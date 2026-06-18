@@ -82,9 +82,18 @@ _ACTIVE_PROPOSE = {
 # Async delegate spawns a background job (commits to spend) but, like propose,
 # only ever writes inside a throwaway worktree — the live tree is untouched.
 _ACTIVE_ASYNC = _ACTIVE_PROPOSE
-# Job lifecycle tools mutate only this server's local job state (idempotent reads,
-# except cancel/consume); they never call the model.
-_JOB_LIFECYCLE = {
+# Job lifecycle annotations, split by observable behavior. None call the model and
+# all are closed-world and non-destructive (they touch only this server's job state,
+# never the user's files/repo). Inspection tools (status/result/list) are read-only
+# and idempotent; consume (deletes the retained record) and cancel (stops a running
+# process) mutate state, so they are non-read-only and non-idempotent.
+_JOB_READ = {
+    "readOnlyHint": True,
+    "openWorldHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+}
+_JOB_MUTATE = {
     "readOnlyHint": False,
     "openWorldHint": False,
     "destructiveHint": False,
@@ -1171,7 +1180,7 @@ def _job_status_model(data: dict) -> JobStatus:
     )
 
 
-@mcp.tool(annotations=_JOB_LIFECYCLE, output_schema=JOB_STATUS_SCHEMA)
+@mcp.tool(annotations=_JOB_READ, output_schema=JOB_STATUS_SCHEMA)
 async def codex_job_status(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1231,7 +1240,7 @@ async def _job_result_impl(
     ).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_JOB_LIFECYCLE, output_schema=RESULT_SCHEMA)
+@mcp.tool(annotations=_JOB_READ, output_schema=RESULT_SCHEMA)
 async def codex_job_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1244,7 +1253,7 @@ async def codex_job_result(
     return await _job_result_impl(job_id, ctx, workspace_root, consume=False)
 
 
-@mcp.tool(annotations=_JOB_LIFECYCLE, output_schema=RESULT_SCHEMA)
+@mcp.tool(annotations=_JOB_MUTATE, output_schema=RESULT_SCHEMA)
 async def codex_job_consume_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1256,7 +1265,7 @@ async def codex_job_consume_result(
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True)
 
 
-@mcp.tool(annotations=_JOB_LIFECYCLE, output_schema=JOB_STATUS_SCHEMA)
+@mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_STATUS_SCHEMA)
 async def codex_job_cancel(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1277,7 +1286,7 @@ async def codex_job_cancel(
     return _job_status_model(data).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_JOB_LIFECYCLE, output_schema=JOB_LIST_SCHEMA)
+@mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
 async def codex_job_list(ctx: Context | None = None, workspace_root: str | None = None) -> dict:
     """List the background jobs known for this workspace, newest first.
 

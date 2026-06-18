@@ -976,6 +976,28 @@ async def test_capabilities_list_error_codes_per_tool():
     assert "job_running" in details["codex_job_result"]["error_codes"]
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "read_only", "idempotent"),
+    [
+        ("codex_job_status", True, True),
+        ("codex_job_result", True, True),
+        ("codex_job_list", True, True),
+        ("codex_job_consume_result", False, False),
+        ("codex_job_cancel", False, False),
+    ],
+)
+async def test_job_lifecycle_annotations_split_read_from_mutation(tool_name, read_only, idempotent):
+    """Read/inspect job tools are read-only+idempotent; consume/cancel are mutating (issue #9)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is read_only
+    assert ann.idempotentHint is idempotent
+    # Every job tool is local (closed-world) and touches only this server's job
+    # state, never the user's files/repo, so it's non-destructive.
+    assert ann.openWorldHint is False
+    assert ann.destructiveHint is False
+
+
 def test_job_status_model_surfaces_cleanup_warnings():
     data = {
         "job_id": "abc",
