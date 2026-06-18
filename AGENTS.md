@@ -31,15 +31,49 @@ All tools return the envelope in `src/codex_in_claude/schemas.py`. Bump `FINGERP
 agent-visible surface changes (tool names, params, error codes, value enums). Keep the change in
 `CHANGELOG.md`.
 
+## Versioning
+
+- Semantic Versioning. **Pre-1.0:** a minor bump may change the agent-visible surface (a breaking
+  change is a minor, not a major); a patch is a bug fix or internal change. Post-1.0, breaking
+  changes are majors.
+- A change to the agent-visible surface (tool names, params, error codes, value enums) bumps
+  `FINGERPRINT` and is flagged as a breaking change (commit `!`/`BREAKING CHANGE:` footer, plus the
+  `breaking-change` label on the PR).
+- `CHANGELOG.md` follows Keep a Changelog: land every notable change under `## [Unreleased]`; cutting
+  a release renames that heading to the version. See Release coordination for the version-bump set.
+
 ## Release coordination
 
 Bump together: `pyproject.toml` version, `.claude-plugin/plugin.json`, the `@vX.Y.Z` tag in
 `.mcp.json`, `README.md`, `CHANGELOG.md`, and `FINGERPRINT` when the surface changed.
 
+## Python support
+
+`requires-python>=3.11`, following SPEC 0 (support Python releases from roughly the last three
+years). CI runs the gate on every supported minor (currently 3.11–3.13). Raising the floor is a
+deliberate change: bump `requires-python`, the CI matrix, and note it in `CHANGELOG.md`.
+
+## Testing
+
+- TDD: write the failing test first, then the minimal code to pass it.
+- Test files mirror the module under test (`tests/test_<module>.py`); every bug fix lands with a
+  regression test that fails before the fix.
+- The 95% coverage floor is enforced in CI. Live tests that hit the real `codex` CLI are marked
+  `integration` and excluded by default (`uv run pytest -m integration --no-cov`).
+
 ## Git / PRs
 
-- Conventional commits (`feat:`, `fix:`, `chore:`, …).
-- Branch for feature work; do not commit directly to the default branch.
+- **Conventional Commits** for every commit and PR title. Allowed types: `feat`, `fix`, `chore`,
+  `docs`, `refactor`, `test`, `perf`, `ci`, `build`, `revert`. Optional scope from the codebase
+  areas: `jobs`, `cli-contract`, `core`, `tools`, `schemas`, `worktree`, `packaging`, `config`
+  (e.g. `feat(jobs): add async lifecycle`). Subject is imperative, lowercase, no trailing period.
+  Mark breaking changes with `!` (`feat!:`) or a `BREAKING CHANGE:` footer (see Versioning).
+- **Squash-merge only.** A PR becomes a single commit whose subject is the PR title, so **the PR
+  title must itself be a valid Conventional Commit**. Keep PRs focused on one logical change.
+- Branch names are `<type>/<slug>` matching the commit type (e.g. `feat/async-jobs`, `docs/conventions`).
+- Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
+  body (`Closes #N`); label the PR with a type and (for issues) a priority.
+- Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
 - **Agents never merge PRs; the maintainer merges.** An agent may merge only on an explicit,
   in-session instruction to merge that specific PR. Open the PR, get checks green, and stop.
 - Don't add `pull_request_target` workflows or self-approve reviews. After pushing new commits to a
