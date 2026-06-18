@@ -91,3 +91,55 @@ async def test_delegate_live(tmp_path):
         ["git", "worktree", "list"], cwd=tmp_path, capture_output=True, text=True, check=True
     ).stdout
     assert out.strip().count("\n") == 0
+
+
+async def test_delegate_async_live(tmp_path, monkeypatch):
+    import subprocess
+    import time
+
+    # keep job state out of the user's real cache dir
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "jobs"))
+
+    def g(*a):
+        subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
+
+    g("init", "-q")
+    g("config", "user.email", "t@t.co")
+    g("config", "user.name", "t")
+    (tmp_path / "greet.py").write_text('def greet(n):\n    return "hi " + n\n')
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    before = (tmp_path / "greet.py").read_text()
+
+    started = await server.codex_delegate_async(
+        "Add a farewell(name) function returning 'bye ' + name to greet.py.",
+        workspace_root=str(tmp_path),
+    )
+    assert started["ok"] is True, started.get("error")
+    job_id = started["job_id"]
+
+    # poll to completion (bounded)
+    deadline = time.monotonic() + 240
+    status = None
+    while time.monotonic() < deadline:
+        status = await server.codex_job_status(job_id, workspace_root=str(tmp_path))
+        if status["status"] != "running":
+            break
+        time.sleep(status.get("poll_after_ms", 1000) / 1000)
+    assert status is not None and status["status"] == "done", status
+
+    res = await server.codex_job_result(job_id, workspace_root=str(tmp_path))
+    assert res["ok"] is True, res.get("error")
+    assert res["diff"]
+    assert res["meta"]["job_id"] == job_id
+    assert (tmp_path / "greet.py").read_text() == before  # live tree untouched
+    # worktree cleaned up
+    out = subprocess.run(
+        ["git", "worktree", "list"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout
+    assert out.strip().count("\n") == 0
+
+    # consume deletes the record
+    await server.codex_job_consume_result(job_id, workspace_root=str(tmp_path))
+    gone = await server.codex_job_status(job_id, workspace_root=str(tmp_path))
+    assert gone["ok"] is False and gone["error"]["code"] == "job_not_found"
