@@ -40,7 +40,8 @@ agent-visible surface changes (tool names, params, error codes, value enums). Ke
   `FINGERPRINT` and is flagged as a breaking change (commit `!`/`BREAKING CHANGE:` footer, plus the
   `breaking-change` label on the PR).
 - `CHANGELOG.md` follows Keep a Changelog: land every notable change under `## [Unreleased]`; cutting
-  a release renames that heading to the version. See Release coordination for the version-bump set.
+  a release moves those entries into a new dated version section and leaves a fresh, empty
+  `## [Unreleased]` on top. See Release coordination for the version-bump set.
 
 ## Release coordination
 
