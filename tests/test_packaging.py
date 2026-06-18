@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -13,6 +14,39 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load_json(rel: str) -> dict:
     return json.loads((ROOT / rel).read_text())
+
+
+def _declared_py_minors() -> set[str]:
+    """Python minor versions advertised by the trove classifiers in pyproject.toml."""
+    classifiers = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["classifiers"]
+    return {
+        m.group(1)
+        for c in classifiers
+        if (m := re.fullmatch(r"Programming Language :: Python :: (\d+\.\d+)", c))
+    }
+
+
+def _ci_matrix_minors() -> set[str]:
+    """Python minor versions exercised by the CI gate matrix in ci.yml."""
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    m = re.search(r"python-version:\s*\[([^\]]*)\]", ci)
+    assert m, "could not find python-version matrix in .github/workflows/ci.yml"
+    return set(re.findall(r"\d+\.\d+", m.group(1)))
+
+
+def test_python_support_matrix_matches_classifiers():
+    """The advertised support set and the CI matrix can't silently diverge (issue #17)."""
+    declared = _declared_py_minors()
+    assert declared, "no Python minor classifiers found"
+    assert declared == _ci_matrix_minors()
+
+
+def test_requires_python_floor_is_lowest_declared():
+    requires = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["requires-python"]
+    floor = re.search(r">=\s*(\d+\.\d+)", requires)
+    assert floor, f"could not parse a >= floor from requires-python: {requires!r}"
+    lowest = min(_declared_py_minors(), key=lambda v: tuple(map(int, v.split("."))))
+    assert floor.group(1) == lowest
 
 
 def test_plugin_manifest_valid_and_versioned():
