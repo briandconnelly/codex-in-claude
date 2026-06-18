@@ -87,6 +87,18 @@ def test_capabilities_shape():
     assert res["fingerprint"] == FINGERPRINT
 
 
+def test_workspace_write_no_egress_is_documented():
+    """The propose-tier no-network constraint of workspace-write is discoverable (issue #24).
+
+    Delegate runs under workspace-write, which blocks network egress; agents must
+    not assume write access implies internet access."""
+    for doc in (server.codex_delegate.__doc__, server.codex_delegate_async.__doc__):
+        assert doc is not None
+        assert "network" in doc.lower()
+    negative_scope = server.codex_capabilities()["negative_scope"]
+    assert any("network" in entry.lower() for entry in negative_scope)
+
+
 # --- consult: success paths --------------------------------------------------
 async def test_consult_structured_success(monkeypatch, clean_env, tmp_path):
     payload = {

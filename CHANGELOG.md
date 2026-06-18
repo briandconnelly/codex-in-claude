@@ -17,6 +17,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- `codex_delegate`/`codex_delegate_async` docstrings and the `codex_capabilities` `negative_scope`
+  now state that propose-tier runs execute under the `workspace-write` sandbox, which **blocks
+  network egress** — a delegated task is self-contained and cannot `git push`/`fetch`, `gh`, `curl`,
+  publish, or install dependencies (those fail with a DNS/host-resolution error). `COMPATIBILITY.md`
+  gains a Sandbox modes section recording the `workspace-write` ⇒ no-egress property. Prose-only (no
+  tool/param/error-code/enum/schema change), so `FINGERPRINT` is unchanged. (#24)
 - The first-read server instructions (FastMCP `instructions`) now summarize all four task families
   — `codex_consult`, `codex_review_changes`, `codex_delegate`, and `codex_delegate_async` + the
   `codex_job_*` lifecycle — plus the key prerequisite (`codex_status` first) and negative scope

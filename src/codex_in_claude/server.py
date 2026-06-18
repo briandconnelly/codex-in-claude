@@ -470,6 +470,9 @@ def codex_capabilities() -> dict:
         negative_scope=[
             "Does not apply edits to your working tree (delegate returns a diff).",
             "Does not bypass the Codex sandbox or approvals.",
+            "Delegate tasks run under workspace-write, which blocks network egress: a "
+            "delegated task cannot push/fetch/publish/install or otherwise reach the "
+            "network — keep it self-contained and do any network step yourself.",
             "In-place edits to the live tree are a later, opt-in milestone.",
         ],
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
@@ -760,7 +763,12 @@ async def codex_delegate(
     Codex edits files with `workspace-write`, but only inside a throwaway worktree
     seeded from your current tracked state. The returned `diff` is Codex's changes;
     review it, then apply it yourself if you want it. Requires a git repo with at
-    least one commit. Pass `workspace_root` (absolute)."""
+    least one commit. Pass `workspace_root` (absolute).
+
+    NO NETWORK: `workspace-write` blocks network egress, so the task must be
+    self-contained — it cannot `git push`/`fetch`, `gh` anything, `curl`, publish, or
+    install dependencies (those fail inside the sandbox with a DNS/host-resolution
+    error). Ask only for local code changes; do any network step yourself afterward."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -849,7 +857,11 @@ async def codex_delegate_async(
     wall-clock deadline even if you never poll). Poll with `codex_job_status`, read
     with `codex_job_result`, delete after reading with `codex_job_consume_result`,
     or stop with `codex_job_cancel`. Requires a git repo with at least one commit;
-    pass `workspace_root` (absolute)."""
+    pass `workspace_root` (absolute).
+
+    NO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks
+    network egress — the task must be self-contained (no push/fetch/`gh`/curl/publish/
+    dependency install; those fail with a DNS/host-resolution error in the sandbox)."""
     d = config.defaults()
     # Background jobs are bounded by the wall-clock deadline, not the sync timeout.
     deadline = config.job_max_seconds()

@@ -18,6 +18,21 @@ upstream `codex-plugin-cc` reliability issues) nor the native `codex review`/`co
 subcommand (its `--output-schema` is not honored for the final message, and its output depends on
 the user's Codex MCP fleet). Reviews use `codex exec` with a diff we gather ourselves.
 
+## Sandbox modes
+
+`--sandbox` is the capability boundary for a run (`cli_contract.py`): `read-only` for the
+consult/review tiers, `workspace-write` for the propose tiers (`codex_delegate`,
+`codex_delegate_async`); we never pass `danger-full-access` or `--dangerously-bypass-*` by default.
+
+**`workspace-write` permits filesystem writes inside the workspace but blocks network egress.** This
+is codex's own sandbox boundary and we pass it through deliberately. The practical consequence: a
+propose/apply task **cannot perform network operations** — `git push`/`fetch`, `gh ...`, `curl`,
+`npm publish`, dependency installs, etc. all fail inside the sandbox (typically with a
+`Could not resolve host` / DNS error). Delegated tasks must therefore be self-contained; do any
+network step yourself after reviewing and applying the returned diff. The tool docstrings and the
+`codex_capabilities` `negative_scope` state this so a calling agent doesn't assume write access
+implies internet access.
+
 ## Flag classes
 
 - **ALWAYS_SEND_FLAGS** — guarantee-bearing (sandbox, cd, json, output-last-message, isolation,
