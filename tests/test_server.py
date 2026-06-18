@@ -224,3 +224,186 @@ async def test_review_bad_isolation(clean_env, tmp_path):
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "unsupported_isolation"
+
+
+# --- delegate (propose tier) -------------------------------------------------
+from codex_in_claude._core import worktree  # noqa: E402
+
+
+def _fake_worktree(tmp_path):
+    return worktree.Worktree(path=str(tmp_path / "wt"), parent=str(tmp_path / "parent"))
+
+
+async def test_delegate_success(monkeypatch, clean_env, tmp_path):
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(
+        worktree, "capture_diff", lambda *a, **k: "diff --git a/x b/x\n+added line\n"
+    )
+
+    removed = {"n": 0}
+    monkeypatch.setattr(
+        worktree, "remove", lambda *a, **k: removed.__setitem__("n", removed["n"] + 1)
+    )
+
+    async def fake(*a, **k):
+        return _fake_result("Implemented the change.")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_delegate("add a feature", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_delegate"
+    assert res["meta"]["tier"] == "propose"
+    assert res["meta"]["sandbox"] == "workspace-write"
+    assert "added line" in res["diff"]
+    assert res["meta"]["context_summary"]["lines_added"] >= 1
+    assert removed["n"] == 1  # worktree always cleaned up
+
+
+async def test_delegate_cleans_up_on_codex_error(monkeypatch, clean_env, tmp_path):
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    removed = {"n": 0}
+    monkeypatch.setattr(
+        worktree, "remove", lambda *a, **k: removed.__setitem__("n", removed["n"] + 1)
+    )
+
+    async def fake(*a, **k):
+        return _fake_result(None, exit_code=1, stderr="not logged in")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_delegate("do it", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "codex_auth_required"
+    assert removed["n"] == 1  # cleanup still happened
+
+
+async def test_delegate_not_a_git_repo(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise worktree.NotAGitRepoError("not a git repo")
+
+    monkeypatch.setattr(worktree, "create", boom)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+
+
+async def test_delegate_no_commits(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise worktree.NoCommitsError("no commits")
+
+    monkeypatch.setattr(worktree, "create", boom)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+
+
+async def test_delegate_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+
+
+async def test_delegate_input_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_delegate("z" * 2000, workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+
+
+async def test_delegate_baseline_warning_surfaced(monkeypatch, clean_env, tmp_path):
+    wt = worktree.Worktree(
+        path=str(tmp_path / "wt"), parent=str(tmp_path / "p"), baseline_warning="seed failed"
+    )
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+
+    async def fake(*a, **k):
+        return _fake_result("done")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert "seed failed" in res["meta"]["security_warnings"]
+    assert res["summary"].startswith("Codex made no changes")
+
+
+# --- dry_run -----------------------------------------------------------------
+async def test_dry_run_preview(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="diff --git a/x b/x\n+y",
+            summary=gitdiff.DiffSummary(1, 1, 0),
+            redacted_paths=[".env"],
+        ),
+    )
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_dry_run"
+    assert res["context_summary"]["files_changed"] == 1
+    assert res["prompt_bytes"] > 0
+    assert res["redacted_paths_count"] == 1
+
+
+async def test_dry_run_git_error(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise gitdiff.NotAGitRepoError("nope")
+
+    monkeypatch.setattr(gitdiff, "gather_diff", boom)
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+
+
+async def test_dry_run_invalid_workspace(clean_env):
+    res = await server.codex_dry_run(scope="working_tree", workspace_root="relative")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+def test_diffstat_counts():
+    diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n-removed\n unchanged\n"
+    summary = server._diffstat(diff)
+    assert summary.files_changed == 1
+    assert summary.lines_added == 1
+    assert summary.lines_removed == 1
+
+
+async def test_delegate_invalid_workspace(clean_env):
+    res = await server.codex_delegate("x", workspace_root="relative/path")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_delegate_placeholder_env(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+async def test_delegate_capture_diff_error(monkeypatch, clean_env, tmp_path):
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    removed = {"n": 0}
+    monkeypatch.setattr(
+        worktree, "remove", lambda *a, **k: removed.__setitem__("n", removed["n"] + 1)
+    )
+
+    def boom(*a, **k):
+        raise worktree.WorktreeError("capture failed")
+
+    monkeypatch.setattr(worktree, "capture_diff", boom)
+
+    async def fake(*a, **k):
+        return _fake_result("done")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+    assert removed["n"] == 1

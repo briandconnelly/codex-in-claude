@@ -13,14 +13,16 @@ from urllib.parse import unquote, urlparse
 from fastmcp import Context, FastMCP
 
 from codex_in_claude import __version__, codex, config, normalize, preflight, prompts
-from codex_in_claude._core import gitdiff, workspace
+from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
+    DRY_RUN_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
     RESULT_SCHEMA,
     STATUS_SCHEMA,
     CapabilitiesResult,
     ContextSummary,
+    DryRunResult,
     ErrorCode,
     ErrorInfo,
     ErrorResult,
@@ -34,6 +36,7 @@ from codex_in_claude.schemas import (
     SuccessResult,
     Tier,
     ToolCapability,
+    Usage,
     workspace_warning_for,
 )
 
@@ -57,6 +60,14 @@ _FREE_READ = {
     "openWorldHint": False,
     "destructiveHint": False,
     "idempotentHint": True,
+}
+# propose tier: Codex writes, but only inside a throwaway worktree — the caller's
+# live tree is never touched, so destructiveHint stays False.
+_ACTIVE_PROPOSE = {
+    "readOnlyHint": False,
+    "openWorldHint": True,
+    "destructiveHint": False,
+    "idempotentHint": False,
 }
 
 mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=__version__)
@@ -212,8 +223,8 @@ def codex_capabilities() -> dict:
         version=__version__,
         transport="stdio",
         stability="alpha",
-        active_tools=["codex_consult", "codex_review_changes"],
-        free_tools=["codex_status", "codex_capabilities"],
+        active_tools=["codex_consult", "codex_review_changes", "codex_delegate"],
+        free_tools=["codex_status", "codex_dry_run", "codex_capabilities"],
         tool_details=[
             ToolCapability(
                 name="codex_consult",
@@ -233,21 +244,42 @@ def codex_capabilities() -> dict:
                 returns="A result envelope with verdict, findings, and a context summary.",
             ),
             ToolCapability(
+                name="codex_delegate",
+                cost="active",
+                use_when="You want Codex to implement a coding task and return a "
+                "reviewable diff WITHOUT touching your working tree (it works in a "
+                "throwaway git worktree).",
+                required_params=["task"],
+                key_optional_params=["workspace_root", "model", "isolation"],
+                returns="A result envelope whose `diff` holds Codex's proposed, "
+                "unapplied changes plus a summary.",
+            ),
+            ToolCapability(
                 name="codex_status",
                 cost="free",
                 use_when="Before active calls, to confirm codex is installed and authenticated.",
                 returns="Readiness, version, auth, and resolved defaults.",
+            ),
+            ToolCapability(
+                name="codex_dry_run",
+                cost="free",
+                use_when="Before codex_review_changes, to preview scope/diff size/"
+                "redactions without spending.",
+                key_optional_params=["scope", "base", "commit", "paths", "workspace_root"],
+                returns="Scope, context summary, prompt size, and redactions.",
             ),
         ],
         tiers=list(config.VALID_TIERS),
         sandboxes=list(codex.cli_contract.VALID_SANDBOXES),
         scope=[
             "Get a second opinion or answer from Codex (read-only).",
-            "(later) Delegate coding tasks via a reviewable worktree diff.",
+            "Review git changes and return structured findings.",
+            "Delegate a coding task and get a reviewable worktree diff (not applied).",
         ],
         negative_scope=[
-            "Does not apply edits to your working tree (consult is read-only).",
+            "Does not apply edits to your working tree (delegate returns a diff).",
             "Does not bypass the Codex sandbox or approvals.",
+            "In-place edits to the live tree are a later, opt-in milestone.",
         ],
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
         deprecation_policy="Pre-1.0: minor versions may change the agent-visible "
@@ -512,6 +544,274 @@ async def codex_review_changes(
         output_schema=FINDINGS_OUTPUT_SCHEMA,
     )
     return _finalize(result, tool="codex_review_changes", meta=meta)
+
+
+def _diffstat(diff: str) -> ContextSummary:
+    """Cheap files/added/removed counts from a unified diff."""
+    files = added = removed = 0
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            files += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return ContextSummary(files_changed=files, lines_added=added, lines_removed=removed)
+
+
+def _apply_run_meta(meta: Meta, result: codex.CodexExecResult) -> tuple[Usage | None, str | None]:
+    """Stamp a finished run's process metadata onto meta; return (usage, session)."""
+    meta.elapsed_ms = result.run.elapsed_ms
+    meta.command_exit_code = result.run.exit_code
+    meta.compat_warnings = result.dropped_flags
+    usage, session_id = normalize.parse_event_metadata(result.events)
+    meta.usage = usage
+    meta.session_id = session_id
+    return usage, session_id
+
+
+@mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=RESULT_SCHEMA)
+async def codex_delegate(
+    task: str,
+    ctx: Context | None = None,
+    workspace_root: str | None = None,
+    model: str | None = None,
+    isolation: str | None = None,
+    timeout_seconds: int | None = None,
+) -> dict:
+    """Delegate a coding task to Codex (a different model) in an isolated git
+    worktree, and get back a **reviewable diff that is NOT applied** to your tree.
+
+    Codex edits files with `workspace-write`, but only inside a throwaway worktree
+    seeded from your current tracked state. The returned `diff` is Codex's changes;
+    review it, then apply it yourself if you want it. Requires a git repo with at
+    least one commit. Pass `workspace_root` (absolute)."""
+    d = config.defaults()
+    timeout = config.clamp_timeout(
+        timeout_seconds if timeout_seconds is not None else d.timeout_seconds
+    )
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="propose",
+            sandbox="workspace-write",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=timeout,
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="propose",
+        sandbox="workspace-write",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=timeout,
+    )
+    if wres.error_code is not None:
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    limit = config.max_input_bytes()
+    if len((task or "").encode("utf-8")) > limit:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"task exceeds {limit} bytes.",
+                repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="task",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    git_timeout = config.git_timeout_seconds()
+    try:
+        wt = worktree.create(cwd, timeout=git_timeout)
+    except worktree.NotAGitRepoError as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="not_a_git_repo",
+                message=str(exc),
+                repair="Point workspace_root at a git repository (propose needs one).",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="worktree_error",
+                message=str(exc)[:300],
+                repair="Ensure the repo has at least one commit and a clean git state.",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    if wt.baseline_warning:
+        meta.security_warnings = [wt.baseline_warning]
+    try:
+        result = await codex.run_codex_exec(
+            prompts.build_delegate_prompt(task),
+            cwd=wt.path,
+            sandbox="workspace-write",
+            isolation=isolation_v,
+            timeout_seconds=timeout,
+            model=model or d.model,
+        )
+        _apply_run_meta(meta, result)
+        if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
+            err = codex.classify_failure(
+                result.run, last_message=result.last_message, events=result.events
+            )
+            return ErrorResult(error=err, meta=meta).model_dump(mode="json")
+        diff = worktree.capture_diff(wt.path, timeout=git_timeout)
+    except worktree.WorktreeError as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="worktree_error",
+                message=str(exc)[:300],
+                repair="Retry; if it persists, inspect the repository state.",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+    finally:
+        worktree.remove(cwd, wt, timeout=git_timeout)
+
+    meta.context_summary = _diffstat(diff)
+    summary = (result.last_message or "").strip() or "(codex returned no summary)"
+    if not diff.strip():
+        summary = f"Codex made no changes. {summary}"
+    return SuccessResult(
+        tool="codex_delegate",
+        summary=summary,
+        verdict="unknown",
+        diff=diff or None,
+        raw_response=RawResponse(
+            text=result.last_message, session_id=meta.session_id, model=meta.model
+        ),
+        next_steps=["Review the returned diff; apply it to your tree only if correct."],
+        meta=meta,
+    ).model_dump(mode="json")
+
+
+@mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
+async def codex_dry_run(
+    scope: str = "working_tree",
+    ctx: Context | None = None,
+    base: str | None = None,
+    commit: str | None = None,
+    paths: list[str] | None = None,
+    workspace_root: str | None = None,
+    isolation: str | None = None,
+) -> dict:
+    """Preview what a `codex_review_changes` call would send — scope, diff size,
+    redactions, truncation — with NO model call and no spend. Use it before a
+    review to confirm the scope and that secrets are redacted."""
+    d = config.defaults()
+    isolation_v = isolation if isolation in config.VALID_ISOLATIONS else d.isolation
+    cwd_guess = workspace.server_cwd()
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    if wres.error_code is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+        )
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    max_bytes = config.max_input_bytes()
+    try:
+        diff = gitdiff.gather_diff(
+            cwd,
+            scope,
+            base=base,
+            commit=commit,
+            paths=paths,
+            timeout=config.git_timeout_seconds(),
+            max_bytes=max_bytes,
+        )
+    except (
+        gitdiff.InvalidScopeError,
+        gitdiff.InvalidBaseError,
+        gitdiff.InvalidCommitError,
+        gitdiff.InvalidPathsError,
+        gitdiff.NotAGitRepoError,
+        gitdiff.GitUnavailableError,
+        RuntimeError,
+    ) as exc:
+        meta = _base_meta(
+            cwd,
+            wres.source,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            scope=scope,
+            base=base,
+            commit=commit,
+        )
+        return _gitdiff_error(exc, meta)
+
+    label = scope if scope != "branch" else f"branch {base}...HEAD"
+    prompt = prompts.build_review_prompt(diff.text, label)
+    return DryRunResult(
+        cwd=cwd,
+        workspace_source=wres.source,
+        workspace_warning=workspace_warning_for(wres.source, cwd),
+        tier="consult",
+        sandbox="read-only",
+        isolation=cast("Isolation", isolation_v),
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths or [],
+        context_summary=ContextSummary(
+            files_changed=diff.summary.files_changed,
+            lines_added=diff.summary.lines_added,
+            lines_removed=diff.summary.lines_removed,
+        ),
+        prompt_bytes=len(prompt.encode("utf-8")),
+        max_input_bytes=max_bytes,
+        truncated=diff.truncated,
+        truncation_hint=diff.truncation_hint,
+        redacted_paths_count=len(diff.redacted_paths),
+        redacted_paths=diff.redacted_paths,
+    ).model_dump(mode="json")
 
 
 def _finalize(result: codex.CodexExecResult, *, tool: str, meta: Meta) -> dict:
