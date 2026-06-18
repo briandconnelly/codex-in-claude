@@ -26,6 +26,7 @@ tools in a loop.
 | Codex to implement a task and return a diff | `codex_delegate` | model call |
 | To implement a long task in the background | `codex_delegate_async` | model call |
 | To preview a review's scope/size before spending | `codex_dry_run` | free |
+| To preview a delegate's seeded baseline + prompt size before spending | `codex_delegate_dry_run` | free |
 | Readiness / version / auth | `codex_status` | free |
 | The tool list + result fingerprint | `codex_capabilities` | free |
 
@@ -48,6 +49,12 @@ Users may also invoke these via slash commands: `/codex:status`, `/codex:consult
   self-contained (no `git push`/`fetch`, `gh`, `curl`, publish, or dependency
   install; those fail with a DNS/host-resolution error). Do any network step
   yourself afterward.
+- **codex_delegate_dry_run** — free, read-only preview of a `codex_delegate`/
+  `codex_delegate_async` call: the baseline its worktree would seed from (HEAD
+  commit, tracked-file count/size, uncommitted-tracked and untracked counts) plus
+  the prompt size that would be sent — no model call, no spend, no worktree created.
+  Use it before delegating to confirm scope and repo before committing to cost. The
+  uncommitted-replay count is advisory (see `worktree_plan.note`).
 
 Always pass an absolute `workspace_root` (or rely on the MCP root) so Codex targets
 the intended repository — otherwise the call may resolve to the server's own cwd
@@ -64,11 +71,15 @@ and cannot reach the network.
 - Starting a job **commits to spend** — it runs to completion or its wall-clock
   deadline even if you never poll.
 - Poll `codex_job_status(job_id)`; **honor `poll_after_ms` and do not poll in a tight
-  loop**. When `result_available` is true, call `codex_job_result(job_id)`.
+  loop**. For a running job it grows with elapsed runtime (a delegate often runs ~20s),
+  so following it backs you off automatically. When `result_available` is true, call
+  `codex_job_result(job_id)`.
 - `codex_job_consume_result` reads and deletes the record; `codex_job_cancel` stops a
   running job; `codex_job_list` recovers `job_id`s lost across context compaction.
 - Job state is disk-backed (survives server restarts) and bounded by a deadline plus
-  TTL/count-cap eviction — old records disappear, so read results before they expire.
+  TTL/count-cap eviction. Results are retained `ttl_seconds` **after the job completes**:
+  `expires_at` is null while running and is set once it finishes — read results before
+  then.
 - Pass the same `workspace_root` to the lifecycle tools as you did to the async call;
   jobs are keyed by workspace.
 
@@ -78,10 +89,12 @@ Every tool returns an envelope:
 
 - Branch on `ok`. On `ok: false`, read `error.code` and follow `error.repair`;
   `error.offending_param` names the bad input. Do not blindly retry.
-- On `ok: true`: `summary` is Codex's headline; `verdict`
-  (pass/concerns/fail/unknown) and `findings[]` carry the detail. Each finding ties
-  to evidence (`file`/`line`). **Treat findings as claims to verify against the
-  actual code, not as ground truth.** A different model can be confidently wrong.
+- On `ok: true`: `summary` is Codex's headline and `findings[]` carry the detail
+  (each tied to evidence — `file`/`line`). Only `codex_review_changes` adds a
+  `verdict` (pass/concerns/fail/unknown) and `confidence`; `codex_consult` (Q&A) and
+  `codex_delegate` (a diff) carry neither. **Treat findings as claims to verify
+  against the actual code, not as ground truth.** A different model can be
+  confidently wrong.
 - For `codex_delegate`, the proposed change is in `diff`. Read it, sanity-check it,
   and apply it deliberately. `meta.context_summary` shows files/lines changed.
 - `meta.usage` reports tokens; `meta.session_id` is Codex's session.
@@ -117,8 +130,9 @@ Every tool returns an envelope:
 
 Optional per-call params (not every tool takes every one): `model` (override the
 Codex model) — on the active tools `codex_consult`, `codex_review_changes`,
-`codex_delegate`, and `codex_delegate_async`; `isolation` (`inherit` (default),
-`ignore-config`, or `ignore-rules`) — on those four plus `codex_dry_run`; and
+`codex_delegate`, and `codex_delegate_async`, plus the free `codex_delegate_dry_run`
+preview; `isolation` (`inherit` (default), `ignore-config`, or `ignore-rules`) — on
+those four plus `codex_dry_run` and `codex_delegate_dry_run`; and
 `timeout_seconds` (clamped 10–600; default 180) — only on the synchronous active
 calls (`codex_consult`, `codex_review_changes`, `codex_delegate`), as
 `codex_delegate_async` is bounded by the background-job deadline

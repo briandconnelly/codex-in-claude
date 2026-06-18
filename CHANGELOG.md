@@ -6,6 +6,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Added
+- **Breaking (agent-visible surface):** new free `codex_delegate_dry_run(task, …)` tool — a
+  zero-spend preview of a `codex_delegate`/`codex_delegate_async` run, mirroring how `codex_dry_run`
+  previews `codex_review_changes`. It reports the baseline the throwaway worktree would seed from
+  (HEAD commit + subject, tracked-file count and approximate size, uncommitted-tracked and untracked
+  counts) plus the prompt bytes that would be sent and the resolved workspace/isolation — with **no**
+  model call and **no** worktree created. It runs the same zero-spend validation the real delegate
+  does (workspace, isolation, task size, git-repo-with-HEAD), so a failure here is one the paid call
+  would also hit. The baseline preview is read-only and therefore advisory: uncommitted tracked
+  changes are counted but their replay into the worktree is not validated (the `worktree_plan.note`
+  field says so). Backed by a new read-only `worktree.plan()` helper in `_core`. `FINGERPRINT` →
+  `schema-7`. (#29)
 - CodeQL code scanning and dependency-review CI workflows, added now that the repository is public
   (both are free for public repos). CodeQL runs on push/PR to `main` plus a weekly schedule;
   dependency-review fails a PR that introduces a dependency with a high-or-worse advisory.
@@ -28,6 +39,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- **Breaking (agent-visible surface):** `verdict` and `confidence` are now review-only. They were
+  on the shared success envelope for every active tool, so `codex_consult` (plain Q&A) always came
+  back `verdict:"unknown"` and `codex_delegate` (which returns a diff) `verdict:"unknown"` too — a
+  meaningless value an agent could wrongly branch on. The success envelope is now three precise
+  per-tool shapes: `codex_consult` → answer + optional `findings`/`questions`/`assumptions`/
+  `next_steps` (no verdict/confidence/diff); `codex_review_changes` → the only verdict-bearing shape
+  (keeps `verdict`/`confidence`); and the `codex_delegate` result (returned directly, or from
+  `codex_delegate_async` via `codex_job_result`/`codex_job_consume_result`) → `diff` + summary, no
+  verdict/confidence. Each active tool now advertises its own `output_schema`, and `codex_consult`
+  is no longer prompted to emit a verdict (a dedicated consult output schema drops the
+  `verdict`/`confidence` fields). `FINGERPRINT` → `schema-8`. (#31)
+- **Breaking (agent-visible surface):** the `codex_dry_run` result no longer carries the
+  `worktree_plan` field. It was always `null` on the review path (it previewed only
+  `codex_review_changes`); the new `codex_delegate_dry_run` now owns the populated, structured
+  worktree plan, so the perpetually-null field is removed rather than left misleading. (#29)
+- Async-job polling is more economical and legible. `codex_job_status` now returns a **growing**
+  `poll_after_ms` for a running job — it scales with elapsed runtime (bounded at 10s) instead of the
+  flat 1s, so an agent that honors the hint backs off naturally rather than polling ~20 times during
+  a typical ~20s delegate; the `job_running` error from `codex_job_result` carries the same backed-off
+  `retry_after_ms`. The `ttl_seconds`/`expires_at` semantics are now documented on the job schemas
+  and `codex_job_status`: results are retained `ttl_seconds` **after completion**, so `expires_at` is
+  null while a job runs and is set once it finishes (no more misreading a null expiry as "never
+  expires"). Behavior/docs only: the `poll_after_ms` field already existed and only its runtime value
+  changed — no tool/param/error-code/enum/schema-shape change — so `FINGERPRINT` is unchanged. (#30)
 - The `collaborating-with-codex` skill now documents the propose-tier `workspace-write` no-network
   constraint (on both `codex_delegate` and the background `codex_delegate_async`), the optional
   `paths` filter on `codex_review_changes`, the `/codex:*` slash commands, and a "Common mistakes"
@@ -76,6 +111,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
+  emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
+  perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of
+  input and are not added. An explicit CLI-provided total is still honored verbatim, preserving the
+  forward-compat hook. Populating an existing field with a value is not a surface change, so
+  `FINGERPRINT` is unchanged. (#28)
 - `codex_dry_run` now validates `isolation` the same way the active tools do, returning the
   structured `unsupported_isolation` error envelope instead of silently substituting the configured
   default. A dry run is meant to preview what a later active call would do, so an invalid value that
