@@ -88,9 +88,11 @@ def create(repo: str, *, timeout: int) -> Worktree:
 
     try:
         warning = _seed_uncommitted(repo, wt, timeout)
-    except WorktreeError:
-        # Seeding failed *after* creating the worktree — tear it down so a partial
-        # baseline can never be mistaken for a clean one, then re-raise.
+    except BaseException:
+        # Any failure after creating the worktree (a raised WorktreeError, or an
+        # unexpected error like a git subprocess timeout) must tear it down — so a
+        # partial baseline can never be mistaken for a clean one and the temp dir
+        # never leaks — then re-raise.
         remove(repo, Worktree(path=wt, parent=parent), timeout=timeout)
         raise
     return Worktree(path=wt, parent=parent, baseline_warning=warning)

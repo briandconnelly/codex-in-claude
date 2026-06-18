@@ -169,6 +169,18 @@ def test_seed_dirty_after_commit_raises(repo, monkeypatch):
     assert _worktree_count(repo) == 1
 
 
+def test_seed_unexpected_exception_cleans_up(repo, monkeypatch):
+    # A non-WorktreeError during seeding (e.g. a git subprocess timeout) must still
+    # tear down the throwaway worktree rather than leak it.
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+    monkeypatch.setattr(worktree, "_seed_uncommitted", boom)
+    with pytest.raises(subprocess.TimeoutExpired):
+        worktree.create(str(repo), timeout=30)
+    assert _worktree_count(repo) == 1
+
+
 def test_capture_diff_add_failure_raises(repo, monkeypatch):
     wt = worktree.create(str(repo), timeout=30)
     try:
