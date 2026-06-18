@@ -503,6 +503,9 @@ def test_poll_backoff_grows_and_is_bounded():
     # Honors a custom base/cap.
     assert poll_backoff_ms(0, base=2000) == 2000
     assert poll_backoff_ms(9999, base=1, cap=3000) == 3000
+    # A cap below the base never drops the result under the base (floor wins).
+    assert poll_backoff_ms(0, base=5000, cap=1000) == 5000
+    assert poll_backoff_ms(9999, base=5000, cap=1000) == 5000
 
 
 def test_status_running_poll_after_ms_grows(tmp_path):

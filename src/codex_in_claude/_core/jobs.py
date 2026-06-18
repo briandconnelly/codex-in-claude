@@ -58,8 +58,10 @@ def poll_backoff_ms(
 
     Grows with how long the job has already run — roughly "wait about as long as it
     has already taken" — so a polling agent naturally backs off instead of tight-
-    looping at the flat ``base``. Bounded to ``[base, cap]``."""
-    return min(max(base, elapsed_ms), cap)
+    looping at the flat ``base``. Bounded to ``[base, cap]``; if a caller passes a
+    ``cap`` below ``base`` (e.g. a configured base above the default cap), the base
+    wins so the result is never below the configured floor."""
+    return min(max(base, elapsed_ms), max(base, cap))
 
 
 def _pid_alive(pid: int | None) -> bool:
