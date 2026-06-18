@@ -39,6 +39,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- Documented that `codex_review_changes` and `codex_consult` are **static** reviews, not a verify
+  mode: they run under the read-only sandbox, which blocks the writes a test/build/lint run
+  typically needs (a writable cache/temp), so Codex can't rely on running the project's checks to
+  confirm its findings. The tool docstrings and the
+  `collaborating-with-codex` skill now state this and tell callers to verify findings by running the
+  project's checks themselves. A writable "verify" mode would change the trust boundary of a
+  read-only tool (Codex's `workspace-write` sandbox can modify the live tree) and belongs in a
+  separate worktree-isolated feature, so #42 is resolved by documenting the current behavior.
+  Prose-only; `FINGERPRINT` unchanged. (#42)
 - **Breaking (agent-visible surface):** `verdict` and `confidence` are now review-only. They were
   on the shared success envelope for every active tool, so `codex_consult` (plain Q&A) always came
   back `verdict:"unknown"` and `codex_delegate` (which returns a diff) `verdict:"unknown"` too — a
