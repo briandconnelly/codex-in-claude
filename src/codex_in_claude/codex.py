@@ -192,6 +192,17 @@ def _auth_error() -> ErrorInfo:
     )
 
 
+def _rate_limit_error(retry_after_ms: int) -> ErrorInfo:
+    return ErrorInfo(
+        code="codex_rate_limited",
+        message="codex hit a usage/rate limit.",
+        repair="Wait retry_after_ms before retrying; reduce concurrent codex calls "
+        "or task frequency if this recurs.",
+        retryable=True,
+        retry_after_ms=retry_after_ms,
+    )
+
+
 def contract_changed_error() -> ErrorInfo:
     """Shared cli_contract_changed error, reused across every failure path so a
     drift is reported identically wherever `codex` surfaces it."""
@@ -229,9 +240,15 @@ def classify_failure(
     event_error = normalize.extract_error_message(events) if events else None
     if cli_contract.is_auth_failure(run.stderr, run.stdout, last_message, event_error):
         return _auth_error()
-    # Check drift last so an auth message is never misread as a contract change.
+    # Drift before rate-limit so a genuine contract change is never masked as a
+    # transient (retryable) rate limit.
     if cli_contract.is_contract_drift(run.stderr, run.stdout, event_error):
         return contract_changed_error()
+    if cli_contract.is_rate_limited(run.stderr, run.stdout, last_message, event_error):
+        retry_after = cli_contract.parse_retry_after_ms(
+            run.stderr, run.stdout, last_message, event_error
+        )
+        return _rate_limit_error(retry_after or cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS)
     detail = (event_error or run.stderr or run.stdout).strip()[:300]
     return ErrorInfo(
         code="nonzero_exit",

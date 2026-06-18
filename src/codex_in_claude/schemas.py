@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-5"
+FINGERPRINT = "codex-in-claude/0.1/schema-6"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -82,6 +82,9 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
+    # codex hit a usage/rate limit (ChatGPT window or API-key 429). Transient and
+    # retryable; the error carries retry_after_ms as the suggested backoff.
+    "codex_rate_limited",
     # Background-job lifecycle errors:
     "job_not_found",
     "job_running",

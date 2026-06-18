@@ -125,6 +125,42 @@ def test_auth_beats_drift_ordering():
     assert err.code == "codex_auth_required"
 
 
+def test_classify_rate_limited_with_retry_after():
+    err = codex.classify_failure(
+        CommandRun("", "Error: 429 Too Many Requests. Retry-After: 30", 1, 1, False)
+    )
+    assert err.code == "codex_rate_limited"
+    assert err.retryable
+    assert err.retry_after_ms == 30_000
+
+
+def test_classify_rate_limited_default_backoff():
+    err = codex.classify_failure(CommandRun("", "you have hit your usage limit", 1, 1, False))
+    assert err.code == "codex_rate_limited"
+    assert err.retryable
+    assert err.retry_after_ms == cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
+
+
+def test_classify_rate_limited_from_error_event():
+    events = '{"type":"error","message":"rate limit exceeded"}'
+    err = codex.classify_failure(CommandRun(events, "", 1, 1, False), events=events)
+    assert err.code == "codex_rate_limited"
+
+
+def test_auth_beats_rate_limit_ordering():
+    # An auth message that also mentions a limit classifies as auth, not rate-limit.
+    err = codex.classify_failure(CommandRun("", "401 unauthorized: usage limit", 1, 1, False))
+    assert err.code == "codex_auth_required"
+
+
+def test_drift_beats_rate_limit_ordering():
+    # A genuine contract-drift error is never masked as a transient rate limit.
+    err = codex.classify_failure(
+        CommandRun("", "error: invalid value 'x'; rate limit", 2, 1, False)
+    )
+    assert err.code == "cli_contract_changed"
+
+
 def test_codex_version(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,

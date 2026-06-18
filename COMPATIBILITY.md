@@ -40,6 +40,26 @@ The final answer is read from the `--output-last-message` file (stable). The `--
 stream is parsed **tolerantly** for optional metadata only (token usage, session id, error events),
 so an event-schema change degrades metadata rather than breaking a run.
 
+## Failure classification
+
+A non-success `codex exec` run is classified from its stderr/stdout and JSONL `error` events against
+the signature sets in `cli_contract.py`, checked in order so a more specific cause is never masked by
+a generic one:
+
+1. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
+2. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`. Checked before
+   rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
+3. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
+   `retry-after`, plus `429` matched with word boundaries so an incidental digit run can't fire it)
+   → `codex_rate_limited`, `retryable=True` with `retry_after_ms` set from a parsed
+   `Retry-After`/"retry after Ns" value **when it is seconds-valued** (a non-second unit or HTTP-date
+   is ignored), else `RATE_LIMIT_DEFAULT_BACKOFF_MS` (60s). Lets a caller back off deterministically
+   instead of retry-storming a transient limit.
+4. everything else → `nonzero_exit`.
+
+Signatures are confirmed against real `codex` output; this file is the source of truth for the
+phrasings, so update `cli_contract.py` (one place) when upstream wording changes.
+
 ## Structured output
 
 `--output-schema` uses OpenAI strict structured outputs: every property must appear in `required`

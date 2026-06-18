@@ -6,6 +6,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Added
+- **Breaking (agent-visible surface):** new `codex_rate_limited` error code. A `codex exec` run that
+  fails because the account hit a usage/rate limit (ChatGPT window or API-key 429) now classifies as
+  `codex_rate_limited` — `retryable=True` with a populated `retry_after_ms` (parsed from a
+  `Retry-After`/"retry after Ns" value when codex provides one, else a 60s default) — instead of an
+  opaque `nonzero_exit`. This lets a calling agent back off deterministically rather than
+  retry-storming a transient limit. Signatures live in `cli_contract.py` (`RATE_LIMIT_PATTERNS`,
+  `is_rate_limited`, `parse_retry_after_ms`); drift is still checked first so a genuine contract
+  change is never masked. `FINGERPRINT` → `schema-6`. (#23)
 - Per-tool `error_codes` on each `codex_capabilities` entry: the (advisory, not exhaustive) set of
   error codes a tool may return, so agents can plan recovery branches without triggering the error
   first.

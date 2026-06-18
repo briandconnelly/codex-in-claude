@@ -271,6 +271,7 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     "invalid_json",
     "schema_violation",
     "cli_contract_changed",
+    "codex_rate_limited",
     "internal_error",
 )
 _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (

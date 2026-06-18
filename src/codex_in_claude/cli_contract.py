@@ -11,6 +11,8 @@ Verified against `codex-cli 0.140.0`.
 
 from __future__ import annotations
 
+import re
+
 CODEX_BIN = "codex"
 
 # Core non-interactive invocation. `exec` runs Codex headlessly; if it disappears
@@ -137,6 +139,43 @@ AUTH_FAILURE_PATTERNS = (
     "unauthorized",
 )
 
+# --- Rate-limit stderr/stdout/event signatures ----------------------------------
+# Phrasings that mean the account hit a usage/rate limit (ChatGPT 5-hour window or
+# an API-key 429) rather than a hard failure. Matching any (case-insensitive)
+# reclassifies an otherwise-generic failure as a retryable codex_rate_limited so a
+# calling agent can back off deterministically instead of retry-storming.
+RATE_LIMIT_PATTERNS = (
+    "rate limit",
+    "too many requests",
+    "usage limit",
+    "quota",
+    "retry-after",
+)
+# "429" is matched separately with word boundaries so it doesn't fire on an
+# incidental digit run (a filename like file429.py, a version, a longer code like
+# 4290); the phrase patterns above are specific enough as plain substrings.
+_HTTP_429_PATTERN = re.compile(r"\b429\b")
+
+# Backoff (ms) suggested when codex reports a rate limit but provides no parseable
+# Retry-After value. Conservative: rate limits commonly reset on minute/hour
+# windows, so 60s avoids an immediate re-hit while staying responsive.
+RATE_LIMIT_DEFAULT_BACKOFF_MS = 60_000
+
+# Matches a delay codex may surface alongside a rate limit: an HTTP-style
+# "Retry-After: <seconds>" header, or prose like "retry after 5s" / "try again in
+# 12 seconds". Captures the number and any immediately following unit token so the
+# parser can REJECT non-second units (minutes/hours) rather than misread them as
+# seconds, and so an HTTP-date "Retry-After:" header (no leading number) never
+# matches. The gap before the number is restricted to whitespace/colon so a date
+# or unrelated text breaks the match instead of yielding a far-off number.
+_SECOND_UNITS = frozenset({"", "s", "sec", "secs", "second", "seconds"})
+# The unit group also consumes a hyphen-joined word (e.g. "5-minute") so such a
+# token is captured and rejected, not silently skipped as a bare-seconds value.
+_RETRY_AFTER_PATTERN = re.compile(
+    r"(?:retry[-\s]?after|try\s+again\s+in)[\s:]*?(\d+)[ \t]*(-?[a-z]+)?",
+    re.IGNORECASE,
+)
+
 
 def is_contract_drift(*texts: str | None) -> bool:
     """Whether any provided text carries a contract-drift signature.
@@ -151,3 +190,24 @@ def is_auth_failure(*texts: str | None) -> bool:
     """Whether any provided text indicates a Codex authentication failure."""
     blob = "\n".join(t for t in texts if t).lower()
     return any(pattern in blob for pattern in AUTH_FAILURE_PATTERNS)
+
+
+def is_rate_limited(*texts: str | None) -> bool:
+    """Whether any provided text indicates a Codex usage/rate-limit failure."""
+    blob = "\n".join(t for t in texts if t).lower()
+    if any(pattern in blob for pattern in RATE_LIMIT_PATTERNS):
+        return True
+    return _HTTP_429_PATTERN.search(blob) is not None
+
+
+def parse_retry_after_ms(*texts: str | None) -> int | None:
+    """Suggested backoff in ms parsed from a seconds-valued Retry-After, or None.
+
+    Only second-valued delays are honored; a non-second unit (minutes/hours) or a
+    non-numeric (HTTP-date) Retry-After returns None so callers fall back to the
+    documented RATE_LIMIT_DEFAULT_BACKOFF_MS rather than a wildly wrong backoff."""
+    blob = "\n".join(t for t in texts if t)
+    match = _RETRY_AFTER_PATTERN.search(blob)
+    if match is None or (match.group(2) or "").lower() not in _SECOND_UNITS:
+        return None
+    return int(match.group(1)) * 1000
