@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -13,6 +14,63 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load_json(rel: str) -> dict:
     return json.loads((ROOT / rel).read_text())
+
+
+def _declared_py_minors() -> set[str]:
+    """Python minor versions advertised by the trove classifiers in pyproject.toml."""
+    classifiers = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["classifiers"]
+    return {
+        m.group(1)
+        for c in classifiers
+        if (m := re.fullmatch(r"Programming Language :: Python :: (\d+\.\d+)", c))
+    }
+
+
+def _parse_py_matrix(workflow: str) -> set[str]:
+    """Python minors from a workflow's `python-version` matrix.
+
+    Handles both the inline-list form (`python-version: ["3.11", "3.12"]`) and the
+    block-list form (`python-version:` followed by indented `- "3.11"` items), so a
+    harmless YAML reformat doesn't false-fail the drift guard."""
+    inline = re.search(r"python-version:\s*\[([^\]]*)\]", workflow)
+    if inline:
+        return set(re.findall(r"\d+\.\d+", inline.group(1)))
+    # Block-list form: capture the contiguous run of `- <version>` items that
+    # follows the key, stopping at the first line that isn't a list item.
+    block = re.search(
+        r"python-version:[ \t]*\n((?:[ \t]*-[ \t]*['\"]?\d+\.\d+['\"]?[ \t]*\n)+)", workflow
+    )
+    assert block, "could not find a python-version matrix in the workflow"
+    return set(re.findall(r"\d+\.\d+", block.group(1)))
+
+
+def _ci_matrix_minors() -> set[str]:
+    """Python minor versions exercised by the CI gate matrix in ci.yml."""
+    return _parse_py_matrix((ROOT / ".github/workflows/ci.yml").read_text())
+
+
+def test_python_support_matrix_matches_classifiers():
+    """The advertised support set and the CI matrix can't silently diverge (issue #17)."""
+    declared = _declared_py_minors()
+    assert declared, "no Python minor classifiers found"
+    assert declared == _ci_matrix_minors()
+
+
+def test_matrix_parser_handles_inline_and_block_yaml():
+    """The drift guard tolerates either YAML list style for python-version."""
+    inline = '      python-version: ["3.11", "3.12", "3.13"]\n'
+    block = '      python-version:\n        - "3.11"\n        - "3.12"\n        - "3.13"\n'
+    expected = {"3.11", "3.12", "3.13"}
+    assert _parse_py_matrix(inline) == expected
+    assert _parse_py_matrix(block) == expected
+
+
+def test_requires_python_floor_is_lowest_declared():
+    requires = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["requires-python"]
+    floor = re.search(r">=\s*(\d+\.\d+)", requires)
+    assert floor, f"could not parse a >= floor from requires-python: {requires!r}"
+    lowest = min(_declared_py_minors(), key=lambda v: tuple(map(int, v.split("."))))
+    assert floor.group(1) == lowest
 
 
 def test_plugin_manifest_valid_and_versioned():

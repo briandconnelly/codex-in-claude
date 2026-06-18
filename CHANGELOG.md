@@ -9,6 +9,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - Per-tool `error_codes` on each `codex_capabilities` entry: the (advisory, not exhaustive) set of
   error codes a tool may return, so agents can plan recovery branches without triggering the error
   first.
+- CI now runs the gate on Python 3.14 (final since Oct 2025), which the trove classifiers already
+  advertised but the matrix did not verify. A packaging test
+  (`test_python_support_matrix_matches_classifiers`, `test_requires_python_floor_is_lowest_declared`)
+  now asserts the `pyproject.toml` Python classifiers, the `.github/workflows/ci.yml` matrix, and the
+  `requires-python` floor stay in lockstep, so the advertised support set and the verified one can't
+  silently diverge again. (#17)
 
 ### Changed
 - **Breaking (agent-visible surface):** error envelopes now carry machine-actionable repair metadata
@@ -31,6 +37,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `codex_dry_run` now validates `isolation` the same way the active tools do, returning the
+  structured `unsupported_isolation` error envelope instead of silently substituting the configured
+  default. A dry run is meant to preview what a later active call would do, so an invalid value that
+  the real call would reject must no longer slip through as a successful preview. No surface change
+  (the `unsupported_isolation` code and the `isolation` param already exist), so `FINGERPRINT` is
+  unchanged. (#6)
 - Cancelling or timing out a `codex_delegate_async` job no longer leaks its throwaway git worktree.
   Previously the JobStore force-killed the worker with `SIGKILL`, so the worker's `finally` cleanup
   never ran and the temp worktree (with any generated source/build output) was left behind in the

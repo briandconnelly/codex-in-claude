@@ -969,8 +969,22 @@ async def codex_dry_run(
     redactions, truncation — with NO model call and no spend. Use it before a
     review to confirm the scope and that secrets are redacted."""
     d = config.defaults()
-    isolation_v = isolation if isolation in config.VALID_ISOLATIONS else d.isolation
     cwd_guess = workspace.server_cwd()
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    if iso_err is not None:
+        # Validate like the active tools rather than silently normalizing — a dry
+        # run must preview the same outcome the real call would produce (issue #6).
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None  # narrowed: iso_err was None
     roots = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
