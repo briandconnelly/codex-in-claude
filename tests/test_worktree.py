@@ -45,6 +45,20 @@ def test_create_reports_parent_early(repo):
         worktree.remove(str(repo), wt, timeout=30)
 
 
+def test_create_cleans_temp_parent_if_on_parent_raises(repo):
+    # If the on_parent hook raises (e.g. disk-full writing the manifest), the temp
+    # parent must not leak — that is the very leak this hook exists to prevent.
+    seen: list[str] = []
+
+    def boom(parent):
+        seen.append(parent)
+        raise RuntimeError("disk full")
+
+    with pytest.raises(RuntimeError):
+        worktree.create(str(repo), timeout=30, on_parent=boom)
+    assert seen and not Path(seen[0]).exists()
+
+
 def test_seeds_uncommitted_tracked_changes(repo):
     (repo / "a.py").write_text("x = 2\n")  # uncommitted change in live tree
     wt = worktree.create(str(repo), timeout=30)

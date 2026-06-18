@@ -232,6 +232,53 @@ def test_cancel_surfaces_cleanup_warning(tmp_path, monkeypatch):
     assert any(wt in w for w in st["cleanup_warnings"])  # leak named in the result
 
 
+def test_cancel_preserves_result_completed_during_grace(tmp_path, monkeypatch):
+    # If the worker finishes on its own during the grace window, cancel must NOT
+    # mask the completed result as "cancelled".
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    jd = store._job_dir(cwd, job_id)
+
+    def fake_terminate(pid, grace_seconds):
+        # Simulate the worker completing (writing result.json) before we kill it.
+        (jd / "result.json").write_text('{"ok": true, "tool": "t"}')
+        jobs._kill_pid_tree(pid)
+
+    monkeypatch.setattr(jobs, "_terminate_pid_tree", fake_terminate)
+    st = store.cancel(cwd, job_id)
+    assert st["status"] == "done"  # completed result preserved, not overwritten
+    assert st["result_available"] is True
+
+
+def test_cancel_returns_none_if_record_removed_during_grace(tmp_path, monkeypatch):
+    # If the record is consumed/deleted during the grace window, cancel must not
+    # crash writing meta into a removed job dir.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    jd = store._job_dir(cwd, job_id)
+
+    def fake_terminate(pid, grace_seconds):
+        jobs._kill_pid_tree(pid)
+        store._rmtree(jd)  # record removed mid-cancel
+
+    monkeypatch.setattr(jobs, "_terminate_pid_tree", fake_terminate)
+    assert store.cancel(cwd, job_id) is None
+
+
+def test_within_cleanup_root_refuses_on_resolve_error(tmp_path, monkeypatch):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+
+    def boom(self, *a, **k):
+        raise OSError("symlink loop")
+
+    monkeypatch.setattr(jobs.Path, "resolve", boom)
+    assert store._within_cleanup_root(str(root / "wt-x")) is False  # refuse, do not raise
+
+
 def test_cleanup_noop_without_cleanup_root(tmp_path):
     target = tmp_path / "wt-orphan"
     target.mkdir()

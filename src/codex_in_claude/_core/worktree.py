@@ -92,7 +92,13 @@ def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None =
     _ensure_repo_with_head(repo, timeout)
     parent = tempfile.mkdtemp(prefix=WORKTREE_PREFIX)
     if on_parent is not None:
-        on_parent(parent)
+        try:
+            on_parent(parent)
+        except BaseException:
+            # A failing hook (e.g. disk-full writing the manifest) must not leak the
+            # temp dir it was meant to register for cleanup.
+            shutil.rmtree(parent, ignore_errors=True)
+            raise
     wt = str(Path(parent) / "tree")
     try:
         _git_ok(repo, ["worktree", "add", "--detach", "--quiet", wt, "HEAD"], timeout)

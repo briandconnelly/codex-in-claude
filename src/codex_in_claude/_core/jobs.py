@@ -201,8 +201,14 @@ class JobStore:
     def _within_cleanup_root(self, path: str) -> bool:
         if self.cleanup_root is None:
             return False
-        root = Path(self.cleanup_root).resolve()
-        target = Path(path).resolve()
+        # The manifest is opaque caller-declared state; a path that cannot be
+        # resolved (symlink loop, permission error) is treated as outside the root
+        # and refused rather than crashing cleanup.
+        try:
+            root = Path(self.cleanup_root).resolve()
+            target = Path(path).resolve()
+        except OSError:
+            return False
         if not target.name.startswith(self.cleanup_prefix):
             return False
         return target != root and target.is_relative_to(root)
@@ -449,6 +455,21 @@ class JobStore:
         # not block status/list/result calls for every workspace.
         _terminate_pid_tree(pid, self.terminate_grace_seconds)
         with _LOCK:
+            # Re-validate: during the unlocked grace window the record may have been
+            # consumed/evicted, finalized by another path, or the worker may have
+            # finished on its own. Re-read fresh state and never clobber it.
+            meta = self._read_meta(jd)
+            if meta is None:
+                return None  # consumed or expired while we waited
+            terminal = meta.get("terminal_status")
+            if terminal is None and self._read_envelope(jd) is not None:
+                # The worker completed during the window — preserve its result
+                # rather than masking it as cancelled.
+                meta["completed_epoch"] = meta.get("completed_epoch") or time.time()
+                meta["terminal_status"] = terminal = "done"
+                self._write_meta(jd, meta)
+            if terminal is not None:
+                return self._status_dict(jd, meta, terminal)
             # Re-read the manifest now: the worker may have declared its worktree
             # only after cancellation began (e.g. it was still creating it), so a
             # snapshot taken before termination could miss the path and leak it.
