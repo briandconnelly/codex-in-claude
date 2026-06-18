@@ -73,8 +73,9 @@ The MCP server is launched on demand via `uvx` from a pinned release tag, so upd
 
 - `codex_status` — readiness, version, auth, resolved defaults.
 - `codex_dry_run(scope, …)` — preview a review's scope/diff size/redactions before spending.
-- `codex_delegate_dry_run(task, …)` — preview a delegate's seeded baseline (HEAD commit, tracked/
-  uncommitted/untracked counts and size) and prompt size before spending; no worktree is created.
+- `codex_delegate_dry_run(task, …)` — preview a delegate's seeded baseline (HEAD commit, plus
+  tracked, uncommitted, and untracked counts and size) and prompt size before spending; no worktree
+  is created.
 - `codex_capabilities` — tool inventory + result fingerprint.
 - `codex_job_status(job_id, …)` / `codex_job_result` / `codex_job_consume_result` /
   `codex_job_cancel` / `codex_job_list` — background-job lifecycle. State is disk-backed and

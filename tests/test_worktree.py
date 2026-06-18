@@ -167,8 +167,9 @@ def test_plan_does_not_create_a_worktree(repo, monkeypatch):
     assert out.count("\n") == 1  # only the main worktree
 
 
-def test_tracked_files_and_bytes_skips_nonblob_and_malformed(repo, monkeypatch):
-    # A submodule gitlink reports size '-'; a malformed line is ignored entirely.
+def test_tracked_files_and_bytes_counts_gitlinks_and_skips_malformed(repo, monkeypatch):
+    # A submodule gitlink is counted as a file but contributes 0 bytes (size '-');
+    # a malformed line (no tab) is ignored entirely.
     listing = (
         "100644 blob abc123 5\ta.py\n"
         "160000 commit deadbeef -\tvendor/sub\n"  # submodule: counted, 0 bytes
@@ -198,6 +199,17 @@ def test_plan_no_commits(tmp_path):
     _git(tmp_path, "init", "-q")
     with pytest.raises(worktree.NoCommitsError):
         worktree.plan(str(tmp_path), timeout=30)
+
+
+def test_plan_maps_git_infra_failure_to_worktree_error(repo, monkeypatch):
+    # A missing git binary / subprocess timeout must surface as WorktreeError (a
+    # structured error the dry-run tool maps to worktree_error), not escape raw.
+    def boom(*a, **k):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(worktree, "_git", boom)
+    with pytest.raises(worktree.WorktreeError):
+        worktree.plan(str(repo), timeout=30)
 
 
 def test_remove_is_idempotent(repo):

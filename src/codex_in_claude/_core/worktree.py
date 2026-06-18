@@ -162,23 +162,31 @@ def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
 def plan(repo: str, *, timeout: int) -> WorktreePlanData:
     """Preview the baseline a `create()` run would seed from — NO worktree created,
     no spend. Raises NotAGitRepoError / NoCommitsError / WorktreeError exactly like
-    `create()`, so a dry run fails the same way the real propose run would."""
-    _ensure_repo_with_head(repo, timeout)
-    head = _git_ok(repo, ["rev-parse", "HEAD"], timeout).strip()
-    subj = _git(repo, ["log", "-1", "--format=%s"], timeout)
-    head_subject = subj.stdout.strip() if subj.returncode == 0 and subj.stdout.strip() else None
-    tracked_files, tracked_bytes = _tracked_files_and_bytes(repo, timeout)
-    # `git diff --numstat HEAD` mirrors what _seed_uncommitted replays (staged +
-    # unstaged tracked changes); each non-empty line is one changed file. Carry the
-    # same --no-ext-diff/--no-textconv hardening the rest of this module uses: a free
-    # preview must never run a repo-configured diff/textconv helper. (--numstat does
-    # not invoke those helpers today, but the flags keep this defensive and uniform.)
-    uncommitted = _count_nonempty_lines(
-        _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD"], timeout)
-    )
-    untracked = _count_nonempty_lines(
-        _git(repo, ["ls-files", "--others", "--exclude-standard"], timeout)
-    )
+    `create()`, so a dry run fails the same way the real propose run would. An
+    infrastructure failure (git missing, a git subprocess timing out) is mapped to
+    WorktreeError so the caller returns a structured error rather than crashing."""
+    try:
+        _ensure_repo_with_head(repo, timeout)
+        head = _git_ok(repo, ["rev-parse", "HEAD"], timeout).strip()
+        subj = _git(repo, ["log", "-1", "--format=%s"], timeout)
+        head_subject = subj.stdout.strip() if subj.returncode == 0 and subj.stdout.strip() else None
+        tracked_files, tracked_bytes = _tracked_files_and_bytes(repo, timeout)
+        # `git diff --numstat HEAD` mirrors what _seed_uncommitted replays (staged +
+        # unstaged tracked changes); each non-empty line is one changed file. Carry the
+        # same --no-ext-diff/--no-textconv hardening the rest of this module uses: a free
+        # preview must never run a repo-configured diff/textconv helper. (--numstat does
+        # not invoke those helpers today, but the flags keep this defensive and uniform.)
+        uncommitted = _count_nonempty_lines(
+            _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD"], timeout)
+        )
+        untracked = _count_nonempty_lines(
+            _git(repo, ["ls-files", "--others", "--exclude-standard"], timeout)
+        )
+    except (NotAGitRepoError, NoCommitsError, WorktreeError):
+        raise  # domain errors pass through unchanged
+    except (subprocess.SubprocessError, OSError) as exc:
+        # git binary missing (FileNotFoundError) or a subprocess timeout, etc.
+        raise WorktreeError(f"git command failed during plan: {str(exc)[:200]}") from exc
     return WorktreePlanData(
         head_commit=head,
         head_subject=head_subject,
