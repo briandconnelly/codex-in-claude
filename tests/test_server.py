@@ -125,8 +125,10 @@ async def test_consult_structured_success(monkeypatch, clean_env, tmp_path):
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
     res = await server.codex_consult("is this ok?", workspace_root=str(tmp_path))
     assert res["ok"] is True
-    assert res["verdict"] == "pass"
-    assert res["confidence"] == "high"
+    assert res["tool"] == "codex_consult"
+    # Consult is Q&A: a verdict/confidence is meaningless and must not appear (#31).
+    assert "verdict" not in res
+    assert "confidence" not in res
     assert len(res["findings"]) == 1
     assert res["questions"] == ["q1"]
     assert res["meta"]["tier"] == "consult"
@@ -142,7 +144,7 @@ async def test_consult_plain_text_success(monkeypatch, clean_env, tmp_path):
     res = await server.codex_consult("question", workspace_root=str(tmp_path))
     assert res["ok"] is True
     assert "plain answer" in res["summary"]
-    assert res["verdict"] == "unknown"
+    assert "verdict" not in res  # consult carries no verdict (#31)
 
 
 # --- consult: error paths ----------------------------------------------------
@@ -243,6 +245,35 @@ async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path
     assert called["n"] == 0  # no model call for an empty diff
 
 
+async def test_review_plain_text_defaults_to_unknown_verdict(monkeypatch, clean_env, tmp_path):
+    # When Codex returns a non-JSON message, review still carries verdict/confidence
+    # (defaults) — verdict is the review tool's contract, unlike consult (#31).
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+
+    async def fake(*a, **k):
+        return _fake_result("plain prose, not JSON")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_review_changes"
+    assert res["verdict"] == "unknown"
+    assert res["confidence"] == "medium"
+    assert "plain prose" in res["summary"]
+
+
+async def test_review_codex_error(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+
+    async def fake(*a, **k):
+        return _fake_result(None, exit_code=1, stderr="not logged in")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "codex_auth_required"
+
+
 async def test_review_not_a_git_repo(monkeypatch, clean_env, tmp_path):
     def raise_not_repo(*a, **k):
         raise gitdiff.NotAGitRepoError("not a git repository")
@@ -302,6 +333,9 @@ async def test_delegate_success(monkeypatch, clean_env, tmp_path):
     res = await server.codex_delegate("add a feature", workspace_root=str(tmp_path))
     assert res["ok"] is True
     assert res["tool"] == "codex_delegate"
+    # Delegate returns a diff, not a review judgment: no meaningless verdict (#31).
+    assert "verdict" not in res
+    assert "confidence" not in res
     assert res["meta"]["tier"] == "propose"
     assert res["meta"]["sandbox"] == "workspace-write"
     assert "added line" in res["diff"]
@@ -892,6 +926,23 @@ async def test_job_result_done_patches_job_id(monkeypatch, clean_env, tmp_path):
     assert res["summary"] == "did it"
 
 
+async def test_job_result_strips_legacy_verdict_fields(monkeypatch, clean_env, tmp_path):
+    # A payload written by a pre-#31 worker may still carry verdict/confidence; the
+    # result tools must drop them so the returned envelope matches DelegateResult.
+    legacy = _done_envelope()
+    legacy["verdict"] = "unknown"
+    legacy["confidence"] = "medium"
+    legacy["meta"]["fingerprint"] = "codex-in-claude/0.1/schema-6"  # a pre-upgrade worker
+    store = _FakeStore(record=_ok_record("done"), result_json=legacy)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert "verdict" not in res
+    assert "confidence" not in res
+    # The normalized payload is stamped with the current surface fingerprint.
+    assert res["meta"]["fingerprint"] == FINGERPRINT
+
+
 async def test_job_result_running_maps_error(monkeypatch, clean_env, tmp_path):
     store = _FakeStore(record=_ok_record("running"), result_json=None)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
@@ -975,8 +1026,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_7():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-7"
+def test_fingerprint_is_schema_8():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-8"
 
 
 def test_capabilities_lists_delegate_dry_run():

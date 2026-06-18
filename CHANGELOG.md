@@ -39,6 +39,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- **Breaking (agent-visible surface):** `verdict` and `confidence` are now review-only. They were
+  on the shared success envelope for every active tool, so `codex_consult` (plain Q&A) always came
+  back `verdict:"unknown"` and `codex_delegate` (which returns a diff) `verdict:"unknown"` too — a
+  meaningless value an agent could wrongly branch on. The success envelope is now three precise
+  per-tool shapes: `codex_consult` → answer + optional `findings`/`questions`/`assumptions`/
+  `next_steps` (no verdict/confidence/diff); `codex_review_changes` → the only verdict-bearing shape
+  (keeps `verdict`/`confidence`); and the `codex_delegate` result (returned directly, or from
+  `codex_delegate_async` via `codex_job_result`/`codex_job_consume_result`) → `diff` + summary, no
+  verdict/confidence. Each active tool now advertises its own `output_schema`, and `codex_consult`
+  is no longer prompted to emit a verdict (a dedicated consult output schema drops the
+  `verdict`/`confidence` fields). `FINGERPRINT` → `schema-8`. (#31)
 - **Breaking (agent-visible surface):** the `codex_dry_run` result no longer carries the
   `worktree_plan` field. It was always `null` on the review path (it previewed only
   `codex_review_changes`); the new `codex_delegate_dry_run` now owns the populated, structured

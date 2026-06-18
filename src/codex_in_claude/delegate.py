@@ -16,11 +16,11 @@ from codex_in_claude import codex, config, normalize, prompts
 from codex_in_claude._core import worktree
 from codex_in_claude.schemas import (
     ContextSummary,
+    DelegateResult,
     ErrorInfo,
     ErrorResult,
     Meta,
     RawResponse,
-    SuccessResult,
     Usage,
 )
 
@@ -80,7 +80,7 @@ async def run_delegate(
     max_diff_bytes: int | None = None,
     on_worktree_parent: Callable[[str], None] | None = None,
 ) -> dict:
-    """Run the propose orchestration and return a SuccessResult|ErrorResult dict.
+    """Run the propose orchestration and return a DelegateResult|ErrorResult dict.
 
     `meta` is the pre-built envelope meta (tier=propose). The worktree is always
     cleaned up, even on failure or codex error. `on_worktree_parent`, if given, is
@@ -151,10 +151,8 @@ async def run_delegate(
         valid_cap = isinstance(max_diff_bytes, int) and max_diff_bytes > 0
         cap = max_diff_bytes if valid_cap else config.max_delegate_diff_bytes()
         diff = _bound_diff(diff, meta, cap)
-    return SuccessResult(
-        tool="codex_delegate",
+    return DelegateResult(
         summary=summary,
-        verdict="unknown",
         diff=diff or None,
         raw_response=RawResponse(
             text=result.last_message, session_id=meta.session_id, model=meta.model
