@@ -349,8 +349,8 @@ class WorktreePlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     head_commit: str  # the HEAD commit the worktree detaches at
     head_subject: str | None = None  # short subject of HEAD, if readable
-    tracked_files: int  # blobs in the HEAD tree (the seeded baseline)
-    tracked_bytes: int  # approximate total size of those blobs
+    tracked_files: int  # entries in the HEAD tree (blobs + submodule gitlinks)
+    tracked_bytes: int  # approximate total size (blob sizes; gitlinks count as 0)
     uncommitted_tracked_files: int  # tracked files changed vs HEAD (would be replayed)
     untracked_files: int  # untracked files (delegate never copies these)
     note: str | None = None  # plain-language caveats about the previewed baseline

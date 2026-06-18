@@ -52,8 +52,8 @@ class WorktreePlanData:
 
     head_commit: str  # the HEAD commit the worktree is detached at
     head_subject: str | None  # short subject of HEAD, if readable
-    tracked_files: int  # blobs in the HEAD tree (the baseline)
-    tracked_bytes: int  # approximate total size of those blobs
+    tracked_files: int  # entries in the HEAD tree (blobs + submodule gitlinks)
+    tracked_bytes: int  # approximate total size (blob sizes; gitlinks count as 0)
     uncommitted_tracked_files: int  # tracked files changed vs HEAD (would be replayed)
     untracked_files: int  # untracked files (never copied into the worktree)
 
@@ -141,9 +141,10 @@ def _count_nonempty_lines(proc: subprocess.CompletedProcess) -> int:
 
 
 def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
-    """Count blobs in the HEAD tree and sum their sizes (approximate baseline size).
+    """Count entries in the HEAD tree and sum blob sizes (approximate baseline size).
     `git ls-tree -r --long` emits `<mode> <type> <sha> <size>\\t<path>`; size is `-`
-    for non-blob entries (e.g. submodule gitlinks), which contribute no bytes."""
+    for non-blob entries (e.g. submodule gitlinks), which are counted as files but
+    contribute no bytes."""
     out = _git_ok(repo, ["ls-tree", "-r", "--long", "HEAD"], timeout)
     files = total = 0
     for line in out.splitlines():

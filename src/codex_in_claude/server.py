@@ -1227,7 +1227,11 @@ async def codex_delegate_dry_run(
             error=ErrorInfo(
                 code="worktree_error",
                 message=str(exc)[:300],
-                repair="Ensure the repo has at least one commit and a clean git state.",
+                # The preview is read-only (no worktree is created), so a dirty tree is
+                # fine; this fires only when the repo has no commit to base on or a git
+                # command failed.
+                repair="Ensure the repo has at least one commit and that git commands "
+                "succeed (e.g. finish any in-progress merge/rebase).",
             ),
             meta=meta,
         ).model_dump(mode="json")
