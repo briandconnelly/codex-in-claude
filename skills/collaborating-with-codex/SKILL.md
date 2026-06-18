@@ -78,10 +78,12 @@ Every tool returns an envelope:
 
 - Branch on `ok`. On `ok: false`, read `error.code` and follow `error.repair`;
   `error.offending_param` names the bad input. Do not blindly retry.
-- On `ok: true`: `summary` is Codex's headline; `verdict`
-  (pass/concerns/fail/unknown) and `findings[]` carry the detail. Each finding ties
-  to evidence (`file`/`line`). **Treat findings as claims to verify against the
-  actual code, not as ground truth.** A different model can be confidently wrong.
+- On `ok: true`: `summary` is Codex's headline and `findings[]` carry the detail
+  (each tied to evidence — `file`/`line`). Only `codex_review_changes` adds a
+  `verdict` (pass/concerns/fail/unknown) and `confidence`; `codex_consult` (Q&A) and
+  `codex_delegate` (a diff) carry neither. **Treat findings as claims to verify
+  against the actual code, not as ground truth.** A different model can be
+  confidently wrong.
 - For `codex_delegate`, the proposed change is in `diff`. Read it, sanity-check it,
   and apply it deliberately. `meta.context_summary` shows files/lines changed.
 - `meta.usage` reports tokens; `meta.session_id` is Codex's session.

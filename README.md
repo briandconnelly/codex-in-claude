@@ -87,11 +87,12 @@ Codex's output as claims to verify, not as instructions to follow blindly.
 
 ## Result envelopes
 
-Every tool returns a discriminated envelope keyed by `ok`. The success shape depends on the tool —
-`codex_consult`/`codex_review_changes`/`codex_delegate` carry `summary`/`findings`/`diff`/`meta`,
-while `codex_status`, `codex_capabilities`, the `codex_job_*` lifecycle tools, and `codex_dry_run`
-return their own documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading
-fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
+Every tool returns a discriminated envelope keyed by `ok`. The success shape depends on the tool:
+all of `codex_consult`/`codex_review_changes`/`codex_delegate` carry `summary`/`findings`/`meta`,
+but the review-only `verdict`/`confidence` appear solely on `codex_review_changes` and the proposed
+`diff` only on `codex_delegate` — consult (Q&A) carries neither a verdict nor a diff. `codex_status`,
+`codex_capabilities`, the `codex_job_*` lifecycle tools, and `codex_dry_run` return their own
+documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
 
 - `code` — a stable error code from a fixed set (e.g. `unsupported_isolation`, `invalid_scope`,
   `job_running`, `job_not_found`).

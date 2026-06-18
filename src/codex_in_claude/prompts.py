@@ -22,6 +22,16 @@ _STRUCTURED_CLAUSE = (
     "set verdict to `unknown`, and leave `findings` empty."
 )
 
+# Consult is Q&A, not a review — no verdict/confidence is asked for (#31).
+_CONSULT_STRUCTURED_CLAUSE = (
+    "Respond with a single JSON object matching the provided output schema: a "
+    "`summary` (your answer/assessment), and a `findings` array for any concrete "
+    "issues worth flagging (each tied to evidence — a file, line, or command "
+    "output). Use `questions`, `assumptions`, and `next_steps` for anything that "
+    "does not fit a finding. For a plain question, put the answer in `summary` and "
+    "leave the arrays empty."
+)
+
 CONSULT_FRAMING = (
     "You are giving Claude Code an independent second opinion as a different model.\n"
     "Do not assume Claude's framing is correct; prioritize correctness, safety, and "
@@ -29,7 +39,7 @@ CONSULT_FRAMING = (
     f"{_UNTRUSTED_DATA_CLAUSE}\n"
     "Do not modify files; this is a read-only consultation.\n"
     "Avoid recursive handoffs; do not suggest delegating to yet another agent.\n"
-    f"{_STRUCTURED_CLAUSE}"
+    f"{_CONSULT_STRUCTURED_CLAUSE}"
 )
 
 DELEGATE_FRAMING = (

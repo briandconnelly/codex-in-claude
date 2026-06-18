@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-6"
+FINGERPRINT = "codex-in-claude/0.1/schema-7"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -161,22 +161,42 @@ class Meta(BaseModel):
     fingerprint: str = FINGERPRINT
 
 
-class SuccessResult(BaseModel):
+class _SuccessBase(BaseModel):
+    """Fields shared by every success envelope. `verdict`/`confidence` live only on
+    the review result — they are a review judgment, meaningless for Q&A (consult) or
+    a worktree diff (delegate), so those tools must not carry them (#31)."""
+
     model_config = ConfigDict(extra="forbid")
     ok: Literal[True] = True
-    tool: str
     summary: str
-    verdict: Verdict = "unknown"
-    confidence: Confidence = "medium"
     findings: list[Finding] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
-    # Unified diff produced by a `propose` run (changes confined to a temp worktree
-    # and NOT applied to the live tree). None for consult/review.
-    diff: str | None = None
     raw_response: RawResponse = Field(default_factory=RawResponse)
     meta: Meta
+
+
+class ConsultResult(_SuccessBase):
+    """codex_consult: a read-only answer/second opinion. No verdict/confidence/diff."""
+
+    tool: Literal["codex_consult"] = "codex_consult"
+
+
+class ReviewResult(_SuccessBase):
+    """codex_review_changes: a structured review. The only verdict-bearing result."""
+
+    tool: Literal["codex_review_changes"] = "codex_review_changes"
+    verdict: Verdict = "unknown"
+    confidence: Confidence = "medium"
+
+
+class DelegateResult(_SuccessBase):
+    """codex_delegate(_async): a proposed change. Carries the unified `diff` (confined
+    to a temp worktree and NOT applied to the live tree); no verdict/confidence."""
+
+    tool: Literal["codex_delegate"] = "codex_delegate"
+    diff: str | None = None
 
 
 class ErrorInfo(BaseModel):
@@ -381,11 +401,17 @@ def _object_union_schema(adapter: TypeAdapter) -> dict:
     }
 
 
-# Advertised output schemas (convention: a discriminated ok:true|false union).
-RESULT_SCHEMA = _object_union_schema(TypeAdapter(SuccessResult | ErrorResult))
+# Advertised output schemas (convention: a discriminated ok:true|false union). Each
+# active tool advertises its own success shape so verdict/confidence appear only where
+# they are meaningful (review), not as perpetually-null fields on consult/delegate (#31).
+CONSULT_RESULT_SCHEMA = _object_union_schema(TypeAdapter(ConsultResult | ErrorResult))
+REVIEW_RESULT_SCHEMA = _object_union_schema(TypeAdapter(ReviewResult | ErrorResult))
+DELEGATE_RESULT_SCHEMA = _object_union_schema(TypeAdapter(DelegateResult | ErrorResult))
 STATUS_SCHEMA = StatusResult.model_json_schema()
 CAPABILITIES_SCHEMA = CapabilitiesResult.model_json_schema()
-JOB_STARTED_SCHEMA = _object_union_schema(TypeAdapter(JobStarted | SuccessResult | ErrorResult))
+# codex_delegate_async returns only a job handle (or an error) — the eventual delegate
+# result is fetched separately via codex_job_result (DELEGATE_RESULT_SCHEMA).
+JOB_STARTED_SCHEMA = _object_union_schema(TypeAdapter(JobStarted | ErrorResult))
 JOB_STATUS_SCHEMA = _object_union_schema(TypeAdapter(JobStatus | ErrorResult))
 DRY_RUN_SCHEMA = _object_union_schema(TypeAdapter(DryRunResult | ErrorResult))
 JOB_LIST_SCHEMA = _object_union_schema(TypeAdapter(JobListResult | ErrorResult))
@@ -397,6 +423,36 @@ JOB_LIST_SCHEMA = _object_union_schema(TypeAdapter(JobListResult | ErrorResult))
 # OpenAI strict structured outputs require EVERY property to appear in `required`
 # and EVERY object to set additionalProperties:false. "Optional" fields are modeled
 # as nullable types (e.g. file/line) that are still listed in `required`.
+_FINDINGS_ARRAY_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "nit"]},
+            "title": {"type": "string"},
+            "file": {"type": ["string", "null"]},
+            "line": {"type": ["integer", "null"]},
+            "line_end": {"type": ["integer", "null"]},
+            "evidence": {"type": "string"},
+            "risk": {"type": "string"},
+            "recommendation": {"type": "string"},
+        },
+        "required": [
+            "severity",
+            "title",
+            "file",
+            "line",
+            "line_end",
+            "evidence",
+            "risk",
+            "recommendation",
+        ],
+    },
+}
+_STR_ARRAY_SCHEMA = {"type": "array", "items": {"type": "string"}}
+
+# Review output: a verdict-bearing structured review. Used by codex_review_changes.
 FINDINGS_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -404,39 +460,10 @@ FINDINGS_OUTPUT_SCHEMA = {
         "summary": {"type": "string"},
         "verdict": {"type": "string", "enum": ["pass", "concerns", "fail", "unknown"]},
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-        "findings": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "severity": {
-                        "type": "string",
-                        "enum": ["critical", "high", "medium", "low", "nit"],
-                    },
-                    "title": {"type": "string"},
-                    "file": {"type": ["string", "null"]},
-                    "line": {"type": ["integer", "null"]},
-                    "line_end": {"type": ["integer", "null"]},
-                    "evidence": {"type": "string"},
-                    "risk": {"type": "string"},
-                    "recommendation": {"type": "string"},
-                },
-                "required": [
-                    "severity",
-                    "title",
-                    "file",
-                    "line",
-                    "line_end",
-                    "evidence",
-                    "risk",
-                    "recommendation",
-                ],
-            },
-        },
-        "questions": {"type": "array", "items": {"type": "string"}},
-        "assumptions": {"type": "array", "items": {"type": "string"}},
-        "next_steps": {"type": "array", "items": {"type": "string"}},
+        "findings": _FINDINGS_ARRAY_SCHEMA,
+        "questions": _STR_ARRAY_SCHEMA,
+        "assumptions": _STR_ARRAY_SCHEMA,
+        "next_steps": _STR_ARRAY_SCHEMA,
     },
     "required": [
         "summary",
@@ -447,4 +474,19 @@ FINDINGS_OUTPUT_SCHEMA = {
         "assumptions",
         "next_steps",
     ],
+}
+
+# Consult output: a read-only answer. Same shape MINUS verdict/confidence — Codex is
+# never asked to invent a verdict for plain Q&A (#31). Used by codex_consult.
+CONSULT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"type": "string"},
+        "findings": _FINDINGS_ARRAY_SCHEMA,
+        "questions": _STR_ARRAY_SCHEMA,
+        "assumptions": _STR_ARRAY_SCHEMA,
+        "next_steps": _STR_ARRAY_SCHEMA,
+    },
+    "required": ["summary", "findings", "questions", "assumptions", "next_steps"],
 }
