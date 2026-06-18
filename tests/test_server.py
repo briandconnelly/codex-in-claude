@@ -646,6 +646,84 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     assert res["error"]["offending_param"] == "isolation"
 
 
+# --- delegate_dry_run --------------------------------------------------------
+def _init_repo(tmp_path):
+    import subprocess
+
+    def g(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    g("init", "-q")
+    g("config", "user.email", "t@t.co")
+    g("config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    return tmp_path
+
+
+async def test_delegate_dry_run_preview(monkeypatch, clean_env, tmp_path):
+    _init_repo(tmp_path)
+
+    def no_create(*a, **k):  # a dry run must never create a worktree or spend
+        raise AssertionError("delegate dry run must not create a worktree")
+
+    monkeypatch.setattr(worktree, "create", no_create)
+    res = await server.codex_delegate_dry_run("add a feature", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_delegate_dry_run"
+    assert res["tier"] == "propose"
+    assert res["sandbox"] == "workspace-write"
+    assert res["prompt_bytes"] > 0
+    plan = res["worktree_plan"]
+    assert plan["tracked_files"] == 1
+    assert plan["uncommitted_tracked_files"] == 0
+    assert plan["untracked_files"] == 0
+    assert plan["head_subject"] == "init"
+    assert plan["note"]  # caveat is always present
+
+
+async def test_delegate_dry_run_not_a_git_repo(clean_env, tmp_path):
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+
+
+async def test_delegate_dry_run_no_commits(clean_env, tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+
+
+async def test_delegate_dry_run_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+
+
+async def test_delegate_dry_run_invalid_workspace(clean_env):
+    res = await server.codex_delegate_dry_run("x", workspace_root="relative/path")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_delegate_dry_run_input_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_delegate_dry_run("z" * 2000, workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+
+
+async def test_delegate_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
 def test_diffstat_counts():
     diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n-removed\n unchanged\n"
     summary = server._diffstat(diff)
@@ -698,6 +776,7 @@ class _FakeStore:
         self._status = status_dict
         self._record = record
         self._result_json = result_json
+        self.poll_after_ms = JOB_POLL_AFTER_MS  # base for the job_running backoff hint
         self.started = []
         self.cancelled = []
         self.consumed = []
@@ -947,8 +1026,15 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_7():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-7"
+def test_fingerprint_is_schema_8():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-8"
+
+
+def test_capabilities_lists_delegate_dry_run():
+    caps = server.codex_capabilities()
+    assert "codex_delegate_dry_run" in caps["free_tools"]
+    details = {t["name"]: t for t in caps["tool_details"]}
+    assert details["codex_delegate_dry_run"]["cost"] == "free"
 
 
 def _param_enum(param_schema: dict) -> list | None:
@@ -1017,6 +1103,18 @@ async def test_job_running_error_is_actionable(monkeypatch, clean_env, tmp_path)
     # poll targets the same workspace rather than risking a wrong-workspace miss.
     assert err["repair_tool_params"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
     assert err["retry_after_ms"] == JOB_POLL_AFTER_MS
+
+
+async def test_job_running_retry_after_echoes_record_poll_hint(monkeypatch, clean_env, tmp_path):
+    # job_result on a running job suggests the same backed-off retry the status record
+    # already computed (the growing poll hint), not a separately recomputed value.
+    rec = _ok_record("running")
+    rec["poll_after_ms"] = 6000  # the store's grown backoff for a long-running job
+    store = _FakeStore(record=rec, result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "job_running"
+    assert res["error"]["retry_after_ms"] == 6000  # echoed from the record's poll_after_ms
 
 
 async def test_job_running_repair_omits_workspace_when_not_given(monkeypatch, clean_env, tmp_path):

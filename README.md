@@ -73,11 +73,16 @@ The MCP server is launched on demand via `uvx` from a pinned release tag, so upd
 
 - `codex_status` — readiness, version, auth, resolved defaults.
 - `codex_dry_run(scope, …)` — preview a review's scope/diff size/redactions before spending.
+- `codex_delegate_dry_run(task, …)` — preview a delegate's seeded baseline (HEAD commit, plus
+  tracked, uncommitted, and untracked counts and size) and prompt size before spending; no worktree
+  is created.
 - `codex_capabilities` — tool inventory + result fingerprint.
 - `codex_job_status(job_id, …)` / `codex_job_result` / `codex_job_consume_result` /
   `codex_job_cancel` / `codex_job_list` — background-job lifecycle. State is disk-backed and
   survives server restarts; jobs are bounded by a wall-clock deadline with TTL + count-cap
-  eviction. Honor `poll_after_ms`; don't poll in a tight loop.
+  eviction. Honor `poll_after_ms` (it grows with a running job's elapsed runtime, bounded, so you
+  back off automatically); don't poll in a tight loop. Results are retained `ttl_seconds` **after**
+  a job completes, so `expires_at` is null while it runs and is set once it finishes.
 
 Slash commands wrap these: `/codex:status`, `/codex:consult`, `/codex:review`,
 `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
@@ -91,8 +96,9 @@ Every tool returns a discriminated envelope keyed by `ok`. The success shape dep
 all of `codex_consult`/`codex_review_changes`/`codex_delegate` carry `summary`/`findings`/`meta`,
 but the review-only `verdict`/`confidence` appear solely on `codex_review_changes` and the proposed
 `diff` only on `codex_delegate` — consult (Q&A) carries neither a verdict nor a diff. `codex_status`,
-`codex_capabilities`, the `codex_job_*` lifecycle tools, and `codex_dry_run` return their own
-documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
+`codex_capabilities`, the `codex_job_*` lifecycle tools, `codex_dry_run`, and `codex_delegate_dry_run`
+return their own documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading
+fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
 
 - `code` — a stable error code from a fixed set (e.g. `unsupported_isolation`, `invalid_scope`,
   `job_running`, `job_not_found`).

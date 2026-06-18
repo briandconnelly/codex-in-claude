@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-7"
+FINGERPRINT = "codex-in-claude/0.1/schema-8"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -305,7 +305,10 @@ class JobStarted(BaseModel):
     status: JobState = "running"
     started_at: str  # ISO-8601 UTC
     deadline_seconds: int  # wall-clock cap after which a poll reaps the job
-    poll_after_ms: int = JOB_POLL_AFTER_MS
+    poll_after_ms: int = JOB_POLL_AFTER_MS  # initial poll delay; grows per poll (see JobStatus)
+    # Results are retained `ttl_seconds` AFTER the job completes — the retention
+    # window, not a countdown from now. `expires_at` is therefore null until the job
+    # finishes; codex_job_status populates it once a terminal state is reached.
     ttl_seconds: int
     expires_at: str | None = None
     meta: Meta
@@ -323,7 +326,12 @@ class JobStatus(BaseModel):
     started_at: str
     elapsed_ms: int
     deadline_seconds: int
+    # Suggested delay before the NEXT poll. For a running job this grows with
+    # elapsed runtime (bounded) so successive polls back off instead of tight-
+    # looping at the flat base; honor it rather than polling on a fixed interval.
     poll_after_ms: int = JOB_POLL_AFTER_MS
+    # Results are retained `ttl_seconds` after the job COMPLETES. `expires_at` is null
+    # while running (no completion time yet) and is set once the job is terminal.
     ttl_seconds: int
     expires_at: str | None = None
     result_available: bool = False  # true once status == done
@@ -357,8 +365,42 @@ class DryRunResult(BaseModel):
     truncation_hint: str | None = None
     redacted_paths_count: int = 0
     redacted_paths: list[str] = Field(default_factory=list)
-    worktree_plan: str | None = None  # for propose: where the temp worktree lands
     security_warnings: list[str] = Field(default_factory=list)
+    fingerprint: str = FINGERPRINT
+
+
+class WorktreePlan(BaseModel):
+    """The baseline a `codex_delegate` run would seed from, previewed read-only with
+    no worktree created. Counts are advisory — uncommitted tracked changes are
+    reported but their replay into the worktree is not validated by the preview."""
+
+    model_config = ConfigDict(extra="forbid")
+    head_commit: str  # the HEAD commit the worktree detaches at
+    head_subject: str | None = None  # short subject of HEAD, if readable
+    tracked_files: int  # entries in the HEAD tree (blobs + submodule gitlinks)
+    tracked_bytes: int  # approximate total size (blob sizes; gitlinks count as 0)
+    uncommitted_tracked_files: int  # tracked files changed vs HEAD (would be replayed)
+    untracked_files: int  # untracked files (delegate never copies these)
+    note: str | None = None  # plain-language caveats about the previewed baseline
+
+
+class DelegateDryRunResult(BaseModel):
+    """Free preview of what a `codex_delegate`/`codex_delegate_async` run WOULD do —
+    no Codex call, no spend, and no worktree created. `tier`/`sandbox` describe the
+    previewed propose run, not this read-only preview."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: Literal[True] = True
+    tool: Literal["codex_delegate_dry_run"] = "codex_delegate_dry_run"
+    cwd: str
+    workspace_source: str | None = None
+    workspace_warning: str | None = None
+    tier: Tier = "propose"
+    sandbox: Sandbox = "workspace-write"
+    isolation: Isolation
+    prompt_bytes: int  # full UTF-8 size of the delegate prompt that would be sent
+    max_input_bytes: int  # the task byte limit the real run enforces
+    worktree_plan: WorktreePlan
     fingerprint: str = FINGERPRINT
 
 
@@ -414,6 +456,7 @@ CAPABILITIES_SCHEMA = CapabilitiesResult.model_json_schema()
 JOB_STARTED_SCHEMA = _object_union_schema(TypeAdapter(JobStarted | ErrorResult))
 JOB_STATUS_SCHEMA = _object_union_schema(TypeAdapter(JobStatus | ErrorResult))
 DRY_RUN_SCHEMA = _object_union_schema(TypeAdapter(DryRunResult | ErrorResult))
+DELEGATE_DRY_RUN_SCHEMA = _object_union_schema(TypeAdapter(DelegateDryRunResult | ErrorResult))
 JOB_LIST_SCHEMA = _object_union_schema(TypeAdapter(JobListResult | ErrorResult))
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via

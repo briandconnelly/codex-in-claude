@@ -135,6 +135,11 @@ def _usage_from(blob: dict) -> Usage | None:
     total = _int("total_tokens", "total")
     if input_tokens is None and output_tokens is None and total is None:
         return None
+    # The current codex CLI emits token_count without a total, so derive it from
+    # input + output when both are present (cached is a subset of input, not an
+    # addend). An explicit CLI total is still honored verbatim for forward-compat. (#28)
+    if total is None and input_tokens is not None and output_tokens is not None:
+        total = input_tokens + output_tokens
     return Usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,

@@ -488,6 +488,39 @@ def test_deadline_and_expiry_helpers(tmp_path):
     assert store._expired({}) is False
 
 
+def test_poll_backoff_grows_and_is_bounded():
+    from codex_in_claude._core.jobs import (
+        DEFAULT_POLL_AFTER_MS,
+        MAX_POLL_AFTER_MS,
+        poll_backoff_ms,
+    )
+
+    # Floored at the base for a just-started job, then grows with elapsed, then caps.
+    assert poll_backoff_ms(0) == DEFAULT_POLL_AFTER_MS
+    assert poll_backoff_ms(DEFAULT_POLL_AFTER_MS // 2) == DEFAULT_POLL_AFTER_MS
+    assert poll_backoff_ms(5000) == 5000
+    assert poll_backoff_ms(10_000_000) == MAX_POLL_AFTER_MS
+    # Honors a custom base/cap.
+    assert poll_backoff_ms(0, base=2000) == 2000
+    assert poll_backoff_ms(9999, base=1, cap=3000) == 3000
+    # A cap below the base never drops the result under the base (floor wins).
+    assert poll_backoff_ms(0, base=5000, cap=1000) == 5000
+    assert poll_backoff_ms(9999, base=5000, cap=1000) == 5000
+
+
+def test_status_running_poll_after_ms_grows(tmp_path):
+    from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS, MAX_POLL_AFTER_MS
+
+    store = _store(tmp_path)
+    # A running job ~6s in gets a grown poll hint, bounded by the cap.
+    running = {"job_id": "j", "started_epoch": time.time() - 6}
+    d = store._status_dict(tmp_path, running, "running")
+    assert DEFAULT_POLL_AFTER_MS < d["poll_after_ms"] <= MAX_POLL_AFTER_MS
+    # A terminal job is not polled, so it keeps the flat base.
+    done = {"job_id": "j", "started_epoch": time.time() - 6, "completed_epoch": time.time()}
+    assert store._status_dict(tmp_path, done, "done")["poll_after_ms"] == store.poll_after_ms
+
+
 def test_read_envelope_oserror(tmp_path):
     # result.json is a directory -> reading raises OSError, handled as None
     (tmp_path / "result.json").mkdir()
