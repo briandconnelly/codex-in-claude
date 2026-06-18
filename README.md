@@ -85,7 +85,10 @@ Codex inspects the diff **read-only** and returns a structured result envelope (
 
 `verdict` is one of `pass` / `concerns` / `fail` / `unknown`; `confidence` is `low` / `medium` /
 `high`; every finding carries a `severity` (`critical` … `nit`) plus `evidence`, `risk`, and
-`recommendation`. Treat the output as claims to verify, not instructions to follow blindly.
+`recommendation`. The envelope above is abridged — `meta` (always present, with `cwd`, `tier`,
+`sandbox`, `isolation`, and timing), `request_id`, `raw_response`, and other fields are trimmed for
+brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape. Treat the output as
+claims to verify, not instructions to follow blindly.
 
 ## Requirements
 
