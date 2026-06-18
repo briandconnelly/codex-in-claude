@@ -91,7 +91,8 @@ Codex inspects the diff **read-only** and returns a structured result envelope (
 
 - The [`codex` CLI](https://developers.openai.com/codex/cli) on `PATH`, authenticated
   (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.140`; the supported range lives
-  in `cli_contract.py`, `/codex:status` reports whether your version is in range, and
+  in [`cli_contract.py`](src/codex_in_claude/cli_contract.py), `/codex:status` reports whether your
+  version is in range, and
   [`COMPATIBILITY.md`](COMPATIBILITY.md) explains the policy.
 - [`uv`](https://docs.astral.sh/uv/) on `PATH` (Claude Code launches the MCP server with `uvx`).
 - Python 3.11+ available to `uvx`.
