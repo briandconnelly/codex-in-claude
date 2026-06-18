@@ -83,3 +83,9 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   in-session instruction to merge that specific PR. Open the PR, get checks green, and stop.
 - Don't add `pull_request_target` workflows or self-approve reviews. After pushing new commits to a
   PR that was already reviewed, request fresh review rather than relying on the stale approval.
+- **Copilot reviews run automatically on every push to a PR.** Treat that feedback like any review
+  (see `receiving-code-review`): evaluate each comment on its merits — verify it against the code,
+  don't blindly implement — fix what's valid, and reply to each comment noting the resolution (or why
+  it was declined). Pushing the fix re-triggers Copilot, so iterate until it reports no new
+  actionable comments. A comment that has no code change (e.g. a false positive) still gets a reply
+  explaining why.
