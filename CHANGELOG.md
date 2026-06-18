@@ -5,6 +5,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+- CI now runs the gate on Python 3.14 (final since Oct 2025), which the trove classifiers already
+  advertised but the matrix did not verify. A packaging test
+  (`test_python_support_matrix_matches_classifiers`, `test_requires_python_floor_is_lowest_declared`)
+  now asserts the `pyproject.toml` Python classifiers, the `.github/workflows/ci.yml` matrix, and the
+  `requires-python` floor stay in lockstep, so the advertised support set and the verified one can't
+  silently diverge again. (#17)
+
 ### Changed
 - **Breaking (agent-visible surface):** fixed-value tool parameters now advertise their allowed
   values as schema `enum` constraints instead of plain strings, so agents see valid choices before
