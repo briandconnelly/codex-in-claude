@@ -334,7 +334,11 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     ),
     "codex_status": [],
     "codex_capabilities": [],
-    "codex_dry_run": _err_codes(_WORKSPACE_ERRORS, _GITDIFF_ERROR_CODES, ("internal_error",)),
+    "codex_dry_run": _err_codes(
+        _WORKSPACE_ERRORS,
+        _GITDIFF_ERROR_CODES,
+        ("unexpanded_env_placeholder", "internal_error"),
+    ),
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         (
@@ -1068,6 +1072,25 @@ async def codex_dry_run(
             ),
             meta=meta,
         ).model_dump(mode="json")
+
+    # Mirror codex_review_changes: surface an unexpanded ${...} env placeholder before
+    # gathering the diff, so the preview fails exactly where the paid review would (#46).
+    placeholder = _placeholder_error(
+        _base_meta(
+            cwd,
+            wres.source,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            scope=scope,
+            base=base,
+            commit=commit,
+        )
+    )
+    if placeholder is not None:
+        return placeholder
 
     max_bytes = config.max_input_bytes()
     try:

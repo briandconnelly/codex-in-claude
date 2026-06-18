@@ -646,6 +646,21 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     assert res["error"]["offending_param"] == "isolation"
 
 
+async def test_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
+    """A dry run must surface the same unexpanded_env_placeholder a review would
+    hit before gathering the diff (issue #46), not green-light it."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+async def test_dry_run_advertises_unexpanded_env_placeholder():
+    caps = server.codex_capabilities()
+    dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
+    assert "unexpanded_env_placeholder" in dry["error_codes"]
+
+
 # --- delegate_dry_run --------------------------------------------------------
 def _init_repo(tmp_path):
     import subprocess
