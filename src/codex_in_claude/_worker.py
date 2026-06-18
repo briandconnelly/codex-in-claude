@@ -77,6 +77,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
         timeout_seconds=spec["timeout_seconds"],
         model=spec.get("model"),
         git_timeout=spec["git_timeout"],
+        max_diff_bytes=spec.get("max_diff_bytes"),
         on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
     )
 

@@ -129,6 +129,25 @@ def test_max_input_bytes_floor(clean_env):
     assert config.max_input_bytes() == 1_000
 
 
+def test_max_delegate_diff_bytes_default(clean_env):
+    assert config.max_delegate_diff_bytes() == config.DEFAULT_MAX_DELEGATE_DIFF_BYTES
+
+
+def test_max_delegate_diff_bytes_override(clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "12345")
+    assert config.max_delegate_diff_bytes() == 12345
+
+
+def test_max_delegate_diff_bytes_invalid_falls_back(clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "notanint")
+    assert config.max_delegate_diff_bytes() == config.DEFAULT_MAX_DELEGATE_DIFF_BYTES
+
+
+def test_max_delegate_diff_bytes_floor(clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "5")
+    assert config.max_delegate_diff_bytes() == 1_000
+
+
 def test_job_defaults(clean_env):
     assert config.job_ttl_seconds() == config.DEFAULT_JOB_TTL_SECONDS
     assert config.job_max_seconds() == config.DEFAULT_JOB_MAX_SECONDS

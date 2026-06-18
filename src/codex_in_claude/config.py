@@ -17,6 +17,10 @@ ENV_PREFIX = "CODEX_IN_CLAUDE_"
 MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 10, 600
 DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_INPUT_BYTES = 200_000
+# Byte cap for the diff a delegate run returns inline. Oversized diffs are
+# truncated with meta.truncated/meta.truncation_hint so agent token cost stays
+# bounded; the diffstat still reflects the full diff.
+DEFAULT_MAX_DELEGATE_DIFF_BYTES = 200_000
 DEFAULT_GIT_TIMEOUT_SECONDS = 60
 
 # Background-job knobs. TTL: how long a terminal record is kept. MAX_SECONDS: a
@@ -108,6 +112,13 @@ def clamp_timeout(value: int) -> int:
 
 def max_input_bytes() -> int:
     return max(1_000, _env_int(f"{ENV_PREFIX}MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES))
+
+
+def max_delegate_diff_bytes() -> int:
+    return max(
+        1_000,
+        _env_int(f"{ENV_PREFIX}MAX_DELEGATE_DIFF_BYTES", DEFAULT_MAX_DELEGATE_DIFF_BYTES),
+    )
 
 
 def git_timeout_seconds() -> int:

@@ -22,6 +22,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   returned diff. The agent-visible surface is unchanged, so `FINGERPRINT` is not bumped. (#4)
 
 ### Changed
+- **Breaking (agent-visible surface):** `codex_delegate`/`codex_delegate_async` now bound the inline
+  diff they return. A diff larger than the configured cap (default 200 KB, env
+  `CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES`, 1 KB floor) is truncated and the result sets
+  `meta.truncated=true` with a `meta.truncation_hint`; the diffstat in `meta.context_summary` still
+  reflects the full diff. This keeps a large generated change from flooding the agent's context with
+  unbounded, unpredictable token cost. `FINGERPRINT` bumps to `codex-in-claude/0.1/schema-3`. (#8)
 - **Breaking (agent-visible surface):** `codex_job_status`/`codex_job_cancel` results gain a
   `cleanup_warnings: string[]` field (non-empty only when a cancelled/timed-out job's worktree could
   not be removed). `FINGERPRINT` bumps to `codex-in-claude/0.1/schema-2`. (#3)

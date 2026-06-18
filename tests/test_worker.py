@@ -49,6 +49,37 @@ def test_worker_writes_result(tmp_path, monkeypatch):
     assert out["summary"] == "do x"
 
 
+def test_worker_threads_max_diff_bytes(tmp_path, monkeypatch):
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path), max_diff_bytes=4096)
+
+    seen = {}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        seen["max_diff_bytes"] = kw.get("max_diff_bytes")
+        return {"ok": True, "tool": "codex_delegate", "summary": task}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    assert _worker.main([str(jd)]) == 0
+    assert seen["max_diff_bytes"] == 4096
+
+
+def test_worker_max_diff_bytes_absent_is_none(tmp_path, monkeypatch):
+    # Older specs lack the key; the worker forwards None so run_delegate defaults it.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    seen = {}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        seen["max_diff_bytes"] = kw.get("max_diff_bytes", "MISSING")
+        return {"ok": True, "tool": "codex_delegate", "summary": task}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    assert _worker.main([str(jd)]) == 0
+    assert seen["max_diff_bytes"] is None
+
+
 def test_worker_crash_writes_error(tmp_path, monkeypatch):
     jd = tmp_path / "job"
     _write_spec(jd, cwd=str(tmp_path))

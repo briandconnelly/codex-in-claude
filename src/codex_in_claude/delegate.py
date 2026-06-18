@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from codex_in_claude import codex, normalize, prompts
+from codex_in_claude import codex, config, normalize, prompts
 from codex_in_claude._core import worktree
 from codex_in_claude.schemas import (
     ContextSummary,
@@ -41,6 +41,21 @@ def _diffstat(diff: str) -> ContextSummary:
     return ContextSummary(files_changed=files, lines_added=added, lines_removed=removed)
 
 
+def _bound_diff(diff: str, meta: Meta, max_bytes: int) -> str:
+    """Cap an inline diff at max_bytes, stamping meta.truncated/truncation_hint when
+    it overflows. Mirrors the review-diff bound in `_core/gitdiff.py` so a delegate
+    run never returns an unbounded diff into the agent's context."""
+    encoded = diff.encode("utf-8", "replace")
+    if len(encoded) <= max_bytes:
+        return diff
+    meta.truncated = True
+    meta.truncation_hint = (
+        f"diff exceeded {max_bytes} bytes and was truncated; narrow the task to a "
+        "smaller change, or raise CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES to receive it whole"
+    )
+    return encoded[:max_bytes].decode("utf-8", "ignore")
+
+
 def _apply_run_meta(meta: Meta, result: codex.CodexExecResult) -> tuple[Usage | None, str | None]:
     """Stamp a finished run's process metadata onto meta; return (usage, session)."""
     meta.elapsed_ms = result.run.elapsed_ms
@@ -62,6 +77,7 @@ async def run_delegate(
     timeout_seconds: int,
     model: str | None,
     git_timeout: int,
+    max_diff_bytes: int | None = None,
     on_worktree_parent: Callable[[str], None] | None = None,
 ) -> dict:
     """Run the propose orchestration and return a SuccessResult|ErrorResult dict.
@@ -69,7 +85,9 @@ async def run_delegate(
     `meta` is the pre-built envelope meta (tier=propose). The worktree is always
     cleaned up, even on failure or codex error. `on_worktree_parent`, if given, is
     called with the temp worktree parent as soon as it exists so a background
-    worker can record it for hard-kill cleanup."""
+    worker can record it for hard-kill cleanup. `max_diff_bytes` caps the inline
+    diff (None → the configured default) so a large change cannot flood the agent's
+    context; the diffstat still reflects the full diff."""
     try:
         wt = worktree.create(cwd, timeout=git_timeout, on_parent=on_worktree_parent)
     except worktree.NotAGitRepoError as exc:
@@ -126,6 +144,9 @@ async def run_delegate(
     summary = (result.last_message or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
+    else:
+        cap = max_diff_bytes if max_diff_bytes is not None else config.max_delegate_diff_bytes()
+        diff = _bound_diff(diff, meta, cap)
     return SuccessResult(
         tool="codex_delegate",
         summary=summary,

@@ -261,6 +261,63 @@ async def test_delegate_success(monkeypatch, clean_env, tmp_path):
     assert removed["n"] == 1  # worktree always cleaned up
 
 
+async def _delegate_with_diff(monkeypatch, tmp_path, diff):
+    """Run codex_delegate with worktree mocked to return `diff`; return the result."""
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: diff)
+
+    async def fake(*a, **k):
+        return _fake_result("Implemented the change.")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    return await server.codex_delegate("do work", workspace_root=str(tmp_path))
+
+
+async def test_delegate_small_diff_not_truncated(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "1000")
+    diff = "diff --git a/x b/x\n+small\n"
+    res = await _delegate_with_diff(monkeypatch, tmp_path, diff)
+    assert res["ok"] is True
+    assert res["diff"] == diff
+    assert res["meta"]["truncated"] is False
+    assert res["meta"]["truncation_hint"] is None
+
+
+async def test_delegate_large_diff_truncated(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "1000")
+    # Many changed files so the diffstat would be large if computed post-truncation.
+    diff = "".join(f"diff --git a/f{i} b/f{i}\n+line {i}\n" for i in range(500))
+    res = await _delegate_with_diff(monkeypatch, tmp_path, diff)
+    assert res["ok"] is True
+    assert res["meta"]["truncated"] is True
+    assert res["meta"]["truncation_hint"]
+    assert len(res["diff"].encode("utf-8")) <= 1000
+    # Diffstat is computed from the FULL diff, not the truncated text.
+    assert res["meta"]["context_summary"]["files_changed"] == 500
+    assert res["meta"]["context_summary"]["lines_added"] == 500
+
+
+async def test_delegate_diff_truncation_handles_multibyte(monkeypatch, clean_env, tmp_path):
+    # A multibyte character straddling the byte cap must not raise or exceed the cap.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "1000")
+    diff = "diff --git a/x b/x\n+" + ("€" * 1000) + "\n"
+    res = await _delegate_with_diff(monkeypatch, tmp_path, diff)
+    assert res["ok"] is True
+    assert res["meta"]["truncated"] is True
+    assert len(res["diff"].encode("utf-8")) <= 1000
+
+
+async def test_delegate_empty_diff_not_truncated(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "1000")
+    res = await _delegate_with_diff(monkeypatch, tmp_path, "")
+    assert res["ok"] is True
+    assert "diff" not in res or res["diff"] is None
+    assert res["meta"]["truncated"] is False
+    assert res["summary"].startswith("Codex made no changes.")
+
+
 async def test_delegate_cleans_up_on_codex_error(monkeypatch, clean_env, tmp_path):
     wt = _fake_worktree(tmp_path)
     monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
@@ -576,6 +633,8 @@ async def test_delegate_async_returns_job_id(monkeypatch, clean_env, tmp_path):
     # the spawned command targets the worker module
     assert "codex_in_claude._worker" in store.started[0]["cmd"]
     assert store.started[0]["spec"]["task"] == "do x"
+    # The diff cap is snapshotted into the spec so the worker bounds its diff too.
+    assert store.started[0]["spec"]["max_diff_bytes"] == server.config.max_delegate_diff_bytes()
 
 
 async def test_delegate_async_not_a_git_repo(monkeypatch, clean_env, tmp_path):
@@ -734,8 +793,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_2():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-2"
+def test_fingerprint_is_schema_3():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-3"
 
 
 def test_job_status_model_surfaces_cleanup_warnings():

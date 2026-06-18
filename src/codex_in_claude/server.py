@@ -715,6 +715,7 @@ async def codex_delegate(
         timeout_seconds=timeout,
         model=model or d.model,
         git_timeout=config.git_timeout_seconds(),
+        max_diff_bytes=config.max_delegate_diff_bytes(),
     )
 
 
@@ -826,6 +827,7 @@ async def codex_delegate_async(
         "model": model or d.model,
         "timeout_seconds": deadline,
         "git_timeout": git_timeout,
+        "max_diff_bytes": config.max_delegate_diff_bytes(),
     }
     store = config.job_store()
 
