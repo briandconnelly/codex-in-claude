@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking (agent-visible surface):** fixed-value tool parameters now advertise their allowed
+  values as schema `enum` constraints instead of plain strings, so agents see valid choices before
+  the first call rather than learning them from a tool-result error. Covers `scope`
+  (`working_tree|branch|commit`) on `codex_review_changes`/`codex_dry_run` and `isolation`
+  (`inherit|ignore-config|ignore-rules`) on `codex_consult`/`codex_review_changes`/`codex_delegate`/
+  `codex_delegate_async`/`codex_dry_run`. Runtime validation is unchanged and still returns the
+  structured `unsupported_isolation`/`invalid_scope` envelopes as defense-in-depth. `FINGERPRINT`
+  bumps to `codex-in-claude/0.1/schema-4`. (#5)
+
 ### Fixed
 - Cancelling or timing out a `codex_delegate_async` job no longer leaks its throwaway git worktree.
   Previously the JobStore force-killed the worker with `SIGKILL`, so the worker's `finally` cleanup

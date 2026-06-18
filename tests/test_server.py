@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from typing import get_args
 
 import pytest
 
 from codex_in_claude import codex, server
 from codex_in_claude._core.runtime import CommandRun
-from codex_in_claude.schemas import FINGERPRINT
+from codex_in_claude.schemas import FINGERPRINT, Isolation, ReviewScope
 
 
 def _fake_result(last_message, *, exit_code=0, stderr="", events=""):
@@ -842,8 +843,37 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_3():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-3"
+def test_fingerprint_is_schema_4():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-4"
+
+
+def _param_enum(param_schema: dict) -> list | None:
+    """Pull the enum out of a tool param schema, tolerating the nullable anyOf form."""
+    if "enum" in param_schema:
+        return param_schema["enum"]
+    for branch in param_schema.get("anyOf", []):
+        if "enum" in branch:
+            return branch["enum"]
+    return None
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "param", "expected"),
+    [
+        ("codex_review_changes", "scope", list(get_args(ReviewScope))),
+        ("codex_review_changes", "isolation", list(get_args(Isolation))),
+        ("codex_dry_run", "scope", list(get_args(ReviewScope))),
+        ("codex_dry_run", "isolation", list(get_args(Isolation))),
+        ("codex_delegate", "isolation", list(get_args(Isolation))),
+        ("codex_delegate_async", "isolation", list(get_args(Isolation))),
+        ("codex_consult", "isolation", list(get_args(Isolation))),
+    ],
+)
+async def test_fixed_value_params_advertise_enum(tool_name, param, expected):
+    """Fixed-value params surface their allowed values as schema enums (issue #5)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    props = tools[tool_name].parameters["properties"]
+    assert _param_enum(props[param]) == expected
 
 
 def test_job_status_model_surfaces_cleanup_warnings():

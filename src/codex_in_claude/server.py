@@ -40,6 +40,7 @@ from codex_in_claude.schemas import (
     RawDefaults,
     RawResponse,
     ResolvedDefaults,
+    ReviewScope,
     Sandbox,
     StatusResult,
     SuccessResult,
@@ -383,7 +384,7 @@ async def codex_consult(
     workspace_root: str | None = None,
     extra_context: str | None = None,
     model: str | None = None,
-    isolation: str | None = None,
+    isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
@@ -510,14 +511,14 @@ def _gitdiff_error(exc: Exception, meta: Meta) -> dict:
 
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=RESULT_SCHEMA)
 async def codex_review_changes(
-    scope: str = "working_tree",
+    scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
     base: str | None = None,
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
     model: str | None = None,
-    isolation: str | None = None,
+    isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
 ) -> dict:
     """Ask Codex (a different model) to review your git changes for an independent
@@ -638,7 +639,7 @@ async def codex_delegate(
     ctx: Context | None = None,
     workspace_root: str | None = None,
     model: str | None = None,
-    isolation: str | None = None,
+    isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
 ) -> dict:
     """Delegate a coding task to Codex (a different model) in an isolated git
@@ -725,7 +726,7 @@ async def codex_delegate_async(
     ctx: Context | None = None,
     workspace_root: str | None = None,
     model: str | None = None,
-    isolation: str | None = None,
+    isolation: Isolation | None = None,
 ) -> dict:
     """Delegate a coding task to Codex in the background and get a `job_id` back
     immediately (does not block on the run).
@@ -862,13 +863,13 @@ async def codex_delegate_async(
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
 async def codex_dry_run(
-    scope: str = "working_tree",
+    scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
     base: str | None = None,
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
-    isolation: str | None = None,
+    isolation: Isolation | None = None,
 ) -> dict:
     """Preview what a `codex_review_changes` call would send — scope, diff size,
     redactions, truncation — with NO model call and no spend. Use it before a
