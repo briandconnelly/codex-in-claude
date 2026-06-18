@@ -43,6 +43,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `worktree_plan` field. It was always `null` on the review path (it previewed only
   `codex_review_changes`); the new `codex_delegate_dry_run` now owns the populated, structured
   worktree plan, so the perpetually-null field is removed rather than left misleading. (#29)
+- Async-job polling is more economical and legible. `codex_job_status` now returns a **growing**
+  `poll_after_ms` for a running job — it scales with elapsed runtime (bounded at 10s) instead of the
+  flat 1s, so an agent that honors the hint backs off naturally rather than polling ~20 times during
+  a typical ~20s delegate; the `job_running` error from `codex_job_result` carries the same backed-off
+  `retry_after_ms`. The `ttl_seconds`/`expires_at` semantics are now documented on the job schemas
+  and `codex_job_status`: results are retained `ttl_seconds` **after completion**, so `expires_at` is
+  null while a job runs and is set once it finishes (no more misreading a null expiry as "never
+  expires"). Behavior/docs only: the `poll_after_ms` field already existed and only its runtime value
+  changed — no tool/param/error-code/enum/schema-shape change — so `FINGERPRINT` is unchanged. (#30)
 - The `collaborating-with-codex` skill now documents the propose-tier `workspace-write` no-network
   constraint (on both `codex_delegate` and the background `codex_delegate_async`), the optional
   `paths` filter on `codex_review_changes`, the `/codex:*` slash commands, and a "Common mistakes"
@@ -91,6 +100,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
+  emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
+  perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of
+  input and are not added. An explicit CLI-provided total is still honored verbatim, preserving the
+  forward-compat hook. Populating an existing field with a value is not a surface change, so
+  `FINGERPRINT` is unchanged. (#28)
 - `codex_dry_run` now validates `isolation` the same way the active tools do, returning the
   structured `unsupported_isolation` error envelope instead of silently substituting the configured
   default. A dry run is meant to preview what a later active call would do, so an invalid value that
