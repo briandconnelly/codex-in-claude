@@ -83,9 +83,10 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   in-session instruction to merge that specific PR. Open the PR, get checks green, and stop.
 - Don't add `pull_request_target` workflows or self-approve reviews. After pushing new commits to a
   PR that was already reviewed, request fresh review rather than relying on the stale approval.
-- **Copilot reviews each PR on open, and again whenever a review is re-requested** (it does not
-  reliably re-review every push, so re-request after pushing fixes). Treat that feedback like any
-  review: evaluate each comment on its merits — verify it against the code, don't blindly implement —
-  fix what's valid, and reply to each comment noting the resolution. Then re-request review and
-  iterate until no new actionable comments remain. A comment you decline (e.g. a false positive)
-  still gets a reply explaining why.
+- **Copilot reviews each PR on open and on every push** — the repo enables Copilot review-on-push
+  (a `copilot_code_review` ruleset rule), and merging requires every review thread resolved
+  (`required_review_thread_resolution`). Treat that feedback like any review: evaluate each comment on
+  its merits — verify it against the code, don't blindly implement — fix what's valid, and reply to
+  each comment noting the resolution. Because each push re-triggers a review, iterate until it reports
+  no new actionable comments, then resolve the threads before merging. A comment you decline (e.g. a
+  false positive) still gets a reply explaining why, and its thread still needs resolving.
