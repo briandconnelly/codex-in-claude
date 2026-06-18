@@ -16,6 +16,13 @@ DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_INPUT_BYTES = 200_000
 DEFAULT_GIT_TIMEOUT_SECONDS = 60
 
+# Background-job knobs. TTL: how long a terminal record is kept. MAX_SECONDS: a
+# job's wall-clock cap (a poll past it reaps the job). MAX_COUNT: retained records
+# per workspace (oldest terminal evicted first).
+DEFAULT_JOB_TTL_SECONDS = 86_400
+DEFAULT_JOB_MAX_SECONDS = 1_800
+DEFAULT_JOB_MAX_COUNT = 50
+
 VALID_TIERS = ("consult", "propose", "apply")
 VALID_ISOLATIONS = ("inherit", "ignore-config", "ignore-rules")
 
@@ -102,6 +109,18 @@ def max_input_bytes() -> int:
 
 def git_timeout_seconds() -> int:
     return max(1, _env_int(f"{ENV_PREFIX}GIT_TIMEOUT_SECONDS", DEFAULT_GIT_TIMEOUT_SECONDS))
+
+
+def job_ttl_seconds() -> int:
+    return max(60, _env_int(f"{ENV_PREFIX}JOB_TTL", DEFAULT_JOB_TTL_SECONDS))
+
+
+def job_max_seconds() -> int:
+    return max(60, min(7_200, _env_int(f"{ENV_PREFIX}JOB_MAX_SECONDS", DEFAULT_JOB_MAX_SECONDS)))
+
+
+def job_max_count() -> int:
+    return max(1, min(1_000, _env_int(f"{ENV_PREFIX}JOB_MAX_COUNT", DEFAULT_JOB_MAX_COUNT)))
 
 
 def sandbox_for_tier(tier: str) -> str:

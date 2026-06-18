@@ -115,3 +115,34 @@ def test_state_dir_override(clean_env, tmp_path):
 def test_max_input_bytes_floor(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "5")
     assert config.max_input_bytes() == 1_000
+
+
+def test_job_defaults(clean_env):
+    assert config.job_ttl_seconds() == config.DEFAULT_JOB_TTL_SECONDS
+    assert config.job_max_seconds() == config.DEFAULT_JOB_MAX_SECONDS
+    assert config.job_max_count() == config.DEFAULT_JOB_MAX_COUNT
+
+
+def test_job_knobs_clamp_low(clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_TTL", "10")
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_MAX_SECONDS", "5")
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_MAX_COUNT", "0")
+    assert config.job_ttl_seconds() == 60
+    assert config.job_max_seconds() == 60
+    assert config.job_max_count() == 1
+
+
+def test_job_knobs_clamp_high(clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_MAX_SECONDS", "999999")
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_MAX_COUNT", "999999")
+    assert config.job_max_seconds() == 7_200
+    assert config.job_max_count() == 1_000
+
+
+def test_job_knobs_env_override(clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_TTL", "3600")
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_MAX_SECONDS", "600")
+    clean_env.setenv("CODEX_IN_CLAUDE_JOB_MAX_COUNT", "10")
+    assert config.job_ttl_seconds() == 3600
+    assert config.job_max_seconds() == 600
+    assert config.job_max_count() == 10
