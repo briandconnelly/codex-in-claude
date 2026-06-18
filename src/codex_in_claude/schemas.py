@@ -7,10 +7,18 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
+
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-4"
+FINGERPRINT = "codex-in-claude/0.1/schema-5"
+
+# Default poll/backoff interval (ms) shared by job handles and the job_running
+# error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
+# Sourced from _core (the lower layer that owns the value) so a live job record's
+# poll_after_ms and this constant can never drift.
+JOB_POLL_AFTER_MS = DEFAULT_POLL_AFTER_MS
 
 Severity = Literal["critical", "high", "medium", "low", "nit"]
 Verdict = Literal["pass", "concerns", "fail", "unknown"]
@@ -172,9 +180,15 @@ class ErrorInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: ErrorCode
     message: str
-    repair: str
+    repair: str  # prose guidance; the structured fields below are the machine-actionable form
     offending_param: str | None = None
     retryable: bool = False
+    # Machine-actionable repair metadata — set when known so an agent can recover
+    # without parsing `repair` prose. All optional/backward-compatible.
+    allowed_values: list[str] | None = None  # concrete valid values for an enum-like param
+    repair_tool: str | None = None  # a tool to call to recover (e.g. codex_job_status)
+    repair_tool_params: dict[str, str] | None = None  # args for repair_tool, e.g. {"job_id": ...}
+    retry_after_ms: int | None = None  # suggested backoff before retrying a retryable error
 
 
 class ErrorResult(BaseModel):
@@ -231,6 +245,9 @@ class ToolCapability(BaseModel):
     required_params: list[str] = Field(default_factory=list)
     key_optional_params: list[str] = Field(default_factory=list)
     returns: str
+    # Error codes this tool may return. Advisory, not exhaustive: a guide for
+    # branching/recovery, not a closed contract. Every entry is a valid ErrorCode.
+    error_codes: list[str] = Field(default_factory=list)
 
 
 class CapabilitiesResult(BaseModel):
@@ -262,7 +279,7 @@ class JobStarted(BaseModel):
     status: JobState = "running"
     started_at: str  # ISO-8601 UTC
     deadline_seconds: int  # wall-clock cap after which a poll reaps the job
-    poll_after_ms: int = 1000
+    poll_after_ms: int = JOB_POLL_AFTER_MS
     ttl_seconds: int
     expires_at: str | None = None
     meta: Meta
@@ -280,7 +297,7 @@ class JobStatus(BaseModel):
     started_at: str
     elapsed_ms: int
     deadline_seconds: int
-    poll_after_ms: int = 1000
+    poll_after_ms: int = JOB_POLL_AFTER_MS
     ttl_seconds: int
     expires_at: str | None = None
     result_available: bool = False  # true once status == done
