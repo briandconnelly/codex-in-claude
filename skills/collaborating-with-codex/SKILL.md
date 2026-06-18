@@ -115,11 +115,13 @@ Every tool returns an envelope:
 
 ## Knobs (optional params / env)
 
-Common per-call params: `model` (override the Codex model) and `isolation`
-(`inherit` (default), `ignore-config`, or `ignore-rules`). The synchronous active
-calls (`codex_consult`, `codex_review_changes`, `codex_delegate`) also take
-`timeout_seconds` (clamped 10–600; default 180); `codex_delegate_async` does not
-accept it and is bounded by the background-job deadline
+Optional per-call params (not every tool takes every one): `model` (override the
+Codex model) — on the active tools `codex_consult`, `codex_review_changes`,
+`codex_delegate`, and `codex_delegate_async`; `isolation` (`inherit` (default),
+`ignore-config`, or `ignore-rules`) — on those four plus `codex_dry_run`; and
+`timeout_seconds` (clamped 10–600; default 180) — only on the synchronous active
+calls (`codex_consult`, `codex_review_changes`, `codex_delegate`), as
+`codex_delegate_async` is bounded by the background-job deadline
 (`CODEX_IN_CLAUDE_JOB_MAX_SECONDS`) instead. For env vars (including the
 background-job knobs), see the README configuration table; use `codex_status` for the
 resolved defaults and `codex_capabilities` for the tool params and error codes.
