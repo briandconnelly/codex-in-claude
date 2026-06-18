@@ -248,7 +248,11 @@ def classify_failure(
         retry_after = cli_contract.parse_retry_after_ms(
             run.stderr, run.stdout, last_message, event_error
         )
-        return _rate_limit_error(retry_after or cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS)
+        # Explicit None check: a parsed "Retry-After: 0" (retry now) is a valid delay
+        # and must be preserved, not coalesced to the default by a falsey check.
+        if retry_after is None:
+            retry_after = cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
+        return _rate_limit_error(retry_after)
     detail = (event_error or run.stderr or run.stdout).strip()[:300]
     return ErrorInfo(
         code="nonzero_exit",

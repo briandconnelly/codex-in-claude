@@ -134,6 +134,14 @@ def test_classify_rate_limited_with_retry_after():
     assert err.retry_after_ms == 30_000
 
 
+def test_classify_rate_limited_preserves_zero_retry_after():
+    # An explicit "Retry-After: 0" (retry now) must be preserved, not coalesced to
+    # the default backoff by a falsey check.
+    err = codex.classify_failure(CommandRun("", "rate limit hit; Retry-After: 0", 1, 1, False))
+    assert err.code == "codex_rate_limited"
+    assert err.retry_after_ms == 0
+
+
 def test_classify_rate_limited_default_backoff():
     err = codex.classify_failure(CommandRun("", "you have hit your usage limit", 1, 1, False))
     assert err.code == "codex_rate_limited"
