@@ -26,6 +26,7 @@ tools in a loop.
 | Codex to implement a task and return a diff | `codex_delegate` | model call |
 | To implement a long task in the background | `codex_delegate_async` | model call |
 | To preview a review's scope/size before spending | `codex_dry_run` | free |
+| To preview a delegate's seeded baseline + prompt size before spending | `codex_delegate_dry_run` | free |
 | Readiness / version / auth | `codex_status` | free |
 | The tool list + result fingerprint | `codex_capabilities` | free |
 
@@ -48,6 +49,12 @@ Users may also invoke these via slash commands: `/codex:status`, `/codex:consult
   self-contained (no `git push`/`fetch`, `gh`, `curl`, publish, or dependency
   install; those fail with a DNS/host-resolution error). Do any network step
   yourself afterward.
+- **codex_delegate_dry_run** — free, read-only preview of a `codex_delegate`/
+  `codex_delegate_async` call: the baseline its worktree would seed from (HEAD
+  commit, tracked-file count/size, uncommitted-tracked and untracked counts) plus
+  the prompt size that would be sent — no model call, no spend, no worktree created.
+  Use it before delegating to confirm scope and repo before committing to cost. The
+  uncommitted-replay count is advisory (see `worktree_plan.note`).
 
 Always pass an absolute `workspace_root` (or rely on the MCP root) so Codex targets
 the intended repository — otherwise the call may resolve to the server's own cwd
@@ -117,8 +124,9 @@ Every tool returns an envelope:
 
 Optional per-call params (not every tool takes every one): `model` (override the
 Codex model) — on the active tools `codex_consult`, `codex_review_changes`,
-`codex_delegate`, and `codex_delegate_async`; `isolation` (`inherit` (default),
-`ignore-config`, or `ignore-rules`) — on those four plus `codex_dry_run`; and
+`codex_delegate`, and `codex_delegate_async`, plus the free `codex_delegate_dry_run`
+preview; `isolation` (`inherit` (default), `ignore-config`, or `ignore-rules`) — on
+those four plus `codex_dry_run` and `codex_delegate_dry_run`; and
 `timeout_seconds` (clamped 10–600; default 180) — only on the synchronous active
 calls (`codex_consult`, `codex_review_changes`, `codex_delegate`), as
 `codex_delegate_async` is bounded by the background-job deadline

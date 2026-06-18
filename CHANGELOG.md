@@ -6,6 +6,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Added
+- **Breaking (agent-visible surface):** new free `codex_delegate_dry_run(task, …)` tool — a
+  zero-spend preview of a `codex_delegate`/`codex_delegate_async` run, mirroring how `codex_dry_run`
+  previews `codex_review_changes`. It reports the baseline the throwaway worktree would seed from
+  (HEAD commit + subject, tracked-file count and approximate size, uncommitted-tracked and untracked
+  counts) plus the prompt bytes that would be sent and the resolved workspace/isolation — with **no**
+  model call and **no** worktree created. It runs the same zero-spend validation the real delegate
+  does (workspace, isolation, task size, git-repo-with-HEAD), so a failure here is one the paid call
+  would also hit. The baseline preview is read-only and therefore advisory: uncommitted tracked
+  changes are counted but their replay into the worktree is not validated (the `worktree_plan.note`
+  field says so). Backed by a new read-only `worktree.plan()` helper in `_core`. `FINGERPRINT` →
+  `schema-7`. (#29)
 - CodeQL code scanning and dependency-review CI workflows, added now that the repository is public
   (both are free for public repos). CodeQL runs on push/PR to `main` plus a weekly schedule;
   dependency-review fails a PR that introduces a dependency with a high-or-worse advisory.
@@ -28,6 +39,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- **Breaking (agent-visible surface):** the `codex_dry_run` result no longer carries the
+  `worktree_plan` field. It was always `null` on the review path (it previewed only
+  `codex_review_changes`); the new `codex_delegate_dry_run` now owns the populated, structured
+  worktree plan, so the perpetually-null field is removed rather than left misleading. (#29)
 - The `collaborating-with-codex` skill now documents the propose-tier `workspace-write` no-network
   constraint (on both `codex_delegate` and the background `codex_delegate_async`), the optional
   `paths` filter on `codex_review_changes`, the `/codex:*` slash commands, and a "Common mistakes"

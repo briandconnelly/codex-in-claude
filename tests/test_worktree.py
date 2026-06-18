@@ -120,6 +120,86 @@ def test_no_commits(tmp_path):
         worktree.create(str(tmp_path), timeout=30)
 
 
+# --- plan(): read-only baseline preview, no worktree created ------------------
+
+
+def test_plan_clean_repo(repo):
+    plan = worktree.plan(str(repo), timeout=30)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert plan.head_commit == head
+    assert plan.head_subject == "init"
+    assert plan.tracked_files == 1
+    assert plan.tracked_bytes == len(b"x = 1\n")
+    assert plan.uncommitted_tracked_files == 0
+    assert plan.untracked_files == 0
+
+
+def test_plan_counts_uncommitted_and_untracked(repo):
+    (repo / "a.py").write_text("x = 2\n")  # uncommitted tracked change
+    (repo / "new.txt").write_text("hi\n")  # untracked
+    plan = worktree.plan(str(repo), timeout=30)
+    assert plan.uncommitted_tracked_files == 1
+    assert plan.untracked_files == 1
+    # tracked_files/bytes reflect the HEAD baseline, not the dirty working tree.
+    assert plan.tracked_files == 1
+    assert plan.tracked_bytes == len(b"x = 1\n")
+
+
+def test_plan_counts_staged_changes_as_uncommitted(repo):
+    (repo / "a.py").write_text("x = 99\n")
+    _git(repo, "add", "-A")  # staged but not committed
+    plan = worktree.plan(str(repo), timeout=30)
+    assert plan.uncommitted_tracked_files == 1
+
+
+def test_plan_does_not_create_a_worktree(repo, monkeypatch):
+    def boom(*a, **k):  # plan must never call create()
+        raise AssertionError("plan must not create a worktree")
+
+    monkeypatch.setattr(worktree, "create", boom)
+    worktree.plan(str(repo), timeout=30)
+    # And no stray worktrees were registered.
+    out = subprocess.run(
+        ["git", "worktree", "list"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    assert out.count("\n") == 1  # only the main worktree
+
+
+def test_tracked_files_and_bytes_skips_nonblob_and_malformed(repo, monkeypatch):
+    # A submodule gitlink reports size '-'; a malformed line is ignored entirely.
+    listing = (
+        "100644 blob abc123 5\ta.py\n"
+        "160000 commit deadbeef -\tvendor/sub\n"  # submodule: counted, 0 bytes
+        "garbage line without tab\n"  # malformed: skipped
+    )
+    monkeypatch.setattr(worktree, "_git_ok", lambda *a, **k: listing)
+    files, total = worktree._tracked_files_and_bytes(str(repo), 30)
+    assert files == 2
+    assert total == 5
+
+
+def test_count_nonempty_lines_treats_git_failure_as_zero(repo):
+    import subprocess
+
+    failed = subprocess.CompletedProcess(["git"], 1, "", "boom")
+    assert worktree._count_nonempty_lines(failed) == 0
+    ok = subprocess.CompletedProcess(["git"], 0, "x\n\n y \n", "")
+    assert worktree._count_nonempty_lines(ok) == 2
+
+
+def test_plan_not_a_git_repo(tmp_path):
+    with pytest.raises(worktree.NotAGitRepoError):
+        worktree.plan(str(tmp_path), timeout=30)
+
+
+def test_plan_no_commits(tmp_path):
+    _git(tmp_path, "init", "-q")
+    with pytest.raises(worktree.NoCommitsError):
+        worktree.plan(str(tmp_path), timeout=30)
+
+
 def test_remove_is_idempotent(repo):
     wt = worktree.create(str(repo), timeout=30)
     worktree.remove(str(repo), wt, timeout=30)
