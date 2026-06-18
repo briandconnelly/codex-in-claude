@@ -26,12 +26,27 @@ def _declared_py_minors() -> set[str]:
     }
 
 
+def _parse_py_matrix(workflow: str) -> set[str]:
+    """Python minors from a workflow's `python-version` matrix.
+
+    Handles both the inline-list form (`python-version: ["3.11", "3.12"]`) and the
+    block-list form (`python-version:` followed by indented `- "3.11"` items), so a
+    harmless YAML reformat doesn't false-fail the drift guard."""
+    inline = re.search(r"python-version:\s*\[([^\]]*)\]", workflow)
+    if inline:
+        return set(re.findall(r"\d+\.\d+", inline.group(1)))
+    # Block-list form: capture the contiguous run of `- <version>` items that
+    # follows the key, stopping at the first line that isn't a list item.
+    block = re.search(
+        r"python-version:[ \t]*\n((?:[ \t]*-[ \t]*['\"]?\d+\.\d+['\"]?[ \t]*\n)+)", workflow
+    )
+    assert block, "could not find a python-version matrix in the workflow"
+    return set(re.findall(r"\d+\.\d+", block.group(1)))
+
+
 def _ci_matrix_minors() -> set[str]:
     """Python minor versions exercised by the CI gate matrix in ci.yml."""
-    ci = (ROOT / ".github/workflows/ci.yml").read_text()
-    m = re.search(r"python-version:\s*\[([^\]]*)\]", ci)
-    assert m, "could not find python-version matrix in .github/workflows/ci.yml"
-    return set(re.findall(r"\d+\.\d+", m.group(1)))
+    return _parse_py_matrix((ROOT / ".github/workflows/ci.yml").read_text())
 
 
 def test_python_support_matrix_matches_classifiers():
@@ -39,6 +54,15 @@ def test_python_support_matrix_matches_classifiers():
     declared = _declared_py_minors()
     assert declared, "no Python minor classifiers found"
     assert declared == _ci_matrix_minors()
+
+
+def test_matrix_parser_handles_inline_and_block_yaml():
+    """The drift guard tolerates either YAML list style for python-version."""
+    inline = '      python-version: ["3.11", "3.12", "3.13"]\n'
+    block = '      python-version:\n        - "3.11"\n        - "3.12"\n        - "3.13"\n'
+    expected = {"3.11", "3.12", "3.13"}
+    assert _parse_py_matrix(inline) == expected
+    assert _parse_py_matrix(block) == expected
 
 
 def test_requires_python_floor_is_lowest_declared():
