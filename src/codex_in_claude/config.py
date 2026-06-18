@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from codex_in_claude import cli_contract
+from codex_in_claude._core.jobs import JobStore
 
 ENV_PREFIX = "CODEX_IN_CLAUDE_"
 
@@ -121,6 +122,16 @@ def job_max_seconds() -> int:
 
 def job_max_count() -> int:
     return max(1, min(1_000, _env_int(f"{ENV_PREFIX}JOB_MAX_COUNT", DEFAULT_JOB_MAX_COUNT)))
+
+
+def job_store() -> JobStore:
+    """A JobStore wired to the resolved state dir and job knobs."""
+    return JobStore(
+        root=state_dir(),
+        ttl_seconds=job_ttl_seconds(),
+        max_seconds=job_max_seconds(),
+        max_count=job_max_count(),
+    )
 
 
 def sandbox_for_tier(tier: str) -> str:

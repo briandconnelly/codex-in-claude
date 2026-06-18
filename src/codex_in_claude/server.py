@@ -12,8 +12,8 @@ from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
 
-from codex_in_claude import __version__, codex, config, normalize, preflight, prompts
-from codex_in_claude._core import gitdiff, workspace, worktree
+from codex_in_claude import __version__, codex, config, delegate, normalize, preflight, prompts
+from codex_in_claude._core import gitdiff, workspace
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     DRY_RUN_SCHEMA,
@@ -36,7 +36,6 @@ from codex_in_claude.schemas import (
     SuccessResult,
     Tier,
     ToolCapability,
-    Usage,
     workspace_warning_for,
 )
 
@@ -71,6 +70,9 @@ _ACTIVE_PROPOSE = {
 }
 
 mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=__version__)
+
+# The propose orchestration lives in delegate.py; re-exported here for test access.
+_diffstat = delegate._diffstat
 
 
 # --------------------------------------------------------------------------- #
@@ -546,30 +548,6 @@ async def codex_review_changes(
     return _finalize(result, tool="codex_review_changes", meta=meta)
 
 
-def _diffstat(diff: str) -> ContextSummary:
-    """Cheap files/added/removed counts from a unified diff."""
-    files = added = removed = 0
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            files += 1
-        elif line.startswith("+") and not line.startswith("+++"):
-            added += 1
-        elif line.startswith("-") and not line.startswith("---"):
-            removed += 1
-    return ContextSummary(files_changed=files, lines_added=added, lines_removed=removed)
-
-
-def _apply_run_meta(meta: Meta, result: codex.CodexExecResult) -> tuple[Usage | None, str | None]:
-    """Stamp a finished run's process metadata onto meta; return (usage, session)."""
-    meta.elapsed_ms = result.run.elapsed_ms
-    meta.command_exit_code = result.run.exit_code
-    meta.compat_warnings = result.dropped_flags
-    usage, session_id = normalize.parse_event_metadata(result.events)
-    meta.usage = usage
-    meta.session_id = session_id
-    return usage, session_id
-
-
 @mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=RESULT_SCHEMA)
 async def codex_delegate(
     task: str,
@@ -644,74 +622,16 @@ async def codex_delegate(
             meta=meta,
         ).model_dump(mode="json")
 
-    git_timeout = config.git_timeout_seconds()
-    try:
-        wt = worktree.create(cwd, timeout=git_timeout)
-    except worktree.NotAGitRepoError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="not_a_git_repo",
-                message=str(exc),
-                repair="Point workspace_root at a git repository (propose needs one).",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
-    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="worktree_error",
-                message=str(exc)[:300],
-                repair="Ensure the repo has at least one commit and a clean git state.",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
-
-    if wt.baseline_warning:
-        meta.security_warnings = [wt.baseline_warning]
-    try:
-        result = await codex.run_codex_exec(
-            prompts.build_delegate_prompt(task),
-            cwd=wt.path,
-            sandbox="workspace-write",
-            isolation=isolation_v,
-            timeout_seconds=timeout,
-            model=model or d.model,
-        )
-        _apply_run_meta(meta, result)
-        if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
-            err = codex.classify_failure(
-                result.run, last_message=result.last_message, events=result.events
-            )
-            return ErrorResult(error=err, meta=meta).model_dump(mode="json")
-        diff = worktree.capture_diff(wt.path, timeout=git_timeout)
-    except worktree.WorktreeError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="worktree_error",
-                message=str(exc)[:300],
-                repair="Retry; if it persists, inspect the repository state.",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
-    finally:
-        worktree.remove(cwd, wt, timeout=git_timeout)
-
-    meta.context_summary = _diffstat(diff)
-    summary = (result.last_message or "").strip() or "(codex returned no summary)"
-    if not diff.strip():
-        summary = f"Codex made no changes. {summary}"
-    return SuccessResult(
-        tool="codex_delegate",
-        summary=summary,
-        verdict="unknown",
-        diff=diff or None,
-        raw_response=RawResponse(
-            text=result.last_message, session_id=meta.session_id, model=meta.model
-        ),
-        next_steps=["Review the returned diff; apply it to your tree only if correct."],
-        meta=meta,
-    ).model_dump(mode="json")
+    return await delegate.run_delegate(
+        task,
+        cwd,
+        meta,
+        sandbox="workspace-write",
+        isolation=isolation_v,
+        timeout_seconds=timeout,
+        model=model or d.model,
+        git_timeout=config.git_timeout_seconds(),
+    )
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
