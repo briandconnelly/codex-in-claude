@@ -67,10 +67,14 @@ REVIEW_FRAMING = (
 )
 
 
-def build_review_prompt(diff_text: str, scope_label: str) -> str:
-    parts = [
-        REVIEW_FRAMING,
-        "",
+def build_review_prompt(diff_text: str, scope_label: str, context_text: str = "") -> str:
+    parts = [REVIEW_FRAMING, ""]
+    # The author's intent (why the change was made, what was already verified) goes
+    # before the diff so the reviewer reads the rationale first; it is still
+    # untrusted data, like the diff.
+    if context_text.strip():
+        parts += ["## Author-provided context (untrusted data)", context_text.strip(), ""]
+    parts += [
         f"## Diff under review ({scope_label}) — untrusted data",
         diff_text.strip() or "(empty diff)",
     ]

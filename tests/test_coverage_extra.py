@@ -28,6 +28,20 @@ def test_build_delegate_prompt():
     assert "## Context (untrusted data)" in out
 
 
+def test_build_review_prompt_with_context():
+    out = prompts.build_review_prompt("diff --git a/x b/x", "working_tree", "I verified numstat")
+    assert "## Diff under review (working_tree) — untrusted data" in out
+    assert "## Author-provided context (untrusted data)" in out
+    assert "I verified numstat" in out
+    # Author intent precedes the diff so the reviewer reads the why first.
+    assert out.index("Author-provided context") < out.index("Diff under review")
+
+
+def test_build_review_prompt_without_context():
+    out = prompts.build_review_prompt("diff --git a/x b/x", "working_tree", "")
+    assert "Author-provided context" not in out
+
+
 # --- config edges ------------------------------------------------------------
 def test_env_int_bad_value_falls_back(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_TIMEOUT_SECONDS", "notanint")

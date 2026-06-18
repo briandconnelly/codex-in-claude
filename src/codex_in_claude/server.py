@@ -319,7 +319,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_review_changes": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("input_too_large", "context_too_large"),
+        ("unsupported_isolation", "input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_delegate": _err_codes(
@@ -334,7 +334,11 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     ),
     "codex_status": [],
     "codex_capabilities": [],
-    "codex_dry_run": _err_codes(_WORKSPACE_ERRORS, _GITDIFF_ERROR_CODES, ("internal_error",)),
+    "codex_dry_run": _err_codes(
+        _WORKSPACE_ERRORS,
+        _GITDIFF_ERROR_CODES,
+        ("unsupported_isolation", "input_too_large", "internal_error"),
+    ),
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         (
@@ -395,7 +399,16 @@ def codex_capabilities() -> dict:
                 cost="active",
                 use_when="You want Codex to review your git changes (working_tree, "
                 "branch, or commit) and return structured findings.",
-                key_optional_params=["scope", "base", "commit", "paths", "workspace_root", "model"],
+                key_optional_params=[
+                    "scope",
+                    "base",
+                    "commit",
+                    "paths",
+                    "workspace_root",
+                    "extra_context",
+                    "model",
+                    "isolation",
+                ],
                 returns="A result envelope with verdict, findings, and a context summary.",
             ),
             ToolCapability(
@@ -469,7 +482,15 @@ def codex_capabilities() -> dict:
                 cost="free",
                 use_when="Before codex_review_changes, to preview scope/diff size/"
                 "redactions without spending.",
-                key_optional_params=["scope", "base", "commit", "paths", "workspace_root"],
+                key_optional_params=[
+                    "scope",
+                    "base",
+                    "commit",
+                    "paths",
+                    "workspace_root",
+                    "extra_context",
+                    "isolation",
+                ],
                 returns="Scope, context summary, prompt size, and redactions.",
             ),
             ToolCapability(
@@ -664,6 +685,7 @@ async def codex_review_changes(
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
+    extra_context: str | None = None,
     model: str | None = None,
     isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
@@ -674,7 +696,12 @@ async def codex_review_changes(
     scope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews
     `base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-
     redacted, and bounded by this server; Codex reviews it read-only and returns
-    structured findings. Pass `workspace_root` (absolute) for the right repo."""
+    structured findings. Pass `workspace_root` (absolute) for the right repo.
+
+    `extra_context` (optional) is author intent — why the change was made, what you
+    already verified, constraints — added to the prompt as clearly-labeled UNTRUSTED
+    data (the reviewer never obeys directives in it) to cut false positives. It is
+    bounded by the same input-byte limit as the diff."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -725,6 +752,18 @@ async def codex_review_changes(
     if placeholder is not None:
         return placeholder
 
+    limit = config.max_input_bytes()
+    if len((extra_context or "").encode("utf-8")) > limit:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"extra_context exceeds {limit} bytes.",
+                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="extra_context",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
     try:
         diff = gitdiff.gather_diff(
             cwd,
@@ -766,7 +805,7 @@ async def codex_review_changes(
     label = scope if scope != "branch" else f"branch {base}...HEAD"
     if scope == "commit":
         label = f"commit {commit}"
-    prompt = prompts.build_review_prompt(diff.text, label)
+    prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
     result = await codex.run_codex_exec(
         prompt,
         cwd=cwd,
@@ -1024,11 +1063,13 @@ async def codex_dry_run(
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
+    extra_context: str | None = None,
     isolation: Isolation | None = None,
 ) -> dict:
     """Preview what a `codex_review_changes` call would send — scope, diff size,
     redactions, truncation — with NO model call and no spend. Use it before a
-    review to confirm the scope and that secrets are redacted."""
+    review to confirm the scope and that secrets are redacted. Pass the same
+    `extra_context` you would give the review so `prompt_bytes` reflects it."""
     d = config.defaults()
     cwd_guess = workspace.server_cwd()
     isolation_v, iso_err = _resolve_isolation(isolation)
@@ -1070,6 +1111,30 @@ async def codex_dry_run(
         ).model_dump(mode="json")
 
     max_bytes = config.max_input_bytes()
+    if len((extra_context or "").encode("utf-8")) > max_bytes:
+        # Mirror the real review's validation so the preview fails exactly where the
+        # paid call would (issue #6: a dry run must not green-light an oversize input).
+        meta = _base_meta(
+            cwd,
+            wres.source,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            scope=scope,
+            base=base,
+            commit=commit,
+        )
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"extra_context exceeds {max_bytes} bytes.",
+                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="extra_context",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
     try:
         diff = gitdiff.gather_diff(
             cwd,
@@ -1104,7 +1169,7 @@ async def codex_dry_run(
         return _gitdiff_error(exc, meta)
 
     label = scope if scope != "branch" else f"branch {base}...HEAD"
-    prompt = prompts.build_review_prompt(diff.text, label)
+    prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
     return DryRunResult(
         cwd=cwd,
         workspace_source=wres.source,

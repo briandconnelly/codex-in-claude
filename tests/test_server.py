@@ -230,6 +230,92 @@ async def test_review_success(monkeypatch, clean_env, tmp_path):
     assert res["meta"]["context_summary"]["files_changed"] == 1
 
 
+async def test_review_extra_context_reaches_prompt(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    captured = {}
+
+    async def fake(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return _fake_result(json.dumps({"summary": "ok", "verdict": "pass", "confidence": "high"}))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(
+        scope="working_tree",
+        workspace_root=str(tmp_path),
+        extra_context="I verified git diff --numstat does not invoke textconv.",
+    )
+    assert res["ok"] is True
+    assert "Author-provided context (untrusted data)" in captured["prompt"]
+    assert "does not invoke textconv" in captured["prompt"]
+
+
+async def test_review_extra_context_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), extra_context="x" * 2000
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["offending_param"] == "extra_context"
+
+
+async def test_dry_run_extra_context_grows_prompt_bytes(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    base = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    with_ctx = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), extra_context="author intent here"
+    )
+    assert with_ctx["ok"] is True
+    assert with_ctx["prompt_bytes"] > base["prompt_bytes"]
+
+
+async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path):
+    # The preview must reject what the real review would reject (issue #6).
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), extra_context="x" * 2000
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["offending_param"] == "extra_context"
+
+
+async def test_dry_run_advertises_returnable_error_codes():
+    # dry_run can return both via its validation paths; capabilities must say so.
+    caps = server.codex_capabilities()
+    dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
+    assert "input_too_large" in dry["error_codes"]
+    assert "unsupported_isolation" in dry["error_codes"]
+
+
+def test_isolation_accepting_tools_advertise_unsupported_isolation():
+    # Every tool that accepts an `isolation` arg can return unsupported_isolation
+    # via _resolve_isolation; capabilities must advertise it for all of them so an
+    # agent's recovery branches are complete.
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    for name in (
+        "codex_consult",
+        "codex_review_changes",
+        "codex_delegate",
+        "codex_delegate_async",
+        "codex_dry_run",
+        "codex_delegate_dry_run",
+    ):
+        assert "unsupported_isolation" in by_name[name]["error_codes"], name
+        # ...and the param that drives that error is listed, so the summary is
+        # internally consistent (param exposed alongside its error).
+        assert "isolation" in by_name[name]["key_optional_params"], name
+
+
+async def test_review_extra_context_advertised_in_capabilities():
+    caps = server.codex_capabilities()
+    review = next(t for t in caps["tool_details"] if t["name"] == "codex_review_changes")
+    assert "extra_context" in review["key_optional_params"]
+
+
 async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path):
     monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff(text="", files=0))
     called = {"n": 0}
@@ -1026,8 +1112,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_8():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-8"
+def test_fingerprint_is_schema_9():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-9"
 
 
 def test_capabilities_lists_delegate_dry_run():

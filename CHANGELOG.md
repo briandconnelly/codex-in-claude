@@ -6,6 +6,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Added
+- **Breaking (agent-visible surface):** `codex_review_changes` now accepts an optional
+  `extra_context` parameter — author intent (why the change was made, what was already verified,
+  constraints) that a reviewer needs to review well and avoid false positives. It mirrors the
+  existing `codex_consult` parameter: appended to the review prompt as a clearly-labeled
+  **untrusted-data** section ("Author-provided context") placed before the diff, and bounded by the
+  same `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` limit (an oversize value returns `input_too_large` with
+  `offending_param="extra_context"`). `codex_dry_run`, which previews a review, takes the same
+  parameter so its `prompt_bytes` reflects the context that would be sent. `FINGERPRINT` →
+  `schema-9`. (#40)
 - **Breaking (agent-visible surface):** new free `codex_delegate_dry_run(task, …)` tool — a
   zero-spend preview of a `codex_delegate`/`codex_delegate_async` run, mirroring how `codex_dry_run`
   previews `codex_review_changes`. It reports the baseline the throwaway worktree would seed from
@@ -111,6 +120,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `codex_capabilities` now advertises `unsupported_isolation` for `codex_review_changes` and
+  `codex_dry_run`. Both accept an `isolation` argument and already return `unsupported_isolation` for
+  an invalid value (each with a test covering that path), but their advertised error-code sets
+  omitted it, so an agent planning recovery branches from capabilities could miss it. Their
+  `key_optional_params` now also list `isolation` (the param that drives that error), matching the
+  other `isolation`-accepting tools, and a regression test asserts every such tool advertises both
+  the code and the param. Advisory metadata only — no tool/param/enum/schema change — so this does
+  not by itself move `FINGERPRINT` (the same release already bumps it to `schema-9` for the
+  `extra_context` addition). (#40)
 - `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
   emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
   perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of
