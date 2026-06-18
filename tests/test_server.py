@@ -873,7 +873,11 @@ async def test_fixed_value_params_advertise_enum(tool_name, param, expected):
     """Fixed-value params surface their allowed values as schema enums (issue #5)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     props = tools[tool_name].parameters["properties"]
-    assert _param_enum(props[param]) == expected
+    enum = _param_enum(props[param])
+    # `enum` is a set semantically; assert membership, not order (which isn't
+    # part of the MCP contract and may vary across Pydantic/FastMCP versions).
+    assert enum is not None, f"{tool_name}.{param} schema exposes no enum"
+    assert set(enum) == set(expected)
 
 
 def test_job_status_model_surfaces_cleanup_warnings():
