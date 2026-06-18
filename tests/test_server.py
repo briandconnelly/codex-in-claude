@@ -62,10 +62,14 @@ def test_capability_summary_covers_all_task_families():
         "codex_review_changes",
         "codex_delegate",
         "codex_delegate_async",
-        "codex_job",  # the codex_job_* lifecycle family
+        "codex_job_status",  # the codex_job_* lifecycle family (first entry, full name)
         "codex_status",
     ):
         assert tool in summary, tool
+    # The job shorthand must use real tool suffixes — `consume_result`, not `consume`
+    # (there is no `codex_job_consume`), so an agent never derives a nonexistent name.
+    assert "consume_result" in summary
+    assert "/consume/" not in summary  # the wrong shorthand
     # Prerequisite + negative scope are stated, not just the tool list.
     low = summary.lower()
     assert "codex_status" in summary and "first" in low  # run codex_status first
