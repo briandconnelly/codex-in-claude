@@ -1,12 +1,15 @@
 # codex-in-claude
 
-Call **OpenAI Codex** from **Claude Code** — for an independent second opinion, structured
-code review, and delegated coding tasks — through a FastMCP plugin that drives the `codex` CLI
-safely.
+[![CI](https://github.com/briandconnelly/codex-in-claude/actions/workflows/ci.yml/badge.svg)](https://github.com/briandconnelly/codex-in-claude/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](pyproject.toml)
+<!-- Add on the first PyPI release:
+[![PyPI](https://img.shields.io/pypi/v/codex-in-claude.svg)](https://pypi.org/project/codex-in-claude/)
+-->
 
-> The mirror image of [`cc-plugin-codex`](https://github.com/briandconnelly/cc-plugin-codex)
-> (which lets Codex call Claude Code). Inspired by `openai/codex-plugin-cc`, rebuilt around
-> `codex exec` (not the experimental app-server protocol) for robustness.
+Call **OpenAI Codex** from **Claude Code** — an independent second opinion, structured code
+review, and delegated coding tasks (**cross-model review**) — through a FastMCP plugin that drives
+the `codex` CLI safely.
 
 > **Status:** alpha. The agent-visible surface is versioned by a `fingerprint`; pre-1.0 minor
 > releases may change it.
@@ -25,14 +28,6 @@ Codex a question, a diff to review, or a task to implement — and get back a st
 
 Planned later milestone: an explicit opt-in `apply` tier for live-tree edits. It is not exposed by
 the current tool set.
-
-## Requirements
-
-- The [`codex` CLI](https://developers.openai.com/codex/cli) on `PATH`, authenticated
-  (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.140`.
-- [`uv`](https://docs.astral.sh/uv/) on `PATH` (Claude Code launches the MCP server with `uvx`).
-- Python 3.11+ available to `uvx`.
-- `git` (for review and delegate).
 
 ## Quick start
 
@@ -56,6 +51,51 @@ For a first useful run:
   worktree.
 
 The MCP server is launched on demand via `uvx` from a pinned release tag, so updates are deliberate.
+
+## Example
+
+Review your uncommitted changes from a Claude Code session:
+
+> `/codex:review`
+
+Codex inspects the diff **read-only** and returns a structured result envelope (abridged):
+
+```json
+{
+  "ok": true,
+  "tool": "codex_review_changes",
+  "verdict": "concerns",
+  "confidence": "high",
+  "summary": "The retry path is correct, but the backoff delay leaks between calls and the new branch has no test coverage.",
+  "findings": [
+    {
+      "severity": "high",
+      "title": "Backoff delay is never reset after a success",
+      "file": "src/app/retry.py",
+      "line": 42,
+      "evidence": "self._delay keeps its last value once a call succeeds",
+      "risk": "A later transient failure starts from an inflated delay, adding latency.",
+      "recommendation": "Reset self._delay to the base delay in the success branch."
+    }
+  ],
+  "next_steps": ["Add a regression test asserting the delay resets after a success"],
+  "meta": { "scope": "working_tree", "sandbox": "read-only", "elapsed_ms": 8137 }
+}
+```
+
+`verdict` is one of `pass` / `concerns` / `fail` / `unknown`; `confidence` is `low` / `medium` /
+`high`; every finding carries a `severity` (`critical` … `nit`) plus `evidence`, `risk`, and
+`recommendation`. Treat the output as claims to verify, not instructions to follow blindly.
+
+## Requirements
+
+- The [`codex` CLI](https://developers.openai.com/codex/cli) on `PATH`, authenticated
+  (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.140`; the supported range lives
+  in `cli_contract.py`, `/codex:status` reports whether your version is in range, and
+  [`COMPATIBILITY.md`](COMPATIBILITY.md) explains the policy.
+- [`uv`](https://docs.astral.sh/uv/) on `PATH` (Claude Code launches the MCP server with `uvx`).
+- Python 3.11+ available to `uvx`.
+- `git` (for review and delegate).
 
 ## Tools
 
@@ -134,6 +174,7 @@ commit so it can create the temporary worktree.
 - Secret-looking content in gathered diffs is redacted (defense-in-depth, not a guarantee — Codex
   can read files itself during a run; use `isolation` and a clean workspace for sensitive repos).
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
+- Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 
 ## Configuration (env, `CODEX_IN_CLAUDE_*`)
 
@@ -151,6 +192,19 @@ commit so it can create the temporary worktree.
 | `CODEX_IN_CLAUDE_JOB_MAX_COUNT` | 50 | retained jobs per workspace (clamped 1–1000) |
 | `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` | built-in tested set | comma-separated `codex` `major.minor` versions to treat as supported |
 
+## Troubleshooting
+
+Run `/codex:status` first — it's free (no model call) and diagnoses most setup problems.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `codex` not found | CLI not installed or not on `PATH` | Install the [`codex` CLI](https://developers.openai.com/codex/cli) and ensure it's on `PATH` |
+| Not authenticated | No Codex login | `codex login` (ChatGPT or API key) |
+| Unsupported-version warning | Your `codex` version is outside the tested range | Update `codex`, or set `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` once you've verified it works |
+| `meta.workspace_warning` in results | Server fell back to its own launch directory | Run from the target repo, or pass `workspace_root` (see [Workspace selection](#workspace-selection)) |
+| `codex_delegate` fails needing a commit | The temp worktree is seeded from `HEAD` | Make at least one commit first |
+| `codex_rate_limited` error | Account hit a usage/rate limit | Back off for `retry_after_ms`, then retry |
+
 ## Local development
 
 ```sh
@@ -163,6 +217,15 @@ uv run codex-in-claude-mcp          # run the MCP server over stdio
 
 To test the plugin from a local checkout, point `.mcp.json` at
 `uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the pinned `uvx` tag.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch, commit, and PR conventions.
+
+## Related projects
+
+- [`cc-plugin-codex`](https://github.com/briandconnelly/cc-plugin-codex) — the mirror image: lets
+  **Codex** call **Claude Code**.
+- Inspired by `openai/codex-plugin-cc`, rebuilt around `codex exec` (not the experimental
+  app-server protocol) for robustness.
 
 ## License
 
