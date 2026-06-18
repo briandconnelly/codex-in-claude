@@ -28,6 +28,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- The `collaborating-with-codex` skill now documents the propose-tier `workspace-write` no-network
+  constraint (on both `codex_delegate` and the background `codex_delegate_async`), the optional
+  `paths` filter on `codex_review_changes`, the `/codex:*` slash commands, and a "Common mistakes"
+  section; reframes `codex_status` as run-first; tightens the `description` to triggering conditions
+  only (dropping the workflow summary); and trims the env-knob list to a README/`codex_status`/
+  `codex_capabilities` cross-reference. Reviewed by Codex (verdict: pass). Docs-only; `FINGERPRINT`
+  unchanged.
 - `codex_delegate`/`codex_delegate_async` docstrings and the `codex_capabilities` `negative_scope`
   now state that propose-tier runs execute under the `workspace-write` sandbox, which **blocks
   network egress** — a delegated task is self-contained and cannot `git push`/`fetch`, `gh`, `curl`,
