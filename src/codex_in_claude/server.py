@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlparse
 from fastmcp import Context, FastMCP
 
 from codex_in_claude import __version__, codex, config, delegate, normalize, preflight, prompts
-from codex_in_claude._core import gitdiff, jobs, workspace, worktree
+from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     DRY_RUN_SCHEMA,
@@ -1251,13 +1251,10 @@ async def _job_result_impl(
     poll_params: dict[str, Any] = {"job_id": job_id}
     if workspace_root:
         poll_params["workspace_root"] = workspace_root
-    # Same growing backoff codex_job_status returns, so polling via job_result on a
-    # long run also backs off instead of retrying at the flat base every time.
-    retry_after = (
-        jobs.poll_backoff_ms(rec.get("elapsed_ms", 0), base=store.poll_after_ms)
-        if running
-        else None
-    )
+    # Reuse the record's already-computed poll_after_ms (the growing backoff
+    # codex_job_status returns) as the retry hint, so polling via job_result on a long
+    # run backs off the same way without recomputing the backoff in two places.
+    retry_after = rec.get("poll_after_ms") if running else None
     return ErrorResult(
         error=ErrorInfo(
             code=cast("ErrorCode", code),
