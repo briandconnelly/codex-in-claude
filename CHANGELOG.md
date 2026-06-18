@@ -24,6 +24,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   Previously they described only `codex_consult`/`codex_status`, so agents could miss the better tool
   for review/delegate tasks. Prose-only (no tool/param/error-code/enum/schema change), so
   `FINGERPRINT` is unchanged. (#7)
+- Job lifecycle tools now carry MCP annotations that match each tool's real behavior. The
+  inspection tools — `codex_job_status`, `codex_job_result`, `codex_job_list` — are now
+  `readOnlyHint=true`/`idempotentHint=true`, while the state-changing `codex_job_consume_result`
+  (deletes the retained record) and `codex_job_cancel` (stops a running process) stay non-read-only
+  and non-idempotent. Previously all five shared one mutating preset, which over-marked the read
+  tools and could create needless approval/planning friction for clients. Annotations aren't part of
+  the fingerprinted result contract (tool names/params/error codes/value enums/schemas) and are
+  refreshed via `list_tools`, so `FINGERPRINT` is unchanged. (#9)
 - **Breaking (agent-visible surface):** error envelopes now carry machine-actionable repair metadata
   alongside the prose `repair` string. `ErrorInfo` gains optional `allowed_values` (concrete valid
   values for enum-like params — populated for `unsupported_isolation` and `invalid_scope`),
