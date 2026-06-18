@@ -28,9 +28,17 @@ uv run pytest -m integration --no-cov
 
 ## Conventions
 
-- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, …).
-- **Branches:** branch for feature work; never commit directly to `main`.
-- **Merging:** open a PR and get checks green. The maintainer merges — agents do not merge their own PRs.
+[AGENTS.md](AGENTS.md) is the authoritative source; the highlights:
+
+- **Commits & PR titles:** [Conventional Commits](https://www.conventionalcommits.org/) — types
+  `feat` / `fix` / `chore` / `docs` / `refactor` / `test` / `perf` / `ci` / `build` / `revert`, with
+  an optional scope (`feat(jobs): …`). Mark breaking changes with `!` or a `BREAKING CHANGE:` footer.
+- **Merging:** PRs are **squash-merged**, so the PR title becomes the commit — it must be a valid
+  Conventional Commit. Keep PRs to one logical change.
+- **Branches:** `<type>/<slug>` (e.g. `feat/async-jobs`); never commit directly to `main`.
+  The maintainer merges — agents do not merge their own PRs.
+- **Versioning:** SemVer; pre-1.0 a minor may change the agent-visible surface. Such a change bumps
+  `FINGERPRINT` and is labeled `breaking-change`.
 - **The CLI contract** lives in `src/codex_in_claude/cli_contract.py`; see `COMPATIBILITY.md`.
 - **The result contract** lives in `src/codex_in_claude/schemas.py`; bump `FINGERPRINT` when the
   agent-visible surface changes and note it in `CHANGELOG.md`.
