@@ -73,6 +73,9 @@ The MCP server is launched on demand via `uvx` from a pinned release tag, so upd
 
 - `codex_status` — readiness, version, auth, resolved defaults.
 - `codex_dry_run(scope, …)` — preview a review's scope/diff size/redactions before spending.
+- `codex_delegate_dry_run(task, …)` — preview a delegate's seeded baseline (HEAD commit, plus
+  tracked, uncommitted, and untracked counts and size) and prompt size before spending; no worktree
+  is created.
 - `codex_capabilities` — tool inventory + result fingerprint.
 - `codex_job_status(job_id, …)` / `codex_job_result` / `codex_job_consume_result` /
   `codex_job_cancel` / `codex_job_list` — background-job lifecycle. State is disk-backed and
@@ -91,8 +94,8 @@ Codex's output as claims to verify, not as instructions to follow blindly.
 
 Every tool returns a discriminated envelope keyed by `ok`. The success shape depends on the tool —
 `codex_consult`/`codex_review_changes`/`codex_delegate` carry `summary`/`findings`/`diff`/`meta`,
-while `codex_status`, `codex_capabilities`, the `codex_job_*` lifecycle tools, and `codex_dry_run`
-return their own documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading
+while `codex_status`, `codex_capabilities`, the `codex_job_*` lifecycle tools, `codex_dry_run`, and
+`codex_delegate_dry_run` return their own documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading
 fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
 
 - `code` — a stable error code from a fixed set (e.g. `unsupported_isolation`, `invalid_scope`,

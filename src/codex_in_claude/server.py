@@ -18,6 +18,7 @@ from codex_in_claude import __version__, codex, config, delegate, normalize, pre
 from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
+    DELEGATE_DRY_RUN_SCHEMA,
     DRY_RUN_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
     JOB_LIST_SCHEMA,
@@ -27,6 +28,7 @@ from codex_in_claude.schemas import (
     STATUS_SCHEMA,
     CapabilitiesResult,
     ContextSummary,
+    DelegateDryRunResult,
     DryRunResult,
     ErrorCode,
     ErrorInfo,
@@ -46,6 +48,7 @@ from codex_in_claude.schemas import (
     SuccessResult,
     Tier,
     ToolCapability,
+    WorktreePlan,
     workspace_warning_for,
 )
 
@@ -59,8 +62,9 @@ CAPABILITY_SUMMARY = (
     "codex_delegate_async (+ codex_job_status/result/consume_result/cancel/list) — the "
     "same delegate as a background job you poll. "
     "Run codex_status first (free) to confirm the codex CLI is installed and "
-    "authenticated; use codex_capabilities for the full inventory and codex_dry_run "
-    "to preview a call without spending. "
+    "authenticated; use codex_capabilities for the full inventory and, to preview a "
+    "call without spending, codex_dry_run (for a review) or codex_delegate_dry_run "
+    "(for a delegate's worktree baseline). "
     "This plugin does not bypass Codex's sandbox or approvals, and delegate never "
     "edits your working tree. Treat Codex's findings as claims to verify, not commands."
 )
@@ -326,6 +330,17 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_status": [],
     "codex_capabilities": [],
     "codex_dry_run": _err_codes(_WORKSPACE_ERRORS, _GITDIFF_ERROR_CODES, ("internal_error",)),
+    "codex_delegate_dry_run": _err_codes(
+        _WORKSPACE_ERRORS,
+        (
+            "unsupported_isolation",
+            "unexpanded_env_placeholder",
+            "input_too_large",
+            "not_a_git_repo",
+            "worktree_error",
+            "internal_error",
+        ),
+    ),
     "codex_job_status": _err_codes(_JOB_READ_ERRORS),
     "codex_job_result": _err_codes(_JOB_RESULT_ERRORS),
     "codex_job_consume_result": _err_codes(_JOB_RESULT_ERRORS),
@@ -352,6 +367,7 @@ def codex_capabilities() -> dict:
         free_tools=[
             "codex_status",
             "codex_dry_run",
+            "codex_delegate_dry_run",
             "codex_capabilities",
             "codex_job_status",
             "codex_job_result",
@@ -450,6 +466,17 @@ def codex_capabilities() -> dict:
                 "redactions without spending.",
                 key_optional_params=["scope", "base", "commit", "paths", "workspace_root"],
                 returns="Scope, context summary, prompt size, and redactions.",
+            ),
+            ToolCapability(
+                name="codex_delegate_dry_run",
+                cost="free",
+                use_when="Before codex_delegate/codex_delegate_async, to preview the "
+                "seeded baseline, prompt size, and workspace without spending.",
+                required_params=["task"],
+                key_optional_params=["workspace_root", "model", "isolation"],
+                returns="The HEAD baseline (commit, tracked/uncommitted/untracked "
+                "counts and size), prompt size, and resolved workspace — no worktree "
+                "created.",
             ),
             ToolCapability(
                 name="codex_capabilities",
@@ -1096,6 +1123,135 @@ async def codex_dry_run(
         truncation_hint=diff.truncation_hint,
         redacted_paths_count=len(diff.redacted_paths),
         redacted_paths=diff.redacted_paths,
+    ).model_dump(mode="json")
+
+
+# Plain-language caveats for a delegate dry run: a no-worktree preview cannot prove
+# uncommitted changes will replay, and untracked files are never seeded.
+_DELEGATE_PLAN_NOTE = (
+    "Seeds a throwaway worktree from HEAD plus your uncommitted tracked changes; "
+    "this preview does not validate that those changes replay, so the real run may "
+    "warn and base on HEAD only. Untracked files are never copied into the worktree."
+)
+
+
+@mcp.tool(annotations=_FREE_READ, output_schema=DELEGATE_DRY_RUN_SCHEMA)
+async def codex_delegate_dry_run(
+    task: str,
+    ctx: Context | None = None,
+    workspace_root: str | None = None,
+    model: str | None = None,
+    isolation: Isolation | None = None,
+) -> dict:
+    """Preview what a `codex_delegate`/`codex_delegate_async` call would do — the
+    baseline it seeds from (HEAD commit, tracked file count/size, uncommitted and
+    untracked counts), the prompt size that would be sent, and the resolved
+    workspace/isolation — with NO model call, NO spend, and no worktree created.
+
+    Use it before delegating to confirm scope and repo before committing to cost,
+    exactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real
+    delegate's zero-spend validation (workspace, isolation, task size, git repo), so
+    a failure here is a failure the paid call would also hit. The returned
+    `tier`/`sandbox` describe the previewed propose run, not this read-only preview."""
+    d = config.defaults()
+    timeout = config.clamp_timeout(d.timeout_seconds)
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="propose",
+            sandbox="workspace-write",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=timeout,
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="propose",
+        sandbox="workspace-write",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=timeout,
+    )
+    if wres.error_code is not None:
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    limit = config.max_input_bytes()
+    if len((task or "").encode("utf-8")) > limit:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"task exceeds {limit} bytes.",
+                repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="task",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    try:
+        plan = worktree.plan(cwd, timeout=config.git_timeout_seconds())
+    except worktree.NotAGitRepoError as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="not_a_git_repo",
+                message=str(exc),
+                repair="Point workspace_root at a git repository (propose needs one).",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="worktree_error",
+                message=str(exc)[:300],
+                # The preview is read-only (no worktree is created), so a dirty tree is
+                # fine; this fires only when the repo has no commit to base on or a git
+                # command failed.
+                repair="Ensure the repo has at least one commit and that git commands "
+                "succeed (e.g. finish any in-progress merge/rebase).",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    prompt = prompts.build_delegate_prompt(task)
+    return DelegateDryRunResult(
+        cwd=cwd,
+        workspace_source=wres.source,
+        workspace_warning=workspace_warning_for(wres.source, cwd),
+        isolation=cast("Isolation", isolation_v),
+        prompt_bytes=len(prompt.encode("utf-8")),
+        max_input_bytes=limit,
+        worktree_plan=WorktreePlan(
+            head_commit=plan.head_commit,
+            head_subject=plan.head_subject,
+            tracked_files=plan.tracked_files,
+            tracked_bytes=plan.tracked_bytes,
+            uncommitted_tracked_files=plan.uncommitted_tracked_files,
+            untracked_files=plan.untracked_files,
+            note=_DELEGATE_PLAN_NOTE,
+        ),
     ).model_dump(mode="json")
 
 

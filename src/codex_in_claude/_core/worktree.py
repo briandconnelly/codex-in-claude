@@ -44,6 +44,20 @@ class Worktree:
     baseline_warning: str | None = None  # set when uncommitted changes could not be seeded
 
 
+@dataclass
+class WorktreePlanData:
+    """Read-only preview of the baseline a `create()` run would seed from. Gathered
+    without creating a worktree, so counts are advisory: uncommitted tracked changes
+    are reported but replay into the worktree is not validated here."""
+
+    head_commit: str  # the HEAD commit the worktree is detached at
+    head_subject: str | None  # short subject of HEAD, if readable
+    tracked_files: int  # entries in the HEAD tree (blobs + submodule gitlinks)
+    tracked_bytes: int  # approximate total size (blob sizes; gitlinks count as 0)
+    uncommitted_tracked_files: int  # tracked files changed vs HEAD (would be replayed)
+    untracked_files: int  # untracked files (never copied into the worktree)
+
+
 def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
@@ -116,6 +130,71 @@ def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None =
         remove(repo, Worktree(path=wt, parent=parent), timeout=timeout)
         raise
     return Worktree(path=wt, parent=parent, baseline_warning=warning)
+
+
+def _count_nonempty_lines(proc: subprocess.CompletedProcess) -> int:
+    """Count non-blank stdout lines, treating a failed git call as zero (the plan is
+    advisory — a transient git hiccup must not break a free preview)."""
+    if proc.returncode != 0:
+        return 0
+    return sum(1 for line in proc.stdout.splitlines() if line.strip())
+
+
+def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
+    """Count entries in the HEAD tree and sum blob sizes (approximate baseline size).
+    `git ls-tree -r --long` emits `<mode> <type> <sha> <size>\\t<path>`; size is `-`
+    for non-blob entries (e.g. submodule gitlinks), which are counted as files but
+    contribute no bytes."""
+    out = _git_ok(repo, ["ls-tree", "-r", "--long", "HEAD"], timeout)
+    files = total = 0
+    for line in out.splitlines():
+        meta, sep, _path = line.partition("\t")
+        fields = meta.split()
+        if not sep or len(fields) < 4:  # a real entry always has a tab before its path
+            continue
+        files += 1
+        size = fields[3]
+        if size.isdigit():
+            total += int(size)
+    return files, total
+
+
+def plan(repo: str, *, timeout: int) -> WorktreePlanData:
+    """Preview the baseline a `create()` run would seed from — NO worktree created,
+    no spend. Raises NotAGitRepoError / NoCommitsError / WorktreeError exactly like
+    `create()`, so a dry run fails the same way the real propose run would. An
+    infrastructure failure (git missing, a git subprocess timing out) is mapped to
+    WorktreeError so the caller returns a structured error rather than crashing."""
+    try:
+        _ensure_repo_with_head(repo, timeout)
+        head = _git_ok(repo, ["rev-parse", "HEAD"], timeout).strip()
+        subj = _git(repo, ["log", "-1", "--format=%s"], timeout)
+        head_subject = subj.stdout.strip() if subj.returncode == 0 and subj.stdout.strip() else None
+        tracked_files, tracked_bytes = _tracked_files_and_bytes(repo, timeout)
+        # `git diff --numstat HEAD` mirrors what _seed_uncommitted replays (staged +
+        # unstaged tracked changes); each non-empty line is one changed file. Carry the
+        # same --no-ext-diff/--no-textconv hardening the rest of this module uses: a free
+        # preview must never run a repo-configured diff/textconv helper. (--numstat does
+        # not invoke those helpers today, but the flags keep this defensive and uniform.)
+        uncommitted = _count_nonempty_lines(
+            _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD"], timeout)
+        )
+        untracked = _count_nonempty_lines(
+            _git(repo, ["ls-files", "--others", "--exclude-standard"], timeout)
+        )
+    except (NotAGitRepoError, NoCommitsError, WorktreeError):
+        raise  # domain errors pass through unchanged
+    except (subprocess.SubprocessError, OSError) as exc:
+        # git binary missing (FileNotFoundError) or a subprocess timeout, etc.
+        raise WorktreeError(f"git command failed during plan: {str(exc)[:200]}") from exc
+    return WorktreePlanData(
+        head_commit=head,
+        head_subject=head_subject,
+        tracked_files=tracked_files,
+        tracked_bytes=tracked_bytes,
+        uncommitted_tracked_files=uncommitted,
+        untracked_files=untracked,
+    )
 
 
 def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:

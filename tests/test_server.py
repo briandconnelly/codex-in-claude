@@ -612,6 +612,84 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     assert res["error"]["offending_param"] == "isolation"
 
 
+# --- delegate_dry_run --------------------------------------------------------
+def _init_repo(tmp_path):
+    import subprocess
+
+    def g(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    g("init", "-q")
+    g("config", "user.email", "t@t.co")
+    g("config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    return tmp_path
+
+
+async def test_delegate_dry_run_preview(monkeypatch, clean_env, tmp_path):
+    _init_repo(tmp_path)
+
+    def no_create(*a, **k):  # a dry run must never create a worktree or spend
+        raise AssertionError("delegate dry run must not create a worktree")
+
+    monkeypatch.setattr(worktree, "create", no_create)
+    res = await server.codex_delegate_dry_run("add a feature", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_delegate_dry_run"
+    assert res["tier"] == "propose"
+    assert res["sandbox"] == "workspace-write"
+    assert res["prompt_bytes"] > 0
+    plan = res["worktree_plan"]
+    assert plan["tracked_files"] == 1
+    assert plan["uncommitted_tracked_files"] == 0
+    assert plan["untracked_files"] == 0
+    assert plan["head_subject"] == "init"
+    assert plan["note"]  # caveat is always present
+
+
+async def test_delegate_dry_run_not_a_git_repo(clean_env, tmp_path):
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+
+
+async def test_delegate_dry_run_no_commits(clean_env, tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+
+
+async def test_delegate_dry_run_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+
+
+async def test_delegate_dry_run_invalid_workspace(clean_env):
+    res = await server.codex_delegate_dry_run("x", workspace_root="relative/path")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_delegate_dry_run_input_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_delegate_dry_run("z" * 2000, workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+
+
+async def test_delegate_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_delegate_dry_run("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
 def test_diffstat_counts():
     diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n-removed\n unchanged\n"
     summary = server._diffstat(diff)
@@ -897,8 +975,15 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_6():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-6"
+def test_fingerprint_is_schema_7():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-7"
+
+
+def test_capabilities_lists_delegate_dry_run():
+    caps = server.codex_capabilities()
+    assert "codex_delegate_dry_run" in caps["free_tools"]
+    details = {t["name"]: t for t in caps["tool_details"]}
+    assert details["codex_delegate_dry_run"]["cost"] == "free"
 
 
 def _param_enum(param_schema: dict) -> list | None:
