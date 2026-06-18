@@ -407,3 +407,125 @@ async def test_delegate_capture_diff_error(monkeypatch, clean_env, tmp_path):
     assert res["ok"] is False
     assert res["error"]["code"] == "worktree_error"
     assert removed["n"] == 1
+
+
+# --- async delegate + job lifecycle ------------------------------------------
+class _FakeStore:
+    """In-memory stand-in for JobStore used by the async/lifecycle tool tests."""
+
+    def __init__(self, *, status_dict="__unset__", record=None, result_json=None):
+        self._status = status_dict
+        self._record = record
+        self._result_json = result_json
+        self.started = []
+        self.cancelled = []
+        self.consumed = []
+
+    def start(self, cmd_factory, cwd, *, kind, extra=None, write_spec=None):
+        import pathlib
+
+        cmd = cmd_factory(pathlib.Path(cwd) / "job")
+        self.started.append({"cmd": cmd, "cwd": cwd, "kind": kind, "spec": write_spec})
+        return "job-abc", "2026-06-17T00:00:00+00:00"
+
+    def status(self, cwd, job_id):
+        if self._status == "__unset__":
+            return self._record
+        return self._status
+
+    def result_payload(self, cwd, job_id, *, consume):
+        if consume:
+            self.consumed.append(job_id)
+        return self._record, self._result_json
+
+    def cancel(self, cwd, job_id):
+        self.cancelled.append(job_id)
+        return self._record
+
+    def list_jobs(self, cwd):
+        return [self._record] if self._record else []
+
+
+def _ok_record(status="done"):
+    return {
+        "job_id": "job-abc",
+        "kind": "codex_delegate",
+        "status": status,
+        "started_at": "2026-06-17T00:00:00+00:00",
+        "started_epoch": 1.0,
+        "elapsed_ms": 5,
+        "deadline_seconds": 1800,
+        "completed_epoch": 2.0,
+        "expires_at": "2026-06-18T00:00:00+00:00",
+        "result_available": status == "done",
+        "poll_after_ms": 1000,
+        "ttl_seconds": 86400,
+        "extra": {},
+    }
+
+
+def _done_envelope():
+    meta = server._base_meta(
+        "/repo",
+        "param",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=1800,
+    ).model_dump(mode="json")
+    return {"ok": True, "tool": "codex_delegate", "summary": "did it", "diff": "d", "meta": meta}
+
+
+async def test_delegate_async_returns_job_id(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    store = _FakeStore()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_delegate_async("do x", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["job_id"] == "job-abc"
+    assert res["kind"] == "codex_delegate"
+    assert res["status"] == "running"
+    # the spawned command targets the worker module
+    assert "codex_in_claude._worker" in store.started[0]["cmd"]
+    assert store.started[0]["spec"]["task"] == "do x"
+
+
+async def test_delegate_async_not_a_git_repo(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise server.worktree.NotAGitRepoError("nope")
+
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
+    res = await server.codex_delegate_async("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+
+
+async def test_delegate_async_no_commits(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise server.worktree.NoCommitsError("no commits")
+
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
+    res = await server.codex_delegate_async("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+
+
+async def test_delegate_async_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_delegate_async("x", workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+
+
+async def test_delegate_async_invalid_workspace(clean_env):
+    res = await server.codex_delegate_async("x", workspace_root="relative/path")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_delegate_async_input_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    res = await server.codex_delegate_async("z" * 2000, workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"

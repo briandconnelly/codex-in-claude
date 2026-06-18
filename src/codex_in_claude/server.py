@@ -7,17 +7,19 @@ Tool surface (v1 grows by milestone):
 
 from __future__ import annotations
 
+import sys
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
 
 from codex_in_claude import __version__, codex, config, delegate, normalize, preflight, prompts
-from codex_in_claude._core import gitdiff, workspace
+from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     DRY_RUN_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
+    JOB_STARTED_SCHEMA,
     RESULT_SCHEMA,
     STATUS_SCHEMA,
     CapabilitiesResult,
@@ -27,6 +29,7 @@ from codex_in_claude.schemas import (
     ErrorInfo,
     ErrorResult,
     Isolation,
+    JobStarted,
     Meta,
     RawDefaults,
     RawResponse,
@@ -65,6 +68,17 @@ _FREE_READ = {
 _ACTIVE_PROPOSE = {
     "readOnlyHint": False,
     "openWorldHint": True,
+    "destructiveHint": False,
+    "idempotentHint": False,
+}
+# Async delegate spawns a background job (commits to spend) but, like propose,
+# only ever writes inside a throwaway worktree — the live tree is untouched.
+_ACTIVE_ASYNC = _ACTIVE_PROPOSE
+# Job lifecycle tools mutate only this server's local job state (idempotent reads,
+# except cancel/consume); they never call the model.
+_JOB_LIFECYCLE = {
+    "readOnlyHint": False,
+    "openWorldHint": False,
     "destructiveHint": False,
     "idempotentHint": False,
 }
@@ -632,6 +646,146 @@ async def codex_delegate(
         model=model or d.model,
         git_timeout=config.git_timeout_seconds(),
     )
+
+
+@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
+async def codex_delegate_async(
+    task: str,
+    ctx: Context | None = None,
+    workspace_root: str | None = None,
+    model: str | None = None,
+    isolation: str | None = None,
+) -> dict:
+    """Delegate a coding task to Codex in the background and get a `job_id` back
+    immediately (does not block on the run).
+
+    Same propose-tier behavior as `codex_delegate` — Codex works in a throwaway git
+    worktree and the result carries a **reviewable diff that is NOT applied** — but
+    it runs detached. Starting a job commits to spend (it runs to completion or its
+    wall-clock deadline even if you never poll). Poll with `codex_job_status`, read
+    with `codex_job_result`, delete after reading with `codex_job_consume_result`,
+    or stop with `codex_job_cancel`. Requires a git repo with at least one commit;
+    pass `workspace_root` (absolute)."""
+    d = config.defaults()
+    # Background jobs are bounded by the wall-clock deadline, not the sync timeout.
+    deadline = config.job_max_seconds()
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="propose",
+            sandbox="workspace-write",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=deadline,
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="propose",
+        sandbox="workspace-write",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=deadline,
+    )
+    if wres.error_code is not None:
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    limit = config.max_input_bytes()
+    if len((task or "").encode("utf-8")) > limit:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"task exceeds {limit} bytes.",
+                repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="task",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    # Fail fast (no spend) if this is not a git repo with a commit to base on.
+    git_timeout = config.git_timeout_seconds()
+    try:
+        worktree.ensure_repo_with_head(cwd, timeout=git_timeout)
+    except worktree.NotAGitRepoError as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="not_a_git_repo",
+                message=str(exc),
+                repair="Point workspace_root at a git repository (propose needs one).",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="worktree_error",
+                message=str(exc)[:300],
+                repair="Ensure the repo has at least one commit and a clean git state.",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    spec = {
+        "task": task,
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "sandbox": "workspace-write",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": deadline,
+        "git_timeout": git_timeout,
+    }
+    store = config.job_store()
+
+    def _cmd(job_dir: object) -> list[str]:
+        return [sys.executable, "-m", "codex_in_claude._worker", str(job_dir)]
+
+    try:
+        job_id, started_at = store.start(_cmd, cwd, kind="codex_delegate", write_spec=spec)
+    except OSError as exc:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="internal_error",
+                message=f"failed to start background job: {exc}"[:300],
+                repair="Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry.",
+                retryable=True,
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    meta.job_id = job_id
+    return JobStarted(
+        job_id=job_id,
+        kind="codex_delegate",
+        status="running",
+        started_at=started_at,
+        deadline_seconds=deadline,
+        ttl_seconds=config.job_ttl_seconds(),
+        expires_at=None,
+        meta=meta,
+    ).model_dump(mode="json")
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)

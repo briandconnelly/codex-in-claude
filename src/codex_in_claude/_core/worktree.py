@@ -64,6 +64,13 @@ def _ensure_repo_with_head(repo: str, timeout: int) -> None:
         raise NoCommitsError("repository has no commits to base a worktree on")
 
 
+def ensure_repo_with_head(repo: str, *, timeout: int) -> None:
+    """Public guard: raise NotAGitRepoError / NoCommitsError / WorktreeError if
+    ``repo`` is not a git repo with at least one commit. Used to fail an async
+    delegate fast, before a background job is started."""
+    _ensure_repo_with_head(repo, timeout)
+
+
 def create(repo: str, *, timeout: int) -> Worktree:
     """Create a worktree mirroring the live tree's tracked state.
 

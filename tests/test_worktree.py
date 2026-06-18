@@ -99,3 +99,12 @@ def test_remove_is_idempotent(repo):
     worktree.remove(str(repo), wt, timeout=30)
     # Second remove must not raise.
     worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_ensure_repo_with_head_raises_outside_repo(tmp_path):
+    import pytest
+
+    from codex_in_claude._core import worktree
+
+    with pytest.raises(worktree.NotAGitRepoError):
+        worktree.ensure_repo_with_head(str(tmp_path), timeout=10)
