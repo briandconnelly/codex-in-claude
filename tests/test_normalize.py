@@ -1,0 +1,94 @@
+"""Event metadata parsing and structured-findings extraction."""
+
+from __future__ import annotations
+
+from codex_in_claude import normalize
+
+
+def test_parse_event_metadata_usage_and_session():
+    events = "\n".join(
+        [
+            '{"type":"session.created","session_id":"sess-123"}',
+            '{"type":"token_count","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}',
+            "not json",
+            "",
+        ]
+    )
+    usage, session_id = normalize.parse_event_metadata(events)
+    assert session_id == "sess-123"
+    assert usage is not None
+    assert usage.input_tokens == 10
+    assert usage.output_tokens == 5
+    assert usage.total_tokens == 15
+
+
+def test_parse_event_metadata_nested_session():
+    events = '{"type":"x","msg":{"thread_id":"t-9"}}'
+    _, session_id = normalize.parse_event_metadata(events)
+    assert session_id == "t-9"
+
+
+def test_parse_event_metadata_empty():
+    usage, session_id = normalize.parse_event_metadata("")
+    assert usage is None
+    assert session_id is None
+
+
+def test_parse_structured_plain_json():
+    obj = normalize.parse_structured('{"summary":"ok","verdict":"pass"}')
+    assert obj == {"summary": "ok", "verdict": "pass"}
+
+
+def test_parse_structured_code_fence():
+    fenced = '```json\n{"summary":"ok"}\n```'
+    assert normalize.parse_structured(fenced) == {"summary": "ok"}
+
+
+def test_parse_structured_non_object():
+    assert normalize.parse_structured('"just a string"') is None
+    assert normalize.parse_structured("not json at all") is None
+    assert normalize.parse_structured(None) is None
+
+
+def test_coerce_findings_valid_and_invalid():
+    raw = [
+        {
+            "severity": "high",
+            "title": "bug",
+            "evidence": "line 3",
+            "risk": "crash",
+            "recommendation": "fix it",
+        },
+        {"severity": "not-a-severity", "title": "bad"},  # dropped
+        "garbage",  # dropped
+    ]
+    findings = normalize.coerce_findings(raw)
+    assert len(findings) == 1
+    assert findings[0].title == "bug"
+
+
+def test_coerce_findings_non_list():
+    assert normalize.coerce_findings(None) == []
+    assert normalize.coerce_findings("x") == []
+
+
+def test_extract_error_message_plain():
+    events = '{"type":"turn.failed","error":{"message":"boom happened"}}'
+    assert normalize.extract_error_message(events) == "boom happened"
+
+
+def test_extract_error_message_unwraps_nested_json():
+    inner = '{"type":"error","error":{"type":"invalid_request_error","message":"bad schema"}}'
+    events = '{"type":"error","message":' + repr_json(inner) + "}"
+    assert normalize.extract_error_message(events) == "bad schema"
+
+
+def test_extract_error_message_none_when_absent():
+    events = '{"type":"turn.completed"}\n{"type":"item.completed"}'
+    assert normalize.extract_error_message(events) is None
+
+
+def repr_json(s: str) -> str:
+    import json
+
+    return json.dumps(s)

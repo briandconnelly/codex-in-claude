@@ -1,0 +1,99 @@
+[project]
+name = "codex-in-claude"
+version = "0.1.0"
+description = "Call OpenAI Codex from Claude Code for delegation, review, and second opinions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Brian Connelly" },
+]
+keywords = ["codex", "claude-code", "code-review", "delegation", "mcp", "plugin"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "anyio>=4",
+    "fastmcp>=3.4",
+    "pydantic>=2",
+]
+
+[project.urls]
+Homepage = "https://github.com/briandconnelly/codex-in-claude"
+Repository = "https://github.com/briandconnelly/codex-in-claude"
+Issues = "https://github.com/briandconnelly/codex-in-claude/issues"
+Changelog = "https://github.com/briandconnelly/codex-in-claude/blob/main/CHANGELOG.md"
+Security = "https://github.com/briandconnelly/codex-in-claude/blob/main/SECURITY.md"
+
+[project.scripts]
+codex-in-claude-mcp = "codex_in_claude.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codex_in_claude"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=7",
+    "ruff>=0.15.15",
+    "ty>=0.0.1a7",
+]
+
+[tool.ruff]
+line-length = 100
+# Matches requires-python (>=3.11).
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "PIE", "RUF", "PL", "PT", "TID", "TC", "ARG", "PTH"]
+ignore = [
+    "PLR0913",  # too-many-args: tool handlers legitimately take many params
+    "PLR0911",  # too-many-returns: dispatch/classify handlers branch per error case
+    "PLR0912",  # too-many-branches: same — error-path-heavy handlers
+    "PLR2004",  # magic-value: noisy for literals
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use asserts, fixtures-as-args, private access, inline literals, broad
+# raises, and comma-string parametrize names by design.
+"tests/**" = ["ARG", "PLR2004", "S101", "TC001", "TC002", "TC003", "PT006", "PT011", "PT018", "PLC0415", "RUF059", "SLF001"]
+
+[tool.ty.src]
+# Type-check shipped code; tests use dynamic/Optional-subscript patterns by design.
+include = ["src"]
+
+[tool.ty.rules]
+# fastmcp/anyio expose runtime shapes ty can't fully resolve; don't fail on third-party imports.
+unresolved-import = "warn"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--cov=codex_in_claude --cov-report=term-missing --strict-markers --strict-config -m 'not integration'"
+markers = [
+    "integration: live tests requiring the codex CLI; opt in with `pytest -m integration --no-cov`",
+]
+
+[tool.coverage.run]
+source = ["src/codex_in_claude"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true

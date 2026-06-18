@@ -1,0 +1,183 @@
+"""Config knobs: env defaults, clamps, tier/sandbox/isolation -> codex flags."""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from codex_in_claude import cli_contract
+
+ENV_PREFIX = "CODEX_IN_CLAUDE_"
+
+MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 10, 600
+DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_MAX_INPUT_BYTES = 200_000
+DEFAULT_GIT_TIMEOUT_SECONDS = 60
+
+VALID_TIERS = ("consult", "propose", "apply")
+VALID_ISOLATIONS = ("inherit", "ignore-config", "ignore-rules")
+
+DEFAULT_TIER = "consult"
+DEFAULT_ISOLATION = "inherit"
+
+# Default sandbox for each tier. consult is strictly read-only; propose/apply need
+# write access (propose is confined to a temp worktree, apply to the live tree).
+TIER_SANDBOX = {
+    "consult": cli_contract.SANDBOX_READ_ONLY,
+    "propose": cli_contract.SANDBOX_WORKSPACE_WRITE,
+    "apply": cli_contract.SANDBOX_WORKSPACE_WRITE,
+}
+
+
+@dataclass
+class Defaults:
+    tier: str
+    sandbox: str
+    isolation: str
+    model: str | None
+    timeout_seconds: int
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def defaults() -> Defaults:
+    tier = os.environ.get(f"{ENV_PREFIX}TIER_DEFAULT", DEFAULT_TIER)
+    tier = tier if tier in VALID_TIERS else DEFAULT_TIER
+    isolation = os.environ.get(f"{ENV_PREFIX}ISOLATION", DEFAULT_ISOLATION)
+    isolation = isolation if isolation in VALID_ISOLATIONS else DEFAULT_ISOLATION
+    sandbox = os.environ.get(f"{ENV_PREFIX}SANDBOX_DEFAULT") or TIER_SANDBOX[tier]
+    sandbox = sandbox if sandbox in cli_contract.VALID_SANDBOXES else TIER_SANDBOX[tier]
+    return Defaults(
+        tier=tier,
+        sandbox=sandbox,
+        isolation=isolation,
+        model=os.environ.get(f"{ENV_PREFIX}MODEL") or None,
+        timeout_seconds=_env_int(f"{ENV_PREFIX}TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+    )
+
+
+# A value the MCP host failed to expand: the literal `${VAR}` form delivered
+# verbatim when the host does not perform ${...} substitution. The body must be a
+# valid shell variable name so malformed forms are not misreported.
+_ENV_PLACEHOLDER_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$")
+
+
+def is_env_placeholder(value: str | None) -> bool:
+    """True when an env value is an unexpanded `${...}` placeholder."""
+    return value is not None and bool(_ENV_PLACEHOLDER_RE.match(value.strip()))
+
+
+def placeholder_env_vars() -> list[str]:
+    """Names of tracked `CODEX_IN_CLAUDE_*` env vars left as unexpanded `${...}`."""
+    return sorted(
+        name
+        for name, value in os.environ.items()
+        if name.startswith(ENV_PREFIX) and is_env_placeholder(value)
+    )
+
+
+ENV_PLACEHOLDER_REPAIR = (
+    "These env vars are literal ${...}; your MCP host is not expanding env "
+    "substitutions. Use an env_vars passthrough list, or set literal values."
+)
+
+
+def clamp_timeout(value: int) -> int:
+    return max(MIN_TIMEOUT_SECONDS, min(MAX_TIMEOUT_SECONDS, value))
+
+
+def max_input_bytes() -> int:
+    return max(1_000, _env_int(f"{ENV_PREFIX}MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES))
+
+
+def git_timeout_seconds() -> int:
+    return max(1, _env_int(f"{ENV_PREFIX}GIT_TIMEOUT_SECONDS", DEFAULT_GIT_TIMEOUT_SECONDS))
+
+
+def sandbox_for_tier(tier: str) -> str:
+    """The default sandbox a tier runs under."""
+    return TIER_SANDBOX.get(tier, cli_contract.SANDBOX_READ_ONLY)
+
+
+def isolation_flags(isolation: str) -> list[str]:
+    """Codex flags implementing an isolation level.
+
+    inherit       -> [] (use the user's $CODEX_HOME config and project .rules)
+    ignore-config -> --ignore-user-config (drop $CODEX_HOME/config.toml; auth kept)
+    ignore-rules  -> also --ignore-rules (drop user/project execpolicy .rules)
+    """
+    if isolation == "inherit":
+        return []
+    if isolation == "ignore-config":
+        return ["--ignore-user-config"]
+    if isolation == "ignore-rules":
+        return ["--ignore-user-config", "--ignore-rules"]
+    raise ValueError(f"unsupported isolation: {isolation}")
+
+
+def supported_versions() -> frozenset[tuple[int, int]]:
+    """The `codex` (major, minor) versions this server is built against.
+
+    Overridable via CODEX_IN_CLAUDE_SUPPORTED_VERSIONS (comma-separated
+    "major.minor"). Any parse error falls back to the built-in set."""
+    raw = os.environ.get(cli_contract.SUPPORTED_VERSIONS_ENV)
+    if not raw:
+        return cli_contract.SUPPORTED_VERSIONS
+    parsed: set[tuple[int, int]] = set()
+    for part in raw.split(","):
+        bits = part.strip().split(".")
+        if len(bits) < 2:
+            continue
+        try:
+            parsed.add((int(bits[0]), int(bits[1])))
+        except ValueError:
+            return cli_contract.SUPPORTED_VERSIONS
+    return frozenset(parsed) or cli_contract.SUPPORTED_VERSIONS
+
+
+def parse_version(version: str | None) -> tuple[int, int] | None:
+    """Extract (major, minor) from a `codex --version` string, or None."""
+    if not version:
+        return None
+    match = re.search(r"(\d+)\.(\d+)\.\d+", version)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def version_supported(version: str | None) -> bool | None:
+    """Whether the installed codex (major, minor) is in supported_versions().
+
+    Returns None when unparseable. Advisory only — codex_status surfaces a mismatch
+    as a warning and never blocks calls on it."""
+    parsed = parse_version(version)
+    if parsed is None:
+        return None
+    return parsed in supported_versions()
+
+
+def state_dir() -> Path:
+    """Directory for disk-backed background job records."""
+    override = os.environ.get(f"{ENV_PREFIX}STATE_DIR")
+    if override:
+        return Path(override).expanduser()
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base).expanduser() if base else Path.home() / ".cache"
+    return root / "codex-in-claude" / "jobs"
+
+
+def worktree_base() -> Path | None:
+    """Optional override for where temp worktrees are created (default: alongside
+    the repo, managed by git). None means let the worktree module choose."""
+    override = os.environ.get(f"{ENV_PREFIX}WORKTREE_BASE")
+    return Path(override).expanduser() if override else None
