@@ -111,6 +111,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- Hardened the server against a single failed/long call taking down the whole tool surface for the
+  rest of a session (the disconnect observed in #39). Three parts: (1) every model-/job-bearing tool
+  is now wrapped in a boundary that converts an *unexpected* exception into the documented
+  `internal_error` result envelope (logged with a traceback) instead of letting it escape as an
+  opaque transport error — `asyncio.CancelledError` is a `BaseException` and still propagates, so MCP
+  cancel semantics are preserved; (2) the server now emits diagnostic logging to **stderr** (and,
+  with `CODEX_IN_CLAUDE_LOG_FILE`, a file) — never stdout, the stdio JSON-RPC channel — so a future
+  disconnect leaves a trail (subprocess spawn/exit, timeout, and cancellation are logged with pid),
+  controlled by `CODEX_IN_CLAUDE_LOG_LEVEL` (default `WARNING`); (3) a regression test pins that
+  cancelling an in-flight `codex exec` kills its process group rather than orphaning it. `internal_error`
+  is already an advertised code for these tools and no tool/param/enum changed, so this is **not** an
+  agent-visible surface change and `FINGERPRINT` is unchanged. The structural complement — moving long
+  read-only calls off the synchronous request path — is tracked separately in #41. (#39)
 - `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
   emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
   perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of

@@ -1205,3 +1205,56 @@ def test_job_status_model_surfaces_cleanup_warnings():
     }
     model = server._job_status_model(data)
     assert model.cleanup_warnings == ["could not remove temporary path: /tmp/cic-worktree-x"]
+
+
+# --- boundary: unexpected exceptions become a structured internal_error (#39) ---
+async def test_consult_unexpected_exception_returns_internal_error(
+    monkeypatch, clean_env, tmp_path
+):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", boom)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["retryable"] is True
+    # The documented envelope still holds: meta is present and tier reflects the tool.
+    assert res["meta"]["tier"] == "consult"
+    assert res["meta"]["sandbox"] == "read-only"
+
+
+async def test_review_unexpected_exception_returns_internal_error(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    # Fail inside diff gathering with a non-classified error to exercise the boundary.
+    monkeypatch.setattr(server.gitdiff, "gather_diff", boom)
+    # gather_diff RuntimeError is caught as a gitdiff error, so raise something else:
+    monkeypatch.setattr(server, "_gitdiff_error", boom)
+    res = await server.codex_review_changes(workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_delegate_unexpected_exception_uses_propose_meta(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.workspace, "resolve_workspace", boom)
+    res = await server.codex_delegate("do a thing", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["meta"]["tier"] == "propose"
+    assert res["meta"]["sandbox"] == "workspace-write"
+
+
+async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
+    import asyncio
+
+    def cancel(*a, **k):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await server.codex_consult("q", workspace_root=str(tmp_path))

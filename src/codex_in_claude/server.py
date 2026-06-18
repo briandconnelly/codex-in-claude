@@ -8,13 +8,17 @@ Tool surface (v1 grows by milestone):
 from __future__ import annotations
 
 import asyncio
+import functools
 import sys
-from typing import Any, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
 
-from codex_in_claude import __version__, codex, config, delegate, normalize, preflight, prompts
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+from codex_in_claude import __version__, codex, config, delegate, normalize, obs, preflight, prompts
 from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
@@ -193,6 +197,60 @@ def _base_meta(
         elapsed_ms=0,
         **extra,
     )
+
+
+def _internal_error_result(tool_name: str, exc: BaseException, *, tier: str, sandbox: str) -> dict:
+    """Best-effort `internal_error` envelope for an unexpected tool failure.
+
+    Used by the tool boundary so a bug or unforeseen exception still returns the
+    documented result envelope (not an opaque transport error) and a caller can
+    branch on `internal_error` — which these tools already advertise."""
+    d = config.defaults()
+    meta = _base_meta(
+        workspace.server_cwd(),
+        None,
+        tier=tier,
+        sandbox=sandbox,
+        isolation=d.isolation,
+        model=d.model,
+        timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+    )
+    return ErrorResult(
+        error=ErrorInfo(
+            code="internal_error",
+            message=f"{tool_name} failed unexpectedly: {type(exc).__name__}: {exc}"[:300],
+            repair="Server-side error; retry. If it persists, run codex_status and inspect "
+            "the server's stderr log (set CODEX_IN_CLAUDE_LOG_LEVEL=DEBUG for detail).",
+            retryable=True,
+        ),
+        meta=meta,
+    ).model_dump(mode="json")
+
+
+def _guard(
+    *, tier: str = "consult", sandbox: str = "read-only"
+) -> Callable[[Callable[..., Awaitable[dict]]], Callable[..., Awaitable[dict]]]:
+    """Wrap an async tool so an unexpected exception becomes a structured
+    `internal_error` envelope (logged with a traceback) instead of escaping the
+    handler. Cancellation is a `BaseException`, so it propagates untouched —
+    `except Exception` never catches it — preserving MCP cancel semantics (#39)."""
+
+    def decorator(fn: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
+        name = getattr(fn, "__name__", "tool")
+
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> dict:
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:
+                obs.get_logger("codex_in_claude.server").error(
+                    "tool %s raised %s", name, type(exc).__name__, exc_info=True
+                )
+                return _internal_error_result(name, exc, tier=tier, sandbox=sandbox)
+
+        return wrapper
+
+    return decorator
 
 
 # --------------------------------------------------------------------------- #
@@ -522,6 +580,7 @@ def codex_capabilities() -> dict:
 # Active tools
 # --------------------------------------------------------------------------- #
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=CONSULT_RESULT_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_consult(
     question: str,
     ctx: Context | None = None,
@@ -657,6 +716,7 @@ def _gitdiff_error(exc: Exception, meta: Meta) -> dict:
 
 
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=REVIEW_RESULT_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes(
     scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
@@ -780,6 +840,7 @@ async def codex_review_changes(
 
 
 @mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=DELEGATE_RESULT_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate(
     task: str,
     ctx: Context | None = None,
@@ -872,6 +933,7 @@ async def codex_delegate(
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_async(
     task: str,
     ctx: Context | None = None,
@@ -1017,6 +1079,7 @@ async def codex_delegate_async(
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_dry_run(
     scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
@@ -1140,6 +1203,7 @@ _DELEGATE_PLAN_NOTE = (
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DELEGATE_DRY_RUN_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_dry_run(
     task: str,
     ctx: Context | None = None,
@@ -1362,6 +1426,7 @@ def _job_status_model(data: dict) -> JobStatus:
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_STATUS_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_status(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1441,6 +1506,7 @@ async def _job_result_impl(
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=DELEGATE_RESULT_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1454,6 +1520,7 @@ async def codex_job_result(
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=DELEGATE_RESULT_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_consume_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1466,6 +1533,7 @@ async def codex_job_consume_result(
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_STATUS_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_cancel(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1487,6 +1555,7 @@ async def codex_job_cancel(
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_list(ctx: Context | None = None, workspace_root: str | None = None) -> dict:
     """List the background jobs known for this workspace, newest first.
 
@@ -1604,6 +1673,8 @@ def _str_list(value: object) -> list[str]:
 
 def main() -> None:
     """Console-script entrypoint: run the MCP server over stdio."""
+    log = obs.configure()
+    log.info("codex-in-claude %s starting (stdio)", __version__)
     mcp.run()
 
 
