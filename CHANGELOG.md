@@ -76,6 +76,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
+  emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
+  perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of
+  input and are not added. An explicit CLI-provided total is still honored verbatim, preserving the
+  forward-compat hook. Populating an existing field with a value is not a surface change, so
+  `FINGERPRINT` is unchanged. (#28)
 - `codex_dry_run` now validates `isolation` the same way the active tools do, returning the
   structured `unsupported_isolation` error envelope instead of silently substituting the configured
   default. A dry run is meant to preview what a later active call would do, so an invalid value that

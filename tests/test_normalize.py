@@ -22,6 +22,37 @@ def test_parse_event_metadata_usage_and_session():
     assert usage.total_tokens == 15
 
 
+def test_usage_total_derived_when_cli_omits_it():
+    # The current codex CLI emits token_count without a total; derive it from
+    # input + output (cached is a subset of input and must not be added). (#28)
+    events = (
+        '{"type":"token_count","usage":'
+        '{"input_tokens":100,"output_tokens":20,"cached_input_tokens":80}}'
+    )
+    usage, _ = normalize.parse_event_metadata(events)
+    assert usage is not None
+    assert usage.total_tokens == 120  # 100 + 20, NOT + 80 cached
+
+
+def test_usage_explicit_cli_total_wins_over_derivation():
+    # A CLI-provided total is forward-compat and must be honored verbatim, even if
+    # it does not equal input + output.
+    events = (
+        '{"type":"token_count","usage":{"input_tokens":100,"output_tokens":20,"total_tokens":999}}'
+    )
+    usage, _ = normalize.parse_event_metadata(events)
+    assert usage is not None
+    assert usage.total_tokens == 999
+
+
+def test_usage_total_not_derived_without_both_input_and_output():
+    # With only one of input/output present there is no meaningful total to derive.
+    events = '{"type":"token_count","usage":{"input_tokens":100}}'
+    usage, _ = normalize.parse_event_metadata(events)
+    assert usage is not None
+    assert usage.total_tokens is None
+
+
 def test_parse_event_metadata_nested_session():
     events = '{"type":"x","msg":{"thread_id":"t-9"}}'
     _, session_id = normalize.parse_event_metadata(events)
