@@ -38,6 +38,10 @@ from uuid import uuid4
 _TERMINAL = frozenset({"done", "failed", "cancelled", "timeout"})
 _LOCK = threading.RLock()
 
+# Default poll/backoff interval (ms) a job advertises to clients. The single source
+# for this value; the parent package re-exports it as the agent-visible constant.
+DEFAULT_POLL_AFTER_MS = 1000
+
 CmdFactory = Callable[[Path], list[str]]
 
 
@@ -134,7 +138,7 @@ class JobStore:
     max_seconds: int
     max_count: int
 
-    poll_after_ms: int = 1000
+    poll_after_ms: int = DEFAULT_POLL_AFTER_MS
 
     # External paths a job declares it owns (in <job_dir>/cleanup.json) are removed
     # when the job is cancelled/timed out, but only when they resolve strictly

@@ -120,6 +120,20 @@ async def test_capabilities_match_registered_tools():
     assert advertised == tool_names
 
 
+def test_tool_error_codes_cover_every_tool_and_are_valid():
+    """Each advertised tool has an error-code list, and every code is a real ErrorCode."""
+    from typing import get_args
+
+    from codex_in_claude.schemas import ErrorCode
+
+    caps = server.codex_capabilities()
+    advertised = set(caps["active_tools"]) | set(caps["free_tools"])
+    valid_codes = set(get_args(ErrorCode))
+    assert set(server._TOOL_ERROR_CODES) == advertised
+    for tool, codes in server._TOOL_ERROR_CODES.items():
+        assert set(codes) <= valid_codes, tool
+
+
 def test_delegate_async_command_present():
     cmd_dir = ROOT / "commands/codex"
     names = {p.stem for p in cmd_dir.glob("*.md")}

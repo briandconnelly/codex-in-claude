@@ -9,7 +9,13 @@ import pytest
 
 from codex_in_claude import codex, server
 from codex_in_claude._core.runtime import CommandRun
-from codex_in_claude.schemas import FINGERPRINT, Isolation, ReviewScope
+from codex_in_claude.schemas import (
+    FINGERPRINT,
+    JOB_POLL_AFTER_MS,
+    ErrorCode,
+    Isolation,
+    ReviewScope,
+)
 
 
 def _fake_result(last_message, *, exit_code=0, stderr="", events=""):
@@ -851,8 +857,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_4():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-4"
+def test_fingerprint_is_schema_5():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-5"
 
 
 def _param_enum(param_schema: dict) -> list | None:
@@ -886,6 +892,88 @@ async def test_fixed_value_params_advertise_enum(tool_name, param, expected):
     # part of the MCP contract and may vary across Pydantic/FastMCP versions).
     assert enum is not None, f"{tool_name}.{param} schema exposes no enum"
     assert set(enum) == set(expected)
+
+
+async def test_isolation_error_lists_allowed_values(clean_env, tmp_path):
+    """unsupported_isolation surfaces the valid set as machine-readable allowed_values."""
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), isolation="bogus")
+    assert res["error"]["code"] == "unsupported_isolation"
+    assert res["error"]["allowed_values"] == list(get_args(Isolation))
+
+
+async def test_scope_error_lists_allowed_values(monkeypatch, clean_env, tmp_path):
+    """invalid_scope surfaces the valid review scopes as allowed_values."""
+
+    def raise_scope(*a, **k):
+        raise gitdiff.InvalidScopeError("bad scope")
+
+    monkeypatch.setattr(gitdiff, "gather_diff", raise_scope)
+    res = await server.codex_review_changes(scope="nope", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "invalid_scope"
+    assert res["error"]["offending_param"] == "scope"
+    assert res["error"]["allowed_values"] == list(get_args(ReviewScope))
+
+
+async def test_job_running_error_is_actionable(monkeypatch, clean_env, tmp_path):
+    """job_running points at the recovery tool with concrete params and a backoff."""
+    store = _FakeStore(record=_ok_record("running"), result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    err = res["error"]
+    assert err["code"] == "job_running"
+    assert err["retryable"] is True
+    assert err["repair_tool"] == "codex_job_status"
+    # repair params carry both the job_id AND the caller's workspace_root, so the
+    # poll targets the same workspace rather than risking a wrong-workspace miss.
+    assert err["repair_tool_params"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
+    assert err["retry_after_ms"] == JOB_POLL_AFTER_MS
+
+
+async def test_job_running_repair_omits_workspace_when_not_given(monkeypatch, clean_env, tmp_path):
+    """With no explicit workspace_root, the repair params don't fabricate one."""
+    store = _FakeStore(record=_ok_record("running"), result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    monkeypatch.setattr(server.workspace, "server_cwd", lambda: str(tmp_path))
+    res = await server.codex_job_result("job-abc")
+    assert res["error"]["repair_tool_params"] == {"job_id": "job-abc"}
+
+
+async def test_job_not_found_points_at_list(monkeypatch, clean_env, tmp_path):
+    """job_not_found names codex_job_list as the way to recover known job_ids."""
+    store = _FakeStore(record=None, result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("missing", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "job_not_found"
+    assert res["error"]["offending_param"] == "job_id"
+    assert res["error"]["repair_tool"] == "codex_job_list"
+    # codex_job_list takes only workspace_root (not job_id) — echo it so the
+    # recovery lists jobs in the same workspace the lookup used.
+    assert res["error"]["repair_tool_params"] == {"workspace_root": str(tmp_path)}
+
+
+def test_job_poll_interval_has_single_source():
+    """The agent-visible JOB_POLL_AFTER_MS is the _core default, so a live job
+    record's poll_after_ms and the job_running retry_after_ms can't drift."""
+    from codex_in_claude._core import jobs
+
+    assert JOB_POLL_AFTER_MS == jobs.DEFAULT_POLL_AFTER_MS
+    assert jobs.JobStore.__dataclass_fields__["poll_after_ms"].default == JOB_POLL_AFTER_MS
+
+
+async def test_capabilities_list_error_codes_per_tool():
+    """Each tool capability declares the (advisory) error codes it may return."""
+    caps = server.codex_capabilities()
+    details = {t["name"]: t for t in caps["tool_details"]}
+    # error_codes is injected only into tool_details, so every advertised tool must
+    # have a detail row or its codes never reach the output.
+    assert set(details) == set(caps["active_tools"]) | set(caps["free_tools"])
+    valid_codes = set(get_args(ErrorCode))
+    for tool in details.values():
+        assert "error_codes" in tool
+        assert set(tool["error_codes"]) <= valid_codes, tool["name"]
+    assert "unsupported_isolation" in details["codex_consult"]["error_codes"]
+    assert "invalid_scope" in details["codex_review_changes"]["error_codes"]
+    assert "job_running" in details["codex_job_result"]["error_codes"]
 
 
 def test_job_status_model_surfaces_cleanup_warnings():
