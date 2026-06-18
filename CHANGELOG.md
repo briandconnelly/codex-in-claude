@@ -17,6 +17,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- The first-read server instructions (FastMCP `instructions`) now summarize all four task families
+  — `codex_consult`, `codex_review_changes`, `codex_delegate`, and `codex_delegate_async` + the
+  `codex_job_*` lifecycle — plus the key prerequisite (`codex_status` first) and negative scope
+  (delegate never edits your working tree; the plugin never bypasses Codex's sandbox/approvals).
+  Previously they described only `codex_consult`/`codex_status`, so agents could miss the better tool
+  for review/delegate tasks. Prose-only (no tool/param/error-code/enum/schema change), so
+  `FINGERPRINT` is unchanged. (#7)
 - **Breaking (agent-visible surface):** error envelopes now carry machine-actionable repair metadata
   alongside the prose `repair` string. `ErrorInfo` gains optional `allowed_values` (concrete valid
   values for enum-like params — populated for `unsupported_isolation` and `invalid_scope`),
