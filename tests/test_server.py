@@ -1228,9 +1228,10 @@ async def test_review_unexpected_exception_returns_internal_error(monkeypatch, c
     def boom(*a, **k):
         raise RuntimeError("kaboom")
 
-    # Fail inside diff gathering with a non-classified error to exercise the boundary.
+    # gather_diff's RuntimeError is caught and routed to _gitdiff_error, so also
+    # make _gitdiff_error raise — that exception escapes the tool's own handling
+    # and must be caught by the new tool boundary, becoming internal_error.
     monkeypatch.setattr(server.gitdiff, "gather_diff", boom)
-    # gather_diff RuntimeError is caught as a gitdiff error, so raise something else:
     monkeypatch.setattr(server, "_gitdiff_error", boom)
     res = await server.codex_review_changes(workspace_root=str(tmp_path))
     assert res["ok"] is False

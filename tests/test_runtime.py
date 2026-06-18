@@ -81,6 +81,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process-group kill is POSIX-only")
 async def test_run_async_cancellation_kills_process_group(tmp_path):
     """Cancelling an in-flight run kills the whole process GROUP, not just the
     direct child: a grandchild (which a parent-only kill would orphan) must also
@@ -105,12 +106,16 @@ async def test_run_async_cancellation_kills_process_group(tmp_path):
                 [sys.executable, "-c", child_src], cwd=str(tmp_path), timeout_seconds=30
             )
         )
-        # Wait until the child has spawned the grandchild and recorded its pid.
+        # Wait until the child has spawned the grandchild and recorded its pid,
+        # capturing it inside the loop so a fall-through fails clearly rather than
+        # raising FileNotFoundError on a missing pidfile.
         for _ in range(100):
-            if pidfile.exists() and pidfile.read_text().strip():
+            text = pidfile.read_text().strip() if pidfile.exists() else ""
+            if text:
+                grandchild_pid = int(text)
                 break
             await asyncio.sleep(0.05)
-        grandchild_pid = int(pidfile.read_text().strip())
+        assert grandchild_pid is not None, "child never recorded the grandchild pid"
         assert _pid_alive(grandchild_pid)
 
         task.cancel()
