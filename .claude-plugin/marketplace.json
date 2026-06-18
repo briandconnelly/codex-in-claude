@@ -1,0 +1,14 @@
+{
+  "name": "briandconnelly",
+  "owner": {
+    "name": "Brian Connelly",
+    "url": "https://github.com/briandconnelly"
+  },
+  "plugins": [
+    {
+      "name": "codex-in-claude",
+      "source": "./",
+      "description": "Call OpenAI Codex from Claude Code for delegation, review, and second opinions."
+    }
+  ]
+}

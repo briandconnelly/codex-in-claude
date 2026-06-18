@@ -1,0 +1,36 @@
+{
+  "name": "codex-in-claude",
+  "version": "0.1.0",
+  "description": "Call OpenAI Codex from Claude Code for delegation, review, and second opinions.",
+  "author": {
+    "name": "Brian Connelly"
+  },
+  "homepage": "https://github.com/briandconnelly/codex-in-claude",
+  "repository": "https://github.com/briandconnelly/codex-in-claude",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "code-review",
+    "delegation",
+    "collaboration",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Codex (for Claude Code)",
+    "shortDescription": "Delegate to Codex, review changes, and get second opinions.",
+    "longDescription": "codex-in-claude lets Claude Code call the OpenAI Codex CLI for an independent second opinion, structured code review, and delegated coding tasks. Delegation runs in an isolated git worktree and returns a reviewable diff that is never applied to your working tree. Read-only by default.",
+    "developerName": "Brian Connelly",
+    "category": "Developer Tools",
+    "capabilities": ["MCP", "Skills"],
+    "websiteURL": "https://github.com/briandconnelly/codex-in-claude",
+    "defaultPrompt": [
+      "Get a second opinion from Codex on this approach.",
+      "Have Codex review my current changes.",
+      "Delegate this task to Codex and show me the proposed diff."
+    ]
+  }
+}

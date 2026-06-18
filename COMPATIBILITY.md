@@ -1,0 +1,53 @@
+# Compatibility with the `codex` CLI
+
+This plugin shells out to the OpenAI `codex` CLI. Every assumption it makes lives in
+`src/codex_in_claude/cli_contract.py` so an upstream change is a one-file, greppable edit.
+Design goal: **fail loudly and safely, never silently weaken a guarantee.**
+
+Verified against `codex-cli 0.140`.
+
+## What we invoke
+
+- `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]
+  [--ephemeral] [--ignore-user-config] [--ignore-rules] [--skip-git-repo-check] [--add-dir <dir>]
+  [--model <m>] -` — prompt delivered on **stdin** (the trailing `-`), keeping context out of argv.
+- `codex --version`, `codex login status`, `codex exec --help` — free local probes.
+
+Notably we do **not** use the `app-server` JSON-RPC/broker protocol (the source of most of the
+upstream `codex-plugin-cc` reliability issues) nor the native `codex review`/`codex exec review`
+subcommand (its `--output-schema` is not honored for the final message, and its output depends on
+the user's Codex MCP fleet). Reviews use `codex exec` with a diff we gather ourselves.
+
+## Flag classes
+
+- **ALWAYS_SEND_FLAGS** — guarantee-bearing (sandbox, cd, json, output-last-message, isolation,
+  output-schema, …). Sent unconditionally and never gated on `--help`. If `codex` removes or
+  renames one, it rejects the invocation at argument parsing — before any model call, zero spend —
+  and the failure is reported as `cli_contract_changed` with repair guidance.
+- **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
+  `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
+
+## Version policy
+
+Advisory only. A version outside the tested set warns (`codex_status.version_warning`,
+`StatusResult`) but never blocks — readiness depends only on the binary being found and
+authenticated. Override the tested set with `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` (comma-separated
+`major.minor`).
+
+## Result extraction
+
+The final answer is read from the `--output-last-message` file (stable). The `--json` JSONL event
+stream is parsed **tolerantly** for optional metadata only (token usage, session id, error events),
+so an event-schema change degrades metadata rather than breaking a run.
+
+## Structured output
+
+`--output-schema` uses OpenAI strict structured outputs: every property must appear in `required`
+and every object must set `additionalProperties: false`. The findings schema in `schemas.py`
+follows this (optional fields are nullable but still required).
+
+## When `codex` changes
+
+1. Update `cli_contract.py` (and `config.py` if defaults move).
+2. Run the golden/contract tests and the live integration tests.
+3. Bump `FINGERPRINT` if the agent-visible surface changed; record it in `CHANGELOG.md`.

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codex-in-claude": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/briandconnelly/codex-in-claude.git@v0.1.0",
+        "codex-in-claude-mcp"
+      ]
+    }
+  }
+}
