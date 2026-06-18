@@ -6,6 +6,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Added
+- CodeQL code scanning and dependency-review CI workflows, added now that the repository is public
+  (both are free for public repos). CodeQL runs on push/PR to `main` plus a weekly schedule;
+  dependency-review fails a PR that introduces a dependency with a high-or-worse advisory.
 - **Breaking (agent-visible surface):** new `codex_rate_limited` error code. A `codex exec` run that
   fails because the account hit a usage/rate limit (ChatGPT window or API-key 429) now classifies as
   `codex_rate_limited` — `retryable=True` with a populated `retry_after_ms` (parsed from a
