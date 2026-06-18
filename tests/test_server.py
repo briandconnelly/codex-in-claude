@@ -664,6 +664,7 @@ class _FakeStore:
         self._status = status_dict
         self._record = record
         self._result_json = result_json
+        self.poll_after_ms = JOB_POLL_AFTER_MS  # base for the job_running backoff hint
         self.started = []
         self.cancelled = []
         self.consumed = []
@@ -966,6 +967,18 @@ async def test_job_running_error_is_actionable(monkeypatch, clean_env, tmp_path)
     # poll targets the same workspace rather than risking a wrong-workspace miss.
     assert err["repair_tool_params"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
     assert err["retry_after_ms"] == JOB_POLL_AFTER_MS
+
+
+async def test_job_running_retry_after_echoes_record_poll_hint(monkeypatch, clean_env, tmp_path):
+    # job_result on a running job suggests the same backed-off retry the status record
+    # already computed (the growing poll hint), not a separately recomputed value.
+    rec = _ok_record("running")
+    rec["poll_after_ms"] = 6000  # the store's grown backoff for a long-running job
+    store = _FakeStore(record=rec, result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "job_running"
+    assert res["error"]["retry_after_ms"] == 6000  # echoed from the record's poll_after_ms
 
 
 async def test_job_running_repair_omits_workspace_when_not_given(monkeypatch, clean_env, tmp_path):
