@@ -5,6 +5,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+- `codex_delegate`/`codex_delegate_async` no longer risk attributing the caller's pre-existing
+  uncommitted changes to Codex. If the throwaway worktree's baseline commit cannot be finalized
+  after the live patch applies (`git add`/`git commit` failure, or a non-clean tree afterward),
+  the run now fails fast with a structured `worktree_error` **before** any Codex call (zero spend)
+  and the partial worktree is cleaned up, instead of silently mixing live changes into the
+  returned diff. The agent-visible surface is unchanged, so `FINGERPRINT` is not bumped. (#4)
+
 ### Added
 - Initial release: a Claude Code plugin that calls the OpenAI Codex CLI via a FastMCP server.
 - Tools: `codex_consult` (read-only second opinion), `codex_review_changes` (structured review of

@@ -86,15 +86,25 @@ def create(repo: str, *, timeout: int) -> Worktree:
         shutil.rmtree(parent, ignore_errors=True)
         raise
 
-    warning = _seed_uncommitted(repo, wt, timeout)
+    try:
+        warning = _seed_uncommitted(repo, wt, timeout)
+    except WorktreeError:
+        # Seeding failed *after* creating the worktree — tear it down so a partial
+        # baseline can never be mistaken for a clean one, then re-raise.
+        remove(repo, Worktree(path=wt, parent=parent), timeout=timeout)
+        raise
     return Worktree(path=wt, parent=parent, baseline_warning=warning)
 
 
 def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     """Replay the live tree's uncommitted *tracked* changes into the worktree and
-    commit them as a baseline. Best-effort: if the patch will not apply, leave the
-    worktree at HEAD and return a warning instead of failing the whole run.
-    Untracked files are intentionally not copied."""
+    commit them as a baseline. Untracked files are intentionally not copied.
+
+    If the patch will not *apply*, that is best-effort: nothing was changed, so we
+    leave the worktree at HEAD and return a warning. But once the patch HAS applied,
+    the baseline commit must fully succeed — otherwise ``capture_diff`` would later
+    report the caller's live changes as the agent's work. Any failure finalizing the
+    baseline raises ``WorktreeError`` (the caller maps it to a zero-spend error)."""
     diff = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"], timeout)
     if diff.returncode != 0:
         return "could not read live uncommitted changes; worktree based on HEAD only"
@@ -112,8 +122,10 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     )
     if apply.returncode != 0:
         return "uncommitted changes could not be replayed; worktree based on HEAD only"
-    _git(wt, ["add", "-A"], timeout)
-    _git(
+    add = _git(wt, ["add", "-A"], timeout)
+    if add.returncode != 0:
+        raise WorktreeError(f"staging the baseline failed: {add.stderr.strip()[:200]}")
+    commit = _git(
         wt,
         [
             "-c",
@@ -128,6 +140,13 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
         ],
         timeout,
     )
+    if commit.returncode != 0:
+        raise WorktreeError(f"committing the baseline failed: {commit.stderr.strip()[:200]}")
+    # The baseline commit must leave the worktree clean; any residue means the live
+    # changes were not fully captured and would leak into the agent's diff.
+    status = _git(wt, ["status", "--porcelain=v1", "--untracked-files=all"], timeout)
+    if status.returncode != 0 or status.stdout.strip():
+        raise WorktreeError("baseline commit left the worktree dirty; aborting before spend")
     return None
 
 
@@ -153,7 +172,9 @@ def capture_diff(wt: str, *, timeout: int) -> str:
     build artifacts (``__pycache__``, ``.pyc``, caches) are excluded so the patch
     holds only meaningful source changes."""
     pathspec = [".", *_ARTIFACT_EXCLUDES]
-    _git(wt, ["add", "-A", "--", *pathspec], timeout)
+    add = _git(wt, ["add", "-A", "--", *pathspec], timeout)
+    if add.returncode != 0:
+        raise WorktreeError(f"staging the worktree diff failed: {add.stderr.strip()[:200]}")
     proc = _git(
         wt, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec], timeout
     )

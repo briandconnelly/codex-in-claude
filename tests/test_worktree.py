@@ -108,3 +108,72 @@ def test_ensure_repo_with_head_raises_outside_repo(tmp_path):
 
     with pytest.raises(worktree.NotAGitRepoError):
         worktree.ensure_repo_with_head(str(tmp_path), timeout=10)
+
+
+# --- baseline seeding must never silently misattribute live changes ----------
+
+
+def _fail_git_on(monkeypatch, predicate, stderr="simulated git failure"):
+    """Wrap worktree._git so calls matching predicate(args) fail; others run real."""
+    real = worktree._git
+
+    def fake(repo, args, timeout):
+        if predicate(args):
+            return subprocess.CompletedProcess(["git", *args], 1, "", stderr)
+        return real(repo, args, timeout)
+
+    monkeypatch.setattr(worktree, "_git", fake)
+
+
+def _worktree_count(repo):
+    out = subprocess.run(
+        ["git", "worktree", "list"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    return len([ln for ln in out.splitlines() if ln.strip()])
+
+
+def test_seed_commit_failure_raises_and_does_not_leak(repo, monkeypatch):
+    # A live uncommitted change exists, the patch applies, but the baseline commit
+    # fails. The worktree must NOT be left holding the live change (it would later
+    # be misattributed to the agent) — create() raises and cleans up.
+    (repo / "a.py").write_text("x = 2\n")
+    _fail_git_on(monkeypatch, lambda args: "commit" in args)
+    with pytest.raises(worktree.WorktreeError, match="baseline"):
+        worktree.create(str(repo), timeout=30)
+    assert _worktree_count(repo) == 1  # throwaway worktree was removed
+
+
+def test_seed_add_failure_raises(repo, monkeypatch):
+    (repo / "a.py").write_text("x = 2\n")
+    _fail_git_on(monkeypatch, lambda args: args[:2] == ["add", "-A"])
+    with pytest.raises(worktree.WorktreeError, match="baseline"):
+        worktree.create(str(repo), timeout=30)
+    assert _worktree_count(repo) == 1
+
+
+def test_seed_dirty_after_commit_raises(repo, monkeypatch):
+    # commit reports success but is a no-op, leaving staged changes behind. The
+    # porcelain-status guard must catch the partial seed rather than let the agent
+    # run on top of un-baselined live changes.
+    (repo / "a.py").write_text("x = 2\n")
+    real = worktree._git
+
+    def fake(r, args, timeout):
+        if "commit" in args:
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        return real(r, args, timeout)
+
+    monkeypatch.setattr(worktree, "_git", fake)
+    with pytest.raises(worktree.WorktreeError, match="dirty"):
+        worktree.create(str(repo), timeout=30)
+    assert _worktree_count(repo) == 1
+
+
+def test_capture_diff_add_failure_raises(repo, monkeypatch):
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        _fail_git_on(monkeypatch, lambda args: args[:2] == ["add", "-A"])
+        with pytest.raises(worktree.WorktreeError):
+            worktree.capture_diff(wt.path, timeout=30)
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)

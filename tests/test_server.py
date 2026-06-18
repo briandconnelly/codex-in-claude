@@ -312,6 +312,47 @@ async def test_delegate_input_too_large(monkeypatch, clean_env, tmp_path):
     assert res["error"]["code"] == "input_too_large"
 
 
+async def test_delegate_baseline_commit_failure_no_spend(monkeypatch, clean_env, tmp_path):
+    # Regression for issue #4: if the baseline commit fails after the live patch
+    # applies, delegate must fail with worktree_error BEFORE calling Codex, so the
+    # caller's pre-existing changes are never returned as Codex's diff.
+    import subprocess
+
+    def g(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    g("init", "-q")
+    g("config", "user.email", "t@t.co")
+    g("config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    (tmp_path / "a.py").write_text("x = 999  # pre-existing live edit\n")
+
+    real_git = worktree._git
+
+    def fake_git(repo, args, timeout):
+        if "commit" in args:
+            return subprocess.CompletedProcess(["git", *args], 1, "", "simulated commit failure")
+        return real_git(repo, args, timeout)
+
+    monkeypatch.setattr(worktree, "_git", fake_git)
+
+    called = {"codex": False}
+
+    async def must_not_run(*a, **k):
+        called["codex"] = True
+        return _fake_result("should not happen")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", must_not_run)
+
+    res = await server.codex_delegate("do something", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+    assert "diff" not in res  # no diff returned at all → nothing to misattribute
+    assert called["codex"] is False  # failed before spending
+
+
 async def test_delegate_baseline_warning_surfaced(monkeypatch, clean_env, tmp_path):
     wt = worktree.Worktree(
         path=str(tmp_path / "wt"), parent=str(tmp_path / "p"), baseline_warning="seed failed"
