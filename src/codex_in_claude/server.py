@@ -23,6 +23,7 @@ from codex_in_claude.schemas import (
     DELEGATE_RESULT_SCHEMA,
     DRY_RUN_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
+    FINGERPRINT,
     JOB_LIST_SCHEMA,
     JOB_POLL_AFTER_MS,
     JOB_STARTED_SCHEMA,
@@ -1237,9 +1238,14 @@ async def _job_result_impl(
         return _job_not_found(job_id, meta, workspace_root)
     state = rec["status"]
     if state == "done" and payload is not None:
-        # Patch the stored envelope's meta with the job_id so callers can correlate.
         if isinstance(payload.get("meta"), dict):
+            # Patch the stored envelope's meta with the job_id so callers can correlate,
+            # and stamp the CURRENT fingerprint: a payload written by a pre-upgrade
+            # worker carries an older fingerprint, but we are normalizing it (below) to
+            # this server's surface, so a stale fingerprint would mislead clients that
+            # cache/branch on it.
             payload["meta"]["job_id"] = job_id
+            payload["meta"]["fingerprint"] = FINGERPRINT
         # A delegate result carries no verdict/confidence (#31). A payload written by
         # an older worker may still include them; drop them so the returned envelope
         # matches the advertised DelegateResult contract rather than leaking dead fields.

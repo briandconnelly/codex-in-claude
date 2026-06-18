@@ -853,12 +853,15 @@ async def test_job_result_strips_legacy_verdict_fields(monkeypatch, clean_env, t
     legacy = _done_envelope()
     legacy["verdict"] = "unknown"
     legacy["confidence"] = "medium"
+    legacy["meta"]["fingerprint"] = "codex-in-claude/0.1/schema-6"  # a pre-upgrade worker
     store = _FakeStore(record=_ok_record("done"), result_json=legacy)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
     res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
     assert res["ok"] is True
     assert "verdict" not in res
     assert "confidence" not in res
+    # The normalized payload is stamped with the current surface fingerprint.
+    assert res["meta"]["fingerprint"] == FINGERPRINT
 
 
 async def test_job_result_running_maps_error(monkeypatch, clean_env, tmp_path):
