@@ -13,13 +13,14 @@ from urllib.parse import unquote, urlparse
 from fastmcp import Context, FastMCP
 
 from codex_in_claude import __version__, codex, config, normalize, preflight, prompts
-from codex_in_claude._core import workspace
+from codex_in_claude._core import gitdiff, workspace
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
     RESULT_SCHEMA,
     STATUS_SCHEMA,
     CapabilitiesResult,
+    ContextSummary,
     ErrorCode,
     ErrorInfo,
     ErrorResult,
@@ -211,7 +212,7 @@ def codex_capabilities() -> dict:
         version=__version__,
         transport="stdio",
         stability="alpha",
-        active_tools=["codex_consult"],
+        active_tools=["codex_consult", "codex_review_changes"],
         free_tools=["codex_status", "codex_capabilities"],
         tool_details=[
             ToolCapability(
@@ -222,6 +223,14 @@ def codex_capabilities() -> dict:
                 required_params=["question"],
                 key_optional_params=["workspace_root", "extra_context", "model", "isolation"],
                 returns="A result envelope with summary, optional findings, and meta.",
+            ),
+            ToolCapability(
+                name="codex_review_changes",
+                cost="active",
+                use_when="You want Codex to review your git changes (working_tree, "
+                "branch, or commit) and return structured findings.",
+                key_optional_params=["scope", "base", "commit", "paths", "workspace_root", "model"],
+                returns="A result envelope with verdict, findings, and a context summary.",
             ),
             ToolCapability(
                 name="codex_status",
@@ -350,6 +359,161 @@ async def codex_consult(
     return _finalize(result, tool="codex_consult", meta=meta)
 
 
+_GITDIFF_ERRORS: dict[type, tuple[str, str | None]] = {
+    gitdiff.InvalidScopeError: ("invalid_scope", "scope"),
+    gitdiff.InvalidBaseError: ("invalid_base", "base"),
+    gitdiff.InvalidCommitError: ("invalid_commit", "commit"),
+    gitdiff.InvalidPathsError: ("invalid_paths", "paths"),
+    gitdiff.NotAGitRepoError: ("not_a_git_repo", "workspace_root"),
+    gitdiff.GitUnavailableError: ("git_unavailable", None),
+}
+
+
+def _gitdiff_error(exc: Exception, meta: Meta) -> dict:
+    code, offending = _GITDIFF_ERRORS.get(type(exc), ("git_unavailable", None))
+    repair = {
+        "invalid_scope": "Use scope=working_tree|branch|commit.",
+        "invalid_base": "Pass a valid base branch/ref for scope=branch.",
+        "invalid_commit": "Pass a valid commit SHA for scope=commit.",
+        "invalid_paths": "Use repo-relative paths with '/' separators, no '..'.",
+        "not_a_git_repo": "Point workspace_root at a git repository.",
+        "git_unavailable": "Ensure git is installed and the repo is healthy.",
+    }[code]
+    return ErrorResult(
+        error=ErrorInfo(
+            code=cast("ErrorCode", code),
+            message=str(exc)[:300],
+            repair=repair,
+            offending_param=offending,
+        ),
+        meta=meta,
+    ).model_dump(mode="json")
+
+
+@mcp.tool(annotations=_ACTIVE_READONLY, output_schema=RESULT_SCHEMA)
+async def codex_review_changes(
+    scope: str = "working_tree",
+    ctx: Context | None = None,
+    base: str | None = None,
+    commit: str | None = None,
+    paths: list[str] | None = None,
+    workspace_root: str | None = None,
+    model: str | None = None,
+    isolation: str | None = None,
+    timeout_seconds: int | None = None,
+) -> dict:
+    """Ask Codex (a different model) to review your git changes for an independent
+    second opinion.
+
+    scope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews
+    `base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-
+    redacted, and bounded by this server; Codex reviews it read-only and returns
+    structured findings. Pass `workspace_root` (absolute) for the right repo."""
+    d = config.defaults()
+    timeout = config.clamp_timeout(
+        timeout_seconds if timeout_seconds is not None else d.timeout_seconds
+    )
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=timeout,
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="consult",
+        sandbox="read-only",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=timeout,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
+    )
+    if wres.error_code is not None:
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    try:
+        diff = gitdiff.gather_diff(
+            cwd,
+            scope,
+            base=base,
+            commit=commit,
+            paths=paths,
+            timeout=config.git_timeout_seconds(),
+            max_bytes=config.max_input_bytes(),
+        )
+    except (
+        gitdiff.InvalidScopeError,
+        gitdiff.InvalidBaseError,
+        gitdiff.InvalidCommitError,
+        gitdiff.InvalidPathsError,
+        gitdiff.NotAGitRepoError,
+        gitdiff.GitUnavailableError,
+        RuntimeError,
+    ) as exc:
+        return _gitdiff_error(exc, meta)
+
+    meta.context_summary = ContextSummary(
+        files_changed=diff.summary.files_changed,
+        lines_added=diff.summary.lines_added,
+        lines_removed=diff.summary.lines_removed,
+    )
+    meta.redacted_paths = diff.redacted_paths
+    meta.truncated = diff.truncated
+    meta.truncation_hint = diff.truncation_hint
+
+    if diff.summary.files_changed == 0 and not diff.text.strip():
+        return SuccessResult(
+            tool="codex_review_changes",
+            summary=f"No changes to review for scope={scope}.",
+            verdict="pass",
+            confidence="high",
+            meta=meta,
+        ).model_dump(mode="json")
+
+    label = scope if scope != "branch" else f"branch {base}...HEAD"
+    if scope == "commit":
+        label = f"commit {commit}"
+    prompt = prompts.build_review_prompt(diff.text, label)
+    result = await codex.run_codex_exec(
+        prompt,
+        cwd=cwd,
+        sandbox="read-only",
+        isolation=isolation_v,
+        timeout_seconds=timeout,
+        model=model or d.model,
+        output_schema=FINDINGS_OUTPUT_SCHEMA,
+    )
+    return _finalize(result, tool="codex_review_changes", meta=meta)
+
+
 def _finalize(result: codex.CodexExecResult, *, tool: str, meta: Meta) -> dict:
     """Turn a CodexExecResult into a SuccessResult/ErrorResult dict."""
     meta.elapsed_ms = result.run.elapsed_ms
@@ -407,5 +571,5 @@ def main() -> None:
     mcp.run()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

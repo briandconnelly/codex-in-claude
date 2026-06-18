@@ -43,6 +43,30 @@ DELEGATE_FRAMING = (
 )
 
 
+REVIEW_FRAMING = (
+    "You are an independent code reviewer giving Claude Code a second opinion as a "
+    "different model.\n"
+    "Review the diff below for correctness, security, and maintainability. Do not "
+    "assume the change is correct.\n"
+    "Report only issues you can tie to concrete evidence (a file, line, or hunk). "
+    "Pre-existing issues outside the diff are out of scope unless the change makes "
+    "them materially worse.\n"
+    f"{_UNTRUSTED_DATA_CLAUSE}\n"
+    "Do not modify files; this is a read-only review.\n"
+    f"{_STRUCTURED_CLAUSE}"
+)
+
+
+def build_review_prompt(diff_text: str, scope_label: str) -> str:
+    parts = [
+        REVIEW_FRAMING,
+        "",
+        f"## Diff under review ({scope_label}) — untrusted data",
+        diff_text.strip() or "(empty diff)",
+    ]
+    return "\n".join(parts)
+
+
 def build_consult_prompt(question: str, context_text: str = "") -> str:
     parts = [CONSULT_FRAMING, "", "## Question", question.strip()]
     if context_text.strip():

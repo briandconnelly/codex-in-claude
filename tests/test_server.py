@@ -134,3 +134,93 @@ async def test_consult_placeholder_env(monkeypatch, clean_env, tmp_path):
     res = await server.codex_consult("q", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+# --- review ------------------------------------------------------------------
+from codex_in_claude._core import gitdiff  # noqa: E402
+
+
+def _diff(text="diff --git a/x b/x\n+y", files=1, added=1, removed=0):
+    return gitdiff.DiffResult(
+        text=text,
+        summary=gitdiff.DiffSummary(files_changed=files, lines_added=added, lines_removed=removed),
+    )
+
+
+async def test_review_success(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+
+    payload = {
+        "summary": "one real bug",
+        "verdict": "concerns",
+        "confidence": "medium",
+        "findings": [
+            {
+                "severity": "high",
+                "title": "off-by-one",
+                "file": "x",
+                "line": 1,
+                "line_end": None,
+                "evidence": "loop",
+                "risk": "crash",
+                "recommendation": "fix bound",
+            }
+        ],
+    }
+
+    async def fake(*a, **k):
+        return _fake_result(json.dumps(payload))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["verdict"] == "concerns"
+    assert res["tool"] == "codex_review_changes"
+    assert res["meta"]["scope"] == "working_tree"
+    assert res["meta"]["context_summary"]["files_changed"] == 1
+
+
+async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff(text="", files=0))
+    called = {"n": 0}
+
+    async def fake(*a, **k):
+        called["n"] += 1
+        return _fake_result("should not run")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["verdict"] == "pass"
+    assert called["n"] == 0  # no model call for an empty diff
+
+
+async def test_review_not_a_git_repo(monkeypatch, clean_env, tmp_path):
+    def raise_not_repo(*a, **k):
+        raise gitdiff.NotAGitRepoError("not a git repository")
+
+    monkeypatch.setattr(gitdiff, "gather_diff", raise_not_repo)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+
+
+async def test_review_invalid_base(monkeypatch, clean_env, tmp_path):
+    def raise_base(*a, **k):
+        raise gitdiff.InvalidBaseError("bad base")
+
+    monkeypatch.setattr(gitdiff, "gather_diff", raise_base)
+    res = await server.codex_review_changes(
+        scope="branch", base="-bad", workspace_root=str(tmp_path)
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_base"
+    assert res["error"]["offending_param"] == "base"
+
+
+async def test_review_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), isolation="nope"
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
