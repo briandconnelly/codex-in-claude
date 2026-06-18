@@ -39,6 +39,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- Documented what to do when the MCP server is unavailable mid-session. The
+  `collaborating-with-codex` skill and the README now explain how to recognize a transport
+  drop (`Connection closed` / `No such tool available`), how to recover (relaunch the server,
+  confirm with `codex_status`), and an interim read-only
+  `codex exec --sandbox read-only --skip-git-repo-check -` fallback — with the explicit caveat that
+  it bypasses the plugin's diff gathering, secret
+  redaction, input-byte bounding, and structured envelope, so it is a stopgap, not a replacement.
+  Docs-only; `FINGERPRINT` unchanged. (#43)
 - **Breaking (agent-visible surface):** `verdict` and `confidence` are now review-only. They were
   on the shared success envelope for every active tool, so `codex_consult` (plain Q&A) always came
   back `verdict:"unknown"` and `codex_delegate` (which returns a diff) `verdict:"unknown"` too — a
