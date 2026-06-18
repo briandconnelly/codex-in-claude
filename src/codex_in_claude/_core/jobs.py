@@ -41,8 +41,25 @@ _LOCK = threading.RLock()
 # Default poll/backoff interval (ms) a job advertises to clients. The single source
 # for this value; the parent package re-exports it as the agent-visible constant.
 DEFAULT_POLL_AFTER_MS = 1000
+# Upper bound for the growing poll backoff (ms). A delegate often runs ~20s, so the
+# hint ramps up to here rather than staying at the flat default and inviting ~20 polls.
+MAX_POLL_AFTER_MS = 10000
 
 CmdFactory = Callable[[Path], list[str]]
+
+
+def poll_backoff_ms(
+    elapsed_ms: int,
+    *,
+    base: int = DEFAULT_POLL_AFTER_MS,
+    cap: int = MAX_POLL_AFTER_MS,
+) -> int:
+    """Suggested delay (ms) before the next codex_job_status poll for a running job.
+
+    Grows with how long the job has already run — roughly "wait about as long as it
+    has already taken" — so a polling agent naturally backs off instead of tight-
+    looping at the flat ``base``. Bounded to ``[base, cap]``."""
+    return min(max(base, elapsed_ms), cap)
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -353,18 +370,26 @@ class JobStore:
         return time.time() - completed > self.ttl_seconds
 
     def _status_dict(self, jd: Path, meta: dict, state: str) -> dict:
+        elapsed_ms = self._elapsed_ms(meta)
+        # Running jobs get a growing poll hint so a polling agent backs off; terminal
+        # jobs don't need polling, so the flat base is fine there.
+        poll = (
+            poll_backoff_ms(elapsed_ms, base=self.poll_after_ms)
+            if state == "running"
+            else self.poll_after_ms
+        )
         return {
             "job_id": meta.get("job_id", jd.name),
             "kind": meta.get("kind", ""),
             "status": state,
             "started_at": meta.get("started_at", ""),
             "started_epoch": meta.get("started_epoch", 0.0),
-            "elapsed_ms": self._elapsed_ms(meta),
+            "elapsed_ms": elapsed_ms,
             "deadline_seconds": self._deadline_seconds(meta),
             "completed_epoch": meta.get("completed_epoch"),
             "expires_at": self._expires_at(meta),
             "result_available": state == "done",
-            "poll_after_ms": self.poll_after_ms,
+            "poll_after_ms": poll,
             "ttl_seconds": self.ttl_seconds,
             "cleanup_warnings": meta.get("cleanup_warnings", []),
             "extra": meta.get("extra", {}),

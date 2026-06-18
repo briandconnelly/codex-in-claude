@@ -77,7 +77,9 @@ The MCP server is launched on demand via `uvx` from a pinned release tag, so upd
 - `codex_job_status(job_id, …)` / `codex_job_result` / `codex_job_consume_result` /
   `codex_job_cancel` / `codex_job_list` — background-job lifecycle. State is disk-backed and
   survives server restarts; jobs are bounded by a wall-clock deadline with TTL + count-cap
-  eviction. Honor `poll_after_ms`; don't poll in a tight loop.
+  eviction. Honor `poll_after_ms` (it grows with a running job's elapsed runtime, bounded, so you
+  back off automatically); don't poll in a tight loop. Results are retained `ttl_seconds` **after**
+  a job completes, so `expires_at` is null while it runs and is set once it finishes.
 
 Slash commands wrap these: `/codex:status`, `/codex:consult`, `/codex:review`,
 `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.

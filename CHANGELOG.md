@@ -28,6 +28,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- Async-job polling is more economical and legible. `codex_job_status` now returns a **growing**
+  `poll_after_ms` for a running job — it scales with elapsed runtime (bounded at 10s) instead of the
+  flat 1s, so an agent that honors the hint backs off naturally rather than polling ~20 times during
+  a typical ~20s delegate; the `job_running` error from `codex_job_result` carries the same backed-off
+  `retry_after_ms`. The `ttl_seconds`/`expires_at` semantics are now documented on the job schemas
+  and `codex_job_status`: results are retained `ttl_seconds` **after completion**, so `expires_at` is
+  null while a job runs and is set once it finishes (no more misreading a null expiry as "never
+  expires"). Behavior/docs only: the `poll_after_ms` field already existed and only its runtime value
+  changed — no tool/param/error-code/enum/schema-shape change — so `FINGERPRINT` is unchanged. (#30)
 - The `collaborating-with-codex` skill now documents the propose-tier `workspace-write` no-network
   constraint (on both `codex_delegate` and the background `codex_delegate_async`), the optional
   `paths` filter on `codex_review_changes`, the `/codex:*` slash commands, and a "Common mistakes"

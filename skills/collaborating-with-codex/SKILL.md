@@ -64,11 +64,15 @@ and cannot reach the network.
 - Starting a job **commits to spend** — it runs to completion or its wall-clock
   deadline even if you never poll.
 - Poll `codex_job_status(job_id)`; **honor `poll_after_ms` and do not poll in a tight
-  loop**. When `result_available` is true, call `codex_job_result(job_id)`.
+  loop**. For a running job it grows with elapsed runtime (a delegate often runs ~20s),
+  so following it backs you off automatically. When `result_available` is true, call
+  `codex_job_result(job_id)`.
 - `codex_job_consume_result` reads and deletes the record; `codex_job_cancel` stops a
   running job; `codex_job_list` recovers `job_id`s lost across context compaction.
 - Job state is disk-backed (survives server restarts) and bounded by a deadline plus
-  TTL/count-cap eviction — old records disappear, so read results before they expire.
+  TTL/count-cap eviction. Results are retained `ttl_seconds` **after the job completes**:
+  `expires_at` is null while running and is set once it finishes — read results before
+  then.
 - Pass the same `workspace_root` to the lifecycle tools as you did to the async call;
   jobs are keyed by workspace.
 

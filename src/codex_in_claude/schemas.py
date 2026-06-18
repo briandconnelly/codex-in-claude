@@ -285,7 +285,10 @@ class JobStarted(BaseModel):
     status: JobState = "running"
     started_at: str  # ISO-8601 UTC
     deadline_seconds: int  # wall-clock cap after which a poll reaps the job
-    poll_after_ms: int = JOB_POLL_AFTER_MS
+    poll_after_ms: int = JOB_POLL_AFTER_MS  # initial poll delay; grows per poll (see JobStatus)
+    # Results are retained `ttl_seconds` AFTER the job completes — the retention
+    # window, not a countdown from now. `expires_at` is therefore null until the job
+    # finishes; codex_job_status populates it once a terminal state is reached.
     ttl_seconds: int
     expires_at: str | None = None
     meta: Meta
@@ -303,7 +306,12 @@ class JobStatus(BaseModel):
     started_at: str
     elapsed_ms: int
     deadline_seconds: int
+    # Suggested delay before the NEXT poll. For a running job this grows with
+    # elapsed runtime (bounded) so successive polls back off instead of tight-
+    # looping at the flat base; honor it rather than polling on a fixed interval.
     poll_after_ms: int = JOB_POLL_AFTER_MS
+    # Results are retained `ttl_seconds` after the job COMPLETES. `expires_at` is null
+    # while running (no completion time yet) and is set once the job is terminal.
     ttl_seconds: int
     expires_at: str | None = None
     result_available: bool = False  # true once status == done

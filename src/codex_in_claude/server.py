@@ -15,13 +15,12 @@ from urllib.parse import unquote, urlparse
 from fastmcp import Context, FastMCP
 
 from codex_in_claude import __version__, codex, config, delegate, normalize, preflight, prompts
-from codex_in_claude._core import gitdiff, workspace, worktree
+from codex_in_claude._core import gitdiff, jobs, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     DRY_RUN_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
     JOB_LIST_SCHEMA,
-    JOB_POLL_AFTER_MS,
     JOB_STARTED_SCHEMA,
     JOB_STATUS_SCHEMA,
     RESULT_SCHEMA,
@@ -1209,8 +1208,12 @@ async def codex_job_status(
     """Check a background job's lifecycle state without fetching the full result.
 
     Use after codex_delegate_async. Returns status, elapsed time, expiry, and
-    `result_available`; when it is true, call codex_job_result. Free — no model
-    call. Honor `poll_after_ms` between polls; do not poll in a tight loop."""
+    `result_available`; when it is true, call codex_job_result. Free — no model call.
+
+    Honor `poll_after_ms` between polls — for a running job it GROWS with elapsed
+    runtime (bounded), so following it backs you off instead of tight-looping (a
+    delegate often runs ~20s). `expires_at` is null while running and is set once the
+    job finishes; results are then retained `ttl_seconds` past that completion."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
@@ -1248,6 +1251,13 @@ async def _job_result_impl(
     poll_params: dict[str, Any] = {"job_id": job_id}
     if workspace_root:
         poll_params["workspace_root"] = workspace_root
+    # Same growing backoff codex_job_status returns, so polling via job_result on a
+    # long run also backs off instead of retrying at the flat base every time.
+    retry_after = (
+        jobs.poll_backoff_ms(rec.get("elapsed_ms", 0), base=store.poll_after_ms)
+        if running
+        else None
+    )
     return ErrorResult(
         error=ErrorInfo(
             code=cast("ErrorCode", code),
@@ -1256,7 +1266,7 @@ async def _job_result_impl(
             retryable=running,
             repair_tool="codex_job_status" if running else None,
             repair_tool_params=poll_params if running else None,
-            retry_after_ms=JOB_POLL_AFTER_MS if running else None,
+            retry_after_ms=retry_after,
         ),
         meta=meta,
     ).model_dump(mode="json")
