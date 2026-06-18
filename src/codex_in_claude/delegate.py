@@ -145,7 +145,11 @@ async def run_delegate(
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
     else:
-        cap = max_diff_bytes if max_diff_bytes is not None else config.max_delegate_diff_bytes()
+        # A cap of None (sync default, or a legacy job spec lacking the key) — or an
+        # invalid one from a corrupt spec (non-int, zero, negative) — falls back to
+        # the configured, floored default rather than slicing with a bad bound.
+        valid_cap = isinstance(max_diff_bytes, int) and max_diff_bytes > 0
+        cap = max_diff_bytes if valid_cap else config.max_delegate_diff_bytes()
         diff = _bound_diff(diff, meta, cap)
     return SuccessResult(
         tool="codex_delegate",

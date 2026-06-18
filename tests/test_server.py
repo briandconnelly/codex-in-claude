@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from codex_in_claude import codex, server
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import FINGERPRINT
@@ -380,6 +382,53 @@ async def test_run_delegate_reports_worktree_parent(monkeypatch, clean_env, tmp_
         on_worktree_parent=seen.append,
     )
     assert seen == [wt.parent]
+
+
+@pytest.mark.parametrize("bad_cap", [0, -5, "nope", 12.5])
+async def test_run_delegate_invalid_cap_falls_back_to_default(
+    monkeypatch, clean_env, tmp_path, bad_cap
+):
+    # A corrupt/legacy job spec could carry a non-positive or non-int cap. run_delegate
+    # must ignore it and use the configured (floored) default rather than slicing with a
+    # bad bound (negative slice / TypeError).
+    from codex_in_claude import delegate
+    from codex_in_claude.schemas import Meta
+
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "1000")
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    diff = "".join(f"diff --git a/f{i} b/f{i}\n+line {i}\n" for i in range(500))
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: diff)
+
+    async def fake(*a, **k):
+        return _fake_result("done")
+
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake)
+    meta = Meta(
+        cwd=str(tmp_path),
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=60,
+        elapsed_ms=0,
+    )
+    res = await delegate.run_delegate(
+        "do x",
+        str(tmp_path),
+        meta,
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=60,
+        model=None,
+        git_timeout=30,
+        max_diff_bytes=bad_cap,
+    )
+    assert res["ok"] is True
+    # Fell back to the configured 1000-byte default: bounded, signaled, no crash.
+    assert res["meta"]["truncated"] is True
+    assert len(res["diff"].encode("utf-8")) <= 1000
 
 
 async def test_delegate_not_a_git_repo(monkeypatch, clean_env, tmp_path):
