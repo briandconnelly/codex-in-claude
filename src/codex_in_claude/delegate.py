@@ -10,6 +10,8 @@ the background worker can use it without constructing the server.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from codex_in_claude import codex, normalize, prompts
 from codex_in_claude._core import worktree
 from codex_in_claude.schemas import (
@@ -21,6 +23,9 @@ from codex_in_claude.schemas import (
     SuccessResult,
     Usage,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _diffstat(diff: str) -> ContextSummary:
@@ -57,13 +62,16 @@ async def run_delegate(
     timeout_seconds: int,
     model: str | None,
     git_timeout: int,
+    on_worktree_parent: Callable[[str], None] | None = None,
 ) -> dict:
     """Run the propose orchestration and return a SuccessResult|ErrorResult dict.
 
     `meta` is the pre-built envelope meta (tier=propose). The worktree is always
-    cleaned up, even on failure or codex error."""
+    cleaned up, even on failure or codex error. `on_worktree_parent`, if given, is
+    called with the temp worktree parent as soon as it exists so a background
+    worker can record it for hard-kill cleanup."""
     try:
-        wt = worktree.create(cwd, timeout=git_timeout)
+        wt = worktree.create(cwd, timeout=git_timeout, on_parent=on_worktree_parent)
     except worktree.NotAGitRepoError as exc:
         return ErrorResult(
             error=ErrorInfo(

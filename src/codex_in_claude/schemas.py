@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-1"
+FINGERPRINT = "codex-in-claude/0.1/schema-2"
 
 Severity = Literal["critical", "high", "medium", "low", "nit"]
 Verdict = Literal["pass", "concerns", "fail", "unknown"]
@@ -285,6 +285,9 @@ class JobStatus(BaseModel):
     expires_at: str | None = None
     result_available: bool = False  # true once status == done
     detail: str | None = None  # short human hint (e.g. failure reason)
+    # Non-empty when a cancelled/timed-out job's throwaway worktree could not be
+    # removed; each entry names the leaked path and reason.
+    cleanup_warnings: list[str] = Field(default_factory=list)
     fingerprint: str = FINGERPRINT
 
 

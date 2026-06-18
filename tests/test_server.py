@@ -279,6 +279,52 @@ async def test_delegate_cleans_up_on_codex_error(monkeypatch, clean_env, tmp_pat
     assert removed["n"] == 1  # cleanup still happened
 
 
+async def test_run_delegate_reports_worktree_parent(monkeypatch, clean_env, tmp_path):
+    # run_delegate forwards the on_worktree_parent hook to worktree.create so the
+    # background worker can record the temp dir for cleanup before codex runs.
+    from codex_in_claude import delegate
+    from codex_in_claude.schemas import Meta
+
+    wt = _fake_worktree(tmp_path)
+
+    def fake_create(repo, *, timeout, on_parent=None):
+        if on_parent is not None:
+            on_parent(wt.parent)
+        return wt
+
+    monkeypatch.setattr(worktree, "create", fake_create)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+
+    async def fake(*a, **k):
+        return _fake_result("done")
+
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake)
+
+    seen: list[str] = []
+    meta = Meta(
+        cwd=str(tmp_path),
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=60,
+        elapsed_ms=0,
+    )
+    await delegate.run_delegate(
+        "do x",
+        str(tmp_path),
+        meta,
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=60,
+        model=None,
+        git_timeout=30,
+        on_worktree_parent=seen.append,
+    )
+    assert seen == [wt.parent]
+
+
 async def test_delegate_not_a_git_repo(monkeypatch, clean_env, tmp_path):
     def boom(*a, **k):
         raise worktree.NotAGitRepoError("not a git repo")
@@ -688,5 +734,26 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_1():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-1"
+def test_fingerprint_is_schema_2():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-2"
+
+
+def test_job_status_model_surfaces_cleanup_warnings():
+    data = {
+        "job_id": "abc",
+        "kind": "codex_delegate",
+        "status": "cancelled",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "started_epoch": 0.0,
+        "elapsed_ms": 5,
+        "deadline_seconds": 60,
+        "completed_epoch": 1.0,
+        "expires_at": None,
+        "result_available": False,
+        "poll_after_ms": 1000,
+        "ttl_seconds": 3600,
+        "cleanup_warnings": ["could not remove temporary path: /tmp/cic-worktree-x"],
+        "extra": {},
+    }
+    model = server._job_status_model(data)
+    assert model.cleanup_warnings == ["could not remove temporary path: /tmp/cic-worktree-x"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -37,6 +38,37 @@ def _wait_terminal(store: JobStore, cwd: str, job_id: str, timeout: float = 5.0)
 
 def _factory(code: str):
     return lambda _jd: [sys.executable, "-c", code]
+
+
+# A snippet (run with cwd=job_dir) that creates a throwaway dir under the cleanup
+# root, declares it in cleanup.json, then sleeps — mimicking the real worker
+# holding a temp worktree open while the job runs.
+_DECLARE_AND_SLEEP = (
+    "import json, sys, tempfile, time\n"
+    "d = tempfile.mkdtemp(prefix=sys.argv[2], dir=sys.argv[1])\n"
+    "open('cleanup.json', 'w').write(json.dumps({'paths': [d]}))\n"
+    "open(d + '/marker', 'w').write('x')\n"
+    "print(d, flush=True)\n"
+    "time.sleep(30)\n"
+)
+
+
+def _declare_factory(root: str, prefix: str = "wt-"):
+    return lambda _jd: [sys.executable, "-c", _DECLARE_AND_SLEEP, root, prefix]
+
+
+def _declared_path(store: JobStore, cwd: str, job_id: str) -> str:
+    """The external path a _DECLARE_AND_SLEEP job recorded in its manifest."""
+    import json
+
+    jd = store._job_dir(cwd, job_id)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            return json.loads((jd / "cleanup.json").read_text())["paths"][0]
+        except (OSError, ValueError, KeyError):
+            time.sleep(0.02)
+    raise AssertionError("job did not declare a cleanup path in time")
 
 
 def test_start_status_result_done(tmp_path):
@@ -69,6 +101,144 @@ def test_cancel_running(tmp_path):
     assert st["status"] == "cancelled"
     # cancelling again returns the terminal record unchanged
     assert store.cancel(cwd, job_id)["status"] == "cancelled"
+
+
+def test_cancel_removes_declared_external_paths(tmp_path):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_declare_factory(str(root)), cwd, kind="codex_delegate")
+    wt = Path(_declared_path(store, cwd, job_id))
+    assert wt.is_dir()
+    st = store.cancel(cwd, job_id)
+    assert st["status"] == "cancelled"
+    assert not wt.exists()  # the declared worktree dir is gone
+    assert st["cleanup_warnings"] == []
+
+
+def test_cancel_rereads_late_declared_manifest(tmp_path):
+    # The worker may declare its worktree only AFTER cancel begins (e.g. it is still
+    # creating it). Cancel must re-read the manifest after termination, or the
+    # fallback cleanup misses the late path and the worktree still leaks.
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    code = (
+        "import json, signal, sys, tempfile, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"  # survive the grace
+        "time.sleep(0.5)\n"  # declare only after cancel's first manifest read
+        "d = tempfile.mkdtemp(prefix=sys.argv[2], dir=sys.argv[1])\n"
+        "open(d + '/marker', 'w').write('x')\n"
+        "open('cleanup.json', 'w').write(json.dumps({'paths': [d]}))\n"
+        "time.sleep(30)\n"
+    )
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-", terminate_grace_seconds=2.0)
+    cwd = str(tmp_path)
+    factory = lambda _jd: [sys.executable, "-c", code, str(root), "wt-"]  # noqa: E731
+    job_id, _ = store.start(factory, cwd, kind="k")
+    time.sleep(0.25)  # let the worker install SIG_IGN before we cancel
+    st = store.cancel(cwd, job_id)
+    assert st["status"] == "cancelled"
+    assert list(root.iterdir()) == []  # the late-declared worktree was still cleaned up
+
+
+def test_timeout_removes_declared_external_paths(tmp_path):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    store = _store(tmp_path, max_seconds=1, cleanup_root=root, cleanup_prefix="wt-")
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_declare_factory(str(root)), cwd, kind="k")
+    wt = Path(_declared_path(store, cwd, job_id))
+    time.sleep(1.2)
+    st = store.status(cwd, job_id)
+    assert st["status"] == "timeout"
+    assert not wt.exists()
+    assert st["cleanup_warnings"] == []
+
+
+def test_terminate_escalates_to_sigkill(tmp_path):
+    # A process that ignores SIGTERM must still be force-killed once the grace ends.
+    import subprocess
+
+    code = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+    proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+    try:
+        assert jobs._is_running(proc.pid)
+        jobs._terminate_pid_tree(proc.pid, grace_seconds=0.0)  # grace=0 -> escalate now
+        assert not jobs._is_running(proc.pid)  # SIGKILL fallback reaped the survivor
+    finally:
+        jobs._kill_pid_tree(proc.pid)
+
+
+def test_terminate_pid_tree_none_is_noop():
+    jobs._terminate_pid_tree(None, grace_seconds=1.0)  # must not raise
+
+
+def test_terminate_pid_tree_dead_pid_is_safe():
+    # killpg on a long-dead pid raises ProcessLookupError; terminate must absorb it.
+    jobs._terminate_pid_tree(2**30, grace_seconds=0.1)  # must not raise
+
+
+def test_within_cleanup_root_requires_configured_root(tmp_path):
+    store = _store(tmp_path)  # cleanup_root is None
+    assert store._within_cleanup_root(str(tmp_path / "anything")) is False
+
+
+def test_cleanup_refuses_path_outside_root(tmp_path):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    outside = tmp_path / "precious"
+    outside.mkdir()
+    (outside / "keep").write_text("x")
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+    warnings = store._cleanup_external_paths([str(outside)])
+    assert outside.is_dir()  # never touched
+    assert any(str(outside) in w for w in warnings)
+
+
+def test_cleanup_refuses_path_without_prefix(tmp_path):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    stray = root / "not-a-worktree"
+    stray.mkdir()
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+    warnings = store._cleanup_external_paths([str(stray)])
+    assert stray.is_dir()
+    assert any(str(stray) in w for w in warnings)
+
+
+def test_cleanup_warns_when_removal_fails(tmp_path, monkeypatch):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    target = root / "wt-stuck"
+    target.mkdir()
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+    monkeypatch.setattr(jobs.shutil, "rmtree", lambda *a, **k: None)  # removal no-ops
+    warnings = store._cleanup_external_paths([str(target)])
+    assert target.is_dir()
+    assert any(str(target) in w for w in warnings)
+
+
+def test_cancel_surfaces_cleanup_warning(tmp_path, monkeypatch):
+    root = tmp_path / "wtroot"
+    root.mkdir()
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_declare_factory(str(root)), cwd, kind="k")
+    wt = _declared_path(store, cwd, job_id)
+    monkeypatch.setattr(jobs.shutil, "rmtree", lambda *a, **k: None)  # removal fails
+    st = store.cancel(cwd, job_id)
+    assert st["status"] == "cancelled"
+    assert any(wt in w for w in st["cleanup_warnings"])  # leak named in the result
+
+
+def test_cleanup_noop_without_cleanup_root(tmp_path):
+    target = tmp_path / "wt-orphan"
+    target.mkdir()
+    store = _store(tmp_path)  # no cleanup_root configured
+    warnings = store._cleanup_external_paths([str(target)])
+    assert target.is_dir()  # nothing removed
+    assert warnings == []
 
 
 def test_consume_deletes(tmp_path):

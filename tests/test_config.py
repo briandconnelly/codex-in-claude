@@ -7,6 +7,18 @@ import pytest
 from codex_in_claude import config
 
 
+def test_job_store_configures_worktree_cleanup(clean_env):
+    import tempfile
+    from pathlib import Path
+
+    from codex_in_claude._core import worktree
+
+    store = config.job_store()
+    # The store may clean up only the throwaway-worktree temp area.
+    assert store.cleanup_root == Path(tempfile.gettempdir())
+    assert store.cleanup_prefix == worktree.WORKTREE_PREFIX
+
+
 def test_defaults_builtin(clean_env):
     d = config.defaults()
     assert d.tier == "consult"

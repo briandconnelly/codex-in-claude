@@ -1051,6 +1051,7 @@ def _job_status_model(data: dict) -> JobStatus:
         expires_at=data["expires_at"],
         result_available=data["result_available"],
         detail=detail,
+        cleanup_warnings=data.get("cleanup_warnings", []),
     )
 
 
@@ -1135,9 +1136,11 @@ async def codex_job_cancel(
 ) -> dict:
     """Cancel a running background delegate job.
 
-    Terminates the Codex process group and marks the job cancelled (cancelled jobs
-    cannot be resumed; the worktree is cleaned up). Already-terminal jobs are
-    returned unchanged. Free — no model call."""
+    Asks the worker to shut down gracefully so it tears down its throwaway worktree,
+    then force-kills it if it overstays, and marks the job cancelled (cancelled jobs
+    cannot be resumed). If the worktree could not be removed, `cleanup_warnings`
+    names the leftover path. Already-terminal jobs are returned unchanged. Free —
+    no model call."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from codex_in_claude import cli_contract
+from codex_in_claude._core import worktree
 from codex_in_claude._core.jobs import JobStore
 
 ENV_PREFIX = "CODEX_IN_CLAUDE_"
@@ -131,6 +133,8 @@ def job_store() -> JobStore:
         ttl_seconds=job_ttl_seconds(),
         max_seconds=job_max_seconds(),
         max_count=job_max_count(),
+        cleanup_root=Path(tempfile.gettempdir()),
+        cleanup_prefix=worktree.WORKTREE_PREFIX,
     )
 
 

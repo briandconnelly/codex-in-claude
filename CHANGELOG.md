@@ -6,12 +6,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Fixed
+- Cancelling or timing out a `codex_delegate_async` job no longer leaks its throwaway git worktree.
+  Previously the JobStore force-killed the worker with `SIGKILL`, so the worker's `finally` cleanup
+  never ran and the temp worktree (with any generated source/build output) was left behind in the
+  system temp dir. The store now terminates the worker gracefully (`SIGTERM`, then `SIGKILL` after a
+  grace period) so it tears down its own worktree, and — as a hard-kill fallback — removes the temp
+  worktree the worker declared it owns, constrained to the worktree temp area so a malformed
+  manifest can never delete elsewhere. If cleanup still fails, the leftover path is named in the new
+  `cleanup_warnings` field. (#3)
 - `codex_delegate`/`codex_delegate_async` no longer risk attributing the caller's pre-existing
   uncommitted changes to Codex. If the throwaway worktree's baseline commit cannot be finalized
   after the live patch applies (`git add`/`git commit` failure, or a non-clean tree afterward),
   the run now fails fast with a structured `worktree_error` **before** any Codex call (zero spend)
   and the partial worktree is cleaned up, instead of silently mixing live changes into the
   returned diff. The agent-visible surface is unchanged, so `FINGERPRINT` is not bumped. (#4)
+
+### Changed
+- **Breaking (agent-visible surface):** `codex_job_status`/`codex_job_cancel` results gain a
+  `cleanup_warnings: string[]` field (non-empty only when a cancelled/timed-out job's worktree could
+  not be removed). `FINGERPRINT` bumps to `codex-in-claude/0.1/schema-2`. (#3)
 
 ### Added
 - Initial release: a Claude Code plugin that calls the OpenAI Codex CLI via a FastMCP server.

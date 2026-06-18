@@ -15,6 +15,14 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+# mkdtemp prefix for the throwaway worktree's parent dir. Exposed so a job runner
+# can constrain its cleanup to this temp area (see jobs.JobStore cleanup_prefix).
+WORKTREE_PREFIX = "cic-worktree-"
 
 
 class WorktreeError(RuntimeError):
@@ -71,14 +79,20 @@ def ensure_repo_with_head(repo: str, *, timeout: int) -> None:
     _ensure_repo_with_head(repo, timeout)
 
 
-def create(repo: str, *, timeout: int) -> Worktree:
+def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None = None) -> Worktree:
     """Create a worktree mirroring the live tree's tracked state.
 
     Raises NotAGitRepoError / NoCommitsError / WorktreeError. On success the
     worktree's HEAD equals the live tree's current tracked content (a baseline
-    commit), so a later diff isolates only the agent's edits."""
+    commit), so a later diff isolates only the agent's edits.
+
+    ``on_parent`` is invoked with the temp parent dir the moment it exists — before
+    any slow git work — so a caller can record it for cleanup even if the process is
+    hard-killed mid-create."""
     _ensure_repo_with_head(repo, timeout)
-    parent = tempfile.mkdtemp(prefix="cic-worktree-")
+    parent = tempfile.mkdtemp(prefix=WORKTREE_PREFIX)
+    if on_parent is not None:
+        on_parent(parent)
     wt = str(Path(parent) / "tree")
     try:
         _git_ok(repo, ["worktree", "add", "--detach", "--quiet", wt, "HEAD"], timeout)

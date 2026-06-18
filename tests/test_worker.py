@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import shutil
+import signal
+import threading
+
+import pytest
 
 from codex_in_claude import _worker, delegate
 
@@ -61,6 +68,48 @@ def test_worker_crash_writes_error(tmp_path, monkeypatch):
 
 def test_worker_no_args_returns_error_code():
     assert _worker.main([]) == 2
+
+
+def test_worker_writes_cleanup_manifest(tmp_path, monkeypatch):
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        kw["on_worktree_parent"]("/tmp/cic-worktree-abc")
+        return {"ok": True}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    _worker.main([str(jd)])
+    manifest = json.loads((jd / "cleanup.json").read_text())
+    assert manifest == {"paths": ["/tmp/cic-worktree-abc"]}
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGTERM"), reason="POSIX signals only")
+def test_worker_sigterm_runs_worktree_cleanup(tmp_path, monkeypatch):
+    # SIGTERM must cancel the run cleanly so run_delegate's finally tears down the
+    # worktree — the whole point of the graceful-termination contract.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+    parent = tmp_path / "wt-parent"
+    state = {"cleaned": False}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        parent.mkdir()
+        kw["on_worktree_parent"](str(parent))
+        try:
+            await asyncio.sleep(10)
+        finally:  # mimics worktree.remove() in run_delegate's finally
+            shutil.rmtree(parent, ignore_errors=True)
+            state["cleaned"] = True
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    rc = _worker.main([str(jd)])
+
+    assert rc == 0
+    assert state["cleaned"] is True  # the finally ran despite termination
+    assert not parent.exists()  # worktree removed
+    assert not (jd / "result.json").exists()  # cancelled jobs leave no result
 
 
 def test_worker_meta_carries_workspace_warning(tmp_path, monkeypatch):

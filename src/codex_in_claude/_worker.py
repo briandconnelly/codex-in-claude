@@ -13,7 +13,9 @@ writing result.json is reported by the JobStore as ``failed`` instead.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import signal
 import sys
 from pathlib import Path
 from typing import cast
@@ -51,6 +53,34 @@ def _atomic_write(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+def _write_cleanup_manifest(job_dir: Path, parent: str) -> None:
+    """Record the temp worktree parent so the JobStore can remove it if this worker
+    is hard-killed before its own cleanup runs (see jobs.JobStore cleanup_root)."""
+    _atomic_write(job_dir / "cleanup.json", {"paths": [parent]})
+
+
+async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
+    """Run the delegate, cancelling cleanly on SIGTERM so run_delegate's worktree
+    teardown runs. The JobStore sends SIGTERM (then SIGKILL after a grace) to
+    cancel or time out the job."""
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    assert task is not None
+    with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+        loop.add_signal_handler(signal.SIGTERM, task.cancel)
+    return await delegate.run_delegate(
+        spec["task"],
+        spec["cwd"],
+        meta,
+        sandbox=spec["sandbox"],
+        isolation=spec["isolation"],
+        timeout_seconds=spec["timeout_seconds"],
+        model=spec.get("model"),
+        git_timeout=spec["git_timeout"],
+        on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if not args:
@@ -59,18 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     spec = json.loads((job_dir / "spec.json").read_text())
     try:
         meta = _meta_from_spec(spec)
-        payload = asyncio.run(
-            delegate.run_delegate(
-                spec["task"],
-                spec["cwd"],
-                meta,
-                sandbox=spec["sandbox"],
-                isolation=spec["isolation"],
-                timeout_seconds=spec["timeout_seconds"],
-                model=spec.get("model"),
-                git_timeout=spec["git_timeout"],
-            )
-        )
+        payload = asyncio.run(_run(job_dir, spec, meta))
+    except asyncio.CancelledError:
+        # Graceful termination (cancel/timeout): run_delegate's finally already tore
+        # down the worktree, and the JobStore owns the terminal status — leave no
+        # result.json behind.
+        return 0
     except Exception as exc:
         payload = ErrorResult(
             error=ErrorInfo(

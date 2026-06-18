@@ -93,6 +93,33 @@ def _kill_pid_tree(pid: int | None) -> None:
         os.waitpid(pid, 0)
 
 
+def _terminate_pid_tree(pid: int | None, grace_seconds: float) -> None:
+    """Stop the detached job's process group gracefully, then force-kill if it
+    overstays.
+
+    A plain SIGKILL (``_kill_pid_tree``) gives the worker no chance to run its own
+    cleanup — for the propose tier that means a leaked temp worktree. So we send
+    SIGTERM first and poll for up to ``grace_seconds`` (the worker cancels its run,
+    tears down its worktree, and exits), then SIGKILL any survivor. Either way the
+    process is reaped so it cannot linger as a zombie."""
+    if not pid:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        else:  # pragma: no cover - non-POSIX fallback
+            os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        _kill_pid_tree(pid)  # already gone or not signalable — reap if we can
+        return
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    while time.monotonic() < deadline:
+        if not _is_running(pid):  # exited gracefully (and was reaped)
+            return
+        time.sleep(0.02)
+    _kill_pid_tree(pid)
+
+
 @dataclass
 class JobStore:
     """Disk-backed job lifecycle rooted at ``root``.
@@ -108,6 +135,14 @@ class JobStore:
     max_count: int
 
     poll_after_ms: int = 1000
+
+    # External paths a job declares it owns (in <job_dir>/cleanup.json) are removed
+    # when the job is cancelled/timed out, but only when they resolve strictly
+    # inside ``cleanup_root`` and (if set) carry ``cleanup_prefix`` — a guard so a
+    # malformed manifest can never delete outside the throwaway-worktree temp area.
+    cleanup_root: Path | None = None
+    cleanup_prefix: str = ""
+    terminate_grace_seconds: float = 5.0
 
     # ------------------------------------------------------------------ paths
     def _ws_dir(self, cwd: str) -> Path:
@@ -148,6 +183,55 @@ class JobStore:
         except json.JSONDecodeError:
             return None
         return env if isinstance(env, dict) else None
+
+    @staticmethod
+    def _read_cleanup_manifest(jd: Path) -> list[str]:
+        """External paths a job declared it owns, from <job_dir>/cleanup.json.
+
+        The store treats this as opaque caller-declared state: it never learns the
+        paths are git worktrees, only that the job asked for them to be removed when
+        it is reaped. Missing/garbage manifest -> no declared paths."""
+        try:
+            data = json.loads((jd / "cleanup.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+        paths = data.get("paths") if isinstance(data, dict) else None
+        return [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+
+    def _within_cleanup_root(self, path: str) -> bool:
+        if self.cleanup_root is None:
+            return False
+        root = Path(self.cleanup_root).resolve()
+        target = Path(path).resolve()
+        if not target.name.startswith(self.cleanup_prefix):
+            return False
+        return target != root and target.is_relative_to(root)
+
+    def _cleanup_external_paths(self, paths: list[str]) -> list[str]:
+        """Remove a reaped job's declared external paths, refusing anything not
+        strictly inside ``cleanup_root``. Returns warnings for paths that were
+        refused or survived removal (so a caller can surface the leak)."""
+        if self.cleanup_root is None:
+            return []  # external cleanup not configured; the store made no promise
+        warnings: list[str] = []
+        for path in paths:
+            if not self._within_cleanup_root(path):
+                warnings.append(f"refused to remove path outside the cleanup root: {path}")
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            if Path(path).exists():
+                warnings.append(f"could not remove temporary path: {path}")
+        return warnings
+
+    def _finalize_cleanup(self, jd: Path, meta: dict, status: str, manifest: list[str]) -> None:
+        """Mark the record terminal and remove any external paths it declared,
+        recording cleanup warnings in meta so status/result can surface them."""
+        warnings = self._cleanup_external_paths(manifest)
+        meta["terminal_status"] = status
+        meta["completed_epoch"] = time.time()
+        if warnings:
+            meta["cleanup_warnings"] = warnings
+        self._write_meta(jd, meta)
 
     @staticmethod
     def _rmtree(jd: Path) -> None:
@@ -223,10 +307,8 @@ class JobStore:
             return terminal
         if _is_running(meta.get("pid")):
             if time.time() > meta.get("deadline_epoch", float("inf")):
-                _kill_pid_tree(meta.get("pid"))
-                meta["terminal_status"] = "timeout"
-                meta["completed_epoch"] = time.time()
-                self._write_meta(jd, meta)
+                _terminate_pid_tree(meta.get("pid"), self.terminate_grace_seconds)
+                self._finalize_cleanup(jd, meta, "timeout", self._read_cleanup_manifest(jd))
                 return "timeout"
             return "running"
         if meta.get("completed_epoch") is None:
@@ -274,6 +356,7 @@ class JobStore:
             "result_available": state == "done",
             "poll_after_ms": self.poll_after_ms,
             "ttl_seconds": self.ttl_seconds,
+            "cleanup_warnings": meta.get("cleanup_warnings", []),
             "extra": meta.get("extra", {}),
         }
 
@@ -359,13 +442,19 @@ class JobStore:
             if live is None:
                 return None
             jd, meta, state = live
-            if state not in _TERMINAL:
-                _kill_pid_tree(meta.get("pid"))
-                meta["terminal_status"] = "cancelled"
-                meta["completed_epoch"] = time.time()
-                self._write_meta(jd, meta)
-                state = "cancelled"
-            return self._status_dict(jd, meta, state)
+            if state in _TERMINAL:
+                return self._status_dict(jd, meta, state)
+            pid = meta.get("pid")
+        # Terminate with the lock released: the graceful-shutdown grace wait must
+        # not block status/list/result calls for every workspace.
+        _terminate_pid_tree(pid, self.terminate_grace_seconds)
+        with _LOCK:
+            # Re-read the manifest now: the worker may have declared its worktree
+            # only after cancellation began (e.g. it was still creating it), so a
+            # snapshot taken before termination could miss the path and leak it.
+            manifest = self._read_cleanup_manifest(jd)
+            self._finalize_cleanup(jd, meta, "cancelled", manifest)
+            return self._status_dict(jd, meta, "cancelled")
 
     def list_jobs(self, cwd: str) -> list[dict]:
         with _LOCK:
