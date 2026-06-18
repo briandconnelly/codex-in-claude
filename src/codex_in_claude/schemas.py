@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -187,7 +187,9 @@ class ErrorInfo(BaseModel):
     # without parsing `repair` prose. All optional/backward-compatible.
     allowed_values: list[str] | None = None  # concrete valid values for an enum-like param
     repair_tool: str | None = None  # a tool to call to recover (e.g. codex_job_status)
-    repair_tool_params: dict[str, str] | None = None  # args for repair_tool, e.g. {"job_id": ...}
+    # args for repair_tool, e.g. {"job_id": ...}; values are arbitrary JSON since tool
+    # arguments aren't all strings.
+    repair_tool_params: dict[str, Any] | None = None
     retry_after_ms: int | None = None  # suggested backoff before retrying a retryable error
 
 
@@ -246,8 +248,9 @@ class ToolCapability(BaseModel):
     key_optional_params: list[str] = Field(default_factory=list)
     returns: str
     # Error codes this tool may return. Advisory, not exhaustive: a guide for
-    # branching/recovery, not a closed contract. Every entry is a valid ErrorCode.
-    error_codes: list[str] = Field(default_factory=list)
+    # branching/recovery, not a closed contract. Typed as ErrorCode so the schema
+    # advertises the valid code set and entries are checked statically.
+    error_codes: list[ErrorCode] = Field(default_factory=list)
 
 
 class CapabilitiesResult(BaseModel):

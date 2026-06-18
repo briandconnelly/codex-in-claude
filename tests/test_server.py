@@ -915,8 +915,19 @@ async def test_job_running_error_is_actionable(monkeypatch, clean_env, tmp_path)
     assert err["code"] == "job_running"
     assert err["retryable"] is True
     assert err["repair_tool"] == "codex_job_status"
-    assert err["repair_tool_params"] == {"job_id": "job-abc"}
+    # repair params carry both the job_id AND the caller's workspace_root, so the
+    # poll targets the same workspace rather than risking a wrong-workspace miss.
+    assert err["repair_tool_params"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
     assert err["retry_after_ms"] == JOB_POLL_AFTER_MS
+
+
+async def test_job_running_repair_omits_workspace_when_not_given(monkeypatch, clean_env, tmp_path):
+    """With no explicit workspace_root, the repair params don't fabricate one."""
+    store = _FakeStore(record=_ok_record("running"), result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    monkeypatch.setattr(server.workspace, "server_cwd", lambda: str(tmp_path))
+    res = await server.codex_job_result("job-abc")
+    assert res["error"]["repair_tool_params"] == {"job_id": "job-abc"}
 
 
 async def test_job_not_found_points_at_list(monkeypatch, clean_env, tmp_path):
@@ -927,6 +938,9 @@ async def test_job_not_found_points_at_list(monkeypatch, clean_env, tmp_path):
     assert res["error"]["code"] == "job_not_found"
     assert res["error"]["offending_param"] == "job_id"
     assert res["error"]["repair_tool"] == "codex_job_list"
+    # codex_job_list takes only workspace_root (not job_id) — echo it so the
+    # recovery lists jobs in the same workspace the lookup used.
+    assert res["error"]["repair_tool_params"] == {"workspace_root": str(tmp_path)}
 
 
 def test_job_poll_interval_has_single_source():

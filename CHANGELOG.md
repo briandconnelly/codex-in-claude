@@ -15,10 +15,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   alongside the prose `repair` string. `ErrorInfo` gains optional `allowed_values` (concrete valid
   values for enum-like params — populated for `unsupported_isolation` and `invalid_scope`),
   `repair_tool` + `repair_tool_params` (the tool and args to call to recover — e.g. `job_running`
-  points at `codex_job_status` with `{"job_id": ...}`, and `job_not_found` points at
-  `codex_job_list`), and `retry_after_ms` (suggested backoff for retryable errors). `ToolCapability`
-  gains `error_codes` (see Added). Existing fields are unchanged; the new fields are optional and
-  default to `null`. `FINGERPRINT` bumps to `codex-in-claude/0.1/schema-5`. (#10)
+  points at `codex_job_status` and `job_not_found` at `codex_job_list`, each echoing the caller's
+  `job_id`/`workspace_root` so the repair targets the same workspace), and `retry_after_ms`
+  (suggested backoff for retryable errors). `ToolCapability` gains `error_codes` (see Added), typed
+  as `ErrorCode` so the advertised code set is visible in the schema. Existing fields are unchanged;
+  the new fields are optional and default to `null`. `FINGERPRINT` bumps to
+  `codex-in-claude/0.1/schema-5`. (#10)
 - **Breaking (agent-visible surface):** fixed-value tool parameters now advertise their allowed
   values as schema `enum` constraints instead of plain strings, so agents see valid choices before
   the first call rather than learning them from a tool-result error. Covers `scope`

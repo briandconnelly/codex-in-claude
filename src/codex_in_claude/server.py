@@ -243,8 +243,8 @@ def codex_status() -> dict:
 # agents can branch/recover without triggering the error first. Advisory, not a
 # closed contract. Composed from shared groups to keep the lists from drifting;
 # every code is asserted to be a valid ErrorCode by tests/test_packaging.py.
-_WORKSPACE_ERRORS = ("invalid_workspace_root", "workspace_outside_roots")
-_RUNTIME_ERRORS = (
+_WORKSPACE_ERRORS: tuple[ErrorCode, ...] = ("invalid_workspace_root", "workspace_outside_roots")
+_RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     "codex_not_found",
     "codex_auth_required",
     "unexpanded_env_placeholder",
@@ -255,7 +255,7 @@ _RUNTIME_ERRORS = (
     "cli_contract_changed",
     "internal_error",
 )
-_GITDIFF_ERROR_CODES = (
+_GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
     "invalid_scope",
     "invalid_base",
     "invalid_commit",
@@ -263,8 +263,8 @@ _GITDIFF_ERROR_CODES = (
     "not_a_git_repo",
     "git_unavailable",
 )
-_JOB_READ_ERRORS = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
-_JOB_RESULT_ERRORS = (
+_JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
+_JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
     "job_running",
     "job_cancelled",
@@ -273,16 +273,17 @@ _JOB_RESULT_ERRORS = (
 )
 
 
-def _err_codes(*groups: tuple[str, ...]) -> list[str]:
-    """Flatten error-code groups, dropping duplicates while preserving order."""
-    seen: dict[str, None] = {}
+def _err_codes(*groups: tuple[ErrorCode, ...]) -> list[ErrorCode]:
+    """Flatten error-code groups, dropping duplicates while preserving order. Each
+    literal is checked against ErrorCode by the type checker via the group types."""
+    seen: dict[ErrorCode, None] = {}
     for group in groups:
         for code in group:
             seen[code] = None
     return list(seen)
 
 
-_TOOL_ERROR_CODES: dict[str, list[str]] = {
+_TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_consult": _err_codes(
         _WORKSPACE_ERRORS,
         ("unsupported_isolation", "input_too_large", "context_too_large"),
@@ -1096,7 +1097,10 @@ def _job_meta(cwd: str, source: str | None) -> Meta:
     )
 
 
-def _job_not_found(job_id: str, meta: Meta) -> dict:
+def _job_not_found(job_id: str, meta: Meta, workspace_root: str | None = None) -> dict:
+    # codex_job_list takes only workspace_root (not job_id); echo the caller's value
+    # so the repair targets the same workspace the lookup used.
+    list_params: dict[str, Any] = {"workspace_root": workspace_root} if workspace_root else {}
     return ErrorResult(
         error=ErrorInfo(
             code="job_not_found",
@@ -1104,6 +1108,7 @@ def _job_not_found(job_id: str, meta: Meta) -> dict:
             repair="Check the job_id, or start a new job; records expire after the TTL.",
             offending_param="job_id",
             repair_tool="codex_job_list",
+            repair_tool_params=list_params or None,
         ),
         meta=meta,
     ).model_dump(mode="json")
@@ -1167,7 +1172,7 @@ async def codex_job_status(
     store = config.job_store()
     data = await asyncio.to_thread(store.status, cwd, job_id)
     if data is None:
-        return _job_not_found(job_id, _job_meta(cwd, source))
+        return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
     return _job_status_model(data).model_dump(mode="json")
 
 
@@ -1181,7 +1186,7 @@ async def _job_result_impl(
     rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=consume)
     meta = _job_meta(cwd, source)
     if rec is None:
-        return _job_not_found(job_id, meta)
+        return _job_not_found(job_id, meta, workspace_root)
     state = rec["status"]
     if state == "done" and payload is not None:
         # Patch the stored envelope's meta with the job_id so callers can correlate.
@@ -1193,7 +1198,11 @@ async def _job_result_impl(
     )
     # A still-running job is the one recoverable case: point at the poll tool with
     # the concrete job_id and a backoff so the agent can act without parsing prose.
+    # Echo the caller's workspace_root so the poll targets the same workspace.
     running = state == "running"
+    poll_params: dict[str, Any] = {"job_id": job_id}
+    if workspace_root:
+        poll_params["workspace_root"] = workspace_root
     return ErrorResult(
         error=ErrorInfo(
             code=cast("ErrorCode", code),
@@ -1201,7 +1210,7 @@ async def _job_result_impl(
             repair=repair,
             retryable=running,
             repair_tool="codex_job_status" if running else None,
-            repair_tool_params={"job_id": job_id} if running else None,
+            repair_tool_params=poll_params if running else None,
             retry_after_ms=JOB_POLL_AFTER_MS if running else None,
         ),
         meta=meta,
@@ -1250,7 +1259,7 @@ async def codex_job_cancel(
     store = config.job_store()
     data = await asyncio.to_thread(store.cancel, cwd, job_id)
     if data is None:
-        return _job_not_found(job_id, _job_meta(cwd, source))
+        return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
     return _job_status_model(data).model_dump(mode="json")
 
 
