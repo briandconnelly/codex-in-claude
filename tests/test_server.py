@@ -559,6 +559,14 @@ async def test_dry_run_invalid_workspace(clean_env):
     assert res["error"]["code"] == "invalid_workspace_root"
 
 
+async def test_dry_run_bad_isolation(clean_env, tmp_path):
+    """Invalid isolation errors like the active tools, not a silent normalize (issue #6)."""
+    res = await server.codex_dry_run(workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+    assert res["error"]["offending_param"] == "isolation"
+
+
 def test_diffstat_counts():
     diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n-removed\n unchanged\n"
     summary = server._diffstat(diff)
