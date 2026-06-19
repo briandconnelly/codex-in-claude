@@ -47,6 +47,7 @@ agent-visible surface changes (tool names, params, error codes, value enums). Ke
 
 Bump together: `pyproject.toml` version, `.claude-plugin/plugin.json`, the `@vX.Y.Z` tag in
 `.mcp.json`, `README.md`, `CHANGELOG.md`, and `FINGERPRINT` when the surface changed.
+See `docs/RELEASING.md` for the full release procedure and the one-time PyPI/GitHub setup.
 
 ## Python support
 
