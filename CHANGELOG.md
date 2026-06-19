@@ -128,6 +128,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `codex_dry_run` now runs the same `unexpanded_env_placeholder` pre-flight check that
+  `codex_review_changes` (and `codex_delegate_dry_run`) run before doing any work. Previously a
+  tracked `CODEX_IN_CLAUDE_*` env var delivered as a literal unexpanded `${...}` (the host not
+  expanding env substitutions) let `codex_dry_run` return `ok: true` while the real review call
+  would immediately fail — exactly the false green-light a dry run exists to prevent (the dry-run
+  fidelity contract from #6). `codex_capabilities` now advertises `unexpanded_env_placeholder` for
+  `codex_dry_run` — and, while there, also `unsupported_isolation`, which `codex_dry_run` already
+  returns for an invalid `isolation` but did not advertise. The placeholder error envelope's `meta`
+  now carries the caller's `paths` too (matching `codex_review_changes`). Advisory metadata + a new
+  returned error path on a free tool; no tool/param/enum/schema change, so `FINGERPRINT` is
+  unchanged. (#46)
 - Hardened the server against a single failed/long call taking down the whole tool surface for the
   rest of a session (the disconnect observed in #39). Three parts: (1) every model-/job-bearing tool
   is now wrapped in a boundary that converts an *unexpected* exception into the documented

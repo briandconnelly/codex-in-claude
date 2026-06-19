@@ -646,6 +646,33 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     assert res["error"]["offending_param"] == "isolation"
 
 
+async def test_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
+    """A dry run must surface the same unexpanded_env_placeholder a review would
+    hit before gathering the diff (issue #46), not green-light it."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+async def test_dry_run_advertises_returnable_error_codes():
+    # codex_dry_run can return both via its pre-flight checks; capabilities must say so.
+    caps = server.codex_capabilities()
+    dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
+    assert "unexpanded_env_placeholder" in dry["error_codes"]
+    assert "unsupported_isolation" in dry["error_codes"]
+
+
+async def test_dry_run_placeholder_error_meta_carries_paths(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), paths=["a/b.py"]
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+    assert res["meta"]["paths"] == ["a/b.py"]
+
+
 # --- delegate_dry_run --------------------------------------------------------
 def _init_repo(tmp_path):
     import subprocess
