@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-1"
+FINGERPRINT = "codex-in-claude/0.1/schema-2"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -126,6 +126,21 @@ class ContextSummary(BaseModel):
     files_changed: int = 0
     lines_added: int = 0
     lines_removed: int = 0
+
+
+class Workspace(BaseModel):
+    """Compact workspace-resolution context for job-lifecycle success responses.
+
+    Mirrors the `cwd`/`workspace_source`/`workspace_warning` fields the full `Meta`
+    envelope carries, so a successful `codex_job_status`/`codex_job_list` call shows
+    which repository the lookup targeted (and warns when it fell back to the server's
+    own cwd) — making wrong-workspace polling diagnosable rather than a silent empty
+    list or `job_not_found` (#54)."""
+
+    model_config = ConfigDict(extra="forbid")
+    cwd: str
+    workspace_source: str | None = None  # how cwd was resolved: param|roots|cwd
+    workspace_warning: str | None = None  # set when cwd was resolved from server cwd
 
 
 class Meta(BaseModel):
@@ -339,6 +354,7 @@ class JobStatus(BaseModel):
     # Non-empty when a cancelled/timed-out job's throwaway worktree could not be
     # removed; each entry names the leaked path and reason.
     cleanup_warnings: list[str] = Field(default_factory=list)
+    workspace: Workspace  # the resolved workspace this status was looked up in (#54)
     fingerprint: str = FINGERPRINT
 
 
@@ -421,6 +437,7 @@ class JobListResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ok: Literal[True] = True
     jobs: list[JobSummary] = Field(default_factory=list)
+    workspace: Workspace  # the resolved workspace these jobs were listed from (#54)
     fingerprint: str = FINGERPRINT
 
 

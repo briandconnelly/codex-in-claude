@@ -41,5 +41,12 @@ want Codex to inspect or edit. Claude Code usually supplies the current repo as 
 commands; if neither an MCP root nor `workspace_root` is available, the server may fall back to its
 own launch directory and return `meta.workspace_warning`.
 
+The job-lifecycle tools (`codex_job_status`, `codex_job_list`, `codex_job_cancel`) carry the resolved
+workspace on **successful** responses too — a compact `workspace` object with `cwd`,
+`workspace_source` (`param`/`roots`/`cwd`), and `workspace_warning` (set on a cwd fallback). Because
+jobs are scoped per workspace, this lets you confirm which repository a poll or list targeted instead
+of mistaking a wrong-workspace lookup for an empty list or `job_not_found`. (Error responses already
+carry the same context via `meta`.)
+
 Review and delegate operations need a git repository. `codex_delegate` also requires at least one
 commit so it can create the temporary worktree.

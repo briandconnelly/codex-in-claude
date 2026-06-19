@@ -67,6 +67,7 @@ from codex_in_claude.schemas import (
     StatusResult,
     Tier,
     ToolCapability,
+    Workspace,
     WorktreePlan,
     workspace_warning_for,
 )
@@ -1644,6 +1645,17 @@ def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
     )
 
 
+def _job_workspace(cwd: str, source: str | None) -> Workspace:
+    """Compact workspace context for job-lifecycle SUCCESS responses (#54): the same
+    cwd/source/warning the error envelope's Meta carries, so a successful status/list
+    call shows which repo it targeted and warns on a cwd fallback."""
+    return Workspace(
+        cwd=cwd,
+        workspace_source=source,
+        workspace_warning=workspace_warning_for(source, cwd),
+    )
+
+
 def _job_not_found(job_id: str, meta: Meta, workspace_root: str | None = None) -> dict:
     # codex_job_list takes only workspace_root (not job_id); echo the caller's value
     # so the repair targets the same workspace the lookup used.
@@ -1684,7 +1696,7 @@ async def _resolve_job_workspace(
     return cwd, wres.source, None
 
 
-def _job_status_model(data: dict) -> JobStatus:
+def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
     state = data["status"]
     mapped = _STATE_TO_ERROR.get(state)
     detail = mapped[1] if (mapped and state not in ("running", "done")) else None
@@ -1701,6 +1713,7 @@ def _job_status_model(data: dict) -> JobStatus:
         result_available=data["result_available"],
         detail=detail,
         cleanup_warnings=data.get("cleanup_warnings", []),
+        workspace=workspace,
     )
 
 
@@ -1725,7 +1738,7 @@ async def codex_job_status(
     data = await asyncio.to_thread(store.status, cwd, job_id)
     if data is None:
         return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
-    return _job_status_model(data).model_dump(mode="json")
+    return _job_status_model(data, _job_workspace(cwd, source)).model_dump(mode="json")
 
 
 # A finished job's success payload must match the result model for its kind, so
@@ -1876,7 +1889,7 @@ async def codex_job_cancel(
     data = await asyncio.to_thread(store.cancel, cwd, job_id)
     if data is None:
         return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
-    return _job_status_model(data).model_dump(mode="json")
+    return _job_status_model(data, _job_workspace(cwd, source)).model_dump(mode="json")
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
@@ -1887,7 +1900,7 @@ async def codex_job_list(ctx: Context | None = None, workspace_root: str | None 
     Use to recover job_ids lost across context compaction or interruption. Returns
     each job's id, kind, status, start time, result_available, and expiry. Free —
     no model call."""
-    cwd, _source, err = await _resolve_job_workspace(ctx, workspace_root)
+    cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     store = config.job_store()
@@ -1904,7 +1917,7 @@ async def codex_job_list(ctx: Context | None = None, workspace_root: str | None 
         )
         for r in rows
     ]
-    return JobListResult(jobs=jobs).model_dump(mode="json")
+    return JobListResult(jobs=jobs, workspace=_job_workspace(cwd, source)).model_dump(mode="json")
 
 
 def main() -> None:

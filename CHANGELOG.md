@@ -23,6 +23,10 @@ an agent can hand work to Codex and get back a structured, bounded result.
   `codex_job_cancel`, and `codex_job_list`. Job state is disk-backed under the state dir, survives
   server restarts, reconciles dead workers via PID liveness, and is bounded by a wall-clock deadline,
   TTL, and per-workspace count cap. `codex_job_status` returns a growing `poll_after_ms` backoff hint.
+  Successful `codex_job_status`/`codex_job_list` (and `codex_job_cancel`) responses carry a compact
+  `workspace` object (`cwd`, `workspace_source`, `workspace_warning`) so an agent can see which repo a
+  lifecycle call targeted — and notice a cwd fallback — instead of silently polling the wrong
+  workspace. ([#54](https://github.com/briandconnelly/codex-in-claude/issues/54))
 - **Free preview and introspection tools.** `codex_status` (run first), `codex_dry_run` and
   `codex_delegate_dry_run` (zero-spend previews that report the prompt bytes and worktree baseline a
   real call would use, and run the same validations), and `codex_capabilities` (per-tool params,
@@ -48,7 +52,7 @@ an agent can hand work to Codex and get back a structured, bounded result.
 - **Slash commands.** `/codex:status`, `/codex:consult`, `/codex:review`, `/codex:delegate`,
   `/codex:delegate-async`, and `/codex:dry-run`.
 - **`collaborating-with-codex` guidance skill** for agents working alongside this plugin.
-- Result fingerprint: `codex-in-claude/0.1/schema-1`.
+- Result fingerprint: `codex-in-claude/0.1/schema-2`.
 
 ### Security
 

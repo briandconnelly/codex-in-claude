@@ -1163,6 +1163,32 @@ async def test_job_status_done(monkeypatch, clean_env, tmp_path):
     assert res["result_available"] is True
 
 
+async def test_job_status_includes_workspace(monkeypatch, clean_env, tmp_path):
+    # #54: a successful status response carries the resolved workspace context so an
+    # agent can tell which repo it polled (recovering after context compaction).
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_status("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    ws = res["workspace"]
+    assert ws["workspace_source"] == "param"
+    assert ws["cwd"]
+    assert ws["workspace_warning"] is None
+
+
+async def test_job_status_cwd_fallback_warning(monkeypatch, clean_env, tmp_path):
+    # #54: with no workspace_root and no MCP roots the server resolves from its own
+    # cwd; the success response must surface workspace_warning so wrong-workspace
+    # polling is diagnosable rather than silently returning job_not_found.
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    monkeypatch.setattr(server.workspace, "server_cwd", lambda: str(tmp_path))
+    res = await server.codex_job_status("job-abc")
+    assert res["ok"] is True
+    assert res["workspace"]["workspace_source"] == "cwd"
+    assert res["workspace"]["workspace_warning"] is not None
+
+
 async def test_job_status_not_found(monkeypatch, clean_env, tmp_path):
     store = _FakeStore(status_dict=None)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
@@ -1249,6 +1275,20 @@ async def test_job_cancel(monkeypatch, clean_env, tmp_path):
     assert res["ok"] is True
     assert res["status"] == "cancelled"
     assert store.cancelled == ["job-abc"]
+    # cancel reuses JobStatus, so it carries the resolved workspace too (#54).
+    assert res["workspace"]["workspace_source"] == "param"
+    assert res["workspace"]["workspace_warning"] is None
+
+
+async def test_job_cancel_cwd_fallback_warning(monkeypatch, clean_env, tmp_path):
+    # #54: the cwd-fallback warning propagates to codex_job_cancel's success response.
+    store = _FakeStore(record=_ok_record("cancelled"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    monkeypatch.setattr(server.workspace, "server_cwd", lambda: str(tmp_path))
+    res = await server.codex_job_cancel("job-abc")
+    assert res["ok"] is True
+    assert res["workspace"]["workspace_source"] == "cwd"
+    assert res["workspace"]["workspace_warning"] is not None
 
 
 async def test_job_cancel_not_found(monkeypatch, clean_env, tmp_path):
@@ -1265,6 +1305,28 @@ async def test_job_list(monkeypatch, clean_env, tmp_path):
     assert res["ok"] is True
     assert len(res["jobs"]) == 1
     assert res["jobs"][0]["job_id"] == "job-abc"
+
+
+async def test_job_list_includes_workspace(monkeypatch, clean_env, tmp_path):
+    # #54: codex_job_list success carries the resolved workspace context too.
+    store = _FakeStore(record=_ok_record("done"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_list(workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["workspace"]["workspace_source"] == "param"
+    assert res["workspace"]["cwd"]
+    assert res["workspace"]["workspace_warning"] is None
+
+
+async def test_job_list_cwd_fallback_warning(monkeypatch, clean_env, tmp_path):
+    # #54: cwd-fallback warning propagates to the list success response.
+    store = _FakeStore(record=_ok_record("done"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    monkeypatch.setattr(server.workspace, "server_cwd", lambda: str(tmp_path))
+    res = await server.codex_job_list()
+    assert res["ok"] is True
+    assert res["workspace"]["workspace_source"] == "cwd"
+    assert res["workspace"]["workspace_warning"] is not None
 
 
 async def test_job_list_invalid_workspace(clean_env):
@@ -1286,8 +1348,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_1():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-1"
+def test_fingerprint_is_schema_2():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-2"
 
 
 # --- async consult / review (#41) --------------------------------------------
@@ -1673,8 +1735,9 @@ def test_job_status_model_surfaces_cleanup_warnings():
         "cleanup_warnings": ["could not remove temporary path: /tmp/cic-worktree-x"],
         "extra": {},
     }
-    model = server._job_status_model(data)
+    model = server._job_status_model(data, server._job_workspace("/repo", "param"))
     assert model.cleanup_warnings == ["could not remove temporary path: /tmp/cic-worktree-x"]
+    assert model.workspace.cwd == "/repo"
 
 
 # --- boundary: unexpected exceptions become a structured internal_error (#39) ---
