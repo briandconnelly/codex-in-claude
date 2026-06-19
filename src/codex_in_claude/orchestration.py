@@ -60,7 +60,7 @@ def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | N
     depth, consistent with the diff redaction the review path already applies."""
     structured = normalize.parse_structured(result.last_message)
     if structured is not None:
-        structured = cast("dict", redaction.redact_tree(structured))
+        structured = cast("dict[str, Any]", redaction.redact_tree(structured))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,
