@@ -75,12 +75,14 @@ def redact_text(text: str | None) -> str | None:
 
 
 def redact_tree(value: object) -> object:
-    """Deep-apply ``redact_text`` to every string in a nested list/dict/str value.
+    """Deep-apply ``redact_text`` to every string *value* in a nested list/dict/str.
 
     Used to sanitize a parsed structured payload (summary, findings, questions,
     assumptions, next_steps) in one pass; non-string leaves (ints, enums, None)
     are returned untouched, and short enum/path values never match a secret
-    pattern, so structure and semantics are preserved."""
+    pattern, so structure and semantics are preserved. Dict KEYS are left as-is
+    (they are field names, not secret-bearing content); only the mapped values are
+    recursed into."""
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, list):
