@@ -44,16 +44,16 @@ def _parse_py_matrix(workflow: str) -> set[str]:
     return set(re.findall(r"\d+\.\d+", block.group(1)))
 
 
-def _ci_matrix_minors() -> set[str]:
-    """Python minor versions exercised by the CI gate matrix in ci.yml."""
-    return _parse_py_matrix((ROOT / ".github/workflows/ci.yml").read_text())
+def _test_matrix_minors() -> set[str]:
+    """Python minor versions exercised by the reusable test workflow in test.yml."""
+    return _parse_py_matrix((ROOT / ".github/workflows/test.yml").read_text())
 
 
 def test_python_support_matrix_matches_classifiers():
     """The advertised support set and the CI matrix can't silently diverge (issue #17)."""
     declared = _declared_py_minors()
     assert declared, "no Python minor classifiers found"
-    assert declared == _ci_matrix_minors()
+    assert declared == _test_matrix_minors()
 
 
 def test_matrix_parser_handles_inline_and_block_yaml():

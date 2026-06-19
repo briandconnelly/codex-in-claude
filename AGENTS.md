@@ -54,7 +54,8 @@ See `docs/RELEASING.md` for the full release procedure and the one-time PyPI/Git
 `requires-python>=3.11`, following SPEC 0 (support Python releases from roughly the last three
 years). CI runs the gate on every supported minor. The supported set is defined by the Python trove
 classifiers in `pyproject.toml`; a packaging test asserts the CI matrix in
-`.github/workflows/ci.yml` and the `requires-python` floor stay in lockstep with those classifiers
+`.github/workflows/test.yml` (the reusable gate called by both `ci.yml` and `publish.yml`) and the
+`requires-python` floor stay in lockstep with those classifiers
 (so this prose deliberately avoids naming specific versions). Changing the support set is
 deliberate: update the classifiers, the CI matrix, and `requires-python` together, and note it in
 `CHANGELOG.md`.
