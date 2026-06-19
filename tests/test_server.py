@@ -1303,6 +1303,19 @@ async def test_job_result_schema_mismatch_is_internal_error(monkeypatch, clean_e
     assert res["error"]["code"] == "internal_error"
 
 
+async def test_job_result_malformed_error_payload_is_internal_error(
+    monkeypatch, clean_env, tmp_path
+):
+    # A done job whose stored ok:false payload is malformed (e.g. truncated on disk)
+    # must surface as internal_error, not leak a wrong-shaped envelope.
+    rec = _ok_record("done")
+    store = _FakeStore(record=rec, result_json={"ok": False, "error": "not-an-object"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
 async def test_job_result_running_consult_reports_consult_meta(monkeypatch, clean_env, tmp_path):
     # A running consult job's error envelope must report its real tier/sandbox, not
     # the propose default used for delegate jobs.

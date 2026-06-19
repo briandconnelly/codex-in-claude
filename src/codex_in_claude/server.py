@@ -1793,7 +1793,12 @@ async def _job_result_impl(
             payload["meta"]["fingerprint"] = FINGERPRINT
         if payload.get("ok") is True:
             return _validate_job_success(payload, rec["kind"], meta)
-        # An error payload (ok: false) is an ErrorResult by construction — pass through.
+        # An error payload (ok: false) should be an ErrorResult; validate it too, since
+        # a disk-backed result.json could be partially written or corrupted.
+        try:
+            ErrorResult.model_validate(payload)
+        except ValidationError as exc:
+            return _job_result_corrupt(f"stored error result was malformed: {exc}", meta)
         return payload
     code, message, repair = _STATE_TO_ERROR.get(
         state, ("job_failed", "The job did not complete.", "Start a new job.")
