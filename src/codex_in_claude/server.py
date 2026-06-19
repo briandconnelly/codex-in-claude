@@ -11,26 +11,35 @@ import asyncio
 import functools
 import sys
 import time
-from typing import TYPE_CHECKING, Any, cast, get_args
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
+from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-from codex_in_claude import __version__, codex, config, delegate, normalize, obs, preflight, prompts
+from codex_in_claude import (
+    __version__,
+    codex,
+    config,
+    delegate,
+    obs,
+    orchestration,
+    preflight,
+    prompts,
+)
 from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
-    CONSULT_OUTPUT_SCHEMA,
     CONSULT_RESULT_SCHEMA,
     DELEGATE_DRY_RUN_SCHEMA,
     DELEGATE_RESULT_SCHEMA,
     DRY_RUN_SCHEMA,
-    FINDINGS_OUTPUT_SCHEMA,
     FINGERPRINT,
     JOB_LIST_SCHEMA,
+    JOB_RESULT_SCHEMA,
     JOB_STARTED_SCHEMA,
     JOB_STATUS_SCHEMA,
     REVIEW_RESULT_SCHEMA,
@@ -39,6 +48,7 @@ from codex_in_claude.schemas import (
     ConsultResult,
     ContextSummary,
     DelegateDryRunResult,
+    DelegateResult,
     DryRunResult,
     ErrorCode,
     ErrorInfo,
@@ -50,7 +60,6 @@ from codex_in_claude.schemas import (
     JobSummary,
     Meta,
     RawDefaults,
-    RawResponse,
     ResolvedDefaults,
     ReviewResult,
     ReviewScope,
@@ -69,8 +78,9 @@ CAPABILITY_SUMMARY = (
     "(working_tree, branch, or commit); "
     "codex_delegate — implement a task in a throwaway git worktree and return a "
     "reviewable diff it does NOT apply to your working tree; "
-    "codex_delegate_async (+ codex_job_status/result/consume_result/cancel/list) — the "
-    "same delegate as a background job you poll. "
+    "codex_consult_async / codex_review_changes_async / codex_delegate_async "
+    "(+ codex_job_status/result/consume_result/cancel/list) — run any of the above as "
+    "a background job you poll. "
     "Run codex_status first (free) to confirm the codex CLI is installed and "
     "authenticated; use codex_capabilities for the full inventory and, to preview a "
     "call without spending, codex_dry_run (for a review) or codex_delegate_dry_run "
@@ -104,6 +114,9 @@ _ACTIVE_PROPOSE = {
 # Async delegate spawns a background job (commits to spend) but, like propose,
 # only ever writes inside a throwaway worktree — the live tree is untouched.
 _ACTIVE_ASYNC = _ACTIVE_PROPOSE
+# Async consult/review spawn a background job (commits to spend, reaches the API)
+# but the underlying run is read-only — Codex never writes the workspace.
+_ACTIVE_ASYNC_READONLY = _ACTIVE_READONLY
 # Job lifecycle annotations, split by observable behavior. None call the model and
 # all are closed-world and non-destructive (they touch only this server's job state,
 # never the user's files/repo). Inspection tools (status/result/list) are read-only
@@ -386,7 +399,18 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         ("unsupported_isolation", "input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
+    "codex_consult_async": _err_codes(
+        _WORKSPACE_ERRORS,
+        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        _RUNTIME_ERRORS,
+    ),
     "codex_review_changes": _err_codes(
+        _WORKSPACE_ERRORS,
+        _GITDIFF_ERROR_CODES,
+        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        _RUNTIME_ERRORS,
+    ),
+    "codex_review_changes_async": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
         ("unsupported_isolation", "input_too_large", "context_too_large"),
@@ -444,7 +468,9 @@ def codex_capabilities() -> dict:
         stability="alpha",
         active_tools=[
             "codex_consult",
+            "codex_consult_async",
             "codex_review_changes",
+            "codex_review_changes_async",
             "codex_delegate",
             "codex_delegate_async",
         ],
@@ -470,6 +496,16 @@ def codex_capabilities() -> dict:
                 returns="A result envelope with summary, optional findings, and meta.",
             ),
             ToolCapability(
+                name="codex_consult_async",
+                cost="active",
+                use_when="Same as codex_consult, but the consult may run long and you "
+                "want a job_id immediately instead of blocking.",
+                required_params=["question"],
+                key_optional_params=["workspace_root", "extra_context", "model", "isolation"],
+                returns="A job handle (job_id, status, deadline, ttl). Poll with "
+                "codex_job_status; read the consult envelope with codex_job_result.",
+            ),
+            ToolCapability(
                 name="codex_review_changes",
                 cost="active",
                 use_when="You want Codex to review your git changes (working_tree, "
@@ -485,6 +521,24 @@ def codex_capabilities() -> dict:
                     "isolation",
                 ],
                 returns="A result envelope with verdict, findings, and a context summary.",
+            ),
+            ToolCapability(
+                name="codex_review_changes_async",
+                cost="active",
+                use_when="Same as codex_review_changes, but the review may run long and "
+                "you want a job_id immediately instead of blocking.",
+                key_optional_params=[
+                    "scope",
+                    "base",
+                    "commit",
+                    "paths",
+                    "workspace_root",
+                    "extra_context",
+                    "model",
+                    "isolation",
+                ],
+                returns="A job handle (job_id, status, deadline, ttl). Poll with "
+                "codex_job_status; read the review envelope with codex_job_result.",
             ),
             ToolCapability(
                 name="codex_delegate",
@@ -521,7 +575,8 @@ def codex_capabilities() -> dict:
                 use_when="When codex_job_status reports result_available=true.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root"],
-                returns="The same envelope as codex_delegate, with meta.job_id set.",
+                returns="The finished job's envelope (delegate diff, consult answer, or "
+                "review verdict — branch on `tool`), with meta.job_id set.",
             ),
             ToolCapability(
                 name="codex_job_consume_result",
@@ -593,7 +648,7 @@ def codex_capabilities() -> dict:
             "Get a second opinion or answer from Codex (read-only).",
             "Review git changes and return structured findings.",
             "Delegate a coding task and get a reviewable worktree diff (not applied).",
-            "Run a long delegate in the background and poll it via job tools.",
+            "Run a long consult, review, or delegate in the background and poll it via job tools.",
         ],
         negative_scope=[
             "Does not apply edits to your working tree (delegate returns a diff).",
@@ -706,54 +761,16 @@ async def codex_consult(
             meta=meta,
         ).model_dump(mode="json")
 
-    prompt = prompts.build_consult_prompt(question, extra_context or "")
-    result = await codex.run_codex_exec(
-        prompt,
-        cwd=cwd,
+    return await orchestration.run_consult(
+        question,
+        cwd,
+        meta,
         sandbox="read-only",
         isolation=isolation_v,
         timeout_seconds=timeout,
         model=model or d.model,
-        output_schema=CONSULT_OUTPUT_SCHEMA,
-        # consult is read-only Q&A; repo membership is irrelevant, so never let a
-        # non-repo workspace block the run.
-        skip_git_repo_check=True,
+        extra_context=extra_context or "",
     )
-    return _finalize_consult(result, meta=meta)
-
-
-_GITDIFF_ERRORS: dict[type, tuple[str, str | None]] = {
-    gitdiff.InvalidScopeError: ("invalid_scope", "scope"),
-    gitdiff.InvalidBaseError: ("invalid_base", "base"),
-    gitdiff.InvalidCommitError: ("invalid_commit", "commit"),
-    gitdiff.InvalidPathsError: ("invalid_paths", "paths"),
-    gitdiff.NotAGitRepoError: ("not_a_git_repo", "workspace_root"),
-    gitdiff.GitUnavailableError: ("git_unavailable", None),
-}
-
-
-def _gitdiff_error(exc: Exception, meta: Meta) -> dict:
-    code, offending = _GITDIFF_ERRORS.get(type(exc), ("git_unavailable", None))
-    repair = {
-        "invalid_scope": "Use scope=working_tree|branch|commit.",
-        "invalid_base": "Pass a valid base branch/ref for scope=branch.",
-        "invalid_commit": "Pass a valid commit SHA for scope=commit.",
-        "invalid_paths": "Use repo-relative paths with '/' separators, no '..'.",
-        "not_a_git_repo": "Point workspace_root at a git repository.",
-        "git_unavailable": "Ensure git is installed and the repo is healthy.",
-    }[code]
-    # Only invalid_scope is enum-like; the rest take free-form refs/paths.
-    allowed = list(get_args(ReviewScope)) if code == "invalid_scope" else None
-    return ErrorResult(
-        error=ErrorInfo(
-            code=cast("ErrorCode", code),
-            message=str(exc)[:300],
-            repair=repair,
-            offending_param=offending,
-            allowed_values=allowed,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
 
 
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=REVIEW_RESULT_SCHEMA)
@@ -837,70 +854,21 @@ async def codex_review_changes(
     if placeholder is not None:
         return placeholder
 
-    limit = config.max_input_bytes()
-    if len((extra_context or "").encode("utf-8")) > limit:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"extra_context exceeds {limit} bytes.",
-                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
-                offending_param="extra_context",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
-
-    try:
-        diff = gitdiff.gather_diff(
-            cwd,
-            scope,
-            base=base,
-            commit=commit,
-            paths=paths,
-            timeout=config.git_timeout_seconds(),
-            max_bytes=config.max_input_bytes(),
-        )
-    except (
-        gitdiff.InvalidScopeError,
-        gitdiff.InvalidBaseError,
-        gitdiff.InvalidCommitError,
-        gitdiff.InvalidPathsError,
-        gitdiff.NotAGitRepoError,
-        gitdiff.GitUnavailableError,
-        RuntimeError,
-    ) as exc:
-        return _gitdiff_error(exc, meta)
-
-    meta.context_summary = ContextSummary(
-        files_changed=diff.summary.files_changed,
-        lines_added=diff.summary.lines_added,
-        lines_removed=diff.summary.lines_removed,
-    )
-    meta.redacted_paths = diff.redacted_paths
-    meta.truncated = diff.truncated
-    meta.truncation_hint = diff.truncation_hint
-
-    if diff.summary.files_changed == 0 and not diff.text.strip():
-        return ReviewResult(
-            summary=f"No changes to review for scope={scope}.",
-            verdict="pass",
-            confidence="high",
-            meta=meta,
-        ).model_dump(mode="json")
-
-    label = scope if scope != "branch" else f"branch {base}...HEAD"
-    if scope == "commit":
-        label = f"commit {commit}"
-    prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
-    result = await codex.run_codex_exec(
-        prompt,
-        cwd=cwd,
+    return await orchestration.run_review(
+        cwd,
+        meta,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
+        extra_context=extra_context or "",
         sandbox="read-only",
         isolation=isolation_v,
         timeout_seconds=timeout,
         model=model or d.model,
-        output_schema=FINDINGS_OUTPUT_SCHEMA,
+        git_timeout=config.git_timeout_seconds(),
+        max_bytes=config.max_input_bytes(),
     )
-    return _finalize_review(result, meta=meta)
 
 
 @mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=DELEGATE_RESULT_SCHEMA)
@@ -1101,9 +1069,11 @@ async def codex_delegate_async(
         ).model_dump(mode="json")
 
     spec = {
+        "kind": "codex_delegate",
         "task": task,
         "cwd": cwd,
         "workspace_source": wres.source,
+        "tier": "propose",
         "sandbox": "workspace-write",
         "isolation": isolation_v,
         "model": model or d.model,
@@ -1111,13 +1081,20 @@ async def codex_delegate_async(
         "git_timeout": git_timeout,
         "max_diff_bytes": config.max_delegate_diff_bytes(),
     }
+    return _start_job(meta, cwd, kind="codex_delegate", spec=spec, deadline=deadline)
+
+
+def _worker_cmd(job_dir: object) -> list[str]:
+    return [sys.executable, "-m", "codex_in_claude._worker", str(job_dir)]
+
+
+def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) -> dict:
+    """Spawn a detached worker for `spec` and return the JobStarted handle (or an
+    internal_error envelope if the job process could not be launched). Shared by
+    every *_async tool so the spawn/handle contract stays identical across kinds."""
     store = config.job_store()
-
-    def _cmd(job_dir: object) -> list[str]:
-        return [sys.executable, "-m", "codex_in_claude._worker", str(job_dir)]
-
     try:
-        job_id, started_at = store.start(_cmd, cwd, kind="codex_delegate", write_spec=spec)
+        job_id, started_at = store.start(_worker_cmd, cwd, kind=kind, write_spec=spec)
     except OSError as exc:
         return ErrorResult(
             error=ErrorInfo(
@@ -1132,7 +1109,7 @@ async def codex_delegate_async(
     meta.job_id = job_id
     return JobStarted(
         job_id=job_id,
-        kind="codex_delegate",
+        kind=kind,
         status="running",
         started_at=started_at,
         deadline_seconds=deadline,
@@ -1140,6 +1117,186 @@ async def codex_delegate_async(
         expires_at=None,
         meta=meta,
     ).model_dump(mode="json")
+
+
+@mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
+async def codex_consult_async(
+    question: str,
+    ctx: Context | None = None,
+    workspace_root: str | None = None,
+    extra_context: str | None = None,
+    model: str | None = None,
+    isolation: Isolation | None = None,
+) -> dict:
+    """Ask Codex for a read-only second opinion in the background; get a `job_id`
+    back immediately instead of blocking.
+
+    Same read-only behavior as `codex_consult` (Codex never edits files), but it runs
+    detached — use it when the consult may run long. Starting a job commits to spend
+    (it runs to completion or its wall-clock deadline even if you never poll). Poll
+    with `codex_job_status`, read the consult envelope with `codex_job_result`, delete
+    it with `codex_job_consume_result`, or stop it with `codex_job_cancel`."""
+    d = config.defaults()
+    deadline = config.job_max_seconds()
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=deadline,
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="consult",
+        sandbox="read-only",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=deadline,
+    )
+    if wres.error_code is not None:
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    limit = config.max_input_bytes()
+    combined = (question or "") + (extra_context or "")
+    if len(combined.encode("utf-8")) > limit:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"question + extra_context exceeds {limit} bytes.",
+                repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
+                offending_param="extra_context",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    spec = {
+        "kind": "codex_consult",
+        "question": question,
+        "extra_context": extra_context or "",
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": deadline,
+    }
+    return _start_job(meta, cwd, kind="codex_consult", spec=spec, deadline=deadline)
+
+
+@mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
+async def codex_review_changes_async(
+    scope: ReviewScope = "working_tree",
+    ctx: Context | None = None,
+    base: str | None = None,
+    commit: str | None = None,
+    paths: list[str] | None = None,
+    workspace_root: str | None = None,
+    extra_context: str | None = None,
+    model: str | None = None,
+    isolation: Isolation | None = None,
+) -> dict:
+    """Review your git changes in the background; get a `job_id` back immediately.
+
+    Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
+    redacted, and bounded, then reviewed read-only), but it runs detached — use it
+    when the review may run long. The diff is gathered inside the job, so a bad
+    `scope`/`base`/`commit` comes back as the same structured error with **zero
+    spend**. Starting a job commits to spend. Poll with `codex_job_status`, read the
+    review envelope with `codex_job_result`, delete it with `codex_job_consume_result`,
+    or stop it with `codex_job_cancel`. Pass `workspace_root` (absolute)."""
+    d = config.defaults()
+    deadline = config.job_max_seconds()
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=deadline,
+        )
+        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="consult",
+        sandbox="read-only",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=deadline,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
+    )
+    if wres.error_code is not None:
+        return ErrorResult(
+            error=ErrorInfo(
+                code=cast("ErrorCode", wres.error_code),
+                message=wres.error_detail or "invalid workspace",
+                repair="Pass an absolute workspace_root inside the client's MCP roots.",
+                offending_param="workspace_root",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    spec = {
+        "kind": "codex_review_changes",
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": deadline,
+        "scope": scope,
+        "base": base,
+        "commit": commit,
+        "paths": paths,
+        "extra_context": extra_context or "",
+        "git_timeout": config.git_timeout_seconds(),
+        "max_bytes": config.max_input_bytes(),
+    }
+    return _start_job(meta, cwd, kind="codex_review_changes", spec=spec, deadline=deadline)
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
@@ -1274,7 +1431,7 @@ async def codex_dry_run(
             base=base,
             commit=commit,
         )
-        return _gitdiff_error(exc, meta)
+        return orchestration.gitdiff_error(exc, meta)
 
     label = scope if scope != "branch" else f"branch {base}...HEAD"
     prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
@@ -1461,14 +1618,26 @@ _STATE_TO_ERROR: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _job_meta(cwd: str, source: str | None) -> Meta:
-    """A propose-tier meta for job-lifecycle envelopes (deadline as timeout)."""
+# tier/sandbox a job ran under, by kind — so a lifecycle envelope's meta reflects
+# the real run (read-only consult/review vs propose delegate), not a hardcoded tier.
+_KIND_TIER_SANDBOX: dict[str, tuple[str, str]] = {
+    "codex_delegate": ("propose", "workspace-write"),
+    "codex_consult": ("consult", "read-only"),
+    "codex_review_changes": ("consult", "read-only"),
+}
+
+
+def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
+    """Meta for job-lifecycle envelopes (deadline as timeout). tier/sandbox follow the
+    job's kind when known; an unknown kind (e.g. a not-found lookup) falls back to the
+    propose tier."""
+    tier, sandbox = _KIND_TIER_SANDBOX.get(kind or "", ("propose", "workspace-write"))
     d = config.defaults()
     return _base_meta(
         cwd,
         source,
-        tier="propose",
-        sandbox="workspace-write",
+        tier=tier,
+        sandbox=sandbox,
         isolation=d.isolation,
         model=d.model,
         timeout_seconds=config.job_max_seconds(),
@@ -1559,6 +1728,46 @@ async def codex_job_status(
     return _job_status_model(data).model_dump(mode="json")
 
 
+# A finished job's success payload must match the result model for its kind, so
+# codex_job_result returns exactly the envelope that kind's synchronous tool would.
+_JOB_RESULT_MODELS: dict[str, type[BaseModel]] = {
+    "codex_delegate": DelegateResult,
+    "codex_consult": ConsultResult,
+    "codex_review_changes": ReviewResult,
+}
+
+
+def _validate_job_success(payload: dict, kind: str, meta: Meta) -> dict:
+    """Return a done job's success payload after checking it matches the expected
+    result type for its kind. A delegate result carries no verdict/confidence (#31),
+    so those are dropped first (an older worker may still have written them). An
+    unknown kind or a payload that does not validate is surfaced as internal_error
+    rather than passed through as an arbitrary envelope."""
+    if kind == "codex_delegate":
+        payload.pop("verdict", None)
+        payload.pop("confidence", None)
+    model = _JOB_RESULT_MODELS.get(kind)
+    if model is None:
+        return _job_result_corrupt(f"unknown job kind {kind!r}", meta)
+    try:
+        model.model_validate(payload)
+    except ValidationError as exc:
+        return _job_result_corrupt(f"stored {kind} result did not match its schema: {exc}", meta)
+    return payload
+
+
+def _job_result_corrupt(detail: str, meta: Meta) -> dict:
+    return ErrorResult(
+        error=ErrorInfo(
+            code="internal_error",
+            message=f"job result could not be returned: {detail}"[:300],
+            repair="Start a new job; if this persists, run codex_status and check the server logs.",
+            retryable=True,
+        ),
+        meta=meta,
+    ).model_dump(mode="json")
+
+
 async def _job_result_impl(
     job_id: str, ctx: Context | None, workspace_root: str | None, *, consume: bool
 ) -> dict:
@@ -1567,9 +1776,11 @@ async def _job_result_impl(
         return err
     store = config.job_store()
     rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=consume)
-    meta = _job_meta(cwd, source)
     if rec is None:
-        return _job_not_found(job_id, meta, workspace_root)
+        return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
+    # Derive the lifecycle-error meta from the job's kind so a running/corrupt
+    # consult/review job reports consult/read-only, not the default propose tier.
+    meta = _job_meta(cwd, source, rec["kind"])
     state = rec["status"]
     if state == "done" and payload is not None:
         if isinstance(payload.get("meta"), dict):
@@ -1580,12 +1791,14 @@ async def _job_result_impl(
             # cache/branch on it.
             payload["meta"]["job_id"] = job_id
             payload["meta"]["fingerprint"] = FINGERPRINT
-        # A delegate result carries no verdict/confidence (#31). A payload written by
-        # an older worker may still include them; drop them so the returned envelope
-        # matches the advertised DelegateResult contract rather than leaking dead fields.
         if payload.get("ok") is True:
-            payload.pop("verdict", None)
-            payload.pop("confidence", None)
+            return _validate_job_success(payload, rec["kind"], meta)
+        # An error payload (ok: false) should be an ErrorResult; validate it too, since
+        # a disk-backed result.json could be partially written or corrupted.
+        try:
+            ErrorResult.model_validate(payload)
+        except ValidationError as exc:
+            return _job_result_corrupt(f"stored error result was malformed: {exc}", meta)
         return payload
     code, message, repair = _STATE_TO_ERROR.get(
         state, ("job_failed", "The job did not complete.", "Start a new job.")
@@ -1615,30 +1828,32 @@ async def _job_result_impl(
     ).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_JOB_READ, output_schema=DELEGATE_RESULT_SCHEMA)
+@mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
-    """Fetch a finished background delegate's result WITHOUT deleting the record.
+    """Fetch a finished background Codex job's result WITHOUT deleting the record.
 
-    Use when codex_job_status reports result_available=true. Returns the same
-    envelope as codex_delegate (with a `diff`), with meta.job_id set. A still-
-    running/cancelled/timed-out/failed job returns an error envelope. To fetch and
-    delete the record, use codex_job_consume_result."""
+    Works for any async job — codex_delegate_async (a `diff`), codex_consult_async (a
+    consult answer), or codex_review_changes_async (a review with `verdict`). Use when
+    codex_job_status reports result_available=true; the envelope matches the job's
+    kind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-
+    out/failed job returns an error envelope. To fetch and delete, use
+    codex_job_consume_result."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=False)
 
 
-@mcp.tool(annotations=_JOB_MUTATE, output_schema=DELEGATE_RESULT_SCHEMA)
+@mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_consume_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
-    """Fetch a finished background delegate's result and delete the stored record.
+    """Fetch a finished background Codex job's result and delete the stored record.
 
-    Same envelope as codex_job_result, then removes completed job state. Use only
-    when you no longer need to poll or re-read the job. Non-done jobs are not
-    deleted."""
+    Same envelope as codex_job_result (matching the job's kind — branch on `tool`),
+    then removes completed job state. Use only when you no longer need to poll or
+    re-read the job. Non-done jobs are not deleted."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True)
 
 
@@ -1647,7 +1862,7 @@ async def codex_job_consume_result(
 async def codex_job_cancel(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
-    """Cancel a running background delegate job.
+    """Cancel a running background Codex job.
 
     Asks the worker to shut down gracefully so it tears down its throwaway worktree,
     then force-kills it if it overstays, and marks the job cancelled (cancelled jobs
@@ -1690,95 +1905,6 @@ async def codex_job_list(ctx: Context | None = None, workspace_root: str | None 
         for r in rows
     ]
     return JobListResult(jobs=jobs).model_dump(mode="json")
-
-
-def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
-    """Stamp a finished run's process metadata onto meta. Return an ErrorResult dict
-    if the run failed, else None (caller builds the tool-specific success result)."""
-    meta.elapsed_ms = result.run.elapsed_ms
-    meta.command_exit_code = result.run.exit_code
-    meta.compat_warnings = result.dropped_flags
-    usage, session_id = normalize.parse_event_metadata(result.events)
-    meta.usage = usage
-    meta.session_id = session_id
-    if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
-        err = codex.classify_failure(
-            result.run, last_message=result.last_message, events=result.events
-        )
-        return ErrorResult(error=err, meta=meta).model_dump(mode="json")
-    return None
-
-
-def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | None, RawResponse]:
-    """Parse the structured payload (or None for a plain message) and build the shared
-    RawResponse. Returns (structured_or_None, raw)."""
-    structured = normalize.parse_structured(result.last_message)
-    raw = RawResponse(text=result.last_message, session_id=meta.session_id, model=meta.model)
-    return structured, raw
-
-
-def _summary_of(structured: dict) -> str:
-    return str(structured.get("summary") or "").strip() or "(no summary)"
-
-
-def _finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
-    """Build a ConsultResult/ErrorResult dict — Q&A, so no verdict/confidence (#31)."""
-    err = _stamp_meta(result, meta)
-    if err is not None:
-        return err
-    structured, raw = _success_common(result, meta)
-    if structured is not None:
-        return ConsultResult(
-            summary=_summary_of(structured),
-            findings=normalize.coerce_findings(structured.get("findings")),
-            questions=_str_list(structured.get("questions")),
-            assumptions=_str_list(structured.get("assumptions")),
-            next_steps=_str_list(structured.get("next_steps")),
-            raw_response=raw,
-            meta=meta,
-        ).model_dump(mode="json")
-    return ConsultResult(
-        summary=(result.last_message or "").strip() or "(codex returned no message)",
-        raw_response=raw,
-        meta=meta,
-    ).model_dump(mode="json")
-
-
-def _finalize_review(result: codex.CodexExecResult, *, meta: Meta) -> dict:
-    """Build a ReviewResult/ErrorResult dict — the only verdict-bearing result."""
-    err = _stamp_meta(result, meta)
-    if err is not None:
-        return err
-    structured, raw = _success_common(result, meta)
-    if structured is not None:
-        return ReviewResult(
-            summary=_summary_of(structured),
-            verdict=_enum(
-                structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"
-            ),
-            confidence=_enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
-            findings=normalize.coerce_findings(structured.get("findings")),
-            questions=_str_list(structured.get("questions")),
-            assumptions=_str_list(structured.get("assumptions")),
-            next_steps=_str_list(structured.get("next_steps")),
-            raw_response=raw,
-            meta=meta,
-        ).model_dump(mode="json")
-    return ReviewResult(
-        summary=(result.last_message or "").strip() or "(codex returned no message)",
-        raw_response=raw,
-        meta=meta,
-    ).model_dump(mode="json")
-
-
-def _enum(value: object, allowed: tuple[str, ...], default: str) -> Any:
-    return value if isinstance(value, str) and value in allowed else default
-
-
-def _str_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v) for v in value if isinstance(v, (str, int, float))]
 
 
 def main() -> None:

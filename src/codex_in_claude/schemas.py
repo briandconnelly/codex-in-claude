@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-9"
+FINGERPRINT = "codex-in-claude/0.1/schema-10"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -449,6 +449,11 @@ def _object_union_schema(adapter: TypeAdapter) -> dict:
 CONSULT_RESULT_SCHEMA = _object_union_schema(TypeAdapter(ConsultResult | ErrorResult))
 REVIEW_RESULT_SCHEMA = _object_union_schema(TypeAdapter(ReviewResult | ErrorResult))
 DELEGATE_RESULT_SCHEMA = _object_union_schema(TypeAdapter(DelegateResult | ErrorResult))
+# codex_job_result / codex_job_consume_result serve every async kind, so their result
+# may be any of the three success envelopes (or an error). Branch on `ok`, then `tool`.
+JOB_RESULT_SCHEMA = _object_union_schema(
+    TypeAdapter(DelegateResult | ConsultResult | ReviewResult | ErrorResult)
+)
 STATUS_SCHEMA = StatusResult.model_json_schema()
 CAPABILITIES_SCHEMA = CapabilitiesResult.model_json_schema()
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate

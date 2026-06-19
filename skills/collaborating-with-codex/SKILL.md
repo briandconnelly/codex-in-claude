@@ -24,7 +24,7 @@ tools in a loop.
 | A second opinion / answer on a question or design | `codex_consult` | model call |
 | Codex to review your git changes for bugs | `codex_review_changes` | model call |
 | Codex to implement a task and return a diff | `codex_delegate` | model call |
-| To implement a long task in the background | `codex_delegate_async` | model call |
+| Any of the above as a background job (long-running) | `codex_consult_async` / `codex_review_changes_async` / `codex_delegate_async` | model call |
 | To preview a review's scope/size before spending | `codex_dry_run` | free |
 | To preview a delegate's seeded baseline + prompt size before spending | `codex_delegate_dry_run` | free |
 | Readiness / version / auth | `codex_status` | free |
@@ -60,13 +60,16 @@ Always pass an absolute `workspace_root` (or rely on the MCP root) so Codex targ
 the intended repository — otherwise the call may resolve to the server's own cwd
 (you'll see `meta.workspace_warning`).
 
-## Background jobs (long delegations)
+## Background jobs (long runs)
 
-For a delegation that may take a while, use **codex_delegate_async** instead of
-blocking on `codex_delegate`. It returns a `job_id` immediately and runs detached;
-the result is the same propose-tier envelope (with a `diff`). The same
-**no-network** constraint applies — the delegated task runs under `workspace-write`
-and cannot reach the network.
+Any of the three active tools has an `_async` counterpart for runs that may take a
+while: **codex_consult_async**, **codex_review_changes_async**, and
+**codex_delegate_async**. Each returns a `job_id` immediately and runs detached
+instead of blocking; the eventual result is the same envelope the synchronous tool
+would return (consult answer, review `verdict`, or delegate `diff`) — fetched via
+`codex_job_result`, so branch on `tool`. The propose-tier **no-network** constraint
+applies to delegate jobs only (they run under `workspace-write`); consult/review
+jobs are read-only.
 
 - Starting a job **commits to spend** — it runs to completion or its wall-clock
   deadline even if you never poll.
