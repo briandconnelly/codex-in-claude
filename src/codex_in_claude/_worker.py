@@ -115,6 +115,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
             model=spec.get("model"),
             git_timeout=spec["git_timeout"],
             max_bytes=spec["max_bytes"],
+            extra_context=spec.get("extra_context", ""),
         )
     raise ValueError(f"unknown job kind: {kind!r}")
 

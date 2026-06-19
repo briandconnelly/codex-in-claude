@@ -16,9 +16,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `verdict` (branch on `tool`) — and validate the stored payload against that kind before returning it
   (a kind/payload mismatch surfaces as `internal_error` rather than a wrong-shaped envelope). For a
   review job the diff is gathered inside the worker, so a bad `scope`/`base`/`commit` comes back as the
-  same structured error with **zero spend**. The read-only consult/review orchestration moved into a
-  new import-light `orchestration.py` shared by the synchronous tools and the background worker.
-  `FINGERPRINT` → `schema-9`. (#41)
+  same structured error with **zero spend**. Both async tools accept the same inputs as their
+  synchronous twins (including `extra_context` on `codex_review_changes_async`) and are wrapped in the
+  same `internal_error` boundary as every other tool. The read-only consult/review orchestration moved
+  into a new import-light `orchestration.py` shared by the synchronous tools and the background worker.
+  `FINGERPRINT` → `schema-10`. (#41)
+- **Breaking (agent-visible surface):** `codex_review_changes` now accepts an optional
+  `extra_context` parameter — author intent (why the change was made, what was already verified,
+  constraints) that a reviewer needs to review well and avoid false positives. It mirrors the
+  existing `codex_consult` parameter: appended to the review prompt as a clearly-labeled
+  **untrusted-data** section ("Author-provided context") placed before the diff, and bounded by the
+  same `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` limit (an oversize value returns `input_too_large` with
+  `offending_param="extra_context"`). `codex_dry_run`, which previews a review, takes the same
+  parameter so its `prompt_bytes` reflects the context that would be sent. `FINGERPRINT` →
+  `schema-9`. (#40)
 - **Breaking (agent-visible surface):** new free `codex_delegate_dry_run(task, …)` tool — a
   zero-spend preview of a `codex_delegate`/`codex_delegate_async` run, mirroring how `codex_dry_run`
   previews `codex_review_changes`. It reports the baseline the throwaway worktree would seed from
@@ -52,6 +63,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- Documented what to do when the MCP server is unavailable mid-session. The
+  `collaborating-with-codex` skill and the README now explain how to recognize a transport
+  drop (`Connection closed` / `No such tool available`), how to recover (relaunch the server,
+  confirm with `codex_status`), and an interim read-only
+  `codex exec --sandbox read-only --skip-git-repo-check -` fallback — with the explicit caveat that
+  it bypasses the plugin's diff gathering, secret
+  redaction, input-byte bounding, and structured envelope, so it is a stopgap, not a replacement.
+  Docs-only; `FINGERPRINT` unchanged. (#43)
+- Documented that `codex_review_changes` and `codex_consult` are **static** reviews, not a verify
+  mode: they run under the read-only sandbox, which blocks the writes a test/build/lint run
+  typically needs (a writable cache/temp), so Codex can't rely on running the project's checks to
+  confirm its findings. The tool docstrings and the
+  `collaborating-with-codex` skill now state this and tell callers to verify findings by running the
+  project's checks themselves. A writable "verify" mode would change the trust boundary of a
+  read-only tool (Codex's `workspace-write` sandbox can modify the live tree) and belongs in a
+  separate worktree-isolated feature, so #42 is resolved by documenting the current behavior.
+  Prose-only; `FINGERPRINT` unchanged. (#42)
 - **Breaking (agent-visible surface):** `verdict` and `confidence` are now review-only. They were
   on the shared success envelope for every active tool, so `codex_consult` (plain Q&A) always came
   back `verdict:"unknown"` and `codex_delegate` (which returns a diff) `verdict:"unknown"` too — a
@@ -124,6 +152,39 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   bumps to `codex-in-claude/0.1/schema-4`. (#5)
 
 ### Fixed
+- `codex_capabilities` now advertises `unsupported_isolation` for `codex_review_changes` and
+  `codex_dry_run`. Both accept an `isolation` argument and already return `unsupported_isolation` for
+  an invalid value (each with a test covering that path), but their advertised error-code sets
+  omitted it, so an agent planning recovery branches from capabilities could miss it. Their
+  `key_optional_params` now also list `isolation` (the param that drives that error), matching the
+  other `isolation`-accepting tools, and a regression test asserts every such tool advertises both
+  the code and the param. Advisory metadata only — no tool/param/enum/schema change — so this does
+  not by itself move `FINGERPRINT` (the same release already bumps it to `schema-9` for the
+  `extra_context` addition). (#40)
+- `codex_dry_run` now runs the same `unexpanded_env_placeholder` pre-flight check that
+  `codex_review_changes` (and `codex_delegate_dry_run`) run before doing any work. Previously a
+  tracked `CODEX_IN_CLAUDE_*` env var delivered as a literal unexpanded `${...}` (the host not
+  expanding env substitutions) let `codex_dry_run` return `ok: true` while the real review call
+  would immediately fail — exactly the false green-light a dry run exists to prevent (the dry-run
+  fidelity contract from #6). `codex_capabilities` now advertises `unexpanded_env_placeholder` for
+  `codex_dry_run` — and, while there, also `unsupported_isolation`, which `codex_dry_run` already
+  returns for an invalid `isolation` but did not advertise. The placeholder error envelope's `meta`
+  now carries the caller's `paths` too (matching `codex_review_changes`). Advisory metadata + a new
+  returned error path on a free tool; no tool/param/enum/schema change, so `FINGERPRINT` is
+  unchanged. (#46)
+- Hardened the server against a single failed/long call taking down the whole tool surface for the
+  rest of a session (the disconnect observed in #39). Three parts: (1) every model-/job-bearing tool
+  is now wrapped in a boundary that converts an *unexpected* exception into the documented
+  `internal_error` result envelope (logged with a traceback) instead of letting it escape as an
+  opaque transport error — `asyncio.CancelledError` is a `BaseException` and still propagates, so MCP
+  cancel semantics are preserved; (2) the server now emits diagnostic logging to **stderr** (and,
+  with `CODEX_IN_CLAUDE_LOG_FILE`, a file) — never stdout, the stdio JSON-RPC channel — so a future
+  disconnect leaves a trail (subprocess spawn/exit, timeout, and cancellation are logged with pid),
+  controlled by `CODEX_IN_CLAUDE_LOG_LEVEL` (default `WARNING`); (3) a regression test pins that
+  cancelling an in-flight `codex exec` kills its process group rather than orphaning it. `internal_error`
+  is already an advertised code for these tools and no tool/param/enum changed, so this is **not** an
+  agent-visible surface change and `FINGERPRINT` is unchanged. The structural complement — moving long
+  read-only calls off the synchronous request path — is tracked separately in #41. (#39)
 - `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
   emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
   perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of

@@ -33,6 +33,12 @@ DEFAULT_JOB_MAX_COUNT = 50
 VALID_TIERS = ("consult", "propose", "apply")
 VALID_ISOLATIONS = ("inherit", "ignore-config", "ignore-rules")
 
+# Diagnostic logging. Logs go to stderr (and optionally a file); never stdout,
+# which is the stdio JSON-RPC channel. WARNING keeps a quiet default while still
+# capturing the disconnect/timeout trail a future incident needs (#39).
+DEFAULT_LOG_LEVEL = "WARNING"
+VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 DEFAULT_TIER = "consult"
 DEFAULT_ISOLATION = "inherit"
 
@@ -209,6 +215,18 @@ def version_supported(version: str | None) -> bool | None:
     if parsed is None:
         return None
     return parsed in supported_versions()
+
+
+def log_level() -> str:
+    """Resolved diagnostic log level (an invalid value falls back to the default)."""
+    raw = os.environ.get(f"{ENV_PREFIX}LOG_LEVEL", DEFAULT_LOG_LEVEL).strip().upper()
+    return raw if raw in VALID_LOG_LEVELS else DEFAULT_LOG_LEVEL
+
+
+def log_file() -> str | None:
+    """Optional file path mirroring the stderr log, or None (stderr only)."""
+    value = os.environ.get(f"{ENV_PREFIX}LOG_FILE")
+    return value or None
 
 
 def state_dir() -> Path:

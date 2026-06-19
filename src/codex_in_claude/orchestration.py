@@ -224,10 +224,24 @@ async def run_review(
     model: str | None,
     git_timeout: int,
     max_bytes: int,
+    extra_context: str = "",
 ) -> dict:
     """Gather + validate the diff, then run a read-only review. The diff is gathered
     BEFORE any model call, so a bad scope/base/commit returns a structured error with
-    zero spend (the same guarantee whether called sync or from a background job)."""
+    zero spend (the same guarantee whether called sync or from a background job).
+
+    `extra_context` (optional author intent) is bounded by the same `max_bytes` limit
+    as the diff and appended to the prompt as untrusted data."""
+    if len(extra_context.encode("utf-8")) > max_bytes:
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"extra_context exceeds {max_bytes} bytes.",
+                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="extra_context",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
     try:
         diff = gitdiff.gather_diff(
             cwd,
@@ -258,7 +272,9 @@ async def run_review(
             meta=meta,
         ).model_dump(mode="json")
 
-    prompt = prompts.build_review_prompt(diff.text, review_label(scope, base, commit))
+    prompt = prompts.build_review_prompt(
+        diff.text, review_label(scope, base, commit), extra_context or ""
+    )
     result = await codex.run_codex_exec(
         prompt,
         cwd=cwd,

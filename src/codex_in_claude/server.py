@@ -8,18 +8,24 @@ Tool surface (v1 grows by milestone):
 from __future__ import annotations
 
 import asyncio
+import functools
 import sys
-from typing import Any, cast
+import time
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
 from pydantic import BaseModel, ValidationError
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 from codex_in_claude import (
     __version__,
     codex,
     config,
     delegate,
+    obs,
     orchestration,
     preflight,
     prompts,
@@ -207,6 +213,71 @@ def _base_meta(
     )
 
 
+def _internal_error_result(
+    tool_name: str, exc: BaseException, *, tier: str, sandbox: str, elapsed_ms: int = 0
+) -> dict:
+    """Best-effort `internal_error` envelope for an unexpected tool failure.
+
+    Used by the tool boundary so a bug or unforeseen exception still returns the
+    documented result envelope (not an opaque transport error) and a caller can
+    branch on `internal_error` — which these tools already advertise."""
+    d = config.defaults()
+    meta = _base_meta(
+        workspace.server_cwd(),
+        None,
+        tier=tier,
+        sandbox=sandbox,
+        isolation=d.isolation,
+        model=d.model,
+        timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+    )
+    meta.elapsed_ms = elapsed_ms
+    return ErrorResult(
+        error=ErrorInfo(
+            code="internal_error",
+            message=f"{tool_name} failed unexpectedly: {type(exc).__name__}: {exc}"[:300],
+            repair="Server-side error; retry. If it persists, run codex_status and inspect "
+            "the server's stderr log (set CODEX_IN_CLAUDE_LOG_LEVEL=DEBUG for detail).",
+            retryable=True,
+        ),
+        meta=meta,
+    ).model_dump(mode="json")
+
+
+def _guard(
+    *, tier: str = "consult", sandbox: str = "read-only"
+) -> Callable[[Callable[..., Awaitable[dict]]], Callable[..., Awaitable[dict]]]:
+    """Wrap an async tool so an unexpected exception becomes a structured
+    `internal_error` envelope (logged with a traceback) instead of escaping the
+    handler. Cancellation is a `BaseException`, so it propagates untouched —
+    `except Exception` never catches it — preserving MCP cancel semantics (#39)."""
+
+    def decorator(fn: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
+        name = getattr(fn, "__name__", "tool")
+
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> dict:
+            start = time.monotonic()
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                obs.get_logger("codex_in_claude.server").error(
+                    "tool %s raised %s after %dms",
+                    name,
+                    type(exc).__name__,
+                    elapsed_ms,
+                    exc_info=True,
+                )
+                return _internal_error_result(
+                    name, exc, tier=tier, sandbox=sandbox, elapsed_ms=elapsed_ms
+                )
+
+        return wrapper
+
+    return decorator
+
+
 # --------------------------------------------------------------------------- #
 # Free tools
 # --------------------------------------------------------------------------- #
@@ -357,7 +428,16 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     ),
     "codex_status": [],
     "codex_capabilities": [],
-    "codex_dry_run": _err_codes(_WORKSPACE_ERRORS, _GITDIFF_ERROR_CODES, ("internal_error",)),
+    "codex_dry_run": _err_codes(
+        _WORKSPACE_ERRORS,
+        _GITDIFF_ERROR_CODES,
+        (
+            "unsupported_isolation",
+            "input_too_large",
+            "unexpanded_env_placeholder",
+            "internal_error",
+        ),
+    ),
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         (
@@ -436,6 +516,7 @@ def codex_capabilities() -> dict:
                     "commit",
                     "paths",
                     "workspace_root",
+                    "extra_context",
                     "model",
                     "isolation",
                 ],
@@ -452,6 +533,7 @@ def codex_capabilities() -> dict:
                     "commit",
                     "paths",
                     "workspace_root",
+                    "extra_context",
                     "model",
                     "isolation",
                 ],
@@ -530,7 +612,15 @@ def codex_capabilities() -> dict:
                 cost="free",
                 use_when="Before codex_review_changes, to preview scope/diff size/"
                 "redactions without spending.",
-                key_optional_params=["scope", "base", "commit", "paths", "workspace_root"],
+                key_optional_params=[
+                    "scope",
+                    "base",
+                    "commit",
+                    "paths",
+                    "workspace_root",
+                    "extra_context",
+                    "isolation",
+                ],
                 returns="Scope, context summary, prompt size, and redactions.",
             ),
             ToolCapability(
@@ -583,6 +673,7 @@ def codex_capabilities() -> dict:
 # Active tools
 # --------------------------------------------------------------------------- #
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=CONSULT_RESULT_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_consult(
     question: str,
     ctx: Context | None = None,
@@ -594,9 +685,12 @@ async def codex_consult(
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
-    Runs `codex exec` in a read-only sandbox — Codex never edits files. Pass
-    `workspace_root` (absolute) so Codex reasons about the right repo. Returns a
-    result envelope; treat findings as claims to verify."""
+    Runs `codex exec` in a read-only sandbox — Codex never edits files. This is a
+    STATIC review, not a verify mode: the read-only sandbox blocks the writes a
+    test/build/lint run typically needs (a writable cache/temp), so Codex can't
+    rely on executing your checks to confirm its claims. Pass `workspace_root`
+    (absolute) so Codex reasons about the right repo. Returns a result envelope;
+    treat findings as unvalidated claims to verify by running the checks yourself."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -680,6 +774,7 @@ async def codex_consult(
 
 
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=REVIEW_RESULT_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes(
     scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
@@ -687,6 +782,7 @@ async def codex_review_changes(
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
+    extra_context: str | None = None,
     model: str | None = None,
     isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
@@ -697,7 +793,17 @@ async def codex_review_changes(
     scope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews
     `base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-
     redacted, and bounded by this server; Codex reviews it read-only and returns
-    structured findings. Pass `workspace_root` (absolute) for the right repo."""
+    structured findings. Pass `workspace_root` (absolute) for the right repo.
+
+    `extra_context` (optional) is author intent — why the change was made, what you
+    already verified, constraints — added to the prompt as clearly-labeled UNTRUSTED
+    data (the reviewer never obeys directives in it) to cut false positives. It is
+    bounded by the same input-byte limit as the diff.
+
+    STATIC review, not a verify mode: the read-only sandbox blocks the writes a
+    test/build/lint run typically needs (a writable cache/temp), so Codex can't
+    rely on running the project's checks to confirm its findings. Treat findings as
+    unvalidated claims to verify by running those checks yourself before acting."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -755,6 +861,7 @@ async def codex_review_changes(
         base=base,
         commit=commit,
         paths=paths,
+        extra_context=extra_context or "",
         sandbox="read-only",
         isolation=isolation_v,
         timeout_seconds=timeout,
@@ -765,6 +872,7 @@ async def codex_review_changes(
 
 
 @mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=DELEGATE_RESULT_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate(
     task: str,
     ctx: Context | None = None,
@@ -857,6 +965,7 @@ async def codex_delegate(
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_async(
     task: str,
     ctx: Context | None = None,
@@ -1011,6 +1120,7 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_consult_async(
     question: str,
     ctx: Context | None = None,
@@ -1100,6 +1210,7 @@ async def codex_consult_async(
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes_async(
     scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
@@ -1107,6 +1218,7 @@ async def codex_review_changes_async(
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
+    extra_context: str | None = None,
     model: str | None = None,
     isolation: Isolation | None = None,
 ) -> dict:
@@ -1180,6 +1292,7 @@ async def codex_review_changes_async(
         "base": base,
         "commit": commit,
         "paths": paths,
+        "extra_context": extra_context or "",
         "git_timeout": config.git_timeout_seconds(),
         "max_bytes": config.max_input_bytes(),
     }
@@ -1187,6 +1300,7 @@ async def codex_review_changes_async(
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
 async def codex_dry_run(
     scope: ReviewScope = "working_tree",
     ctx: Context | None = None,
@@ -1194,11 +1308,13 @@ async def codex_dry_run(
     commit: str | None = None,
     paths: list[str] | None = None,
     workspace_root: str | None = None,
+    extra_context: str | None = None,
     isolation: Isolation | None = None,
 ) -> dict:
     """Preview what a `codex_review_changes` call would send — scope, diff size,
     redactions, truncation — with NO model call and no spend. Use it before a
-    review to confirm the scope and that secrets are redacted."""
+    review to confirm the scope and that secrets are redacted. Pass the same
+    `extra_context` you would give the review so `prompt_bytes` reflects it."""
     d = config.defaults()
     cwd_guess = workspace.server_cwd()
     isolation_v, iso_err = _resolve_isolation(isolation)
@@ -1239,7 +1355,51 @@ async def codex_dry_run(
             meta=meta,
         ).model_dump(mode="json")
 
+    # Mirror codex_review_changes: surface an unexpanded ${...} env placeholder before
+    # gathering the diff, so the preview fails exactly where the paid review would (#46).
+    placeholder = _placeholder_error(
+        _base_meta(
+            cwd,
+            wres.source,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            scope=scope,
+            base=base,
+            commit=commit,
+            paths=paths,
+        )
+    )
+    if placeholder is not None:
+        return placeholder
+
     max_bytes = config.max_input_bytes()
+    if len((extra_context or "").encode("utf-8")) > max_bytes:
+        # Mirror the real review's validation so the preview fails exactly where the
+        # paid call would (issue #6: a dry run must not green-light an oversize input).
+        meta = _base_meta(
+            cwd,
+            wres.source,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=d.model,
+            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            scope=scope,
+            base=base,
+            commit=commit,
+        )
+        return ErrorResult(
+            error=ErrorInfo(
+                code="input_too_large",
+                message=f"extra_context exceeds {max_bytes} bytes.",
+                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
+                offending_param="extra_context",
+            ),
+            meta=meta,
+        ).model_dump(mode="json")
     try:
         diff = gitdiff.gather_diff(
             cwd,
@@ -1274,7 +1434,7 @@ async def codex_dry_run(
         return orchestration.gitdiff_error(exc, meta)
 
     label = scope if scope != "branch" else f"branch {base}...HEAD"
-    prompt = prompts.build_review_prompt(diff.text, label)
+    prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
     return DryRunResult(
         cwd=cwd,
         workspace_source=wres.source,
@@ -1310,6 +1470,7 @@ _DELEGATE_PLAN_NOTE = (
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DELEGATE_DRY_RUN_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_dry_run(
     task: str,
     ctx: Context | None = None,
@@ -1544,6 +1705,7 @@ def _job_status_model(data: dict) -> JobStatus:
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_STATUS_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_status(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1662,6 +1824,7 @@ async def _job_result_impl(
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1677,6 +1840,7 @@ async def codex_job_result(
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_RESULT_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_consume_result(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1689,6 +1853,7 @@ async def codex_job_consume_result(
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_STATUS_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_cancel(
     job_id: str, ctx: Context | None = None, workspace_root: str | None = None
 ) -> dict:
@@ -1710,6 +1875,7 @@ async def codex_job_cancel(
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
+@_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_list(ctx: Context | None = None, workspace_root: str | None = None) -> dict:
     """List the background jobs known for this workspace, newest first.
 
@@ -1738,6 +1904,8 @@ async def codex_job_list(ctx: Context | None = None, workspace_root: str | None 
 
 def main() -> None:
     """Console-script entrypoint: run the MCP server over stdio."""
+    log = obs.configure()
+    log.info("codex-in-claude %s starting (stdio)", __version__)
     mcp.run()
 
 

@@ -230,6 +230,95 @@ async def test_review_success(monkeypatch, clean_env, tmp_path):
     assert res["meta"]["context_summary"]["files_changed"] == 1
 
 
+async def test_review_extra_context_reaches_prompt(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    captured = {}
+
+    async def fake(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return _fake_result(json.dumps({"summary": "ok", "verdict": "pass", "confidence": "high"}))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(
+        scope="working_tree",
+        workspace_root=str(tmp_path),
+        extra_context="I verified git diff --numstat does not invoke textconv.",
+    )
+    assert res["ok"] is True
+    assert "Author-provided context (untrusted data)" in captured["prompt"]
+    assert "does not invoke textconv" in captured["prompt"]
+
+
+async def test_review_extra_context_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), extra_context="x" * 2000
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["offending_param"] == "extra_context"
+
+
+async def test_dry_run_extra_context_grows_prompt_bytes(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    base = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    with_ctx = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), extra_context="author intent here"
+    )
+    assert with_ctx["ok"] is True
+    assert with_ctx["prompt_bytes"] > base["prompt_bytes"]
+
+
+async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path):
+    # The preview must reject what the real review would reject (issue #6).
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), extra_context="x" * 2000
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["offending_param"] == "extra_context"
+
+
+async def test_dry_run_advertises_returnable_error_codes():
+    # codex_dry_run can return all of these via its pre-flight checks; capabilities
+    # must advertise each (input_too_large from extra_context, the placeholder guard,
+    # and the isolation validation).
+    caps = server.codex_capabilities()
+    dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
+    assert "input_too_large" in dry["error_codes"]
+    assert "unsupported_isolation" in dry["error_codes"]
+    assert "unexpanded_env_placeholder" in dry["error_codes"]
+
+
+def test_isolation_accepting_tools_advertise_unsupported_isolation():
+    # Every tool that accepts an `isolation` arg can return unsupported_isolation
+    # via _resolve_isolation; capabilities must advertise it for all of them so an
+    # agent's recovery branches are complete.
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    for name in (
+        "codex_consult",
+        "codex_review_changes",
+        "codex_delegate",
+        "codex_delegate_async",
+        "codex_dry_run",
+        "codex_delegate_dry_run",
+    ):
+        assert "unsupported_isolation" in by_name[name]["error_codes"], name
+        # ...and the param that drives that error is listed, so the summary is
+        # internally consistent (param exposed alongside its error).
+        assert "isolation" in by_name[name]["key_optional_params"], name
+
+
+async def test_review_extra_context_advertised_in_capabilities():
+    caps = server.codex_capabilities()
+    review = next(t for t in caps["tool_details"] if t["name"] == "codex_review_changes")
+    assert "extra_context" in review["key_optional_params"]
+
+
 async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path):
     monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff(text="", files=0))
     called = {"n": 0}
@@ -646,6 +735,25 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     assert res["error"]["offending_param"] == "isolation"
 
 
+async def test_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
+    """A dry run must surface the same unexpanded_env_placeholder a review would
+    hit before gathering the diff (issue #46), not green-light it."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+async def test_dry_run_placeholder_error_meta_carries_paths(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), paths=["a/b.py"]
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+    assert res["meta"]["paths"] == ["a/b.py"]
+
+
 # --- delegate_dry_run --------------------------------------------------------
 def _init_repo(tmp_path):
     import subprocess
@@ -1026,8 +1134,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_9():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-9"
+def test_fingerprint_is_schema_10():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-10"
 
 
 # --- async consult / review (#41) --------------------------------------------
@@ -1092,6 +1200,17 @@ async def test_review_async_returns_job_id(monkeypatch, clean_env, tmp_path):
     assert spec["sandbox"] == "read-only"
     # The diff is gathered in the worker, so the byte cap is snapshotted into the spec.
     assert spec["max_bytes"] == server.config.max_input_bytes()
+
+
+async def test_review_async_threads_extra_context(monkeypatch, clean_env, tmp_path):
+    # review_async mirrors the sync tool's extra_context, carried to the worker via spec.
+    store = _FakeStore()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_review_changes_async(
+        workspace_root=str(tmp_path), extra_context="author intent"
+    )
+    assert res["ok"] is True
+    assert store.started[0]["spec"]["extra_context"] == "author intent"
 
 
 async def test_review_async_bad_isolation(clean_env, tmp_path):
@@ -1391,3 +1510,70 @@ def test_job_status_model_surfaces_cleanup_warnings():
     }
     model = server._job_status_model(data)
     assert model.cleanup_warnings == ["could not remove temporary path: /tmp/cic-worktree-x"]
+
+
+# --- boundary: unexpected exceptions become a structured internal_error (#39) ---
+async def test_consult_unexpected_exception_returns_internal_error(
+    monkeypatch, clean_env, tmp_path
+):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", boom)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["retryable"] is True
+    # The documented envelope still holds: meta is present and tier reflects the tool.
+    assert res["meta"]["tier"] == "consult"
+    assert res["meta"]["sandbox"] == "read-only"
+
+
+async def test_review_unexpected_exception_returns_internal_error(monkeypatch, clean_env, tmp_path):
+    # An unexpected exception escaping the review orchestration must be caught by the
+    # tool boundary and become a structured internal_error (not an opaque error).
+    async def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.orchestration, "run_review", boom)
+    res = await server.codex_review_changes(workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_delegate_unexpected_exception_uses_propose_meta(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.workspace, "resolve_workspace", boom)
+    res = await server.codex_delegate("do a thing", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["meta"]["tier"] == "propose"
+    assert res["meta"]["sandbox"] == "workspace-write"
+
+
+async def test_boundary_internal_error_stamps_elapsed_ms(monkeypatch, clean_env, tmp_path):
+    import asyncio
+
+    async def slow_boom(*a, **k):
+        await asyncio.sleep(0.02)
+        raise RuntimeError("late failure")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", slow_boom)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    # A late failure records its elapsed time, not a misleading 0.
+    assert res["meta"]["elapsed_ms"] > 0
+
+
+async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
+    import asyncio
+
+    def cancel(*a, **k):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await server.codex_consult("q", workspace_root=str(tmp_path))
