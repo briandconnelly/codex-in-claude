@@ -89,14 +89,18 @@ Three workflow files under `.github/workflows/`.
   2. **`test`** — `needs: release-metadata`, `uses: ./.github/workflows/test.yml`.
   3. **`build`** — `needs: test`: setup-uv + Python 3.12 → `uv build --no-sources` →
      `uvx twine check dist/*` → upload `dist/*` as an artifact (`if-no-files-found: error`).
-  4. **`publish`** — `needs: build`, `environment: pypi`, `permissions: { contents: read,
+  4. **`create-tag`** — `needs: [release-metadata, build]`, `permissions: contents: write`: create
+     the annotated tag if it doesn't already exist (pushed by `github-actions[bot]`). Runs **before**
+     publish so an irreversible PyPI release never exists without its git tag; no-ops on tag-push
+     events. A `GITHUB_TOKEN` tag push does not retrigger this workflow.
+  5. **`publish`** — `needs: create-tag`, `environment: pypi`, `permissions: { contents: read,
      id-token: write }`: download artifact → `pypa/gh-action-pypi-publish` (Trusted Publishing, no
      token).
-  5. **`github-release`** — `needs: [release-metadata, publish]`,
-     `permissions: contents: write`: checkout (full history) → download artifact → create the tag if
-     it doesn't exist (annotated, pushed by `github-actions[bot]`) → **extract the `## [X.Y.Z]`
-     section from `CHANGELOG.md`** as the release body → `gh release create "$TAG" dist/*
-     --title "codex-in-claude $TAG" --notes-file …`. Idempotent: skip if the release already exists.
+  6. **`github-release`** — `needs: [release-metadata, publish]`,
+     `permissions: contents: write`: checkout (full history) → download artifact → **extract the
+     `## [X.Y.Z]` section from `CHANGELOG.md`** as the release body → `gh release create "$TAG"
+     dist/* --title "codex-in-claude $TAG" --notes-file …`. Idempotent: skip if the release already
+     exists.
 
 ### CHANGELOG section extraction
 
@@ -133,6 +137,8 @@ part of this CI change.
    "pending publisher" flow so the very first publish can create the project.
 2. In GitHub repo settings, create an **environment named `pypi`** (optionally with required
    reviewers for a manual approval gate before publish).
+3. **Protect `v*` tags** (ruleset or classic protected tag) so only maintainers / release automation
+   can create them — a `v*.*.*` tag push triggers a real PyPI publish.
 
 These are documented in the plan as prerequisites; the workflows assume they exist.
 
