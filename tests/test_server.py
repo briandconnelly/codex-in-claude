@@ -1250,6 +1250,21 @@ async def test_delegate_unexpected_exception_uses_propose_meta(monkeypatch, clea
     assert res["meta"]["sandbox"] == "workspace-write"
 
 
+async def test_boundary_internal_error_stamps_elapsed_ms(monkeypatch, clean_env, tmp_path):
+    import asyncio
+
+    async def slow_boom(*a, **k):
+        await asyncio.sleep(0.02)
+        raise RuntimeError("late failure")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", slow_boom)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    # A late failure records its elapsed time, not a misleading 0.
+    assert res["meta"]["elapsed_ms"] > 0
+
+
 async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
     import asyncio
 

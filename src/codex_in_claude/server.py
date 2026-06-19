@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import sys
+import time
 from typing import TYPE_CHECKING, Any, cast, get_args
 from urllib.parse import unquote, urlparse
 
@@ -199,7 +200,9 @@ def _base_meta(
     )
 
 
-def _internal_error_result(tool_name: str, exc: BaseException, *, tier: str, sandbox: str) -> dict:
+def _internal_error_result(
+    tool_name: str, exc: BaseException, *, tier: str, sandbox: str, elapsed_ms: int = 0
+) -> dict:
     """Best-effort `internal_error` envelope for an unexpected tool failure.
 
     Used by the tool boundary so a bug or unforeseen exception still returns the
@@ -215,6 +218,7 @@ def _internal_error_result(tool_name: str, exc: BaseException, *, tier: str, san
         model=d.model,
         timeout_seconds=config.clamp_timeout(d.timeout_seconds),
     )
+    meta.elapsed_ms = elapsed_ms
     return ErrorResult(
         error=ErrorInfo(
             code="internal_error",
@@ -240,13 +244,21 @@ def _guard(
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> dict:
+            start = time.monotonic()
             try:
                 return await fn(*args, **kwargs)
             except Exception as exc:
+                elapsed_ms = int((time.monotonic() - start) * 1000)
                 obs.get_logger("codex_in_claude.server").error(
-                    "tool %s raised %s", name, type(exc).__name__, exc_info=True
+                    "tool %s raised %s after %dms",
+                    name,
+                    type(exc).__name__,
+                    elapsed_ms,
+                    exc_info=True,
                 )
-                return _internal_error_result(name, exc, tier=tier, sandbox=sandbox)
+                return _internal_error_result(
+                    name, exc, tier=tier, sandbox=sandbox, elapsed_ms=elapsed_ms
+                )
 
         return wrapper
 

@@ -13,6 +13,7 @@ def _reset():
     root = logging.getLogger(obs.ROOT_LOGGER_NAME)
     for h in root.handlers[:]:
         root.removeHandler(h)
+        h.close()  # release file descriptors (a leaked FileHandler can lock tmp files)
 
 
 def test_configure_uses_stderr_never_stdout(clean_env):
