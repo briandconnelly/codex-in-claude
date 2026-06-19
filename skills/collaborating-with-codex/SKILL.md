@@ -146,7 +146,7 @@ If a tool call fails with a transport error (e.g. `Connection closed`, or
 
    Pipe your question (or a `git diff` you gathered yourself) in on stdin. **This
    bypasses everything the plugin adds** — no diff gathering, no secret redaction, no
-   input-byte bound, and no structured envelope. So:
+   input-byte bounding, and no structured envelope. So:
 
    - Gather and sanitize any diff/context yourself before sending it (don't pipe in
      files full of live credentials).

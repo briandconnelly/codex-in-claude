@@ -158,7 +158,7 @@ If a tool call fails with a transport error (`Connection closed`, or
 `codex-in-claude` MCP server and confirm readiness with `codex_status` (or `/codex:status`) before
 resuming. While it is down you can fall back to the `codex` CLI directly for a read-only consult or
 review — `codex exec --sandbox read-only --skip-git-repo-check -` (prompt on stdin) — but this
-bypasses the plugin's diff gathering, secret redaction, input-byte bound, and structured envelope, so
+bypasses the plugin's diff gathering, secret redaction, input-byte bounding, and structured envelope, so
 sanitize input yourself and prefer restoring the server. See the `collaborating-with-codex` skill for
 the full fallback guidance.
 
