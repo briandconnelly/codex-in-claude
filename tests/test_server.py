@@ -1480,6 +1480,22 @@ async def test_job_result_detail_controls_raw_text(monkeypatch, clean_env, tmp_p
     full = await server.codex_job_result("job-abc", workspace_root=str(tmp_path), detail="full")
     assert full["raw_response"]["text"] == "RAW MODEL OUTPUT"
 
+    # codex_job_consume_result shares the same trimming path (consume=True); assert it
+    # honors detail too so a regression there can't slip through (Copilot review).
+    store3 = _FakeStore(record=_ok_record("done"), result_json=copy.deepcopy(_stored()))
+    monkeypatch.setattr(server.config, "job_store", lambda: store3)
+    consumed = await server.codex_job_consume_result("job-abc", workspace_root=str(tmp_path))
+    assert consumed["ok"] is True
+    assert consumed["raw_response"]["text"] is None  # summary default on consume
+    assert store3.consumed == ["job-abc"]  # the record was actually consumed
+
+    store4 = _FakeStore(record=_ok_record("done"), result_json=copy.deepcopy(_stored()))
+    monkeypatch.setattr(server.config, "job_store", lambda: store4)
+    consumed_full = await server.codex_job_consume_result(
+        "job-abc", workspace_root=str(tmp_path), detail="full"
+    )
+    assert consumed_full["raw_response"]["text"] == "RAW MODEL OUTPUT"
+
 
 # --- async consult / review (#41) --------------------------------------------
 async def test_consult_async_returns_job_id(monkeypatch, clean_env, tmp_path):
