@@ -1206,6 +1206,16 @@ def test_capabilities_lists_async_readonly_tools():
     assert {"codex_consult_async", "codex_review_changes_async"} <= names
 
 
+def test_review_tools_advertise_isolation_param_and_error():
+    # Both review tools accept `isolation` and can return unsupported_isolation, so
+    # capabilities must advertise the param and the code for each.
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    for name in ("codex_review_changes", "codex_review_changes_async"):
+        assert "isolation" in by_name[name]["key_optional_params"], name
+        assert "unsupported_isolation" in by_name[name]["error_codes"], name
+
+
 def test_capabilities_lists_delegate_dry_run():
     caps = server.codex_capabilities()
     assert "codex_delegate_dry_run" in caps["free_tools"]

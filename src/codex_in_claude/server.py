@@ -336,7 +336,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_review_changes": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("input_too_large", "context_too_large"),
+        ("unsupported_isolation", "input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_review_changes_async": _err_codes(
@@ -430,7 +430,15 @@ def codex_capabilities() -> dict:
                 cost="active",
                 use_when="You want Codex to review your git changes (working_tree, "
                 "branch, or commit) and return structured findings.",
-                key_optional_params=["scope", "base", "commit", "paths", "workspace_root", "model"],
+                key_optional_params=[
+                    "scope",
+                    "base",
+                    "commit",
+                    "paths",
+                    "workspace_root",
+                    "model",
+                    "isolation",
+                ],
                 returns="A result envelope with verdict, findings, and a context summary.",
             ),
             ToolCapability(
@@ -438,7 +446,15 @@ def codex_capabilities() -> dict:
                 cost="active",
                 use_when="Same as codex_review_changes, but the review may run long and "
                 "you want a job_id immediately instead of blocking.",
-                key_optional_params=["scope", "base", "commit", "paths", "workspace_root", "model"],
+                key_optional_params=[
+                    "scope",
+                    "base",
+                    "commit",
+                    "paths",
+                    "workspace_root",
+                    "model",
+                    "isolation",
+                ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the review envelope with codex_job_result.",
             ),
