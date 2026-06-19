@@ -52,6 +52,12 @@ an agent can hand work to Codex and get back a structured, bounded result.
 
 ### Security
 
+- **Redact secrets from delegate diffs.** `codex_delegate`/`codex_delegate_async` now run the
+  proposed worktree diff through the same secret redaction as review diffs before returning it:
+  secret-looking file hunks (e.g. `.env`, `*.pem`, `id_rsa`) are dropped (header kept), inline
+  secret values become `[redacted: secret value]`, and the redacted paths are reported in
+  `meta.redacted_paths`. The `context_summary` diffstat still reflects the full pre-redaction change.
+  ([#57](https://github.com/briandconnelly/codex-in-claude/issues/57))
 - **Harden job recovery against PID reuse after a restart.** Background-job liveness no longer trusts
   a persisted PID via a bare `kill(0)` probe after the server restarts. Each worker now holds an
   exclusive advisory lock on `<job_dir>/worker.lock` for its lifetime, and the store uses that lock as

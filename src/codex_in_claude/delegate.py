@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from codex_in_claude import codex, config, normalize, prompts
-from codex_in_claude._core import worktree
+from codex_in_claude._core import redaction, worktree
 from codex_in_claude.schemas import (
     ContextSummary,
     DelegateResult,
@@ -145,6 +145,14 @@ async def run_delegate(
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
     else:
+        # Apply the same secret redaction the review path uses (gitdiff.gather_diff)
+        # before the diff leaves this process: drop secret-looking file hunks and
+        # replace inline secret values, recording the paths on meta (#57). Redact the
+        # full diff first, THEN bound, so the byte cap applies to sanitized text and a
+        # secret can't survive inside a truncated fragment. context_summary above is
+        # intentionally computed on the pre-redaction diff, mirroring the review path's
+        # pre-redaction numstat, so it still reflects the full change.
+        diff, meta.redacted_paths = redaction.redact(diff)
         # A cap of None (sync default, or a legacy job spec lacking the key) — or an
         # invalid one from a corrupt spec (non-int, zero, negative) — falls back to
         # the configured, floored default rather than slicing with a bad bound.
