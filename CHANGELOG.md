@@ -39,6 +39,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- Documented what to do when the MCP server is unavailable mid-session. The
+  `collaborating-with-codex` skill and the README now explain how to recognize a transport
+  drop (`Connection closed` / `No such tool available`), how to recover (relaunch the server,
+  confirm with `codex_status`), and an interim read-only
+  `codex exec --sandbox read-only --skip-git-repo-check -` fallback — with the explicit caveat that
+  it bypasses the plugin's diff gathering, secret
+  redaction, input-byte bounding, and structured envelope, so it is a stopgap, not a replacement.
+  Docs-only; `FINGERPRINT` unchanged. (#43)
 - Documented that `codex_review_changes` and `codex_consult` are **static** reviews, not a verify
   mode: they run under the read-only sandbox, which blocks the writes a test/build/lint run
   typically needs (a writable cache/temp), so Codex can't rely on running the project's checks to

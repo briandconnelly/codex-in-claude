@@ -185,6 +185,13 @@ Run `/codex:status` first — it's free (no model call) and diagnoses most setup
 | `meta.workspace_warning` in results | Server fell back to its own launch directory | Run from the target repo, or pass `workspace_root` (see [`docs/REFERENCE.md`](docs/REFERENCE.md#workspace-selection)) |
 | `codex_delegate` fails needing a commit | The temp worktree is seeded from `HEAD` | Make at least one commit first |
 | `codex_rate_limited` error | Account hit a usage/rate limit | Back off for `retry_after_ms`, then retry |
+| `Connection closed` / `No such tool available: mcp__codex-in-claude__*` | The stdio MCP server is down | Relaunch the `codex-in-claude` server and confirm with `codex_status`; see the fallback note below |
+
+If the MCP server is down, you can fall back to the `codex` CLI directly for a read-only consult or
+review — `codex exec --sandbox read-only --skip-git-repo-check -` (prompt on stdin) — but this
+bypasses the plugin's diff gathering, secret redaction, input-byte bounding, and structured envelope,
+so sanitize input yourself and prefer restoring the server. See the `collaborating-with-codex` skill
+for the full fallback guidance.
 
 ## Local development
 
