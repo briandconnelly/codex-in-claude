@@ -105,12 +105,14 @@ jobs:
           if-no-files-found: error
 
   # Create the tag BEFORE publishing so a PyPI release (irreversible) never
-  # exists without its git tag. For tag-push events the tag already exists and
-  # this no-ops; for workflow_dispatch it creates the tag from the dispatch SHA.
-  # A tag pushed with GITHUB_TOKEN does not retrigger this workflow.
+  # exists without its git tag. Only workflow_dispatch reaches here: on a
+  # tag-push the tag already exists, so this job is skipped and no contents:write
+  # token is minted on that path. A tag pushed with GITHUB_TOKEN does not
+  # retrigger this workflow.
   create-tag:
     name: Create tag
     needs: [release-metadata, build]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -137,7 +139,12 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: create-tag
+    # create-tag is skipped on tag-push (the tag already exists) and required on
+    # workflow_dispatch. Proceed when the build succeeded and create-tag did not
+    # fail (success or skipped); !cancelled() lets this override the default
+    # skip-on-skipped-dependency behavior without running on a cancelled run.
+    needs: [build, create-tag]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.create-tag.result != 'failure' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

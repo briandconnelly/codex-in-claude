@@ -192,15 +192,12 @@ Expected: `lockstep ok: 0.1.0`
 
 - [ ] **Step 3: Run the smoke against a deliberately broken value (should fail)**
 
-Run:
+Run (portable — feeds a deliberately mismatched `.mcp.json` line to the same anchored grep,
+no absolute paths, working tree untouched):
 ```bash
-( tmp="$(mktemp -d)"; cp -r .mcp.json "$tmp/"; \
-  sed 's/@v0\.1\.0/@v9.9.9/' .mcp.json > "$tmp/.mcp.json.bad"; \
-  cd "$tmp"; cp /Users/bdc/projects/codex-in-claude/pyproject.toml .; \
-  cp /Users/bdc/projects/codex-in-claude/.claude-plugin -r . 2>/dev/null || true; \
-  mv .mcp.json.bad .mcp.json; \
-  version="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"; \
-  grep -Fq "@v${version}\"," .mcp.json && echo "UNEXPECTED PASS" || echo "correctly failed on drift" )
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+sed 's/@v[0-9.]*"/@v9.9.9"/' .mcp.json \
+  | grep -Fq "@v${version}\"," && echo "UNEXPECTED PASS" || echo "correctly failed on drift"
 ```
 Expected: `correctly failed on drift`
 

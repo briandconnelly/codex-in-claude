@@ -46,7 +46,8 @@ agent-visible surface changes (tool names, params, error codes, value enums). Ke
 ## Release coordination
 
 Bump together: `pyproject.toml` version, `.claude-plugin/plugin.json`, the `@vX.Y.Z` tag in
-`.mcp.json`, `README.md`, `CHANGELOG.md`, and `FINGERPRINT` when the surface changed.
+`.mcp.json`, `CHANGELOG.md`, and `FINGERPRINT` when the surface changed. (`README.md` carries no
+pinned version literal — it uses a dynamic PyPI badge and marketplace install — so it needs no bump.)
 See `docs/RELEASING.md` for the full release procedure and the one-time PyPI/GitHub setup.
 
 ## Python support
