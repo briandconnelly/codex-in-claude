@@ -49,3 +49,14 @@ an agent can hand work to Codex and get back a structured, bounded result.
   `/codex:delegate-async`, and `/codex:dry-run`.
 - **`collaborating-with-codex` guidance skill** for agents working alongside this plugin.
 - Result fingerprint: `codex-in-claude/0.1/schema-1`.
+
+### Security
+
+- **Harden job recovery against PID reuse after a restart.** Background-job liveness no longer trusts
+  a persisted PID via a bare `kill(0)` probe after the server restarts. Each worker now holds an
+  exclusive advisory lock on `<job_dir>/worker.lock` for its lifetime, and the store uses that lock as
+  the authority for liveness — a PID reused by an unrelated process cannot hold it, so
+  `codex_job_status`, `codex_job_cancel`, and deadline reaping never report or signal an unrelated
+  process. An unowned, unverifiable post-restart record is treated as not-running rather than signaled,
+  and process-group signals are sent only to a verified group leader. Requires a local filesystem
+  (POSIX `fcntl`). ([#55](https://github.com/briandconnelly/codex-in-claude/issues/55))

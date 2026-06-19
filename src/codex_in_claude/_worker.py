@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -30,6 +31,30 @@ from codex_in_claude.schemas import (
     Tier,
     workspace_warning_for,
 )
+
+# Open fds whose flock keeps each per-job lock held for this process's whole life;
+# the OS releases them on exit. A list (not a `global` rebind) so the JobStore can
+# verify THIS worker is alive independently of the PID.
+_held_locks: list[int] = []
+
+
+def _hold_job_lock(job_dir: Path) -> None:
+    """Take an exclusive advisory lock on ``<job_dir>/worker.lock`` and keep it for
+    this process's lifetime. PID reuse after a server restart can't hold this job's
+    lock, so the JobStore can tell our worker apart from an unrelated process on the
+    same (reused) PID. Best-effort: a platform without ``fcntl`` simply skips it."""
+    try:
+        import fcntl  # noqa: PLC0415 - platform-guarded lazy import (POSIX only)
+    except ImportError:  # pragma: no cover - non-POSIX
+        return
+    with contextlib.suppress(OSError):
+        fd = os.open(str(job_dir / "worker.lock"), os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:  # pragma: no cover - unexpected contention on our own job lock
+            os.close(fd)
+            return
+        _held_locks.append(fd)  # kept open == lock held until this process exits
 
 
 def _meta_from_spec(spec: dict) -> Meta:
@@ -125,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         return 2
     job_dir = Path(args[0])
+    _hold_job_lock(job_dir)
     spec = json.loads((job_dir / "spec.json").read_text())
     try:
         meta = _meta_from_spec(spec)

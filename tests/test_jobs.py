@@ -240,7 +240,7 @@ def test_cancel_preserves_result_completed_during_grace(tmp_path, monkeypatch):
     job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
     jd = store._job_dir(cwd, job_id)
 
-    def fake_terminate(pid, grace_seconds):
+    def fake_terminate(pid, grace_seconds, **kwargs):
         # Simulate the worker completing (writing result.json) before we kill it.
         (jd / "result.json").write_text('{"ok": true, "tool": "t"}')
         jobs._kill_pid_tree(pid)
@@ -259,7 +259,7 @@ def test_cancel_returns_none_if_record_removed_during_grace(tmp_path, monkeypatc
     job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
     jd = store._job_dir(cwd, job_id)
 
-    def fake_terminate(pid, grace_seconds):
+    def fake_terminate(pid, grace_seconds, **kwargs):
         jobs._kill_pid_tree(pid)
         store._rmtree(jd)  # record removed mid-cancel
 
@@ -425,6 +425,129 @@ def test_is_running_none_and_not_our_child():
 
 def test_kill_pid_tree_none_is_noop():
     jobs._kill_pid_tree(None)  # must not raise
+
+
+# --- restart / PID-reuse hardening (#55) -------------------------------------
+def _persist_job(store, cwd, job_id, *, pid, owner, **over):
+    jd = store._job_dir(cwd, job_id)
+    jd.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "job_id": job_id,
+        "kind": "k",
+        "pid": pid,
+        "owner": owner,
+        "started_epoch": time.time(),
+        "started_at": "x",
+        "deadline_epoch": time.time() + 999,
+        "completed_epoch": None,
+        "terminal_status": None,
+        "extra": {},
+    }
+    meta.update(over)
+    store._write_meta(jd, meta)
+    return jd, store._read_meta(jd)
+
+
+def test_unowned_live_pid_is_not_running(tmp_path):
+    # Core #55 fix: after a restart, a persisted PID this server instance did not start
+    # (unowned) and that holds no per-job worker lock must NOT be treated as the running
+    # worker — even when that PID is alive (here, our own test process). The old kill(0)
+    # fallback reported it running, which let cancel/timeout signal an unrelated process.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    jd, meta = _persist_job(store, cwd, "jid", pid=os.getpid(), owner="other-instance")
+    assert store._job_running(jd, meta) is False
+
+
+def test_unowned_live_pid_status_does_not_signal(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    _persist_job(store, cwd, "jid", pid=os.getpid(), owner="other-instance")
+    calls = []
+    monkeypatch.setattr(jobs, "_terminate_pid_tree", lambda *a, **k: calls.append(a))
+    st = store.status(cwd, "jid")
+    assert st["status"] != "running"  # not reported as the running worker
+    assert calls == []  # and never signaled
+
+
+def test_owned_child_no_lock_is_running(tmp_path):
+    # A job THIS instance started (owned) is its own child; with no lock file yet the
+    # existence probe is trustworthy, so a live owned child is reported running.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    jd = store._job_dir(cwd, job_id)
+    meta = store._read_meta(jd)
+    try:
+        assert meta.get("owner")  # start() stamps the owner token
+        assert store._job_running(jd, meta) is True
+    finally:
+        jobs._kill_pid_tree(meta.get("pid"))
+
+
+def test_worker_lock_held_states(tmp_path):
+    import fcntl
+
+    lock = tmp_path / "worker.lock"
+    assert jobs._worker_lock_held(lock) is None  # missing file -> indeterminate
+    lock.write_bytes(b"")
+    assert jobs._worker_lock_held(lock) is False  # created but unheld -> free
+    fd = os.open(str(lock), os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert jobs._worker_lock_held(lock) is True  # held by a live fd -> alive
+    finally:
+        os.close(fd)
+    assert jobs._worker_lock_held(lock) is False  # released after close -> free
+
+
+def test_terminate_does_not_signal_when_predicate_reports_dead(monkeypatch):
+    # The grace/escalation path must stay gated on verified liveness: if the worker
+    # is no longer (lock-)alive, neither SIGTERM nor SIGKILL is sent — so a PID reused
+    # after the worker exits during the grace window is never signaled.
+    calls = []
+    monkeypatch.setattr(jobs, "_signal_proc", lambda *a: calls.append(("term", *a)))
+    monkeypatch.setattr(jobs, "_kill_pid_tree", lambda *a: calls.append(("kill", *a)))
+    jobs._terminate_pid_tree(424242, grace_seconds=0.5, is_alive=lambda: False)
+    assert calls == []
+
+
+def test_timeout_grace_completion_prefers_result(tmp_path, monkeypatch):
+    # If the worker completes during the grace window (writes result.json), the
+    # deadline path must surface that result as "done", not mask it as "timeout".
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    jd = store._job_dir(cwd, job_id)
+    meta = store._read_meta(jd)
+    pid = meta["pid"]
+    try:
+        meta["deadline_epoch"] = time.time() - 1  # already overran
+        store._write_meta(jd, meta)
+        (jd / "result.json").write_text('{"ok": true, "tool": "t"}')
+        monkeypatch.setattr(jobs, "_terminate_pid_tree", lambda *a, **k: None)
+        st = store.status(cwd, job_id)
+        assert st["status"] == "done"  # result preserved, not a timeout
+    finally:
+        jobs._kill_pid_tree(pid)
+
+
+def test_lock_held_marks_unowned_job_running(tmp_path):
+    # Even unowned (post-restart), a job whose worker still holds the per-job lock is
+    # positively verified as alive and IS running/signalable.
+    import fcntl
+
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    jd, meta = _persist_job(store, cwd, "jid", pid=os.getpid(), owner="other-instance")
+    lock = jd / "worker.lock"
+    lock.write_bytes(b"")
+    fd = os.open(str(lock), os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert store._job_running(jd, meta) is True
+    finally:
+        os.close(fd)
 
 
 def test_read_meta_and_envelope_missing(tmp_path):
