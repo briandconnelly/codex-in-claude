@@ -22,8 +22,10 @@ No PyPI API token is stored anywhere — publishing uses short-lived OIDC creden
 ## Cutting a release
 
 1. On a branch, bump the version in lockstep across `pyproject.toml`, `.claude-plugin/plugin.json`,
-   and `.mcp.json` (the `@vX.Y.Z` tag). The `release-lockstep` CI job verifies these three agree.
-   Bump `FINGERPRINT` in `src/codex_in_claude/schemas.py` if the agent-visible surface changed.
+   and `.mcp.json` (the `codex-in-claude==X.Y.Z` PyPI pin). The `release-lockstep` CI job verifies
+   these three agree. The pin references the release being cut, so it only resolves once that version
+   is on PyPI (after the tag publishes) — same as the previous git-tag pin. Bump `FINGERPRINT` in
+   `src/codex_in_claude/schemas.py` if the agent-visible surface changed.
 2. Move the `## [Unreleased]` entries in `CHANGELOG.md` into a new dated section
    `## [X.Y.Z] - YYYY-MM-DD`, and leave a fresh empty `## [Unreleased]` on top.
 3. Open a PR, get CI green, and merge to `main`.

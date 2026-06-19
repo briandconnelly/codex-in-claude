@@ -90,8 +90,11 @@ def test_mcp_json_launches_pinned_release():
     mcp = _load_json(".mcp.json")
     args = mcp["mcpServers"]["codex-in-claude"]["args"]
     assert "codex-in-claude-mcp" in args
-    # Pinned to a versioned git tag for deliberate updates.
-    assert any("@v" in a for a in args)
+    # Installed from PyPI, pinned to this exact version for deliberate updates — and
+    # kept in lockstep with pyproject (mirrors the release-lockstep CI guard).
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    version = pyproject["project"]["version"]
+    assert f"codex-in-claude=={version}" in args
 
 
 def test_pyproject_version_matches_package():

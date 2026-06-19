@@ -15,7 +15,7 @@ Closes #
       `FINGERPRINT` was bumped and `CHANGELOG.md` updated.
 - [ ] If the CLI contract changed, `cli_contract.py` and `COMPATIBILITY.md` were updated.
 - [ ] On a release: version bumped together across `pyproject.toml`, `.claude-plugin/plugin.json`,
-      the `@vX.Y.Z` tag in `.mcp.json`, `README.md`, and `CHANGELOG.md`.
+      the `codex-in-claude==X.Y.Z` pin in `.mcp.json`, and `CHANGELOG.md`.
 
 ## Notes for reviewers
 

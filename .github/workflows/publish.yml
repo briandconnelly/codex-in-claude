@@ -62,8 +62,9 @@ jobs:
 
           grep -Fq "version = \"${version}\"" pyproject.toml
           grep -Fq "\"version\": \"${version}\"" .claude-plugin/plugin.json
-          # Anchor on the trailing quote+comma so 0.1.1 does NOT match @v0.1.10.
-          grep -Fq "@v${version}\"," .mcp.json
+          # .mcp.json launches the published PyPI release, pinned to this exact version.
+          # Anchor on the trailing quote+comma so 0.1.1 does NOT match ==0.1.10.
+          grep -Fq "codex-in-claude==${version}\"," .mcp.json
           grep -Fq "## [${version}]" CHANGELOG.md
 
           {
