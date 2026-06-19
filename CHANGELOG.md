@@ -40,6 +40,13 @@ an agent can hand work to Codex and get back a structured, bounded result.
   prose `repair` string. A rate-limited Codex run surfaces as `codex_rate_limited` with a populated
   `retry_after_ms` so callers back off deterministically. Fixed-value params (`scope`, `isolation`)
   advertise their choices as schema enums.
+- **Detail levels for compact envelopes.** `codex_consult`, `codex_review_changes`, `codex_delegate`,
+  and async result retrieval (`codex_job_result`, `codex_job_consume_result`) accept
+  `detail="summary"` (the default) or `detail="full"`. The summary default omits the often-large,
+  duplicative raw model text (`raw_response.text`) — the structured fields stay authoritative and the
+  parser shape is stable (`raw_response` is still present with its `text` nulled). `detail="full"`
+  returns the complete raw output for diagnostics. An invalid value is rejected as
+  `unsupported_detail`. ([#56](https://github.com/briandconnelly/codex-in-claude/issues/56))
 - **Safety boundaries.** Secret redaction, input-byte bounding (`CODEX_IN_CLAUDE_MAX_INPUT_BYTES`), an
   unexpanded-env-placeholder pre-flight check, and a per-tool boundary that converts an unexpected
   exception into an `internal_error` envelope instead of taking down the session. Diagnostic logging
@@ -54,13 +61,6 @@ an agent can hand work to Codex and get back a structured, bounded result.
 - **Slash commands.** `/codex:status`, `/codex:consult`, `/codex:review`, `/codex:delegate`,
   `/codex:delegate-async`, and `/codex:dry-run`.
 - **`collaborating-with-codex` guidance skill** for agents working alongside this plugin.
-- **Detail levels for compact envelopes.** `codex_consult`, `codex_review_changes`, `codex_delegate`,
-  and async result retrieval (`codex_job_result`, `codex_job_consume_result`) accept
-  `detail="summary"` (the new default) or `detail="full"`. The summary default omits the often-large,
-  duplicative raw model text (`raw_response.text`) — the structured fields stay authoritative and the
-  parser shape is unchanged (`raw_response` is still present with its `text` nulled). `detail="full"`
-  returns the complete raw output for diagnostics. An invalid value is rejected as
-  `unsupported_detail`. ([#56](https://github.com/briandconnelly/codex-in-claude/issues/56))
 - Result fingerprint: `codex-in-claude/0.1/schema-3`.
 
 ### Security
