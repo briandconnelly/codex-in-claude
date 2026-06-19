@@ -1348,8 +1348,137 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_2():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-2"
+def test_fingerprint_is_schema_3():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-3"
+
+
+# --- detail levels (#56) -----------------------------------------------------
+_CONSULT_PAYLOAD = {"summary": "Looks fine", "findings": [], "questions": ["q1"]}
+
+
+async def test_consult_default_detail_omits_raw_text(monkeypatch, clean_env, tmp_path):
+    # #56: the default (summary) envelope omits the large, duplicative raw model text
+    # but keeps the authoritative structured fields and a stable parser shape.
+    async def fake(*a, **k):
+        return _fake_result(json.dumps(_CONSULT_PAYLOAD))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_consult("ok?", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["summary"] == "Looks fine"
+    assert res["questions"] == ["q1"]
+    assert res["raw_response"]["text"] is None  # omitted by default
+
+
+async def test_consult_full_detail_includes_raw_text(monkeypatch, clean_env, tmp_path):
+    async def fake(*a, **k):
+        return _fake_result(json.dumps(_CONSULT_PAYLOAD))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_consult("ok?", workspace_root=str(tmp_path), detail="full")
+    assert res["ok"] is True
+    assert res["raw_response"]["text"] == json.dumps(_CONSULT_PAYLOAD)
+
+
+async def test_consult_bad_detail(clean_env, tmp_path):
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), detail="bogus")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_detail"
+    assert res["error"]["allowed_values"] == ["summary", "full"]
+
+
+async def test_review_bad_detail(clean_env, tmp_path):
+    res = await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), detail="bogus"
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_detail"
+
+
+async def test_delegate_bad_detail(clean_env, tmp_path):
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path), detail="bogus")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_detail"
+
+
+async def test_job_result_bad_detail(monkeypatch, clean_env, tmp_path):
+    store = _FakeStore(record=_ok_record("done"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path), detail="bogus")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_detail"
+
+
+async def test_review_default_detail_omits_raw_text(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    payload = {"summary": "ok", "verdict": "pass", "confidence": "high"}
+
+    async def fake(*a, **k):
+        return _fake_result(json.dumps(payload))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["verdict"] == "pass"
+    assert res["raw_response"]["text"] is None
+    full = await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), detail="full"
+    )
+    assert full["raw_response"]["text"] == json.dumps(payload)
+
+
+async def test_delegate_default_detail_omits_raw_text(monkeypatch, clean_env, tmp_path):
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "diff --git a/x b/x\n+y\n")
+
+    async def fake(*a, **k):
+        return _fake_result("Implemented the change.")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_delegate("do x", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["summary"] == "Implemented the change."
+    assert res["raw_response"]["text"] is None
+    full = await server.codex_delegate("do x", workspace_root=str(tmp_path), detail="full")
+    assert full["raw_response"]["text"] == "Implemented the change."
+
+
+async def test_job_result_detail_controls_raw_text(monkeypatch, clean_env, tmp_path):
+    # #56: async result retrieval applies detail too — the worker stores the full
+    # envelope, and codex_job_result trims raw_response.text unless detail="full".
+    import copy
+
+    def _stored():
+        meta = server._base_meta(
+            "/repo",
+            "param",
+            tier="propose",
+            sandbox="workspace-write",
+            isolation="inherit",
+            model=None,
+            timeout_seconds=1800,
+        ).model_dump(mode="json")
+        return {
+            "ok": True,
+            "tool": "codex_delegate",
+            "summary": "did it",
+            "diff": "d",
+            "raw_response": {"text": "RAW MODEL OUTPUT", "session_id": "s1", "model": "m"},
+            "meta": meta,
+        }
+
+    store = _FakeStore(record=_ok_record("done"), result_json=copy.deepcopy(_stored()))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["raw_response"]["text"] is None  # summary default
+
+    store2 = _FakeStore(record=_ok_record("done"), result_json=copy.deepcopy(_stored()))
+    monkeypatch.setattr(server.config, "job_store", lambda: store2)
+    full = await server.codex_job_result("job-abc", workspace_root=str(tmp_path), detail="full")
+    assert full["raw_response"]["text"] == "RAW MODEL OUTPUT"
 
 
 # --- async consult / review (#41) --------------------------------------------

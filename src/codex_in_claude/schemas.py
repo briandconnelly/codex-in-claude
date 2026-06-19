@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-2"
+FINGERPRINT = "codex-in-claude/0.1/schema-3"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -52,6 +52,24 @@ def workspace_warning_for(source: str | None, cwd: str) -> str | None:
     return None
 
 
+def apply_detail(envelope: dict, detail: str) -> dict:
+    """Trim a SUCCESS envelope to the requested detail level (#56).
+
+    `detail="full"` returns the envelope unchanged — the full raw model output and
+    complete metadata, for diagnostics. `detail="summary"` (the default) omits the
+    often-large, duplicative raw model text (`raw_response.text`); the structured
+    fields (`summary`/`findings`/`verdict`/`diff`/…) stay authoritative and the
+    parser shape is unchanged (`raw_response` remains present with its `text` nulled,
+    and `session_id`/`model` are still echoed there and in `meta`). Error envelopes
+    (`ok` != True) are returned unchanged. Mutates and returns the same dict."""
+    if detail == "full" or envelope.get("ok") is not True:
+        return envelope
+    raw = envelope.get("raw_response")
+    if isinstance(raw, dict):
+        raw["text"] = None
+    return envelope
+
+
 ErrorCode = Literal[
     # Setup / auth
     "codex_not_found",
@@ -61,6 +79,7 @@ ErrorCode = Literal[
     "unsupported_tier",
     "unsupported_sandbox",
     "unsupported_isolation",
+    "unsupported_detail",
     "invalid_scope",
     "invalid_base",
     "invalid_commit",

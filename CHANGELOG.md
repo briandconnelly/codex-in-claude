@@ -52,7 +52,14 @@ an agent can hand work to Codex and get back a structured, bounded result.
 - **Slash commands.** `/codex:status`, `/codex:consult`, `/codex:review`, `/codex:delegate`,
   `/codex:delegate-async`, and `/codex:dry-run`.
 - **`collaborating-with-codex` guidance skill** for agents working alongside this plugin.
-- Result fingerprint: `codex-in-claude/0.1/schema-2`.
+- **Detail levels for compact envelopes.** `codex_consult`, `codex_review_changes`, `codex_delegate`,
+  and async result retrieval (`codex_job_result`, `codex_job_consume_result`) accept
+  `detail="summary"` (the new default) or `detail="full"`. The summary default omits the often-large,
+  duplicative raw model text (`raw_response.text`) — the structured fields stay authoritative and the
+  parser shape is unchanged (`raw_response` is still present with its `text` nulled). `detail="full"`
+  returns the complete raw output for diagnostics. An invalid value is rejected as
+  `unsupported_detail`. ([#56](https://github.com/briandconnelly/codex-in-claude/issues/56))
+- Result fingerprint: `codex-in-claude/0.1/schema-3`.
 
 ### Security
 

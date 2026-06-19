@@ -34,6 +34,20 @@ to gathered diffs. Inline matches become `[redacted: secret value]`. This is **b
 defense-in-depth, not a guarantee**: it covers content the plugin itself surfaces, not whatever Codex
 may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
 
+### Detail levels
+
+`codex_consult`, `codex_review_changes`, `codex_delegate`, and async result retrieval
+(`codex_job_result`, `codex_job_consume_result`) take a `detail` parameter:
+
+- `detail="summary"` (**default**) — omits the raw model text (`raw_response.text`), which usually
+  duplicates content already in `summary`/`findings`/`diff`. The structured fields remain
+  authoritative, and the parser shape is unchanged: `raw_response` is still present with `text` set to
+  `null` (its `session_id`/`model` — also in `meta` — are kept).
+- `detail="full"` — includes the complete raw model output for diagnostics.
+
+An unrecognized value is rejected with `unsupported_detail`. For async work the worker always stores
+the full envelope, so a later `codex_job_result(..., detail="full")` can still recover the raw text.
+
 ## Workspace selection
 
 When calling the MCP tools directly, pass `workspace_root` as an absolute path to the repository you

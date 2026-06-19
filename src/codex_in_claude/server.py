@@ -11,7 +11,7 @@ import asyncio
 import functools
 import sys
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, get_args
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
@@ -49,6 +49,7 @@ from codex_in_claude.schemas import (
     ContextSummary,
     DelegateDryRunResult,
     DelegateResult,
+    Detail,
     DryRunResult,
     ErrorCode,
     ErrorInfo,
@@ -69,6 +70,7 @@ from codex_in_claude.schemas import (
     ToolCapability,
     Workspace,
     WorktreePlan,
+    apply_detail,
     workspace_warning_for,
 )
 
@@ -173,6 +175,21 @@ def _resolve_isolation(value: str | None) -> tuple[str | None, ErrorInfo | None]
             allowed_values=list(config.VALID_ISOLATIONS),
         )
     return isolation, None
+
+
+def _resolve_detail(value: str | None) -> tuple[str | None, ErrorInfo | None]:
+    """Validate the `detail` param (#56). Returns (detail, None) or (None, error)."""
+    detail = value or "summary"
+    valid = get_args(Detail)
+    if detail not in valid:
+        return None, ErrorInfo(
+            code="unsupported_detail",
+            message=f"unsupported detail: {detail}",
+            repair=f"Use one of: {', '.join(valid)}.",
+            offending_param="detail",
+            allowed_values=list(valid),
+        )
+    return detail, None
 
 
 def _placeholder_error(meta: Meta) -> dict | None:
@@ -377,6 +394,7 @@ _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
 _JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
 _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
+    "unsupported_detail",
     "job_running",
     "job_cancelled",
     "job_timeout",
@@ -397,7 +415,7 @@ def _err_codes(*groups: tuple[ErrorCode, ...]) -> list[ErrorCode]:
 _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_consult": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        ("unsupported_isolation", "unsupported_detail", "input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_consult_async": _err_codes(
@@ -408,7 +426,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_review_changes": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        ("unsupported_isolation", "unsupported_detail", "input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_review_changes_async": _err_codes(
@@ -419,7 +437,13 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     ),
     "codex_delegate": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "input_too_large", "not_a_git_repo", "worktree_error"),
+        (
+            "unsupported_isolation",
+            "unsupported_detail",
+            "input_too_large",
+            "not_a_git_repo",
+            "worktree_error",
+        ),
         _RUNTIME_ERRORS,
     ),
     "codex_delegate_async": _err_codes(
@@ -493,8 +517,15 @@ def codex_capabilities() -> dict:
                 use_when="You want a read-only second opinion or answer from Codex "
                 "(a different model) on a question, design, or diff.",
                 required_params=["question"],
-                key_optional_params=["workspace_root", "extra_context", "model", "isolation"],
-                returns="A result envelope with summary, optional findings, and meta.",
+                key_optional_params=[
+                    "workspace_root",
+                    "extra_context",
+                    "model",
+                    "isolation",
+                    "detail",
+                ],
+                returns="A result envelope with summary, optional findings, and meta. "
+                "detail='summary' (default) omits raw_response.text; detail='full' includes it.",
             ),
             ToolCapability(
                 name="codex_consult_async",
@@ -520,8 +551,10 @@ def codex_capabilities() -> dict:
                     "extra_context",
                     "model",
                     "isolation",
+                    "detail",
                 ],
-                returns="A result envelope with verdict, findings, and a context summary.",
+                returns="A result envelope with verdict, findings, and a context summary. "
+                "detail='summary' (default) omits raw_response.text; detail='full' includes it.",
             ),
             ToolCapability(
                 name="codex_review_changes_async",
@@ -548,9 +581,10 @@ def codex_capabilities() -> dict:
                 "reviewable diff WITHOUT touching your working tree (it works in a "
                 "throwaway git worktree).",
                 required_params=["task"],
-                key_optional_params=["workspace_root", "model", "isolation"],
+                key_optional_params=["workspace_root", "model", "isolation", "detail"],
                 returns="A result envelope whose `diff` holds Codex's proposed, "
-                "unapplied changes plus a summary.",
+                "unapplied changes plus a summary. detail='summary' (default) omits "
+                "raw_response.text; detail='full' includes it.",
             ),
             ToolCapability(
                 name="codex_delegate_async",
@@ -575,16 +609,17 @@ def codex_capabilities() -> dict:
                 cost="free",
                 use_when="When codex_job_status reports result_available=true.",
                 required_params=["job_id"],
-                key_optional_params=["workspace_root"],
+                key_optional_params=["workspace_root", "detail"],
                 returns="The finished job's envelope (delegate diff, consult answer, or "
-                "review verdict — branch on `tool`), with meta.job_id set.",
+                "review verdict — branch on `tool`), with meta.job_id set. detail='summary' "
+                "(default) omits raw_response.text; detail='full' includes it.",
             ),
             ToolCapability(
                 name="codex_job_consume_result",
                 cost="free",
                 use_when="To fetch a finished job's result and delete the stored record.",
                 required_params=["job_id"],
-                key_optional_params=["workspace_root"],
+                key_optional_params=["workspace_root", "detail"],
                 returns="The same envelope as codex_job_result; removes completed state.",
             ),
             ToolCapability(
@@ -683,6 +718,7 @@ async def codex_consult(
     model: str | None = None,
     isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
+    detail: Detail = "summary",
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
@@ -711,6 +747,20 @@ async def codex_consult(
         )
         return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
     assert isolation_v is not None  # narrowed: iso_err was None
+
+    detail_v, detail_err = _resolve_detail(detail)
+    if detail_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=model or d.model,
+            timeout_seconds=timeout,
+        )
+        return ErrorResult(error=detail_err, meta=meta).model_dump(mode="json")
+    assert detail_v is not None
 
     roots = await _roots_from_ctx(ctx)
     res = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
@@ -762,15 +812,18 @@ async def codex_consult(
             meta=meta,
         ).model_dump(mode="json")
 
-    return await orchestration.run_consult(
-        question,
-        cwd,
-        meta,
-        sandbox="read-only",
-        isolation=isolation_v,
-        timeout_seconds=timeout,
-        model=model or d.model,
-        extra_context=extra_context or "",
+    return apply_detail(
+        await orchestration.run_consult(
+            question,
+            cwd,
+            meta,
+            sandbox="read-only",
+            isolation=isolation_v,
+            timeout_seconds=timeout,
+            model=model or d.model,
+            extra_context=extra_context or "",
+        ),
+        detail_v,
     )
 
 
@@ -787,6 +840,7 @@ async def codex_review_changes(
     model: str | None = None,
     isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
+    detail: Detail = "summary",
 ) -> dict:
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
@@ -824,6 +878,20 @@ async def codex_review_changes(
         return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
     assert isolation_v is not None
 
+    detail_v, detail_err = _resolve_detail(detail)
+    if detail_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=isolation_v,
+            model=model or d.model,
+            timeout_seconds=timeout,
+        )
+        return ErrorResult(error=detail_err, meta=meta).model_dump(mode="json")
+    assert detail_v is not None
+
     roots = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
@@ -855,20 +923,23 @@ async def codex_review_changes(
     if placeholder is not None:
         return placeholder
 
-    return await orchestration.run_review(
-        cwd,
-        meta,
-        scope=scope,
-        base=base,
-        commit=commit,
-        paths=paths,
-        extra_context=extra_context or "",
-        sandbox="read-only",
-        isolation=isolation_v,
-        timeout_seconds=timeout,
-        model=model or d.model,
-        git_timeout=config.git_timeout_seconds(),
-        max_bytes=config.max_input_bytes(),
+    return apply_detail(
+        await orchestration.run_review(
+            cwd,
+            meta,
+            scope=scope,
+            base=base,
+            commit=commit,
+            paths=paths,
+            extra_context=extra_context or "",
+            sandbox="read-only",
+            isolation=isolation_v,
+            timeout_seconds=timeout,
+            model=model or d.model,
+            git_timeout=config.git_timeout_seconds(),
+            max_bytes=config.max_input_bytes(),
+        ),
+        detail_v,
     )
 
 
@@ -881,6 +952,7 @@ async def codex_delegate(
     model: str | None = None,
     isolation: Isolation | None = None,
     timeout_seconds: int | None = None,
+    detail: Detail = "summary",
 ) -> dict:
     """Delegate a coding task to Codex (a different model) in an isolated git
     worktree, and get back a **reviewable diff that is NOT applied** to your tree.
@@ -952,16 +1024,24 @@ async def codex_delegate(
             meta=meta,
         ).model_dump(mode="json")
 
-    return await delegate.run_delegate(
-        task,
-        cwd,
-        meta,
-        sandbox="workspace-write",
-        isolation=isolation_v,
-        timeout_seconds=timeout,
-        model=model or d.model,
-        git_timeout=config.git_timeout_seconds(),
-        max_diff_bytes=config.max_delegate_diff_bytes(),
+    detail_v, detail_err = _resolve_detail(detail)
+    if detail_err is not None:
+        return ErrorResult(error=detail_err, meta=meta).model_dump(mode="json")
+    assert detail_v is not None
+
+    return apply_detail(
+        await delegate.run_delegate(
+            task,
+            cwd,
+            meta,
+            sandbox="workspace-write",
+            isolation=isolation_v,
+            timeout_seconds=timeout,
+            model=model or d.model,
+            git_timeout=config.git_timeout_seconds(),
+            max_diff_bytes=config.max_delegate_diff_bytes(),
+        ),
+        detail_v,
     )
 
 
@@ -1782,11 +1862,20 @@ def _job_result_corrupt(detail: str, meta: Meta) -> dict:
 
 
 async def _job_result_impl(
-    job_id: str, ctx: Context | None, workspace_root: str | None, *, consume: bool
+    job_id: str,
+    ctx: Context | None,
+    workspace_root: str | None,
+    *,
+    consume: bool,
+    detail: str = "summary",
 ) -> dict:
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
+    detail_v, detail_err = _resolve_detail(detail)
+    if detail_err is not None:
+        return ErrorResult(error=detail_err, meta=_job_meta(cwd, source)).model_dump(mode="json")
+    assert detail_v is not None
     store = config.job_store()
     rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=consume)
     if rec is None:
@@ -1805,7 +1894,7 @@ async def _job_result_impl(
             payload["meta"]["job_id"] = job_id
             payload["meta"]["fingerprint"] = FINGERPRINT
         if payload.get("ok") is True:
-            return _validate_job_success(payload, rec["kind"], meta)
+            return apply_detail(_validate_job_success(payload, rec["kind"], meta), detail_v)
         # An error payload (ok: false) should be an ErrorResult; validate it too, since
         # a disk-backed result.json could be partially written or corrupted.
         try:
@@ -1844,7 +1933,10 @@ async def _job_result_impl(
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_result(
-    job_id: str, ctx: Context | None = None, workspace_root: str | None = None
+    job_id: str,
+    ctx: Context | None = None,
+    workspace_root: str | None = None,
+    detail: Detail = "summary",
 ) -> dict:
     """Fetch a finished background Codex job's result WITHOUT deleting the record.
 
@@ -1853,21 +1945,28 @@ async def codex_job_result(
     codex_job_status reports result_available=true; the envelope matches the job's
     kind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-
     out/failed job returns an error envelope. To fetch and delete, use
-    codex_job_consume_result."""
-    return await _job_result_impl(job_id, ctx, workspace_root, consume=False)
+    codex_job_consume_result.
+
+    `detail="summary"` (default) omits the raw model text; pass `detail="full"` for
+    the complete raw output and metadata (#56)."""
+    return await _job_result_impl(job_id, ctx, workspace_root, consume=False, detail=detail)
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_consume_result(
-    job_id: str, ctx: Context | None = None, workspace_root: str | None = None
+    job_id: str,
+    ctx: Context | None = None,
+    workspace_root: str | None = None,
+    detail: Detail = "summary",
 ) -> dict:
     """Fetch a finished background Codex job's result and delete the stored record.
 
     Same envelope as codex_job_result (matching the job's kind — branch on `tool`),
     then removes completed job state. Use only when you no longer need to poll or
-    re-read the job. Non-done jobs are not deleted."""
-    return await _job_result_impl(job_id, ctx, workspace_root, consume=True)
+    re-read the job. Non-done jobs are not deleted. `detail` works as in
+    codex_job_result (#56)."""
+    return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_STATUS_SCHEMA)
