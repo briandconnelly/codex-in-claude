@@ -176,6 +176,12 @@ jobs:
   github-release:
     name: Create GitHub Release
     needs: [release-metadata, publish]
+    # `publish` transitively depends on `create-tag`, which is skipped on a tag-push
+    # (it only runs for workflow_dispatch). Without an explicit condition the default
+    # success() would propagate that skip and skip this job too, so a tag-push would
+    # publish to PyPI but never create the GitHub Release. Mirror `publish`'s guard:
+    # run whenever the publish succeeded and the run was not cancelled. (#66)
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
