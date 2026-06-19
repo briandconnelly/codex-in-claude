@@ -117,8 +117,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   expanding env substitutions) let `codex_dry_run` return `ok: true` while the real review call
   would immediately fail — exactly the false green-light a dry run exists to prevent (the dry-run
   fidelity contract from #6). `codex_capabilities` now advertises `unexpanded_env_placeholder` for
-  `codex_dry_run`. Advisory metadata + a new returned error path on a free tool; no
-  tool/param/enum/schema change, so `FINGERPRINT` is unchanged. (#46)
+  `codex_dry_run` — and, while there, also `unsupported_isolation`, which `codex_dry_run` already
+  returns for an invalid `isolation` but did not advertise. The placeholder error envelope's `meta`
+  now carries the caller's `paths` too (matching `codex_review_changes`). Advisory metadata + a new
+  returned error path on a free tool; no tool/param/enum/schema change, so `FINGERPRINT` is
+  unchanged. (#46)
 - `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
   emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
   perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of

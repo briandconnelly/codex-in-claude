@@ -337,7 +337,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unexpanded_env_placeholder", "internal_error"),
+        ("unsupported_isolation", "unexpanded_env_placeholder", "internal_error"),
     ),
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
@@ -1087,6 +1087,7 @@ async def codex_dry_run(
             scope=scope,
             base=base,
             commit=commit,
+            paths=paths,
         )
     )
     if placeholder is not None:
