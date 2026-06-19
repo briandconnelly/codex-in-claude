@@ -485,6 +485,25 @@ def test_owned_child_no_lock_is_running(tmp_path):
         jobs._kill_pid_tree(meta.get("pid"))
 
 
+def test_ownership_is_per_process_not_per_store(tmp_path):
+    # The server builds a fresh JobStore per tool call, so ownership must be a
+    # per-process identity: a job started by one store must still be "owned" (its own
+    # child) when read through a different store in the same process — otherwise a
+    # just-started, still-running job would be misreported as not running.
+    store1 = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store1.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    store2 = _store(tmp_path)
+    jd = store2._job_dir(cwd, job_id)
+    meta = store2._read_meta(jd)
+    try:
+        assert store2._owned(meta) is True
+        assert store2._job_running(jd, meta) is True  # no lock yet, but it's our child
+        assert store2.status(cwd, job_id)["status"] == "running"
+    finally:
+        jobs._kill_pid_tree(meta.get("pid"))
+
+
 def test_worker_lock_held_states(tmp_path):
     import fcntl
 

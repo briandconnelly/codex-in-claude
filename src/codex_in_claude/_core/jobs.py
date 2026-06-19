@@ -41,13 +41,20 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 _TERMINAL = frozenset({"done", "failed", "cancelled", "timeout"})
 _LOCK = threading.RLock()
+
+# Per-process identity stamped onto every job this process starts and compared on
+# read to decide ownership. Generated ONCE at import, so it is stable across the many
+# short-lived JobStore instances the server builds (one per tool call) and changes
+# only across a real restart (a new process re-imports this module). Persisted into
+# meta.json; a record whose owner differs was started by some other/earlier process.
+_PROCESS_OWNER = uuid4().hex
 
 # Default poll/backoff interval (ms) a job advertises to clients. The single source
 # for this value; the parent package re-exports it as the agent-visible constant.
@@ -229,13 +236,6 @@ class JobStore:
     cleanup_prefix: str = ""
     terminate_grace_seconds: float = 5.0
 
-    # A per-process identity, regenerated on every construction (so it does NOT
-    # survive a restart). A job is "owned" only by the instance that started it; an
-    # unowned record is one this server did not spawn (e.g. it survived a restart),
-    # whose PID we must not trust without the per-job lock. Never persisted across
-    # processes, never compared between stores.
-    _owner: str = field(default_factory=lambda: uuid4().hex, init=False, repr=False)
-
     # ------------------------------------------------------------------ paths
     def _ws_dir(self, cwd: str) -> Path:
         canonical = os.path.realpath(cwd)
@@ -386,7 +386,7 @@ class JobStore:
                 "job_id": job_id,
                 "kind": kind,
                 "pid": proc.pid,
-                "owner": self._owner,
+                "owner": _PROCESS_OWNER,
                 "started_epoch": started,
                 "started_at": datetime.now(UTC).isoformat(),
                 "deadline_epoch": started + self.max_seconds,
@@ -399,35 +399,31 @@ class JobStore:
             return job_id, meta["started_at"]
 
     # ------------------------------------------------------------ status calc
-    def _owned(self, meta: dict) -> bool:
-        """Whether THIS server instance started the job (its worker is our child)."""
+    @staticmethod
+    def _owned(meta: dict) -> bool:
+        """Whether THIS process started the job (its worker is our own child)."""
         owner = meta.get("owner")
-        return bool(owner) and owner == self._owner
+        return bool(owner) and owner == _PROCESS_OWNER
 
     def _job_running(self, jd: Path, meta: dict) -> bool:
         """Whether the job's worker is alive AND safe to signal.
 
-        The per-job lock is authoritative: a PID reused by an unrelated process after
-        a restart cannot hold it, so such a PID is never mistaken for the worker. When
-        the lock is indeterminate (not yet created, or no ``fcntl``) we trust the PID
-        only for jobs this instance started (its own children, where the existence
-        probe is reliable); an unowned job with no verifiable lock is treated as not
-        running so cancel/timeout never signal a stale PID."""
+        A held per-job lock is authoritative for ANY job: a PID reused by an unrelated
+        process after a restart cannot hold it, so such a PID is never mistaken for the
+        worker. For a job THIS process started (owned), the PID is our own child, so the
+        existence probe (``_is_running``, which reaps) is authoritative — and stays
+        correct during the worker's tiny create-then-``flock`` startup window, when the
+        lock briefly reads as free. An unowned job is treated as running only while its
+        worker still holds the lock; otherwise it is not running, so cancel/timeout
+        never signal a stale or reused PID."""
         pid = meta.get("pid")
         if not pid:
             return False
-        held = _worker_lock_held(jd / "worker.lock")
-        if held is True:
-            return True  # lock-verified alive
-        if held is False:
-            if self._owned(meta):  # our own finished child — reap the zombie
-                with contextlib.suppress(ChildProcessError, OSError):
-                    os.waitpid(pid, os.WNOHANG)
-            return False  # verified dead
-        # Lock indeterminate: trust the PID only for our own children.
+        if _worker_lock_held(jd / "worker.lock") is True:
+            return True  # positively verified alive (a reused PID can't hold this lock)
         if self._owned(meta):
-            return _is_running(pid)
-        return False  # unowned + unverifiable (post-restart) -> never signal
+            return _is_running(pid)  # our own child: the PID probe is authoritative
+        return False  # unowned + no verified lock -> never reported running or signaled
 
     def _status_of(self, jd: Path, meta: dict) -> str:
         """Compute the live status, killing + marking jobs that overran."""
