@@ -94,7 +94,11 @@ Every tool returns an envelope:
   `verdict` (pass/concerns/fail/unknown) and `confidence`; `codex_consult` (Q&A) and
   `codex_delegate` (a diff) carry neither. **Treat findings as claims to verify
   against the actual code, not as ground truth.** A different model can be
-  confidently wrong.
+  confidently wrong — and `consult`/`review` run read-only, so reviews are
+  **static, not a verify step**: the sandbox blocks the writes a test/build/lint
+  run usually needs, so Codex's findings are not validated by executing your
+  checks. Run the project's checks yourself before acting on a finding (e.g.
+  confirm a "this breaks X" claim by running X's test).
 - For `codex_delegate`, the proposed change is in `diff`. Read it, sanity-check it,
   and apply it deliberately. `meta.context_summary` shows files/lines changed.
 - `meta.usage` reports tokens; `meta.session_id` is Codex's session.
@@ -125,6 +129,10 @@ Every tool returns an envelope:
   approved change; review before you apply.
 - **Treating a verdict as ground truth** — verify findings against the code; a
   different model can be confidently wrong.
+- **Assuming the reviewer ran the tests** — `consult`/`review` are read-only and
+  static, not a verify step; the sandbox blocks the writes tests/build/lint usually
+  need, so don't assume a finding was validated by running them. Run the checks
+  yourself.
 
 ## Knobs (optional params / env)
 
