@@ -94,7 +94,11 @@ Every tool returns an envelope:
   `verdict` (pass/concerns/fail/unknown) and `confidence`; `codex_consult` (Q&A) and
   `codex_delegate` (a diff) carry neither. **Treat findings as claims to verify
   against the actual code, not as ground truth.** A different model can be
-  confidently wrong.
+  confidently wrong — and `consult`/`review` run read-only, so reviews are
+  **static, not a verify step**: the sandbox blocks the writes a test/build/lint
+  run usually needs, so Codex's findings are not validated by executing your
+  checks. Run the project's checks yourself before acting on a finding (e.g.
+  confirm a "this breaks X" claim by running X's test).
 - For `codex_delegate`, the proposed change is in `diff`. Read it, sanity-check it,
   and apply it deliberately. `meta.context_summary` shows files/lines changed.
 - `meta.usage` reports tokens; `meta.session_id` is Codex's session.
@@ -125,6 +129,40 @@ Every tool returns an envelope:
   approved change; review before you apply.
 - **Treating a verdict as ground truth** — verify findings against the code; a
   different model can be confidently wrong.
+- **Assuming the reviewer ran the tests** — `consult`/`review` are read-only and
+  static, not a verify step; the sandbox blocks the writes tests/build/lint usually
+  need, so don't assume a finding was validated by running them. Run the checks
+  yourself.
+
+## If the MCP server is unavailable
+
+If a tool call fails with a transport error (e.g. `Connection closed`, or
+`No such tool available: mcp__codex-in-claude__*`), the stdio server is down.
+
+1. **Try to recover it first.** Ask the user to relaunch the MCP server (in Claude
+   Code, reconnect/restart the `codex-in-claude` server), then confirm with
+   `codex_status` (or `/codex:status`) before resuming the paid tools. The plugin is
+   always the preferred path — it adds workspace-aware diff gathering, secret
+   redaction, input-byte bounding, and the structured result envelope.
+
+2. **Interim manual fallback (only while the server is down).** You can call the
+   `codex` CLI directly for a one-off read-only consult or review:
+
+   ```sh
+   codex exec --sandbox read-only --skip-git-repo-check -   # prompt on stdin
+   ```
+
+   Pipe your question (or a `git diff` you gathered yourself) in on stdin. **This
+   bypasses everything the plugin adds** — no diff gathering, no secret redaction, no
+   input-byte bounding, and no structured envelope. So:
+
+   - Gather and sanitize any diff/context yourself before sending it (don't pipe in
+     files full of live credentials).
+   - Keep `--sandbox read-only` for a consult/review; never hand-roll a writable
+     sandbox as a "fallback" for a delegate — restore the server for propose-tier work.
+   - Treat the raw text output as a claim to verify, exactly as you would a tool
+     result, and parse it yourself (there is no `ok`/`error.code`/`findings` envelope).
+   - Prefer restoring the server as soon as possible rather than continuing manually.
 
 ## Knobs (optional params / env)
 

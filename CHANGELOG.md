@@ -39,6 +39,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   silently diverge again. (#17)
 
 ### Changed
+- Documented what to do when the MCP server is unavailable mid-session. The
+  `collaborating-with-codex` skill and the README now explain how to recognize a transport
+  drop (`Connection closed` / `No such tool available`), how to recover (relaunch the server,
+  confirm with `codex_status`), and an interim read-only
+  `codex exec --sandbox read-only --skip-git-repo-check -` fallback — with the explicit caveat that
+  it bypasses the plugin's diff gathering, secret
+  redaction, input-byte bounding, and structured envelope, so it is a stopgap, not a replacement.
+  Docs-only; `FINGERPRINT` unchanged. (#43)
+- Documented that `codex_review_changes` and `codex_consult` are **static** reviews, not a verify
+  mode: they run under the read-only sandbox, which blocks the writes a test/build/lint run
+  typically needs (a writable cache/temp), so Codex can't rely on running the project's checks to
+  confirm its findings. The tool docstrings and the
+  `collaborating-with-codex` skill now state this and tell callers to verify findings by running the
+  project's checks themselves. A writable "verify" mode would change the trust boundary of a
+  read-only tool (Codex's `workspace-write` sandbox can modify the live tree) and belongs in a
+  separate worktree-isolated feature, so #42 is resolved by documenting the current behavior.
+  Prose-only; `FINGERPRINT` unchanged. (#42)
 - **Breaking (agent-visible surface):** `verdict` and `confidence` are now review-only. They were
   on the shared success envelope for every active tool, so `codex_consult` (plain Q&A) always came
   back `verdict:"unknown"` and `codex_delegate` (which returns a diff) `verdict:"unknown"` too — a
@@ -122,6 +139,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   now carries the caller's `paths` too (matching `codex_review_changes`). Advisory metadata + a new
   returned error path on a free tool; no tool/param/enum/schema change, so `FINGERPRINT` is
   unchanged. (#46)
+- Hardened the server against a single failed/long call taking down the whole tool surface for the
+  rest of a session (the disconnect observed in #39). Three parts: (1) every model-/job-bearing tool
+  is now wrapped in a boundary that converts an *unexpected* exception into the documented
+  `internal_error` result envelope (logged with a traceback) instead of letting it escape as an
+  opaque transport error — `asyncio.CancelledError` is a `BaseException` and still propagates, so MCP
+  cancel semantics are preserved; (2) the server now emits diagnostic logging to **stderr** (and,
+  with `CODEX_IN_CLAUDE_LOG_FILE`, a file) — never stdout, the stdio JSON-RPC channel — so a future
+  disconnect leaves a trail (subprocess spawn/exit, timeout, and cancellation are logged with pid),
+  controlled by `CODEX_IN_CLAUDE_LOG_LEVEL` (default `WARNING`); (3) a regression test pins that
+  cancelling an in-flight `codex exec` kills its process group rather than orphaning it. `internal_error`
+  is already an advertised code for these tools and no tool/param/enum changed, so this is **not** an
+  agent-visible surface change and `FINGERPRINT` is unchanged. The structural complement — moving long
+  read-only calls off the synchronous request path — is tracked separately in #41. (#39)
 - `meta.usage.total_tokens` is now derived as `input_tokens + output_tokens` when the codex CLI
   emits a `token_count` event without a total (the current 0.140.0 behavior), instead of being
   perpetually `null` while the other usage fields are populated. Cached input tokens are a subset of
