@@ -28,6 +28,12 @@ fields). Failure is uniform: an `error` object built for machine-driven recovery
 — useful for planning recovery, but not a closed contract. The envelope shape is versioned by
 `fingerprint`; clients can cache by it.
 
+Secret-looking values are redacted from every free-text surface before it leaves the plugin —
+`summary`, `findings`/`questions`/`assumptions`/`next_steps`, and `raw_response.text` — in addition
+to gathered diffs. Inline matches become `[redacted: secret value]`. This is **best-effort
+defense-in-depth, not a guarantee**: it covers content the plugin itself surfaces, not whatever Codex
+may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
+
 ## Workspace selection
 
 When calling the MCP tools directly, pass `workspace_root` as an absolute path to the repository you

@@ -152,8 +152,11 @@ Calling the MCP tools directly instead of through the `/codex:*` commands? See
   seeded from `HEAD` plus replayable uncommitted tracked changes. Untracked files are not copied.
   Your working tree is never modified by the plugin; you review the returned diff and apply it
   yourself.
-- Secret-looking content in gathered diffs is redacted (defense-in-depth, not a guarantee — Codex
-  can read files itself during a run; use `isolation` and a clean workspace for sensitive repos).
+- Secret-looking content is redacted before it leaves the plugin (defense-in-depth, not a guarantee —
+  Codex can read files itself during a run; use `isolation` and a clean workspace for sensitive
+  repos). This covers gathered diffs and the free-text Codex returns (`summary`, `findings`,
+  `raw_response.text`): secret-looking file hunks are dropped, and inline secret values become
+  `[redacted: secret value]`.
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 

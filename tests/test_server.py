@@ -683,6 +683,75 @@ async def test_run_delegate_invalid_cap_falls_back_to_default(
     assert len(res["diff"].encode("utf-8")) <= 1000
 
 
+async def test_delegate_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_path):
+    # #58: a secret Codex echoes in its prose summary / raw_response must be redacted
+    # even when it never appears in a diff (delegate returns plain prose).
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+
+    async def fake(*a, **k):
+        return _fake_result(f'I read config and found password = "{_SECRET}" there.')
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_delegate("inspect config", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert _SECRET not in res["summary"]
+    assert _SECRET not in (res["raw_response"]["text"] or "")
+    assert "[redacted: secret value]" in res["summary"]
+
+
+async def test_consult_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_path):
+    # #58: structured free-text (summary, finding evidence) is redacted before return.
+    payload = {
+        "summary": f"The token is ghp_{'a' * 36}.",
+        "findings": [
+            {
+                "severity": "low",
+                "title": "leak",
+                "evidence": f'password = "{_SECRET}"',
+                "risk": "exposure",
+                "recommendation": "rotate",
+            }
+        ],
+    }
+
+    async def fake(*a, **k):
+        return _fake_result(json.dumps(payload))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_consult("any secrets?", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert "ghp_" + "a" * 36 not in res["summary"]
+    assert _SECRET not in res["findings"][0]["evidence"]
+    assert "[redacted: secret value]" in res["findings"][0]["evidence"]
+    # raw_response.text is the unparsed JSON (escaped quotes) — also an acceptance surface.
+    assert _SECRET not in (res["raw_response"]["text"] or "")
+    assert "ghp_" + "a" * 36 not in (res["raw_response"]["text"] or "")
+
+
+async def test_review_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_path):
+    # #58: review summary free-text is redacted before return.
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    payload = {
+        "summary": f'Found AKIAIOSFODNN7EXAMPLE and password = "{_SECRET}" in the diff.',
+        "verdict": "concerns",
+        "confidence": "high",
+    }
+
+    async def fake(*a, **k):
+        return _fake_result(json.dumps(payload))
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert _SECRET not in res["summary"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in res["summary"]
+    assert _SECRET not in (res["raw_response"]["text"] or "")
+    assert res["verdict"] == "concerns"
+
+
 async def test_delegate_not_a_git_repo(monkeypatch, clean_env, tmp_path):
     def boom(*a, **k):
         raise worktree.NotAGitRepoError("not a git repo")

@@ -58,6 +58,14 @@ an agent can hand work to Codex and get back a structured, bounded result.
   secret values become `[redacted: secret value]`, and the redacted paths are reported in
   `meta.redacted_paths`. The `context_summary` diffstat still reflects the full pre-redaction change.
   ([#57](https://github.com/briandconnelly/codex-in-claude/issues/57))
+- **Redact secrets from Codex free-text output.** The inline-value redaction is now also applied to
+  the free-text Codex returns — `summary`, `findings`/`questions`/`assumptions`/`next_steps`, and
+  `raw_response.text` on `codex_consult`, `codex_review_changes`, and `codex_delegate` (sync and
+  async) — so a secret echoed in prose (e.g. quoting a config file it read) becomes
+  `[redacted: secret value]` rather than reaching the transcript verbatim. File-hunk dropping does
+  not apply to prose; this is inline-value replacement only. Best-effort defense-in-depth, consistent
+  with the diff redaction above; the schema is unchanged.
+  ([#58](https://github.com/briandconnelly/codex-in-claude/issues/58))
 - **Harden job recovery against PID reuse after a restart.** Background-job liveness no longer trusts
   a persisted PID via a bare `kill(0)` probe after the server restarts. Each worker now holds an
   exclusive advisory lock on `<job_dir>/worker.lock` for its lifetime, and the store uses that lock as

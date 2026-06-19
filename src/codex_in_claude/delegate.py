@@ -141,7 +141,11 @@ async def run_delegate(
         worktree.remove(cwd, wt, timeout=git_timeout)
 
     meta.context_summary = _diffstat(diff)
-    summary = (result.last_message or "").strip() or "(codex returned no summary)"
+    # Redact inline secret-looking values from Codex's free-text before it is returned,
+    # mirroring the diff redaction below (#58): a secret echoed in prose (e.g. quoting a
+    # config it read) would otherwise reach the caller unredacted in summary/raw_response.
+    last_message = redaction.redact_text(result.last_message)
+    summary = (last_message or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
     else:
@@ -162,9 +166,7 @@ async def run_delegate(
     return DelegateResult(
         summary=summary,
         diff=diff or None,
-        raw_response=RawResponse(
-            text=result.last_message, session_id=meta.session_id, model=meta.model
-        ),
+        raw_response=RawResponse(text=last_message, session_id=meta.session_id, model=meta.model),
         next_steps=["Review the returned diff; apply it to your tree only if correct."],
         meta=meta,
     ).model_dump(mode="json")

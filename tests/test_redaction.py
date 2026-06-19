@@ -46,3 +46,55 @@ def test_clean_diff_unchanged():
     out, redacted = redaction.redact(diff)
     assert redacted == []
     assert "return 1" in out
+
+
+# --- free-text redaction (#58) ----------------------------------------------
+def test_redact_text_replaces_inline_secret():
+    text = 'The config sets api_key = "abcdef0123456789abcdef0123" for auth.'
+    out = redaction.redact_text(text)
+    assert "abcdef0123456789" not in out
+    assert "[redacted: secret value]" in out
+
+
+def test_redact_text_handles_github_token_and_aws_key():
+    text = "token ghp_abcdefABCDEF0123456789abcdefABCDEF and AKIAIOSFODNN7EXAMPLE here"
+    out = redaction.redact_text(text)
+    assert "ghp_abcdefABCDEF0123456789" not in out
+    assert "AKIAIOSFODNN7EXAMPLE" not in out
+
+
+def test_redact_text_handles_json_escaped_quote():
+    # raw_response.text is the unparsed JSON, where a quoted value is backslash-escaped
+    # (password = \"secret\"). The redactor must still strip the value (#58 review gap).
+    text = 'found password = \\"supersecretvalue1234567890\\" in config'
+    out = redaction.redact_text(text)
+    assert "supersecretvalue" not in out
+    assert "[redacted: secret value]" in out
+
+
+def test_redact_text_preserves_clean_prose_and_newlines():
+    text = "Line one is fine.\nLine two returns 1.\n"
+    assert redaction.redact_text(text) == text
+
+
+def test_redact_text_passes_through_none_and_empty():
+    assert redaction.redact_text(None) is None
+    assert redaction.redact_text("") == ""
+
+
+def test_redact_tree_walks_nested_structures():
+    tree = {
+        "summary": 'password = "supersecretvalue1234567890"',
+        "findings": [
+            {"severity": "high", "evidence": "token: ghp_abcdefABCDEF0123456789abcdefABCDEF"}
+        ],
+        "questions": ["AKIAIOSFODNN7EXAMPLE?"],
+        "count": 3,
+    }
+    out = redaction.redact_tree(tree)
+    assert "supersecretvalue" not in out["summary"]
+    assert "ghp_abcdefABCDEF" not in out["findings"][0]["evidence"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in out["questions"][0]
+    # Short enum values and non-strings pass through unchanged.
+    assert out["findings"][0]["severity"] == "high"
+    assert out["count"] == 3

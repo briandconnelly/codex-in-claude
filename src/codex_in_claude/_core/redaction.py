@@ -23,7 +23,9 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
     re.compile(r"(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(
-        r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{16,}"
+        # The optional opening quote also matches a JSON-escaped quote (\") so a secret
+        # quoted inside an unparsed JSON string (raw_response.text) is still redacted (#58).
+        r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
     ),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 ]
@@ -55,6 +57,37 @@ def _redact_secret_values(line: str) -> tuple[str, bool]:
 
         out = pattern.sub(repl, out)
     return out, redacted
+
+
+def redact_text(text: str | None) -> str | None:
+    """Best-effort inline secret-value redaction for free-text (no diff/file logic).
+
+    Applies only the inline ``SECRET_VALUE_PATTERNS`` — the same value replacement
+    used on diff body lines — to arbitrary prose Codex returns (summaries, answers,
+    raw_response text, finding fields). File-hunk dropping does not apply to prose,
+    so only inline values are replaced with ``[redacted: secret value]``. ``None``
+    and empty strings pass through unchanged. Defense-in-depth, NOT a guarantee
+    (consistent with this module's contract)."""
+    if not text:
+        return text
+    out, _ = _redact_secret_values(text)
+    return out
+
+
+def redact_tree(value: object) -> object:
+    """Deep-apply ``redact_text`` to every string in a nested list/dict/str value.
+
+    Used to sanitize a parsed structured payload (summary, findings, questions,
+    assumptions, next_steps) in one pass; non-string leaves (ints, enums, None)
+    are returned untouched, and short enum/path values never match a secret
+    pattern, so structure and semantics are preserved."""
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, list):
+        return [redact_tree(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_tree(item) for key, item in value.items()}
+    return value
 
 
 def redact(diff: str) -> tuple[str, list[str]]:

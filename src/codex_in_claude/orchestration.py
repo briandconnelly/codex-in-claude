@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, cast, get_args
 
 from codex_in_claude import codex, normalize, prompts
-from codex_in_claude._core import gitdiff
+from codex_in_claude._core import gitdiff, redaction
 from codex_in_claude.schemas import (
     CONSULT_OUTPUT_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
@@ -52,9 +52,20 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
 
 def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | None, RawResponse]:
     """Parse the structured payload (or None for a plain message) and build the shared
-    RawResponse. Returns (structured_or_None, raw)."""
+    RawResponse. Returns (structured_or_None, raw).
+
+    Inline secret-looking values are redacted from every free-text surface before it
+    leaves this process (#58): the parsed structured payload (summary/findings/etc.)
+    via redact_tree, and raw_response.text via redact_text. Best-effort defense-in-
+    depth, consistent with the diff redaction the review path already applies."""
     structured = normalize.parse_structured(result.last_message)
-    raw = RawResponse(text=result.last_message, session_id=meta.session_id, model=meta.model)
+    if structured is not None:
+        structured = cast("dict", redaction.redact_tree(structured))
+    raw = RawResponse(
+        text=redaction.redact_text(result.last_message),
+        session_id=meta.session_id,
+        model=meta.model,
+    )
     return structured, raw
 
 
@@ -89,7 +100,7 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
             meta=meta,
         ).model_dump(mode="json")
     return ConsultResult(
-        summary=(result.last_message or "").strip() or "(codex returned no message)",
+        summary=(raw.text or "").strip() or "(codex returned no message)",
         raw_response=raw,
         meta=meta,
     ).model_dump(mode="json")
@@ -116,7 +127,7 @@ def finalize_review(result: codex.CodexExecResult, *, meta: Meta) -> dict:
             meta=meta,
         ).model_dump(mode="json")
     return ReviewResult(
-        summary=(result.last_message or "").strip() or "(codex returned no message)",
+        summary=(raw.text or "").strip() or "(codex returned no message)",
         raw_response=raw,
         meta=meta,
     ).model_dump(mode="json")
