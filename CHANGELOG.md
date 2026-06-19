@@ -38,7 +38,7 @@ an agent can hand work to Codex and get back a structured, bounded result.
   unexpanded-env-placeholder pre-flight check, and a per-tool boundary that converts an unexpected
   exception into an `internal_error` envelope instead of taking down the session. Diagnostic logging
   goes to stderr (never the stdio JSON-RPC channel), optionally to a file.
-- **CLI contract.** Every assumption about the `codex` CLI lives in `cli_contract.py`. Guarantee-bearing
+- **CLI contract.** Every assumption about the `codex` CLI lives in `src/codex_in_claude/cli_contract.py`. Guarantee-bearing
   flags are sent unconditionally and fail loudly as `cli_contract_changed` (zero spend) if rejected;
   depth-only flags are feature-detected and dropped gracefully.
 - **Configuration knobs.** `CODEX_IN_CLAUDE_STATE_DIR`, `CODEX_IN_CLAUDE_JOB_TTL`,
