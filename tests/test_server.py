@@ -283,11 +283,14 @@ async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path)
 
 
 async def test_dry_run_advertises_returnable_error_codes():
-    # dry_run can return both via its validation paths; capabilities must say so.
+    # codex_dry_run can return all of these via its pre-flight checks; capabilities
+    # must advertise each (input_too_large from extra_context, the placeholder guard,
+    # and the isolation validation).
     caps = server.codex_capabilities()
     dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
     assert "input_too_large" in dry["error_codes"]
     assert "unsupported_isolation" in dry["error_codes"]
+    assert "unexpanded_env_placeholder" in dry["error_codes"]
 
 
 def test_isolation_accepting_tools_advertise_unsupported_isolation():
@@ -739,14 +742,6 @@ async def test_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
     res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "unexpanded_env_placeholder"
-
-
-async def test_dry_run_advertises_returnable_error_codes():
-    # codex_dry_run can return both via its pre-flight checks; capabilities must say so.
-    caps = server.codex_capabilities()
-    dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
-    assert "unexpanded_env_placeholder" in dry["error_codes"]
-    assert "unsupported_isolation" in dry["error_codes"]
 
 
 async def test_dry_run_placeholder_error_meta_carries_paths(monkeypatch, clean_env, tmp_path):

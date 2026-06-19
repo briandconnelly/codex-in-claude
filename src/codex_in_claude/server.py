@@ -407,7 +407,12 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unsupported_isolation", "input_too_large", "unexpanded_env_placeholder", "internal_error"),
+        (
+            "unsupported_isolation",
+            "input_too_large",
+            "unexpanded_env_placeholder",
+            "internal_error",
+        ),
     ),
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
