@@ -604,9 +604,12 @@ async def codex_consult(
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
-    Runs `codex exec` in a read-only sandbox — Codex never edits files. Pass
-    `workspace_root` (absolute) so Codex reasons about the right repo. Returns a
-    result envelope; treat findings as claims to verify."""
+    Runs `codex exec` in a read-only sandbox — Codex never edits files. This is a
+    STATIC review, not a verify mode: the read-only sandbox blocks the writes a
+    test/build/lint run typically needs (a writable cache/temp), so Codex can't
+    rely on executing your checks to confirm its claims. Pass `workspace_root`
+    (absolute) so Codex reasons about the right repo. Returns a result envelope;
+    treat findings as unvalidated claims to verify by running the checks yourself."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -746,7 +749,12 @@ async def codex_review_changes(
     scope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews
     `base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-
     redacted, and bounded by this server; Codex reviews it read-only and returns
-    structured findings. Pass `workspace_root` (absolute) for the right repo."""
+    structured findings. Pass `workspace_root` (absolute) for the right repo.
+
+    STATIC review, not a verify mode: the read-only sandbox blocks the writes a
+    test/build/lint run typically needs (a writable cache/temp), so Codex can't
+    rely on running the project's checks to confirm its findings. Treat findings as
+    unvalidated claims to verify by running those checks yourself before acting."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
