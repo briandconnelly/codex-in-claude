@@ -168,8 +168,9 @@ def _signal_proc(pid: int, sig: int) -> None:
 
 
 def _kill_pid_tree(pid: int | None) -> None:
-    """Kill the detached job's process group, then reap it if it was our child so
-    it does not linger as a zombie."""
+    """SIGKILL the detached job via :func:`_signal_proc` (its process group when
+    ``pid`` is the group leader — our workers are — else just that PID), then reap
+    it if it was our child so it does not linger as a zombie."""
     if not pid:
         return
     _signal_proc(pid, signal.SIGKILL)
