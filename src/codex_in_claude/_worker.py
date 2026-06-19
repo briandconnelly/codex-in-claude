@@ -20,13 +20,14 @@ import sys
 from pathlib import Path
 from typing import cast
 
-from codex_in_claude import delegate
+from codex_in_claude import delegate, orchestration
 from codex_in_claude.schemas import (
     ErrorCode,
     ErrorInfo,
     ErrorResult,
     Meta,
     Sandbox,
+    Tier,
     workspace_warning_for,
 )
 
@@ -38,12 +39,18 @@ def _meta_from_spec(spec: dict) -> Meta:
         cwd=cwd,
         workspace_source=source,
         workspace_warning=workspace_warning_for(source, cwd),
-        tier="propose",
+        # tier/sandbox come from the spec: delegate runs propose/workspace-write,
+        # consult/review run consult/read-only.
+        tier=cast("Tier", spec.get("tier", "propose")),
         sandbox=cast("Sandbox", spec["sandbox"]),
         isolation=spec["isolation"],
         model=spec.get("model"),
         timeout_seconds=spec["timeout_seconds"],
         elapsed_ms=0,
+        scope=spec.get("scope"),
+        base=spec.get("base"),
+        commit=spec.get("commit"),
+        paths=spec.get("paths"),
     )
 
 
@@ -60,26 +67,56 @@ def _write_cleanup_manifest(job_dir: Path, parent: str) -> None:
 
 
 async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
-    """Run the delegate, cancelling cleanly on SIGTERM so run_delegate's worktree
-    teardown runs. The JobStore sends SIGTERM (then SIGKILL after a grace) to
-    cancel or time out the job."""
+    """Dispatch the job by kind, cancelling cleanly on SIGTERM so an in-flight
+    `codex exec` (and, for delegate, the worktree teardown) is torn down. The
+    JobStore sends SIGTERM (then SIGKILL after a grace) to cancel or time out."""
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
     assert task is not None
     with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
         loop.add_signal_handler(signal.SIGTERM, task.cancel)
-    return await delegate.run_delegate(
-        spec["task"],
-        spec["cwd"],
-        meta,
-        sandbox=spec["sandbox"],
-        isolation=spec["isolation"],
-        timeout_seconds=spec["timeout_seconds"],
-        model=spec.get("model"),
-        git_timeout=spec["git_timeout"],
-        max_diff_bytes=spec.get("max_diff_bytes"),
-        on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
-    )
+
+    kind = spec.get("kind")
+    if kind == "codex_delegate":
+        return await delegate.run_delegate(
+            spec["task"],
+            spec["cwd"],
+            meta,
+            sandbox=spec["sandbox"],
+            isolation=spec["isolation"],
+            timeout_seconds=spec["timeout_seconds"],
+            model=spec.get("model"),
+            git_timeout=spec["git_timeout"],
+            max_diff_bytes=spec.get("max_diff_bytes"),
+            on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
+        )
+    if kind == "codex_consult":
+        return await orchestration.run_consult(
+            spec["question"],
+            spec["cwd"],
+            meta,
+            sandbox=spec["sandbox"],
+            isolation=spec["isolation"],
+            timeout_seconds=spec["timeout_seconds"],
+            model=spec.get("model"),
+            extra_context=spec.get("extra_context", ""),
+        )
+    if kind == "codex_review_changes":
+        return await orchestration.run_review(
+            spec["cwd"],
+            meta,
+            scope=spec["scope"],
+            base=spec.get("base"),
+            commit=spec.get("commit"),
+            paths=spec.get("paths"),
+            sandbox=spec["sandbox"],
+            isolation=spec["isolation"],
+            timeout_seconds=spec["timeout_seconds"],
+            model=spec.get("model"),
+            git_timeout=spec["git_timeout"],
+            max_bytes=spec["max_bytes"],
+        )
+    raise ValueError(f"unknown job kind: {kind!r}")
 
 
 def main(argv: list[str] | None = None) -> int:

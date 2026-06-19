@@ -1026,8 +1026,184 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_8():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-8"
+def test_fingerprint_is_schema_9():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-9"
+
+
+# --- async consult / review (#41) --------------------------------------------
+async def test_consult_async_returns_job_id(monkeypatch, clean_env, tmp_path):
+    store = _FakeStore()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async(
+        "why?", workspace_root=str(tmp_path), extra_context="ctx"
+    )
+    assert res["ok"] is True
+    assert res["job_id"] == "job-abc"
+    assert res["kind"] == "codex_consult"
+    spec = store.started[0]["spec"]
+    assert spec["kind"] == "codex_consult"
+    assert spec["question"] == "why?"
+    assert spec["extra_context"] == "ctx"
+    assert spec["sandbox"] == "read-only"
+    assert spec["tier"] == "consult"
+
+
+async def test_consult_async_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+
+
+async def test_consult_async_invalid_workspace(clean_env):
+    res = await server.codex_consult_async("q", workspace_root="relative")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_consult_async_input_too_large(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_consult_async(
+        "q", workspace_root=str(tmp_path), extra_context="z" * 2000
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["offending_param"] == "extra_context"
+
+
+async def test_consult_async_placeholder_env(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+async def test_review_async_returns_job_id(monkeypatch, clean_env, tmp_path):
+    store = _FakeStore()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_review_changes_async(
+        scope="branch", base="main", workspace_root=str(tmp_path)
+    )
+    assert res["ok"] is True
+    assert res["kind"] == "codex_review_changes"
+    spec = store.started[0]["spec"]
+    assert spec["kind"] == "codex_review_changes"
+    assert spec["scope"] == "branch"
+    assert spec["base"] == "main"
+    assert spec["sandbox"] == "read-only"
+    # The diff is gathered in the worker, so the byte cap is snapshotted into the spec.
+    assert spec["max_bytes"] == server.config.max_input_bytes()
+
+
+async def test_review_async_bad_isolation(clean_env, tmp_path):
+    res = await server.codex_review_changes_async(workspace_root=str(tmp_path), isolation="nope")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unsupported_isolation"
+
+
+async def test_review_async_invalid_workspace(clean_env):
+    res = await server.codex_review_changes_async(workspace_root="relative")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+def _done_consult_envelope():
+    meta = server._base_meta(
+        "/repo",
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=1800,
+    ).model_dump(mode="json")
+    return {"ok": True, "tool": "codex_consult", "summary": "answer", "meta": meta}
+
+
+def _done_review_envelope():
+    meta = server._base_meta(
+        "/repo",
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=1800,
+    ).model_dump(mode="json")
+    return {
+        "ok": True,
+        "tool": "codex_review_changes",
+        "summary": "looks ok",
+        "verdict": "pass",
+        "confidence": "high",
+        "meta": meta,
+    }
+
+
+async def test_job_result_consult_kind_returns_consult_envelope(monkeypatch, clean_env, tmp_path):
+    rec = _ok_record("done")
+    rec["kind"] = "codex_consult"
+    store = _FakeStore(record=rec, result_json=_done_consult_envelope())
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_consult"
+    assert res["summary"] == "answer"
+    assert "verdict" not in res  # consult carries none, and we must not inject it
+
+
+async def test_job_result_review_kind_keeps_verdict(monkeypatch, clean_env, tmp_path):
+    rec = _ok_record("done")
+    rec["kind"] = "codex_review_changes"
+    store = _FakeStore(record=rec, result_json=_done_review_envelope())
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_review_changes"
+    assert res["verdict"] == "pass"  # review keeps its verdict (not stripped like delegate)
+
+
+async def test_job_result_unknown_kind_is_internal_error(monkeypatch, clean_env, tmp_path):
+    rec = _ok_record("done")
+    rec["kind"] = "codex_bogus"
+    store = _FakeStore(record=rec, result_json=_done_consult_envelope())
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_job_result_schema_mismatch_is_internal_error(monkeypatch, clean_env, tmp_path):
+    # A consult-kind job whose stored payload is actually a review envelope (verdict)
+    # must not be passed through — ConsultResult forbids verdict, so validation fails.
+    rec = _ok_record("done")
+    rec["kind"] = "codex_consult"
+    store = _FakeStore(record=rec, result_json=_done_review_envelope())
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_job_result_running_consult_reports_consult_meta(monkeypatch, clean_env, tmp_path):
+    # A running consult job's error envelope must report its real tier/sandbox, not
+    # the propose default used for delegate jobs.
+    rec = _ok_record("running")
+    rec["kind"] = "codex_consult"
+    store = _FakeStore(record=rec, result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_running"
+    assert res["meta"]["tier"] == "consult"
+    assert res["meta"]["sandbox"] == "read-only"
+
+
+def test_capabilities_lists_async_readonly_tools():
+    caps = server.codex_capabilities()
+    assert "codex_consult_async" in caps["active_tools"]
+    assert "codex_review_changes_async" in caps["active_tools"]
+    names = {t["name"] for t in caps["tool_details"]}
+    assert {"codex_consult_async", "codex_review_changes_async"} <= names
 
 
 def test_capabilities_lists_delegate_dry_run():

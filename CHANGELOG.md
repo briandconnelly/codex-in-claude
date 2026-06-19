@@ -6,6 +6,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ## [Unreleased]
 
 ### Added
+- **Breaking (agent-visible surface):** new `codex_consult_async` and
+  `codex_review_changes_async` tools — the read-only consult/review tiers as background jobs, mirroring
+  `codex_delegate_async`. Each returns a `job_id` immediately and runs detached, so a long consult or
+  review (observed at ~95–147s) no longer blocks the caller on the synchronous request path. Poll and
+  read them with the existing `codex_job_status`/`codex_job_result`/`codex_job_consume_result`/
+  `codex_job_cancel`/`codex_job_list` lifecycle. `codex_job_result`/`codex_job_consume_result` now
+  return whichever envelope matches the job's kind — a delegate `diff`, a consult answer, or a review
+  `verdict` (branch on `tool`) — and validate the stored payload against that kind before returning it
+  (a kind/payload mismatch surfaces as `internal_error` rather than a wrong-shaped envelope). For a
+  review job the diff is gathered inside the worker, so a bad `scope`/`base`/`commit` comes back as the
+  same structured error with **zero spend**. The read-only consult/review orchestration moved into a
+  new import-light `orchestration.py` shared by the synchronous tools and the background worker.
+  `FINGERPRINT` → `schema-9`. (#41)
 - **Breaking (agent-visible surface):** new free `codex_delegate_dry_run(task, …)` tool — a
   zero-spend preview of a `codex_delegate`/`codex_delegate_async` run, mirroring how `codex_dry_run`
   previews `codex_review_changes`. It reports the baseline the throwaway worktree would seed from

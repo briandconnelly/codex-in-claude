@@ -14,9 +14,11 @@ import pytest
 from codex_in_claude import _worker, delegate
 
 _SPEC = {
+    "kind": "codex_delegate",
     "task": "do x",
     "cwd": "/tmp/repo",
     "workspace_source": "param",
+    "tier": "propose",
     "sandbox": "workspace-write",
     "isolation": "inherit",
     "timeout_seconds": 60,
@@ -157,3 +159,69 @@ def test_worker_meta_carries_workspace_warning(tmp_path, monkeypatch):
     _worker.main([str(jd)])
     assert captured["meta"].workspace_warning is not None
     assert captured["meta"].tier == "propose"
+
+
+def test_worker_dispatches_consult(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_consult",
+        question="why?",
+        extra_context="ctx",
+        tier="consult",
+        sandbox="read-only",
+        cwd=str(tmp_path),
+    )
+
+    async def fake_run_consult(question, cwd, meta, **kw):
+        assert question == "why?"
+        assert kw["extra_context"] == "ctx"
+        assert kw["sandbox"] == "read-only"
+        return {"ok": True, "tool": "codex_consult", "summary": question}
+
+    monkeypatch.setattr(orchestration, "run_consult", fake_run_consult)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out["tool"] == "codex_consult"
+
+
+def test_worker_dispatches_review(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    async def fake_run_review(cwd, meta, **kw):
+        assert kw["scope"] == "working_tree"
+        assert kw["max_bytes"] == 200000
+        return {"ok": True, "tool": "codex_review_changes", "summary": "reviewed"}
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out["tool"] == "codex_review_changes"
+
+
+def test_worker_unknown_kind_writes_error(tmp_path):
+    jd = tmp_path / "job"
+    _write_spec(jd, kind="codex_bogus", cwd=str(tmp_path))
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out["ok"] is False
+    assert out["error"]["code"] == "internal_error"
