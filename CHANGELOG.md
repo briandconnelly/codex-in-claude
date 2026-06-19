@@ -5,6 +5,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-19
+
 Initial release: a Claude Code plugin that calls the OpenAI Codex CLI through a FastMCP server, so
 an agent can hand work to Codex and get back a structured, bounded result.
 
