@@ -1040,7 +1040,7 @@ async def test_job_result_strips_legacy_verdict_fields(monkeypatch, clean_env, t
     legacy = _done_envelope()
     legacy["verdict"] = "unknown"
     legacy["confidence"] = "medium"
-    legacy["meta"]["fingerprint"] = "codex-in-claude/0.1/schema-6"  # a pre-upgrade worker
+    legacy["meta"]["fingerprint"] = "codex-in-claude/0.1/schema-0"  # a pre-upgrade worker
     store = _FakeStore(record=_ok_record("done"), result_json=legacy)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
     res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
@@ -1134,8 +1134,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_10():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-10"
+def test_fingerprint_is_schema_1():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-1"
 
 
 # --- async consult / review (#41) --------------------------------------------

@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-10"
+FINGERPRINT = "codex-in-claude/0.1/schema-1"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
