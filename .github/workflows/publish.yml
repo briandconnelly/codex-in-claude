@@ -127,9 +127,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists."
-            exit 0
+          # release-metadata already verified this tag is absent for the dispatch.
+          # If it exists now, a concurrent or foreign release created it. Tolerate
+          # ONLY our own tag (already pointing at GITHUB_SHA, e.g. a job re-run);
+          # fail loudly on a mismatched tag so we never publish a release under a
+          # tag that points somewhere else. For an annotated tag the peeled ref
+          # (^{}) is the commit; for a lightweight tag the plain ref is.
+          peeled="$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | awk '{print $1}')"
+          direct="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
+          target="${peeled:-$direct}"
+          if [ -n "$target" ]; then
+            if [ "$target" = "$GITHUB_SHA" ]; then
+              echo "Tag ${TAG} already points at ${GITHUB_SHA}; nothing to do."
+              exit 0
+            fi
+            echo "Tag ${TAG} already exists at ${target}, not ${GITHUB_SHA}; refusing to publish a mismatched release." >&2
+            exit 1
           fi
 
           git config user.name "github-actions[bot]"
