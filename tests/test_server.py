@@ -732,6 +732,33 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     assert res["error"]["offending_param"] == "isolation"
 
 
+async def test_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
+    """A dry run must surface the same unexpanded_env_placeholder a review would
+    hit before gathering the diff (issue #46), not green-light it."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+
+
+async def test_dry_run_advertises_returnable_error_codes():
+    # codex_dry_run can return both via its pre-flight checks; capabilities must say so.
+    caps = server.codex_capabilities()
+    dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
+    assert "unexpanded_env_placeholder" in dry["error_codes"]
+    assert "unsupported_isolation" in dry["error_codes"]
+
+
+async def test_dry_run_placeholder_error_meta_carries_paths(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MODEL", "${MODEL}")
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), paths=["a/b.py"]
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+    assert res["meta"]["paths"] == ["a/b.py"]
+
+
 # --- delegate_dry_run --------------------------------------------------------
 def _init_repo(tmp_path):
     import subprocess
@@ -1291,3 +1318,72 @@ def test_job_status_model_surfaces_cleanup_warnings():
     }
     model = server._job_status_model(data)
     assert model.cleanup_warnings == ["could not remove temporary path: /tmp/cic-worktree-x"]
+
+
+# --- boundary: unexpected exceptions become a structured internal_error (#39) ---
+async def test_consult_unexpected_exception_returns_internal_error(
+    monkeypatch, clean_env, tmp_path
+):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", boom)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["retryable"] is True
+    # The documented envelope still holds: meta is present and tier reflects the tool.
+    assert res["meta"]["tier"] == "consult"
+    assert res["meta"]["sandbox"] == "read-only"
+
+
+async def test_review_unexpected_exception_returns_internal_error(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    # gather_diff's RuntimeError is caught and routed to _gitdiff_error, so also
+    # make _gitdiff_error raise — that exception escapes the tool's own handling
+    # and must be caught by the new tool boundary, becoming internal_error.
+    monkeypatch.setattr(server.gitdiff, "gather_diff", boom)
+    monkeypatch.setattr(server, "_gitdiff_error", boom)
+    res = await server.codex_review_changes(workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_delegate_unexpected_exception_uses_propose_meta(monkeypatch, clean_env, tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server.workspace, "resolve_workspace", boom)
+    res = await server.codex_delegate("do a thing", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["meta"]["tier"] == "propose"
+    assert res["meta"]["sandbox"] == "workspace-write"
+
+
+async def test_boundary_internal_error_stamps_elapsed_ms(monkeypatch, clean_env, tmp_path):
+    import asyncio
+
+    async def slow_boom(*a, **k):
+        await asyncio.sleep(0.02)
+        raise RuntimeError("late failure")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", slow_boom)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    # A late failure records its elapsed time, not a misleading 0.
+    assert res["meta"]["elapsed_ms"] > 0
+
+
+async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
+    import asyncio
+
+    def cancel(*a, **k):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await server.codex_consult("q", workspace_root=str(tmp_path))
