@@ -451,7 +451,9 @@ async def test_delegate_small_diff_not_truncated(monkeypatch, clean_env, tmp_pat
     diff = "diff --git a/x b/x\n+small\n"
     res = await _delegate_with_diff(monkeypatch, tmp_path, diff)
     assert res["ok"] is True
-    assert res["diff"] == diff
+    # Returned intact and untruncated. Redaction normalizes the trailing newline
+    # (same as the review path), so compare against the rstripped form.
+    assert res["diff"] == diff.rstrip("\n")
     assert res["meta"]["truncated"] is False
     assert res["meta"]["truncation_hint"] is None
 
@@ -487,6 +489,87 @@ async def test_delegate_empty_diff_not_truncated(monkeypatch, clean_env, tmp_pat
     assert "diff" not in res or res["diff"] is None
     assert res["meta"]["truncated"] is False
     assert res["summary"].startswith("Codex made no changes.")
+
+
+_SECRET = "supersecretvalue1234567890"
+_SECRET_DIFF = (
+    "diff --git a/.env b/.env\n"
+    "new file mode 100644\n"
+    "--- /dev/null\n"
+    "+++ b/.env\n"
+    f"+API_TOKEN={_SECRET}\n"
+    "diff --git a/id_rsa b/id_rsa\n"
+    "--- /dev/null\n"
+    "+++ b/id_rsa\n"
+    "+-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    "diff --git a/src/app.py b/src/app.py\n"
+    "--- a/src/app.py\n"
+    "+++ b/src/app.py\n"
+    f'+password = "{_SECRET}"\n'
+    "+normal_line = 1\n"
+)
+
+
+async def test_delegate_redacts_secret_files_and_inline_values(monkeypatch, clean_env, tmp_path):
+    # Regression for #57: codex_delegate must apply the same secret redaction as the
+    # review path before returning the worktree diff to the caller.
+    res = await _delegate_with_diff(monkeypatch, tmp_path, _SECRET_DIFF)
+    assert res["ok"] is True
+    out = res["diff"]
+    # No secret-file hunk or inline secret literal survives anywhere in the result.
+    assert _SECRET not in out
+    assert "BEGIN OPENSSH PRIVATE KEY" not in out
+    # Secret-looking files are dropped (headers kept); inline values are replaced.
+    assert "[redacted: secret-looking file not sent]" in out
+    assert "[redacted: secret value]" in out
+    # Non-secret content is preserved.
+    assert "normal_line = 1" in out
+    # meta lists every redacted path.
+    rp = res["meta"]["redacted_paths"]
+    assert ".env" in rp and "id_rsa" in rp and "src/app.py" in rp
+    # Diffstat reflects the FULL pre-redaction diff (mirrors the review path): all
+    # three files are counted even though two were redacted away.
+    assert res["meta"]["context_summary"]["files_changed"] == 3
+
+
+async def test_run_delegate_envelope_redacts_secrets(monkeypatch, clean_env, tmp_path):
+    # The background worker serializes exactly run_delegate's returned dict, so this
+    # validates the async result envelope (#57) without spawning a subprocess.
+    from codex_in_claude import delegate
+    from codex_in_claude.schemas import Meta
+
+    wt = _fake_worktree(tmp_path)
+    monkeypatch.setattr(worktree, "create", lambda *a, **k: wt)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: _SECRET_DIFF)
+
+    async def fake(*a, **k):
+        return _fake_result("done")
+
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake)
+    meta = Meta(
+        cwd=str(tmp_path),
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=60,
+        elapsed_ms=0,
+    )
+    res = await delegate.run_delegate(
+        "do x",
+        str(tmp_path),
+        meta,
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=60,
+        model=None,
+        git_timeout=30,
+    )
+    assert res["ok"] is True
+    assert _SECRET not in res["diff"]
+    assert "BEGIN OPENSSH PRIVATE KEY" not in res["diff"]
+    assert {".env", "id_rsa", "src/app.py"} <= set(res["meta"]["redacted_paths"])
 
 
 async def test_delegate_cleans_up_on_codex_error(monkeypatch, clean_env, tmp_path):

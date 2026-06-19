@@ -49,3 +49,12 @@ an agent can hand work to Codex and get back a structured, bounded result.
   `/codex:delegate-async`, and `/codex:dry-run`.
 - **`collaborating-with-codex` guidance skill** for agents working alongside this plugin.
 - Result fingerprint: `codex-in-claude/0.1/schema-1`.
+
+### Security
+
+- **Redact secrets from delegate diffs.** `codex_delegate`/`codex_delegate_async` now run the
+  proposed worktree diff through the same secret redaction as review diffs before returning it:
+  secret-looking file hunks (e.g. `.env`, `*.pem`, `id_rsa`) are dropped (header kept), inline
+  secret values become `[redacted: secret value]`, and the redacted paths are reported in
+  `meta.redacted_paths`. The `context_summary` diffstat still reflects the full pre-redaction change.
+  ([#57](https://github.com/briandconnelly/codex-in-claude/issues/57))
