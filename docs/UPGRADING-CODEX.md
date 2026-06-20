@@ -33,8 +33,8 @@ reports against `cli_contract.py`:
   the running version isn't yet in `SUPPORTED_VERSIONS`.
 - **`INFO`** — flags codex offers that the contract doesn't consume. Skim for anything newly
   relevant (a new isolation/output flag worth adopting; a new dangerous flag to keep avoiding).
-- **exit 2** — couldn't probe (binary missing / unparseable). Fix the environment first; nothing was
-  verified.
+- **exit 2** — couldn't probe (binary missing / timed out / unparseable). Fix the environment first;
+  nothing was verified.
 
 This is the mechanical half only. Steps 2–3 are the judgment half the script cannot do.
 

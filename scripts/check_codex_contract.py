@@ -17,7 +17,7 @@ Usage:
 Exit codes:
     0  contract holds (warnings are non-fatal)
     1  drift: a guarantee-bearing flag or sandbox value is gone (a real blocker)
-    2  could not probe (codex missing / help unparseable) — verify nothing
+    2  could not probe (codex missing / timed out / help unparseable) — verify nothing
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def main() -> int:
     help_text = _probe_help()
 
     if not version_str or not help_text.strip():
-        print(f"{FAIL}: could not probe `codex` (binary missing or help unparseable).")
+        print(f"{FAIL}: could not probe `codex` (binary missing, timed out, or help unparseable).")
         print("      Install/authenticate codex, then re-run. Nothing was verified.")
         return 2
 
