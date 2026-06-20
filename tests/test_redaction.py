@@ -48,6 +48,59 @@ def test_clean_diff_unchanged():
     assert "return 1" in out
 
 
+# --- unlabeled / vendor-shape secrets (#73) ---------------------------------
+def test_jwt_redacted_in_diff():
+    jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"
+        ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )
+    # Unlabeled — no key=/token= adjacent, so only a JWT-shape pattern catches it.
+    out, redacted = redaction.redact(f"diff --git a/x.py b/x.py\n+Cookie: {jwt}")
+    assert jwt not in out
+    assert "[redacted: secret value]" in out
+    assert "x.py" in redacted
+
+
+def test_vendor_key_prefixes_redacted():
+    secrets = [
+        "sk-abcdefABCDEF0123456789abcdefABCDEF",  # OpenAI legacy
+        "sk-proj-abcdefABCDEF0123456789_-abcdefABCDEF",  # OpenAI project key (hyphenated)
+        "sk_live_abcdefABCDEF0123456789",  # Stripe live
+        "sk_test_abcdefABCDEF0123456789",  # Stripe test
+        "AIzaSyA0123456789abcdefABCDEF0123456789",  # Google (AIza + 35)
+    ]
+    for secret in secrets:
+        out = redaction.redact_text(f"the value is {secret} here")
+        assert secret not in out, secret
+        assert "[redacted: secret value]" in out
+        # No fragment of the token may survive — surrounding prose stays intact.
+        assert out == "the value is [redacted: secret value] here", secret
+
+
+def test_oversized_google_key_fully_redacted():
+    # A token longer than the canonical length must not leave a trailing suffix.
+    out = redaction.redact_text("AIzaSyA0123456789abcdefABCDEF0123456789EXTRA stuff")
+    assert "EXTRA" not in out
+    assert out == "[redacted: secret value] stuff"
+
+
+def test_unlabeled_connection_string_password_redacted():
+    text = "DATABASE_URL=postgres://user:s3cr3tPassw0rd@db.example.com:5432/app"
+    out = redaction.redact_text(text)
+    assert "s3cr3tPassw0rd" not in out
+    assert "[redacted: secret value]" in out
+    # user, scheme, and host are preserved — only the password is stripped.
+    assert "postgres://user:" in out
+    assert "@db.example.com:5432/app" in out
+
+
+def test_url_with_port_not_treated_as_credentials():
+    # No userinfo `@`, so the port must not be mistaken for a password.
+    text = "see https://example.com:8080/path for details"
+    assert redaction.redact_text(text) == text
+
+
 # --- free-text redaction (#58) ----------------------------------------------
 def test_redact_text_replaces_inline_secret():
     text = 'The config sets api_key = "abcdef0123456789abcdef0123" for auth.'

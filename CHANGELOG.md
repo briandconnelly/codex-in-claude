@@ -5,6 +5,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Security
+
+- **Broader best-effort secret redaction.** The diff/prose redactor now also catches shape-only
+  (unlabeled) secrets: JWTs (`eyJ…` three-segment tokens), vendor key prefixes (OpenAI `sk-`/`sk-proj-`,
+  Stripe `sk_live_`/`sk_test_`, Google `AIza…`), and connection-string passwords (`scheme://user:pass@host`,
+  password stripped while scheme/user/host are preserved). Still best-effort defense-in-depth, not a
+  guarantee; the agent-visible surface is unchanged (no `fingerprint` bump).
+  ([#73](https://github.com/briandconnelly/codex-in-claude/issues/73))
+
 ## [0.1.0] - 2026-06-19
 
 Initial release: a Claude Code plugin that calls the OpenAI Codex CLI through a FastMCP server, so
