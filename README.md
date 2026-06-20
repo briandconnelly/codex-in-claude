@@ -110,10 +110,10 @@ claims to verify, not instructions to follow blindly.
   `commit`; returns structured findings.
 - `codex_delegate(task, …)` — implement a task in an isolated worktree; returns a reviewable
   `diff` that is **not** applied.
-- `codex_consult_async(question, …)`, `codex_review_changes_async(…)`, `codex_delegate_async(task, …)`
-  — detached variants of the three active tools: each returns a `job_id` immediately. Starting a job
-  commits to spend (it runs to completion or its deadline); poll with `codex_job_status` /
-  `codex_job_result`.
+- `codex_consult_async(question, …)`, `codex_review_changes_async(scope, base, commit, paths, …)`,
+  `codex_delegate_async(task, …)` — detached variants of the three active tools, taking the same
+  arguments as their synchronous forms: each returns a `job_id` immediately. Starting a job commits
+  to spend (it runs to completion or its deadline); poll with `codex_job_status` / `codex_job_result`.
 
 **Free (local only):**
 
@@ -211,7 +211,8 @@ uv run codex-in-claude-mcp          # run the MCP server over stdio
 ```
 
 To test the plugin from a local checkout, point `.mcp.json` at
-`uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the pinned `uvx` PyPI release.
+`uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the version-pinned
+`uvx --from codex-in-claude==<version>` invocation it ships with.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch, commit, and PR conventions.
 
