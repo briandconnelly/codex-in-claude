@@ -5,6 +5,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-20
+
+The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-3` →
+`codex-in-claude/0.1/schema-5`), so pre-1.0 this is a minor release. Clients that cache by
+`fingerprint` re-fetch the contract.
+
 ### Added
 
 - **Legible failure on stdio transport death.** `main()` now wraps the transport loop: a fatal error
