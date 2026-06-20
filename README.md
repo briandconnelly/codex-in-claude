@@ -218,7 +218,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch, commit, and PR conventions.
 
 ## Related projects
 
-- [`cc-plugin-codex`](https://github.com/briandconnelly/cc-plugin-codex) — the mirror image: lets
+- [`claude-in-codex`](https://github.com/briandconnelly/claude-in-codex) — the mirror image: lets
   **Codex** call **Claude Code**.
 - Inspired by `openai/codex-plugin-cc`, rebuilt around `codex exec` (not the experimental
   app-server protocol) for robustness.
