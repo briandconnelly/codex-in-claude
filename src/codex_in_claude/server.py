@@ -8,7 +8,10 @@ Tool surface (v1 grows by milestone):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
+import os
+import signal
 import sys
 import time
 from typing import TYPE_CHECKING, Any, cast, get_args
@@ -18,6 +21,7 @@ from fastmcp import Context, FastMCP
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
+    import logging
     from collections.abc import Awaitable, Callable
 
 from codex_in_claude import (
@@ -2019,11 +2023,63 @@ async def codex_job_list(ctx: Context | None = None, workspace_root: str | None 
     return JobListResult(jobs=jobs, workspace=_job_workspace(cwd, source)).model_dump(mode="json")
 
 
+def _make_signal_handler(log: logging.Logger, previous: Any) -> Callable[[int, object], None]:
+    """A signal handler that logs which signal arrived, then defers to the prior
+    disposition — so we add a "who killed it" breadcrumb without changing shutdown
+    behavior (we do not attempt graceful cleanup; AnyIO/FastMCP own that)."""
+
+    def handler(signum: int, frame: object) -> None:
+        name = signal.Signals(signum).name
+        log.info("codex-in-claude %s: received %s, shutting down", __version__, name)
+        if callable(previous):
+            previous(signum, frame)  # e.g. default SIGINT handler raises KeyboardInterrupt
+        else:  # SIG_DFL: restore and re-raise so the OS default (terminate) still happens
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+    return handler
+
+
+def _install_signal_logging(log: logging.Logger) -> None:
+    """Log a breadcrumb on SIGINT/SIGTERM, chaining to the existing handler. Best
+    effort: AnyIO may replace these once the loop starts — we don't fight it."""
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(ValueError, OSError, AttributeError):
+            # ValueError: not the main thread; AttributeError: signal absent on this OS.
+            previous = signal.getsignal(signum)
+            if previous == signal.SIG_IGN:
+                continue  # inherited as ignored — leave it truly ignored, install nothing
+            signal.signal(signum, _make_signal_handler(log, previous))
+
+
 def main() -> None:
-    """Console-script entrypoint: run the MCP server over stdio."""
+    """Console-script entrypoint: run the MCP server over stdio.
+
+    A stdio MCP server cannot be transparently auto-restarted — the client owns the
+    pipe and the `initialize` handshake — so the goal here is to fail *legibly*: a
+    fatal error out of the transport loop leaves an actionable stderr breadcrumb
+    (name, version, reconnect hint) instead of a silent exit, and clean disconnects
+    are logged as shutdown rather than crashes (#76)."""
     log = obs.configure()
+    _install_signal_logging(log)
     log.info("codex-in-claude %s starting (stdio)", __version__)
-    mcp.run()
+    try:
+        mcp.run()
+    except (KeyboardInterrupt, EOFError, BrokenPipeError) as exc:
+        # Client closed the pipe or interrupted us — an ordinary disconnect, not a crash.
+        log.info("codex-in-claude %s: clean shutdown (%s)", __version__, type(exc).__name__)
+    except SystemExit:
+        raise  # honor an explicit exit code (e.g. from our own signal path)
+    except Exception as exc:
+        log.exception(
+            "codex-in-claude %s crashed out of the stdio transport loop; the MCP server "
+            "has stopped and will not recover on its own. Reconnect with the /mcp command "
+            "(or restart the client).",
+            __version__,
+        )
+        raise SystemExit(1) from exc
+    else:
+        log.info("codex-in-claude %s: stdio transport closed, shutting down", __version__)
 
 
 if __name__ == "__main__":  # pragma: no cover

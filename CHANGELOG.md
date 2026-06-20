@@ -5,6 +5,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Legible failure on stdio transport death.** `main()` now wraps the transport loop: a fatal error
+  out of `mcp.run()` logs an actionable stderr breadcrumb (server name, version, reason, and a `/mcp`
+  reconnect hint) and exits nonzero instead of dying silently, while clean disconnects
+  (EOF / broken pipe / `SIGINT` / `SIGTERM`) are logged as shutdown rather than crashes. A minimal
+  `SIGINT`/`SIGTERM` breadcrumb chains to the prior disposition (and leaves an inherited-ignored
+  signal ignored). A stdio server can't be transparently auto-restarted — the client owns the pipe
+  and `initialize` handshake — so recovery stays a manual `/mcp` reconnect, now documented in the
+  README troubleshooting section. ([#76](https://github.com/briandconnelly/codex-in-claude/issues/76))
+
 ### Fixed
 
 - **`codex_review_changes` now reviews explicitly-named untracked files.** With
