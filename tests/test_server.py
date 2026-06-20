@@ -1352,6 +1352,21 @@ def test_fingerprint_is_schema_3():
     assert FINGERPRINT == "codex-in-claude/0.1/schema-3"
 
 
+async def test_sync_active_tools_document_no_progress_and_async_fallback():
+    """The blocking active tools tell agents they don't stream progress and point to
+    the async variant + codex_job_status for live status (#72)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    for name, async_name in (
+        ("codex_consult", "codex_consult_async"),
+        ("codex_review_changes", "codex_review_changes_async"),
+        ("codex_delegate", "codex_delegate_async"),
+    ):
+        desc = tools[name].description or ""
+        assert "notifications/progress" in desc, name
+        assert async_name in desc, name
+        assert "codex_job_status" in desc, name
+
+
 # --- detail levels (#56) -----------------------------------------------------
 _CONSULT_PAYLOAD = {"summary": "Looks fine", "findings": [], "questions": ["q1"]}
 

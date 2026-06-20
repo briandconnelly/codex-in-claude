@@ -731,7 +731,12 @@ async def codex_consult(
     test/build/lint run typically needs (a writable cache/temp), so Codex can't
     rely on executing your checks to confirm its claims. Pass `workspace_root`
     (absolute) so Codex reasons about the right repo. Returns a result envelope;
-    treat findings as unvalidated claims to verify by running the checks yourself."""
+    treat findings as unvalidated claims to verify by running the checks yourself.
+
+    Progress: this is a blocking call that returns only when Codex finishes; it does
+    not stream incremental `notifications/progress`. If you need live status or
+    recoverability for a long run, use `codex_consult_async` for a `job_id` and poll
+    `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -862,7 +867,12 @@ async def codex_review_changes(
     STATIC review, not a verify mode: the read-only sandbox blocks the writes a
     test/build/lint run typically needs (a writable cache/temp), so Codex can't
     rely on running the project's checks to confirm its findings. Treat findings as
-    unvalidated claims to verify by running those checks yourself before acting."""
+    unvalidated claims to verify by running those checks yourself before acting.
+
+    Progress: this is a blocking call that returns only when Codex finishes; it does
+    not stream incremental `notifications/progress`. If you need live status or
+    recoverability for a long run, use `codex_review_changes_async` for a `job_id` and
+    poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -969,7 +979,12 @@ async def codex_delegate(
     NO NETWORK: `workspace-write` blocks network egress, so the task must be
     self-contained — it cannot `git push`/`fetch`, `gh` anything, `curl`, publish, or
     install dependencies (those fail inside the sandbox with a DNS/host-resolution
-    error). Ask only for local code changes; do any network step yourself afterward."""
+    error). Ask only for local code changes; do any network step yourself afterward.
+
+    Progress: this is a blocking call that returns only when Codex finishes; it does
+    not stream incremental `notifications/progress`, and a delegate can run ~20s+. If
+    you need live status or recoverability, use `codex_delegate_async` for a `job_id`
+    and poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
