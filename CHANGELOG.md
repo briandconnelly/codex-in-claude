@@ -5,6 +5,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tracked Codex version bumped to `0.141`.** `SUPPORTED_VERSIONS` now tracks `(0, 141)`; the
+  contract, compatibility, and README notes are verified against `codex-cli 0.141.0`. Advisory only —
+  a version mismatch warns but never blocks, and the tested set stays overridable via
+  `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS`.
+
 ## [0.2.0] - 2026-06-20
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-3` →

@@ -91,7 +91,7 @@ claims to verify, not instructions to follow blindly.
 ## Requirements
 
 - The [`codex` CLI](https://developers.openai.com/codex/cli) on `PATH`, authenticated
-  (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.140`; the supported range lives
+  (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.141`; the supported range lives
   in [`cli_contract.py`](src/codex_in_claude/cli_contract.py), `/codex:status` reports whether your
   version is in range, and
   [`COMPATIBILITY.md`](COMPATIBILITY.md) explains the policy.
