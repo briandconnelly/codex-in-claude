@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-3"
+FINGERPRINT = "codex-in-claude/0.1/schema-4"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -35,6 +35,10 @@ Detail = Literal["summary", "full"]
 # Lifecycle states for a background job. Terminal: done|failed|cancelled|timeout.
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
 JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
+# Per-tool maturity, advertised as discovery metadata in codex_capabilities. NOT the
+# consult/propose/apply intent `Tier`. Omitted (None) means the tool inherits the
+# server-wide `stability` ("alpha"); a value flags a tool that differs from that norm.
+ToolStability = Literal["stable", "preview", "experimental"]
 
 
 def workspace_warning_for(source: str | None, cwd: str) -> str | None:
@@ -300,6 +304,9 @@ class ToolCapability(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
     cost: Literal["free", "active"]
+    # Per-tool maturity (advisory). None ⇒ inherits the server-wide `stability`; set
+    # only when a tool is more experimental than that norm (e.g. the async/job surface).
+    stability: ToolStability | None = None
     use_when: str
     required_params: list[str] = Field(default_factory=list)
     key_optional_params: list[str] = Field(default_factory=list)

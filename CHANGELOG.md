@@ -5,6 +5,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-tool stability + `listChanged` discovery metadata.** `codex_capabilities` now advertises an
+  advisory per-tool `stability` field: the newer async (`codex_*_async`) and background-job lifecycle
+  (`codex_job_*`) tools are marked `experimental`, while the sync core omits the field to inherit the
+  server-wide `stability` ("alpha") — so an agent can tell the stateful M4 surface from the settled
+  consult/review/delegate core. It is per-tool maturity metadata, distinct from the
+  consult/propose/apply intent tier. The server also declares the tools `listChanged` capability (now
+  pinned by a test) so clients know the contract even though the tool list is static per version.
+  Adds an output-schema field, so the result `fingerprint` bumps to `schema-4`.
+  ([#71](https://github.com/briandconnelly/codex-in-claude/issues/71))
+
 ### Security
 
 - **Broader best-effort secret redaction.** The diff/prose redactor now also catches shape-only

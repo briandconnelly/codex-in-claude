@@ -530,6 +530,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_consult_async",
                 cost="active",
+                stability="experimental",
                 use_when="Same as codex_consult, but the consult may run long and you "
                 "want a job_id immediately instead of blocking.",
                 required_params=["question"],
@@ -559,6 +560,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_review_changes_async",
                 cost="active",
+                stability="experimental",
                 use_when="Same as codex_review_changes, but the review may run long and "
                 "you want a job_id immediately instead of blocking.",
                 key_optional_params=[
@@ -589,6 +591,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_delegate_async",
                 cost="active",
+                stability="experimental",
                 use_when="Same as codex_delegate, but the task is long-running and you "
                 "want a job_id immediately instead of blocking.",
                 required_params=["task"],
@@ -599,6 +602,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_job_status",
                 cost="free",
+                stability="experimental",
                 use_when="To poll a background job's state without fetching the result.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root"],
@@ -607,6 +611,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_job_result",
                 cost="free",
+                stability="experimental",
                 use_when="When codex_job_status reports result_available=true.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root", "detail"],
@@ -617,6 +622,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_job_consume_result",
                 cost="free",
+                stability="experimental",
                 use_when="To fetch a finished job's result and delete the stored record.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root", "detail"],
@@ -625,6 +631,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_job_cancel",
                 cost="free",
+                stability="experimental",
                 use_when="To stop a running background job.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root"],
@@ -633,6 +640,7 @@ def codex_capabilities() -> dict:
             ToolCapability(
                 name="codex_job_list",
                 cost="free",
+                stability="experimental",
                 use_when="To recover job_ids or inspect known jobs for a workspace.",
                 key_optional_params=["workspace_root"],
                 returns="Compact job summaries, newest first.",
@@ -702,7 +710,10 @@ def codex_capabilities() -> dict:
     # means a newly advertised tool is missing from _TOOL_ERROR_CODES.
     for cap in caps.tool_details:
         cap.error_codes = _TOOL_ERROR_CODES[cap.name]
-    return caps.model_dump(mode="json")
+    # exclude_none so a tool that inherits the server-wide stability omits the field
+    # entirely (rather than emitting a noisy `stability: null`). The only optional
+    # field in this envelope is the per-tool `stability`.
+    return caps.model_dump(mode="json", exclude_none=True)
 
 
 # --------------------------------------------------------------------------- #
