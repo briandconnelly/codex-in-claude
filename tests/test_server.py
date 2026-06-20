@@ -6,6 +6,7 @@ import json
 from typing import get_args
 
 import pytest
+from pydantic import ValidationError
 
 from codex_in_claude import codex, server
 from codex_in_claude._core.runtime import CommandRun
@@ -1348,8 +1349,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_3():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-3"
+def test_fingerprint_is_schema_4():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-4"
 
 
 # --- detail levels (#56) -----------------------------------------------------
@@ -1745,6 +1746,26 @@ async def test_fixed_value_params_advertise_enum(tool_name, param, expected):
     # part of the MCP contract and may vary across Pydantic/FastMCP versions).
     assert enum is not None, f"{tool_name}.{param} schema exposes no enum"
     assert set(enum) == set(expected)
+
+
+async def test_all_tool_input_schemas_are_closed_and_declare_dialect():
+    """Every tool input schema rejects unknown keys and declares its JSON Schema
+    dialect, so a misspelled/extra param can't be silently dropped (issue #70)."""
+    tools = await server.mcp.list_tools()
+    assert tools
+    for tool in tools:
+        schema = tool.parameters
+        assert schema.get("additionalProperties") is False, f"{tool.name} schema not closed"
+        assert schema.get("$schema") == server.INPUT_SCHEMA_DIALECT, (
+            f"{tool.name} schema declares no dialect"
+        )
+
+
+async def test_unknown_tool_argument_is_rejected():
+    """An unknown argument fails validation rather than being silently ignored."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    with pytest.raises(ValidationError):
+        await tools["codex_status"].run({"definitely_not_a_param": 1})
 
 
 async def test_isolation_error_lists_allowed_values(clean_env, tmp_path):

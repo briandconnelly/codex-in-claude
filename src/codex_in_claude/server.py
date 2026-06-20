@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
+from fastmcp.server.middleware import Middleware
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
@@ -139,6 +140,30 @@ _JOB_MUTATE = {
 }
 
 mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=__version__)
+
+# Pydantic v2 (which FastMCP uses to generate tool input schemas) targets this dialect.
+INPUT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
+
+
+class _InputSchemaDialectMiddleware(Middleware):
+    """Stamp the JSON Schema dialect onto every tool's input schema.
+
+    FastMCP already emits *closed* input schemas (``additionalProperties: false``) and
+    rejects unknown arguments with a validation error, so misspelled/extra params are
+    not silently dropped. It does not, however, declare a ``$schema`` dialect — without
+    one a client can't know which draft to validate against. We add it here so the
+    advertised input schema is self-describing (agent-friendly-mcp checklist §3). This
+    is advertising only; it does not change accepted params, enums, or behavior."""
+
+    async def on_list_tools(self, context, call_next):  # type: ignore[no-untyped-def]
+        tools = await call_next(context)
+        for tool in tools:
+            if tool.parameters is not None:
+                tool.parameters.setdefault("$schema", INPUT_SCHEMA_DIALECT)
+        return tools
+
+
+mcp.add_middleware(_InputSchemaDialectMiddleware())
 
 # The propose orchestration lives in delegate.py; re-exported here for test access.
 _diffstat = delegate._diffstat

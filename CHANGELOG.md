@@ -5,6 +5,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool input schemas declare their JSON Schema dialect.** Every tool's advertised input
+  schema now carries `$schema` (`draft 2020-12`, the dialect Pydantic/FastMCP generate), so a
+  client knows which draft to validate against (agent-friendly-mcp §3). The schemas were already
+  *closed* (`additionalProperties: false`) and already reject unknown/misspelled arguments with a
+  validation error rather than silently dropping them — that behavior is now pinned by a regression
+  test across all tools. Accepted params, enums, and error codes are unchanged, but the advertised
+  input schema did change, so the result `fingerprint` bumps `schema-3` → `schema-4` (clients cache
+  by it). ([#70](https://github.com/briandconnelly/codex-in-claude/issues/70))
+
 ### Security
 
 - **Broader best-effort secret redaction.** The diff/prose redactor now also catches shape-only
