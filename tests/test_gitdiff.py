@@ -231,7 +231,9 @@ def test_untracked_file_blob_not_persisted_in_repo(repo):
         str(repo), "working_tree", paths=["leak.txt"], timeout=30, max_bytes=200_000
     )
     sha = subprocess.run(
-        ["git", "hash-object", "leak.txt"],
+        # Match production hashing (`hash-object --no-filters`) so the expected SHA is
+        # independent of any global gitattributes/clean filter the host has configured.
+        ["git", "hash-object", "--no-filters", "leak.txt"],
         cwd=repo,
         capture_output=True,
         text=True,

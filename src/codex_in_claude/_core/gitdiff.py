@@ -102,12 +102,15 @@ def _git(
         env.update(extra_env)
     try:
         proc = subprocess.run(
-            # `-c core.quotepath=true` forces C-quoting of control-character paths
-            # regardless of the user's config; with quotepath=false git would emit
-            # raw newlines in path headers, letting a crafted filename forge a
-            # second `diff --git` entry. encoding+surrogateescape so non-UTF-8 bytes
-            # git may emit or consume (binary paths, symlink targets) round-trip
-            # instead of raising UnicodeDecodeError/UnicodeEncodeError.
+            # `-c core.quotepath=true` forces git's default path quoting regardless
+            # of the user's config. git always C-quotes control characters (newlines,
+            # tabs, etc.) no matter the quotepath setting; quotepath only governs
+            # high-bit/non-ASCII bytes -- with quotepath=false git emits them raw
+            # instead of octal-escaped, making the reviewed diff depend on the caller's
+            # config. Forcing quotepath=true keeps path-header encoding deterministic.
+            # encoding+surrogateescape so non-UTF-8 bytes git may emit or consume
+            # (binary paths, symlink targets) round-trip instead of raising
+            # UnicodeDecodeError/UnicodeEncodeError.
             ["git", "-c", "core.quotepath=true", *args],
             cwd=cwd,
             capture_output=True,
