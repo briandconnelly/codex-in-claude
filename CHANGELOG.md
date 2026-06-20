@@ -9,7 +9,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 - **`codex_review_changes` now reviews explicitly-named untracked files.** With
   `scope="working_tree"` and `paths` targeting a brand-new (never-staged) file, the review
-  silently returned "no changes" because `git diff HEAD` only sees tracked files. Named untracked
+  silently returned "No changes to review" because `git diff HEAD` only sees tracked files. Named untracked
   (non-gitignored) files are now gathered too — staged into a throwaway index and diffed against the
   empty tree — so writing a file and reviewing it no longer requires a `git add` round-trip. Default
   behavior is unchanged (no `paths` ⇒ tracked changes only). Gathering is filter-free and writes no

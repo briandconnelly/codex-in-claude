@@ -102,10 +102,18 @@ def _git(
         env.update(extra_env)
     try:
         proc = subprocess.run(
-            ["git", *args],
+            # `-c core.quotepath=true` forces C-quoting of control-character paths
+            # regardless of the user's config; with quotepath=false git would emit
+            # raw newlines in path headers, letting a crafted filename forge a
+            # second `diff --git` entry. encoding+surrogateescape so non-UTF-8 bytes
+            # git may emit or consume (binary paths, symlink targets) round-trip
+            # instead of raising UnicodeDecodeError/UnicodeEncodeError.
+            ["git", "-c", "core.quotepath=true", *args],
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=timeout,
             check=False,
             env=env,
@@ -134,6 +142,8 @@ def _ref_exists(cwd: str, ref: str, timeout: int) -> bool:
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=timeout,
             check=False,
             env={"LC_ALL": "C", "LANG": "C", "PATH": _path()},

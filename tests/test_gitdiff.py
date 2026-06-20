@@ -267,6 +267,33 @@ def test_untracked_symlink_with_newline_in_name(repo):
     assert res.summary.lines_added == 1
 
 
+def test_quotepath_quoting_forced_despite_user_config(repo):
+    # `core.quotepath` governs whether high-bit (non-ASCII) path bytes are C-quoted.
+    # A user setting `core.quotepath=false` would otherwise emit raw UTF-8 bytes in the
+    # `diff --git` header, making the reviewed text depend on caller config. We force
+    # `-c core.quotepath=true`, so quoting is deterministic regardless of that config.
+    _git(repo, "config", "core.quotepath", "false")
+    (repo / "café.py").write_text("v = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["café.py"], timeout=30, max_bytes=200_000
+    )
+    # Forced quoting renders the non-ASCII byte as an escaped octal sequence, never raw.
+    assert "café.py" not in res.text
+    assert "caf\\303\\251.py" in res.text
+    assert res.summary.files_changed == 1
+
+
+def test_named_untracked_non_utf8_content_roundtrips(repo):
+    # An untracked file with non-UTF-8 bytes must not raise UnicodeDecodeError while
+    # gathering: surrogateescape lets git's output round-trip and the diff is bounded.
+    (repo / "blob.bin").write_bytes(b"\xff\xfe\x00raw\x80bytes\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["blob.bin"], timeout=30, max_bytes=200_000
+    )
+    assert "blob.bin" in res.text
+    assert res.summary.files_changed == 1
+
+
 def test_named_untracked_inaccessible_file_raises(repo):
     # An unreadable untracked file makes `--no-index` exit 1 with empty stdout; that is
     # a real error and must surface, not be silently dropped.
