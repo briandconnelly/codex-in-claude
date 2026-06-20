@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Sync active tools document their no-progress behavior.** The blocking `codex_consult`,
+  `codex_review_changes`, and `codex_delegate` tool descriptions now state that they return only when
+  Codex finishes and do not stream incremental `notifications/progress`, and point agents to the
+  `*_async` variant + `codex_job_status` when they need live status or recoverability for a long run
+  (a `codex_delegate` can run ~20s+). The domain `codex_job_*` surface remains the deliberate
+  long-running-operation hedge; this is a description-only clarification (no `fingerprint` change).
+  ([#72](https://github.com/briandconnelly/codex-in-claude/issues/72))
+
 ### Security
 
 - **Broader best-effort secret redaction.** The diff/prose redactor now also catches shape-only
