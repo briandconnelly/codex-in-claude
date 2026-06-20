@@ -7,6 +7,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Legible failure on stdio transport death.** `main()` now wraps the transport loop: a fatal error
+  out of `mcp.run()` logs an actionable stderr breadcrumb (server name, version, reason, and a `/mcp`
+  reconnect hint) and exits nonzero instead of dying silently, while clean disconnects
+  (EOF / broken pipe / `SIGINT` / `SIGTERM`) are logged as shutdown rather than crashes. A minimal
+  `SIGINT`/`SIGTERM` breadcrumb chains to the prior disposition (and leaves an inherited-ignored
+  signal ignored). A stdio server can't be transparently auto-restarted — the client owns the pipe
+  and `initialize` handshake — so recovery stays a manual `/mcp` reconnect, now documented in the
+  README troubleshooting section. ([#76](https://github.com/briandconnelly/codex-in-claude/issues/76))
 - **Per-tool stability + `listChanged` discovery metadata.** `codex_capabilities` now advertises an
   advisory per-tool `stability` field: the newer async (`codex_*_async`) and background-job lifecycle
   (`codex_job_*`) tools are marked `experimental`, while the sync core omits the field to inherit the
@@ -14,8 +22,37 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   consult/review/delegate core. It is per-tool maturity metadata, distinct from the
   consult/propose/apply intent tier. The server also declares the tools `listChanged` capability (now
   pinned by a test) so clients know the contract even though the tool list is static per version.
-  Adds an output-schema field, so the result `fingerprint` bumps to `schema-4`.
+  Adds an output-schema field, so the result `fingerprint` bumps `schema-4` → `schema-5`.
   ([#71](https://github.com/briandconnelly/codex-in-claude/issues/71))
+
+### Changed
+
+- **Tool input schemas declare their JSON Schema dialect.** Every tool's advertised input
+  schema now carries `$schema` (`draft 2020-12`, the dialect Pydantic/FastMCP generate), so a
+  client knows which draft to validate against (agent-friendly-mcp §3). The schemas were already
+  *closed* (`additionalProperties: false`) and already reject unknown/misspelled arguments with a
+  validation error rather than silently dropping them — that behavior is now pinned by a regression
+  test across all tools. Accepted params, enums, and error codes are unchanged, but the advertised
+  input schema did change, so the result `fingerprint` bumps `schema-3` → `schema-4` (clients cache
+  by it). ([#70](https://github.com/briandconnelly/codex-in-claude/issues/70))
+- **Sync active tools document their no-progress behavior.** The blocking `codex_consult`,
+  `codex_review_changes`, and `codex_delegate` tool descriptions now state that they return only when
+  Codex finishes and do not stream incremental `notifications/progress`, and point agents to the
+  `*_async` variant + `codex_job_status` when they need live status or recoverability for a long run
+  (a `codex_delegate` can run ~20s+). The domain `codex_job_*` surface remains the deliberate
+  long-running-operation hedge; this is a description-only clarification (no `fingerprint` change).
+  ([#72](https://github.com/briandconnelly/codex-in-claude/issues/72))
+
+### Fixed
+
+- **`codex_review_changes` now reviews explicitly-named untracked files.** With
+  `scope="working_tree"` and `paths` targeting a brand-new (never-staged) file, the review
+  silently returned "No changes to review" because `git diff HEAD` only sees tracked files. Named untracked
+  (non-gitignored) files are now gathered too — staged into a throwaway index and diffed against the
+  empty tree — so writing a file and reviewing it no longer requires a `git add` round-trip. Default
+  behavior is unchanged (no `paths` ⇒ tracked changes only). Gathering is filter-free and writes no
+  objects into the repo's own store, preserving the read-only/redacted posture.
+  ([#74](https://github.com/briandconnelly/codex-in-claude/issues/74))
 
 ### Security
 

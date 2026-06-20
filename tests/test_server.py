@@ -6,6 +6,7 @@ import json
 from typing import get_args
 
 import pytest
+from pydantic import ValidationError
 
 from codex_in_claude import codex, server
 from codex_in_claude._core.runtime import CommandRun
@@ -1348,8 +1349,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_4():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-4"
+def test_fingerprint_is_schema_5():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-5"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -1379,6 +1380,21 @@ def test_server_advertises_tools_list_changed():
     contract even though the static tool list never changes mid-session (#71)."""
     opts = server.mcp._mcp_server.create_initialization_options()
     assert opts.capabilities.tools.listChanged is True
+
+
+async def test_sync_active_tools_document_no_progress_and_async_fallback():
+    """The blocking active tools tell agents they don't stream progress and point to
+    the async variant + codex_job_status for live status (#72)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    for name, async_name in (
+        ("codex_consult", "codex_consult_async"),
+        ("codex_review_changes", "codex_review_changes_async"),
+        ("codex_delegate", "codex_delegate_async"),
+    ):
+        desc = tools[name].description or ""
+        assert "notifications/progress" in desc, name
+        assert async_name in desc, name
+        assert "codex_job_status" in desc, name
 
 
 # --- detail levels (#56) -----------------------------------------------------
@@ -1774,6 +1790,55 @@ async def test_fixed_value_params_advertise_enum(tool_name, param, expected):
     # part of the MCP contract and may vary across Pydantic/FastMCP versions).
     assert enum is not None, f"{tool_name}.{param} schema exposes no enum"
     assert set(enum) == set(expected)
+
+
+async def test_all_tool_input_schemas_are_closed_and_declare_dialect():
+    """Every tool input schema rejects unknown keys and declares its JSON Schema
+    dialect, so a misspelled/extra param can't be silently dropped (issue #70)."""
+    tools = await server.mcp.list_tools()
+    assert tools
+    for tool in tools:
+        schema = tool.parameters
+        assert schema.get("additionalProperties") is False, f"{tool.name} schema not closed"
+        assert schema.get("$schema") == server.INPUT_SCHEMA_DIALECT, (
+            f"{tool.name} schema declares no dialect"
+        )
+
+
+async def test_dialect_middleware_overwrites_existing_schema():
+    """The middleware stamps our dialect even when a tool already carries a
+    ``$schema`` (a different draft, or None) — the guarantee is that the
+    advertised dialect matches the one we validate against, not that we defer
+    to whatever upstream emitted (Copilot review, PR #80)."""
+
+    class _FakeTool:
+        def __init__(self, params):
+            self.parameters = params
+
+    tools = [
+        _FakeTool({"$schema": "https://json-schema.org/draft-07/schema#"}),
+        _FakeTool({"$schema": None}),
+        _FakeTool({}),
+        _FakeTool(None),
+    ]
+
+    async def call_next(_context):
+        return tools
+
+    middleware = server._InputSchemaDialectMiddleware()
+    result = await middleware.on_list_tools(object(), call_next)
+
+    assert result[0].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
+    assert result[1].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
+    assert result[2].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
+    assert result[3].parameters is None
+
+
+async def test_unknown_tool_argument_is_rejected():
+    """An unknown argument fails validation rather than being silently ignored."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    with pytest.raises(ValidationError):
+        await tools["codex_status"].run({"definitely_not_a_param": 1})
 
 
 async def test_isolation_error_lists_allowed_values(clean_env, tmp_path):
