@@ -58,7 +58,8 @@ def test_jwt_redacted_in_diff():
     # Unlabeled — no key=/token= adjacent, so only a JWT-shape pattern catches it.
     out, redacted = redaction.redact(f"diff --git a/x.py b/x.py\n+Cookie: {jwt}")
     assert jwt not in out
-    assert "[redacted: secret value]" in out
+    # Exact output — no fragment of the token survives around the placeholder.
+    assert "+Cookie: [redacted: secret value]" in out
     assert "x.py" in redacted
 
 
