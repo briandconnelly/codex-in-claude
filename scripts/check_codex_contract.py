@@ -36,7 +36,7 @@ def _probe_version() -> str:
     run = runtime.run_sync_capture(
         [cli_contract.CODEX_BIN, *cli_contract.VERSION_ARGS], timeout_seconds=10
     )
-    if run.binary_missing:
+    if run.binary_missing or run.timed_out:
         return ""
     return run.stdout.strip()
 
@@ -45,7 +45,9 @@ def _probe_help() -> str:
     run = runtime.run_sync_capture(
         [cli_contract.CODEX_BIN, *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10
     )
-    if run.binary_missing:
+    # A timeout writes "__timed_out__" to stderr; without this guard that non-empty
+    # text would parse to zero flags and misreport a hung probe as contract drift.
+    if run.binary_missing or run.timed_out:
         return ""
     return f"{run.stdout}\n{run.stderr}"
 
@@ -94,6 +96,11 @@ def main() -> int:
             print(f"{WARN}: HELP_GATED flag {flag} absent — server drops it gracefully.")
 
     # --- sandbox values (capability boundary) ----------------------------------
+    # Deliberately coarse: a substring scan of the whole help blob, not a parse of
+    # the `--sandbox` value enum. It can false-pass if a value appears in unrelated
+    # prose, or false-fail on a help-format change — acceptable for this mechanical
+    # pre-check, which the manual semantic review and the live integration tests
+    # (docs/UPGRADING-CODEX.md) back up.
     missing_sandbox = [v for v in cli_contract.VALID_SANDBOXES if v not in help_text]
     if missing_sandbox:
         blocking = True
