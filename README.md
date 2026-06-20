@@ -192,7 +192,13 @@ Run `/codex:status` first — it's free (no model call) and diagnoses most setup
 | `meta.workspace_warning` in results | Server fell back to its own launch directory | Run from the target repo, or pass `workspace_root` (see [`docs/REFERENCE.md`](docs/REFERENCE.md#workspace-selection)) |
 | `codex_delegate` fails needing a commit | The temp worktree is seeded from `HEAD` | Make at least one commit first |
 | `codex_rate_limited` error | Account hit a usage/rate limit | Back off for `retry_after_ms`, then retry |
-| `Connection closed` / `No such tool available: mcp__codex-in-claude__*` | The stdio MCP server is down | Relaunch the `codex-in-claude` server and confirm with `codex_status`; see the fallback note below |
+| `Connection closed` / `No such tool available: mcp__codex-in-claude__*` | The stdio MCP server is down | Reconnect with the `/mcp` command (or restart the client), then confirm with `codex_status`; see the fallback note below |
+
+A stdio MCP server can't be transparently auto-restarted (the client owns the pipe and the
+`initialize` handshake), so recovery is a manual reconnect. On a fatal crash the server writes a
+breadcrumb to **stderr** (server name, version, reason, and a `/mcp` reconnect hint) before exiting,
+and logs clean disconnects (EOF / broken pipe / `SIGINT` / `SIGTERM`) as shutdown rather than crashes
+— so the server logs tell you whether it died or was stopped.
 
 If the MCP server is down, you can fall back to the `codex` CLI directly for a read-only consult or
 review — `codex exec --sandbox read-only --skip-git-repo-check -` (prompt on stdin) — but this
