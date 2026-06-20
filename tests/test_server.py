@@ -1374,7 +1374,7 @@ def test_capabilities_mark_m4_surface_experimental():
         assert "stability" not in by_name[name], name
 
 
-async def test_server_advertises_tools_list_changed():
+def test_server_advertises_tools_list_changed():
     """The server declares the tools `listChanged` capability so clients know the
     contract even though the static tool list never changes mid-session (#71)."""
     opts = server.mcp._mcp_server.create_initialization_options()
