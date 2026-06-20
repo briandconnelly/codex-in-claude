@@ -28,6 +28,19 @@ SECRET_VALUE_PATTERNS = [
         r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
     ),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    # Unlabeled secrets caught by shape alone (#73), independent of an adjacent label.
+    # JWT: three base64url segments after the `eyJ` ("{" base64) header marker.
+    re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    # Vendor key prefixes: OpenAI (sk-, sk-proj-), Stripe (sk_live_/sk_test_),
+    # Google (AIza). `{n,}` rather than a fixed length so a longer/variant token
+    # can't leave a trailing suffix unredacted.
+    re.compile(r"sk-proj-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"sk_(?:live|test)_[A-Za-z0-9]{16,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{35,}"),
+    # Connection-string userinfo: redact the password between `://user:` and `@host`,
+    # keeping scheme, user, and host. The `@` lookahead avoids matching `host:port`.
+    re.compile(r"([a-zA-Z][\w+.-]*://[^:@\s/]+:)[^@\s/]+(?=@)"),
 ]
 
 
