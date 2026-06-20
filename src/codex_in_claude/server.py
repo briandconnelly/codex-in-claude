@@ -159,7 +159,12 @@ class _InputSchemaDialectMiddleware(Middleware):
         tools = await call_next(context)
         for tool in tools:
             if tool.parameters is not None:
-                tool.parameters.setdefault("$schema", INPUT_SCHEMA_DIALECT)
+                # Assign rather than setdefault: the guarantee is that the
+                # advertised dialect matches the one we actually validate
+                # against. If FastMCP/Pydantic ever emits its own ``$schema``
+                # (a different draft, or ``None``), overwrite it instead of
+                # trusting it.
+                tool.parameters["$schema"] = INPUT_SCHEMA_DIALECT
         return tools
 
 

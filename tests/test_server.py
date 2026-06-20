@@ -1761,6 +1761,35 @@ async def test_all_tool_input_schemas_are_closed_and_declare_dialect():
         )
 
 
+async def test_dialect_middleware_overwrites_existing_schema():
+    """The middleware stamps our dialect even when a tool already carries a
+    ``$schema`` (a different draft, or None) — the guarantee is that the
+    advertised dialect matches the one we validate against, not that we defer
+    to whatever upstream emitted (Copilot review, PR #80)."""
+
+    class _FakeTool:
+        def __init__(self, params):
+            self.parameters = params
+
+    tools = [
+        _FakeTool({"$schema": "https://json-schema.org/draft-07/schema#"}),
+        _FakeTool({"$schema": None}),
+        _FakeTool({}),
+        _FakeTool(None),
+    ]
+
+    async def call_next(_context):
+        return tools
+
+    middleware = server._InputSchemaDialectMiddleware()
+    result = await middleware.on_list_tools(object(), call_next)
+
+    assert result[0].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
+    assert result[1].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
+    assert result[2].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
+    assert result[3].parameters is None
+
+
 async def test_unknown_tool_argument_is_rejected():
     """An unknown argument fails validation rather than being silently ignored."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
