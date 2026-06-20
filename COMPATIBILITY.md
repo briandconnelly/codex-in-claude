@@ -83,6 +83,7 @@ follows this (optional fields are nullable but still required).
 
 ## When `codex` changes
 
-1. Update `cli_contract.py` (and `config.py` if defaults move).
-2. Run the golden/contract tests and the live integration tests.
-3. Bump `FINGERPRINT` if the agent-visible surface changed; record it in `CHANGELOG.md`.
+Follow the full procedure in [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md): run the no-spend
+drift check (`uv run python scripts/check_codex_contract.py`), do the manual semantic review the
+script can't, then update `cli_contract.py` (and the lockstep files), run the test gate plus the live
+integration tests, and bump `FINGERPRINT`/`CHANGELOG.md` only if the agent-visible surface changed.

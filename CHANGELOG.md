@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Formal codex-upgrade procedure.** `docs/UPGRADING-CODEX.md` documents the repeatable, ordered
+  checklist for incorporating a new `codex` CLI version (drift detection, semantic review,
+  replace-vs-add the tracked minor, lockstep files, breaking-vs-not, verification). The terse
+  "When codex changes" section in `COMPATIBILITY.md` now points at it. Paired with
+  `scripts/check_codex_contract.py`, a no-spend drift check that diffs the installed CLI's
+  `--version`/`exec --help` against the contract's flag classes and sandbox values (reusing the
+  server's own help parser).
+
 ### Changed
 
 - **Tracked Codex version bumped to `0.141`.** `SUPPORTED_VERSIONS` now tracks `(0, 141)`; the
