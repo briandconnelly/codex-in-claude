@@ -5,6 +5,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Legible failure on stdio transport death.** `main()` now wraps the transport loop: a fatal error
+  out of `mcp.run()` logs an actionable stderr breadcrumb (server name, version, reason, and a `/mcp`
+  reconnect hint) and exits nonzero instead of dying silently, while clean disconnects
+  (EOF / broken pipe / `SIGINT` / `SIGTERM`) are logged as shutdown rather than crashes. A minimal
+  `SIGINT`/`SIGTERM` breadcrumb chains to the prior disposition (and leaves an inherited-ignored
+  signal ignored). A stdio server can't be transparently auto-restarted — the client owns the pipe
+  and `initialize` handshake — so recovery stays a manual `/mcp` reconnect, now documented in the
+  README troubleshooting section. ([#76](https://github.com/briandconnelly/codex-in-claude/issues/76))
+
 ### Changed
 
 - **Sync active tools document their no-progress behavior.** The blocking `codex_consult`,
@@ -14,6 +25,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (a `codex_delegate` can run ~20s+). The domain `codex_job_*` surface remains the deliberate
   long-running-operation hedge; this is a description-only clarification (no `fingerprint` change).
   ([#72](https://github.com/briandconnelly/codex-in-claude/issues/72))
+
+### Fixed
+
+- **`codex_review_changes` now reviews explicitly-named untracked files.** With
+  `scope="working_tree"` and `paths` targeting a brand-new (never-staged) file, the review
+  silently returned "No changes to review" because `git diff HEAD` only sees tracked files. Named untracked
+  (non-gitignored) files are now gathered too — staged into a throwaway index and diffed against the
+  empty tree — so writing a file and reviewing it no longer requires a `git add` round-trip. Default
+  behavior is unchanged (no `paths` ⇒ tracked changes only). Gathering is filter-free and writes no
+  objects into the repo's own store, preserving the read-only/redacted posture.
+  ([#74](https://github.com/briandconnelly/codex-in-claude/issues/74))
 
 ### Security
 
