@@ -50,7 +50,7 @@ For a first useful run:
 - `/codex:delegate add focused tests for this behavior` to get a proposed diff in an isolated
   worktree.
 
-The MCP server is launched on demand via `uvx` from a pinned release tag, so updates are deliberate.
+The MCP server is launched on demand via `uvx` from a pinned PyPI release, so updates are deliberate.
 
 ## Example
 
@@ -110,8 +110,10 @@ claims to verify, not instructions to follow blindly.
   `commit`; returns structured findings.
 - `codex_delegate(task, …)` — implement a task in an isolated worktree; returns a reviewable
   `diff` that is **not** applied.
-- `codex_delegate_async(task, …)` — same as `codex_delegate` but detached: returns a `job_id`
-  immediately. Starting a job commits to spend (it runs to completion or its deadline).
+- `codex_consult_async(question, …)`, `codex_review_changes_async(…)`, `codex_delegate_async(task, …)`
+  — detached variants of the three active tools: each returns a `job_id` immediately. Starting a job
+  commits to spend (it runs to completion or its deadline); poll with `codex_job_status` /
+  `codex_job_result`.
 
 **Free (local only):**
 
@@ -209,7 +211,7 @@ uv run codex-in-claude-mcp          # run the MCP server over stdio
 ```
 
 To test the plugin from a local checkout, point `.mcp.json` at
-`uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the pinned `uvx` tag.
+`uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the pinned `uvx` PyPI release.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch, commit, and PR conventions.
 
