@@ -111,3 +111,217 @@ def test_path_filter(repo):
     )
     assert "calc.py" in res.text
     assert "other.py" not in res.text
+
+
+# --- explicitly-named untracked files (#74) ---------------------------------
+def test_working_tree_named_untracked_file_reviewed(repo):
+    # A brand-new (never-staged) file named in paths must be reviewed, not silently dropped.
+    (repo / "fresh.py").write_text("def f():\n    return 42\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["fresh.py"], timeout=30, max_bytes=200_000
+    )
+    assert "fresh.py" in res.text
+    assert "return 42" in res.text
+    assert "new file" in res.text
+    assert res.summary.files_changed == 1
+    assert res.summary.lines_added == 2
+
+
+def test_working_tree_named_untracked_combined_with_tracked(repo):
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")  # tracked, modified
+    (repo / "fresh.py").write_text("x = 1\n")  # untracked
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["calc.py", "fresh.py"], timeout=30, max_bytes=200_000
+    )
+    assert "return a - b" in res.text
+    assert "fresh.py" in res.text
+    assert res.summary.files_changed == 2
+
+
+def test_working_tree_untracked_under_named_directory(repo):
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "mod.py").write_text("y = 2\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["pkg"], timeout=30, max_bytes=200_000
+    )
+    assert "pkg/mod.py" in res.text
+    assert "y = 2" in res.text
+
+
+def test_untracked_not_included_without_paths(repo):
+    # Default behavior is unchanged: no paths => only tracked changes, untracked invisible.
+    (repo / "fresh.py").write_text("z = 3\n")
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert "fresh.py" not in res.text
+    assert res.summary.files_changed == 0
+
+
+def test_named_ignored_untracked_file_excluded(repo):
+    (repo / ".gitignore").write_text("ignored.py\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore")
+    (repo / "ignored.py").write_text("secret = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["ignored.py"], timeout=30, max_bytes=200_000
+    )
+    # exclude-standard: a gitignored file named in paths is not surfaced.
+    assert "ignored.py" not in res.text
+    assert res.summary.files_changed == 0
+
+
+def test_named_untracked_secret_file_redacted(repo):
+    (repo / ".env").write_text("SECRET_TOKEN=supersecretvalue1234567890\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=[".env"], timeout=30, max_bytes=200_000
+    )
+    assert "supersecretvalue" not in res.text
+    assert ".env" in res.redacted_paths
+
+
+def test_named_untracked_symlink_to_dir_reviewed(repo):
+    # A `git diff --no-index` against a symlink-to-directory fails with an access error;
+    # the symlink must instead be surfaced as a `mode 120000` new-file patch (#74).
+    (repo / "realdir").mkdir()
+    (repo / "link").symlink_to("realdir", target_is_directory=True)
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["link"], timeout=30, max_bytes=200_000
+    )
+    assert "b/link" in res.text
+    assert "120000" in res.text
+    assert "+realdir" in res.text
+    assert res.summary.files_changed == 1
+    assert res.summary.lines_added == 1
+
+
+def test_named_untracked_symlink_multiline_target(repo):
+    # A POSIX symlink target may contain newlines; every line must be `+`-prefixed and
+    # the hunk count must match so the synthesized diff stays well-formed.
+    (repo / "link").symlink_to("first\nsecond")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["link"], timeout=30, max_bytes=200_000
+    )
+    assert "@@ -0,0 +1,2 @@" in res.text
+    assert "+first" in res.text
+    assert "+second" in res.text
+    # No target line may slip in unprefixed (would let crafted text spoof diff structure).
+    assert "\nsecond\n" not in res.text
+    assert res.summary.lines_added == 2
+
+
+def test_untracked_file_clean_filter_not_applied(repo):
+    # Gathering must not run configured gitattributes clean filters (a code-exec surface),
+    # and must show the raw working-tree bytes, not the filtered/normalized form.
+    _git(repo, "config", "filter.evil.clean", "sed s/SECRET/MANGLED/")
+    (repo / ".gitattributes").write_text("*.sec filter=evil\n")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-qm", "attr")
+    (repo / "data.sec").write_text("has SECRET here\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["data.sec"], timeout=30, max_bytes=200_000
+    )
+    assert "has SECRET here" in res.text  # raw bytes
+    assert "MANGLED" not in res.text  # clean filter never ran
+
+
+def test_untracked_file_blob_not_persisted_in_repo(repo):
+    # Gathering must not leave the raw (pre-redaction) bytes of an untracked file as a
+    # blob in the repo's own object store, where it could outlive the redacted review.
+    (repo / "leak.txt").write_text("TOP SECRET LEAK value\n")
+    gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["leak.txt"], timeout=30, max_bytes=200_000
+    )
+    sha = subprocess.run(
+        # Match production hashing (`hash-object --no-filters`) so the expected SHA is
+        # independent of any global gitattributes/clean filter the host has configured.
+        ["git", "hash-object", "--no-filters", "leak.txt"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    present = subprocess.run(["git", "cat-file", "-e", sha], cwd=repo, check=False).returncode == 0
+    assert not present, "raw untracked blob leaked into repo .git/objects"
+
+
+def test_untracked_content_line_starting_with_plus_counted(repo):
+    # A content line that begins with `+` becomes `++...` in the diff; it must still be
+    # counted as added (git numstat is authoritative, not a `+++` prefix filter).
+    (repo / "plus.py").write_text("+value = 1\nnormal = 2\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["plus.py"], timeout=30, max_bytes=200_000
+    )
+    assert "++value = 1" in res.text
+    assert res.summary.lines_added == 2
+
+
+def test_untracked_symlink_with_newline_in_name(repo):
+    # A control-character path must be git-quoted in the header, not interpolated raw
+    # (which could inject a fake `diff --git` line). git emits the quoted form.
+    (repo / "a\nb").symlink_to("target")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["a\nb"], timeout=30, max_bytes=200_000
+    )
+    # git C-quotes the path (\n escaped to two chars), so the header stays one physical
+    # line and the newline can't forge a second `diff --git` entry.
+    assert '"a/a\\nb"' in res.text
+    assert '\nb" "b/' not in res.text
+    assert res.summary.files_changed == 1
+    assert res.summary.lines_added == 1
+
+
+def test_quotepath_quoting_forced_despite_user_config(repo):
+    # `core.quotepath` governs whether high-bit (non-ASCII) path bytes are C-quoted.
+    # A user setting `core.quotepath=false` would otherwise emit raw UTF-8 bytes in the
+    # `diff --git` header, making the reviewed text depend on caller config. We force
+    # `-c core.quotepath=true`, so quoting is deterministic regardless of that config.
+    _git(repo, "config", "core.quotepath", "false")
+    (repo / "café.py").write_text("v = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["café.py"], timeout=30, max_bytes=200_000
+    )
+    # Forced quoting renders the non-ASCII byte as an escaped octal sequence, never raw.
+    assert "café.py" not in res.text
+    assert "caf\\303\\251.py" in res.text
+    assert res.summary.files_changed == 1
+
+
+def test_named_untracked_non_utf8_content_roundtrips(repo):
+    # An untracked file with non-UTF-8 bytes must not raise UnicodeDecodeError while
+    # gathering: surrogateescape lets git's output round-trip and the diff is bounded.
+    (repo / "blob.bin").write_bytes(b"\xff\xfe\x00raw\x80bytes\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["blob.bin"], timeout=30, max_bytes=200_000
+    )
+    assert "blob.bin" in res.text
+    assert res.summary.files_changed == 1
+
+
+def test_named_untracked_inaccessible_file_raises(repo):
+    # An unreadable untracked file makes `--no-index` exit 1 with empty stdout; that is
+    # a real error and must surface, not be silently dropped.
+    import os
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("file permissions are not enforced for root")
+    bad = repo / "locked.py"
+    bad.write_text("x = 1\n")
+    bad.chmod(0o000)
+    try:
+        with pytest.raises(RuntimeError):
+            gitdiff.gather_diff(
+                str(repo), "working_tree", paths=["locked.py"], timeout=30, max_bytes=200_000
+            )
+    finally:
+        bad.chmod(0o644)
+
+
+def test_branch_scope_ignores_untracked(repo):
+    # The untracked-file augmentation is working_tree-only.
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (repo / "fresh.py").write_text("w = 9\n")
+    res = gitdiff.gather_diff(
+        str(repo), "branch", base=base, paths=["fresh.py"], timeout=30, max_bytes=200_000
+    )
+    assert "fresh.py" not in res.text
