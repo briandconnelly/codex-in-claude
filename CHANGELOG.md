@@ -7,6 +7,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Claude Code compatibility runbook.** `docs/CLAUDE-CODE-COMPAT.md` documents the host-side coupling
+  (plugin/marketplace manifest, MCP launch, skill/command formats, the MCP protocol) — what guards
+  each surface today, how a Claude Code change surfaces as breakage, and how to triage and respond.
+  Reactive by design: Claude Code ships no pinnable version contract, unlike the codex CLI we call.
+  Cross-linked from `COMPATIBILITY.md`.
 - **Formal codex-upgrade procedure.** `docs/UPGRADING-CODEX.md` documents the repeatable, ordered
   checklist for incorporating a new `codex` CLI version (drift detection, semantic review,
   replace-vs-add the tracked minor, lockstep files, breaking-vs-not, verification). The terse
