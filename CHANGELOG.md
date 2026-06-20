@@ -18,6 +18,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Tool input schemas declare their JSON Schema dialect.** Every tool's advertised input
+  schema now carries `$schema` (`draft 2020-12`, the dialect Pydantic/FastMCP generate), so a
+  client knows which draft to validate against (agent-friendly-mcp §3). The schemas were already
+  *closed* (`additionalProperties: false`) and already reject unknown/misspelled arguments with a
+  validation error rather than silently dropping them — that behavior is now pinned by a regression
+  test across all tools. Accepted params, enums, and error codes are unchanged, but the advertised
+  input schema did change, so the result `fingerprint` bumps `schema-3` → `schema-4` (clients cache
+  by it). ([#70](https://github.com/briandconnelly/codex-in-claude/issues/70))
 - **Sync active tools document their no-progress behavior.** The blocking `codex_consult`,
   `codex_review_changes`, and `codex_delegate` tool descriptions now state that they return only when
   Codex finishes and do not stream incremental `notifications/progress`, and point agents to the
