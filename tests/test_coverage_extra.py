@@ -220,7 +220,9 @@ async def test_review_placeholder_env(monkeypatch, clean_env, tmp_path):
 
 def test_main_runs(monkeypatch):
     called = {"n": 0}
-    monkeypatch.setattr(server.mcp, "run", lambda *a, **k: called.__setitem__("n", 1))
+    # _patch_main() stubs _install_signal_logging() / obs.configure() so main() does
+    # not mutate the test runner's process-wide SIGINT/SIGTERM disposition (#76).
+    _patch_main(monkeypatch, lambda *a, **k: called.__setitem__("n", 1))
     server.main()
     assert called["n"] == 1
 
