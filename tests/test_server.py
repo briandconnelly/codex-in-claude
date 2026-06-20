@@ -1349,8 +1349,37 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_4():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-4"
+def test_fingerprint_is_schema_5():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-5"
+
+
+def test_capabilities_mark_m4_surface_experimental():
+    """The newer async + background-job lifecycle tools advertise stability=experimental;
+    the sync core inherits the server-wide alpha (field omitted via exclude_none) (#71)."""
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    experimental = {
+        "codex_consult_async",
+        "codex_review_changes_async",
+        "codex_delegate_async",
+        "codex_job_status",
+        "codex_job_result",
+        "codex_job_consume_result",
+        "codex_job_cancel",
+        "codex_job_list",
+    }
+    for name in experimental:
+        assert by_name[name]["stability"] == "experimental", name
+    # Sync core tools omit the field entirely (inherit server-wide stability).
+    for name in ("codex_consult", "codex_review_changes", "codex_delegate", "codex_status"):
+        assert "stability" not in by_name[name], name
+
+
+def test_server_advertises_tools_list_changed():
+    """The server declares the tools `listChanged` capability so clients know the
+    contract even though the static tool list never changes mid-session (#71)."""
+    opts = server.mcp._mcp_server.create_initialization_options()
+    assert opts.capabilities.tools.listChanged is True
 
 
 async def test_sync_active_tools_document_no_progress_and_async_fallback():
