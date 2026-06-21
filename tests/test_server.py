@@ -1349,8 +1349,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_7():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-7"
+def test_fingerprint_is_schema_8():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-8"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2175,3 +2175,70 @@ async def test_mcp_bad_enum_value_rejected_without_envelope(clean_env, tmp_path)
         )
         assert res.is_error is True
         assert not _is_our_error_envelope(res.structured_content)
+
+
+# --- input schemas describe ambiguous params (#93) ---------------------------
+# Each param maps to a lowercase substring its advertised description must contain, so
+# the test pins meaning (not mere presence) and guards against drift.
+_DESCRIBED_PARAMS = {
+    "workspace_root": "absolute",
+    "base": "branch",
+    "commit": "commit",
+    "paths": "repo-relative",
+    "model": "model",
+    "timeout_seconds": "clamp",
+    "question": "codex",
+    "task": "implement",
+    "extra_context": "context",
+    "job_id": "job",
+}
+
+
+async def test_input_schemas_describe_ambiguous_params(clean_env):
+    """Ambiguous params carry a meaningful `description` in the advertised input schema,
+    so an agent need not parse docstring prose to use them correctly (#93). Inspects the
+    real schemas via the MCP boundary."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    seen: set[str] = set()
+    for tool in tools:
+        props = (tool.inputSchema or {}).get("properties", {})
+        for param, must_contain in _DESCRIBED_PARAMS.items():
+            if param in props:
+                seen.add(param)
+                desc = props[param].get("description", "")
+                assert desc, (tool.name, param)
+                assert must_contain in desc.lower(), (tool.name, param, desc)
+    # Non-vacuous: every named param actually appears on at least one tool.
+    assert seen == set(_DESCRIBED_PARAMS)
+
+
+async def test_timeout_seconds_description_matches_clamp_behavior(clean_env):
+    """The timeout_seconds description states the 10..600 clamp (and that out-of-range
+    is coerced, not rejected), so the schema agrees with clamp_timeout() runtime (#93)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    consult = next(t for t in tools if t.name == "codex_consult")
+    spec = consult.inputSchema["properties"]["timeout_seconds"]
+    desc = spec["description"]
+    assert "10" in desc and "600" in desc
+    # No numeric schema constraint — behavior is clamp, not reject.
+    assert "minimum" not in spec and "maximum" not in spec
+
+
+async def test_delegate_dry_run_param_descriptions_do_not_claim_a_run(clean_env):
+    """codex_delegate_dry_run reuses task/model but never calls Codex or returns a diff,
+    so its descriptions must not imply an active run (#93, Codex review)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    dry = next(t for t in tools if t.name == "codex_delegate_dry_run")
+    props = dry.inputSchema["properties"]
+    task_desc = props["task"]["description"].lower()
+    assert "does not call codex" in task_desc and "return a diff" in task_desc
+    assert "does not call codex" in props["model"]["description"].lower()
