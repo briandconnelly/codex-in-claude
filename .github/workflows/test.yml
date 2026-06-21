@@ -23,6 +23,8 @@ jobs:
           enable-cache: true
       - name: Install dependencies
         run: uv sync --frozen
+      - name: Check GitHub Actions are SHA-pinned
+        run: uv run python scripts/check_github_actions_pinning.py
       - name: Lint
         run: uv run ruff check .
       - name: Format

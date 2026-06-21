@@ -77,6 +77,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   a version mismatch warns but never blocks, and the tested set stays overridable via
   `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS`.
 
+### Security
+
+- **Enforce SHA-pinning of GitHub Actions (#101).** Every workflow `uses:` was already pinned to a
+  full commit SHA, but nothing prevented a future edit from reintroducing a mutable `@v4` tag or
+  `@main` branch reference — repo settings still allow all actions and don't require pinning. A new
+  `scripts/check_github_actions_pinning.py` (pure stdlib) scans the committed workflow YAML and fails
+  if any `uses:` is not immutably pinned (external action/reusable workflow → `owner/repo[/path]@`
+  40-hex SHA; Docker action → `@sha256:` digest; local `./` actions exempt). It runs as a step in the
+  reusable test gate, so it rides the already-required status checks rather than depending on a new
+  branch-protection setting. No agent-visible MCP surface change, so the result `fingerprint` is
+  unchanged.
+
 ## [0.2.0] - 2026-06-20
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-3` →
