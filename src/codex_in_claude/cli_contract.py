@@ -6,7 +6,7 @@ versions, and the stderr phrasings that mean the contract drifted — lives here
 an upstream breaking change is a one-file, greppable, testable edit. See
 COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.140.0`.
+Verified against `codex-cli 0.141.0`.
 """
 
 from __future__ import annotations
@@ -76,11 +76,11 @@ HELP_GATED_FLAGS = {
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.140.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.141.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 140)})
+SUPPORTED_VERSIONS = frozenset({(0, 141)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

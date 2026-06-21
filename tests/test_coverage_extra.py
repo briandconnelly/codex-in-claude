@@ -62,7 +62,7 @@ def test_worktree_base_default(clean_env):
 def test_supported_versions_partial_token(clean_env):
     # A token without a minor is skipped; falls back to built-in set.
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "5")
-    assert config.version_supported("codex-cli 0.140.0") is True
+    assert config.version_supported("codex-cli 0.141.0") is True
 
 
 # --- runtime property --------------------------------------------------------
@@ -126,7 +126,7 @@ async def test_consult_uses_roots(monkeypatch, clean_env, tmp_path):
 
 # --- server status: could-not-determine auth --------------------------------
 def test_status_auth_unknown(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.140.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.141.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (None, None))
     res = server.codex_status()
     assert res["ready"] is False
@@ -142,7 +142,7 @@ def test_status_version_unsupported_warning(monkeypatch, clean_env):
 
 
 def test_status_flags_warning(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.140.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.141.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "ok"))
     monkeypatch.setattr(server.preflight, "missing_expected_flags", lambda fs: ["--sandbox"])
     res = server.codex_status()

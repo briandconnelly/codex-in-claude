@@ -5,6 +5,39 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP `isError` now reflects semantic tool failures (#91).** A handler-level failure was returned
+  as `ok: false` structured data but the MCP tool result still reported `isError: false`, so a
+  conformant client keying off the protocol flag (rather than parsing our envelope) misclassified a
+  failed call as a success. A single FastMCP boundary middleware now flips `isError: true` whenever a
+  tool returns an envelope with `ok is False`, while leaving the `ErrorInfo` envelope intact in
+  `structured_content` (and its text fallback). Agent-visible result semantics changed, so the result
+  `fingerprint` bumps `schema-5` → `schema-6`.
+
+### Added
+
+- **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
+  demand), fetches the latest published `@openai/codex` version from npm, and — when its minor isn't
+  in `cli_contract.SUPPORTED_VERSIONS` — opens an idempotent tracking issue pre-filled with the
+  `docs/UPGRADING-CODEX.md` checklist. No-spend and CLI-free: it only detects the new minor; the
+  drift check and semantic review still run locally where the real codex CLI is authenticated. The
+  decision logic lives in `scripts/check_codex_release.py`.
+- **Formal codex-upgrade procedure.** `docs/UPGRADING-CODEX.md` documents the repeatable, ordered
+  checklist for incorporating a new `codex` CLI version (drift detection, semantic review,
+  replace-vs-add the tracked minor, lockstep files, breaking-vs-not, verification). The terse
+  "When codex changes" section in `COMPATIBILITY.md` now points at it. Paired with
+  `scripts/check_codex_contract.py`, a no-spend drift check that diffs the installed CLI's
+  `--version`/`exec --help` against the contract's flag classes and sandbox values (reusing the
+  server's own help parser).
+
+### Changed
+
+- **Tracked Codex version bumped to `0.141`.** `SUPPORTED_VERSIONS` now tracks `(0, 141)`; the
+  contract, compatibility, and README notes are verified against `codex-cli 0.141.0`. Advisory only —
+  a version mismatch warns but never blocks, and the tested set stays overridable via
+  `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS`.
+
 ## [0.2.0] - 2026-06-20
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-3` →
