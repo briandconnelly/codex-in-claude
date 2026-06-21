@@ -1038,7 +1038,8 @@ async def codex_consult(
 
     limit = config.max_input_bytes()
     combined = (question or "") + (extra_context or "")
-    if len(combined.encode("utf-8")) > limit:
+    combined_bytes = len(combined.encode("utf-8"))
+    if combined_bytes > limit:
         return ErrorResult(
             error=ErrorInfo(
                 code="input_too_large",
@@ -1046,7 +1047,7 @@ async def codex_consult(
                 repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
                 offending_param="extra_context",
                 limit_bytes=limit,
-                actual_bytes=len(combined.encode("utf-8")),
+                actual_bytes=combined_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1246,7 +1247,8 @@ async def codex_delegate(
         return placeholder
 
     limit = config.max_input_bytes()
-    if len((task or "").encode("utf-8")) > limit:
+    task_bytes = len((task or "").encode("utf-8"))
+    if task_bytes > limit:
         return ErrorResult(
             error=ErrorInfo(
                 code="input_too_large",
@@ -1254,7 +1256,7 @@ async def codex_delegate(
                 repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="task",
                 limit_bytes=limit,
-                actual_bytes=len((task or "").encode("utf-8")),
+                actual_bytes=task_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1341,7 +1343,8 @@ async def codex_delegate_async(
         return placeholder
 
     limit = config.max_input_bytes()
-    if len((task or "").encode("utf-8")) > limit:
+    task_bytes = len((task or "").encode("utf-8"))
+    if task_bytes > limit:
         return ErrorResult(
             error=ErrorInfo(
                 code="input_too_large",
@@ -1349,7 +1352,7 @@ async def codex_delegate_async(
                 repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="task",
                 limit_bytes=limit,
-                actual_bytes=len((task or "").encode("utf-8")),
+                actual_bytes=task_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1485,7 +1488,8 @@ async def codex_consult_async(
 
     limit = config.max_input_bytes()
     combined = (question or "") + (extra_context or "")
-    if len(combined.encode("utf-8")) > limit:
+    combined_bytes = len(combined.encode("utf-8"))
+    if combined_bytes > limit:
         return ErrorResult(
             error=ErrorInfo(
                 code="input_too_large",
@@ -1493,7 +1497,7 @@ async def codex_consult_async(
                 repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
                 offending_param="extra_context",
                 limit_bytes=limit,
-                actual_bytes=len(combined.encode("utf-8")),
+                actual_bytes=combined_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1665,7 +1669,8 @@ async def codex_dry_run(
         return placeholder
 
     max_bytes = config.max_input_bytes()
-    if len((extra_context or "").encode("utf-8")) > max_bytes:
+    extra_context_bytes = len((extra_context or "").encode("utf-8"))
+    if extra_context_bytes > max_bytes:
         # Mirror the real review's validation so the preview fails exactly where the
         # paid call would (issue #6: a dry run must not green-light an oversize input).
         meta = _base_meta(
@@ -1687,7 +1692,7 @@ async def codex_dry_run(
                 repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="extra_context",
                 limit_bytes=max_bytes,
-                actual_bytes=len((extra_context or "").encode("utf-8")),
+                actual_bytes=extra_context_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1816,7 +1821,8 @@ async def codex_delegate_dry_run(
         return placeholder
 
     limit = config.max_input_bytes()
-    if len((task or "").encode("utf-8")) > limit:
+    task_bytes = len((task or "").encode("utf-8"))
+    if task_bytes > limit:
         return ErrorResult(
             error=ErrorInfo(
                 code="input_too_large",
@@ -1824,7 +1830,7 @@ async def codex_delegate_dry_run(
                 repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="task",
                 limit_bytes=limit,
-                actual_bytes=len((task or "").encode("utf-8")),
+                actual_bytes=task_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")
