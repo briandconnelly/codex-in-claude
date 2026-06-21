@@ -12,6 +12,13 @@ The repeatable procedure for incorporating a new OpenAI `codex` CLI release. It 
 The single source of truth for every CLI assumption is `src/codex_in_claude/cli_contract.py`. Most
 steps below come down to: probe the new CLI, confirm or update that one file, prove it with tests.
 
+You usually don't have to notice a release yourself: `.github/workflows/codex-release-watch.yml`
+runs weekly, and when a new `codex` **minor** appears upstream it opens a `codex-upgrade` tracking
+issue pre-filled with this checklist. The watch is no-spend and CLI-free — it only flags the new
+minor; everything below still runs locally, where the real authenticated `codex` lives. (A
+patch-only bump within the tracked minor is deliberately not flagged; re-run step 1 opportunistically
+if you want to refresh the `Verified against` line.)
+
 ## 0. Prerequisites
 
 - The new `codex` is installed and authenticated (`codex login`).
