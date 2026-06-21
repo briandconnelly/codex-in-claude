@@ -2191,6 +2191,9 @@ _DESCRIBED_PARAMS = {
     "task": "implement",
     "extra_context": "context",
     "job_id": "job",
+    "scope": "review",
+    "detail": "verbosity",
+    "isolation": "isolation",
 }
 
 
