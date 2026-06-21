@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-5"
+FINGERPRINT = "codex-in-claude/0.1/schema-6"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -300,6 +300,32 @@ class StatusResult(BaseModel):
     fingerprint: str = FINGERPRINT
 
 
+class AsyncLifecycle(BaseModel):
+    """Structured discovery metadata for an *_async tool that runs as a background job
+    via this server's *custom* job lifecycle rather than native MCP tasks/progress (#94).
+
+    Lets a client that looks specifically for native MCP tasks or `notifications/progress`
+    infer their absence structurally (not just from description prose), and discover the
+    exact poll/result/consume/cancel/list tools and the JobStatus fields to branch on."""
+
+    model_config = ConfigDict(extra="forbid")
+    # No native MCP task object and no notifications/progress streaming — the run is
+    # polled via the codex_job_* tools below. These are fixed for this server.
+    native_task_support: Literal[False] = False
+    progress_support: Literal["none"] = "none"
+    lifecycle: Literal["codex_job_*"] = "codex_job_*"
+    # The job-lifecycle tools to drive the run after the *_async call returns a job_id.
+    poll_tool: str  # codex_job_status
+    result_tool: str  # codex_job_result
+    consume_tool: str  # codex_job_consume_result
+    cancel_tool: str  # codex_job_cancel
+    list_tool: str  # codex_job_list
+    # JobStatus fields a client branches on while polling.
+    status_field: str  # "status" — the lifecycle state
+    result_ready_field: str  # "result_available" — true once the result can be fetched
+    poll_after_field: str  # "poll_after_ms" — backoff to honor before the next poll
+
+
 class ToolCapability(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
@@ -315,6 +341,10 @@ class ToolCapability(BaseModel):
     # branching/recovery, not a closed contract. Typed as ErrorCode so the schema
     # advertises the valid code set and entries are checked statically.
     error_codes: list[ErrorCode] = Field(default_factory=list)
+    # Set only on the *_async tools: how to drive their background-job lifecycle, and
+    # that the server uses that custom lifecycle instead of native MCP tasks/progress
+    # (#94). None ⇒ a synchronous/lifecycle tool that needs no such metadata.
+    async_lifecycle: AsyncLifecycle | None = None
 
 
 class CapabilitiesResult(BaseModel):

@@ -49,6 +49,7 @@ from codex_in_claude.schemas import (
     JOB_STATUS_SCHEMA,
     REVIEW_RESULT_SCHEMA,
     STATUS_SCHEMA,
+    AsyncLifecycle,
     CapabilitiesResult,
     ConsultResult,
     ContextSummary,
@@ -515,6 +516,25 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_job_list": _err_codes(_WORKSPACE_ERRORS, ("internal_error",)),
 }
 
+# The *_async tools run via this server's custom job lifecycle (no native MCP
+# tasks/progress). Advertised structurally on each so a client can discover the exact
+# poll/result/consume/cancel/list tools and JobStatus fields, and detect the absence of
+# native tasks/progress, without parsing description prose (#94). The tool names and
+# JobStatus field names are the single source of truth here.
+_ASYNC_TOOLS: frozenset[str] = frozenset(
+    {"codex_consult_async", "codex_review_changes_async", "codex_delegate_async"}
+)
+_ASYNC_LIFECYCLE = AsyncLifecycle(
+    poll_tool="codex_job_status",
+    result_tool="codex_job_result",
+    consume_tool="codex_job_consume_result",
+    cancel_tool="codex_job_cancel",
+    list_tool="codex_job_list",
+    status_field="status",
+    result_ready_field="result_available",
+    poll_after_field="poll_after_ms",
+)
+
 
 @mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
 def codex_capabilities() -> dict:
@@ -744,9 +764,11 @@ def codex_capabilities() -> dict:
     # means a newly advertised tool is missing from _TOOL_ERROR_CODES.
     for cap in caps.tool_details:
         cap.error_codes = _TOOL_ERROR_CODES[cap.name]
-    # exclude_none so a tool that inherits the server-wide stability omits the field
-    # entirely (rather than emitting a noisy `stability: null`). The only optional
-    # field in this envelope is the per-tool `stability`.
+        if cap.name in _ASYNC_TOOLS:
+            cap.async_lifecycle = _ASYNC_LIFECYCLE
+    # exclude_none so optional per-tool fields are omitted entirely when unset (rather
+    # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
+    # it, and only the *_async tools carry `async_lifecycle`.
     return caps.model_dump(mode="json", exclude_none=True)
 
 
