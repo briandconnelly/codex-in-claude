@@ -7,6 +7,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
+  demand), fetches the latest published `@openai/codex` version from npm, and — when its minor isn't
+  in `cli_contract.SUPPORTED_VERSIONS` — opens an idempotent tracking issue pre-filled with the
+  `docs/UPGRADING-CODEX.md` checklist. No-spend and CLI-free: it only detects the new minor; the
+  drift check and semantic review still run locally where the real codex CLI is authenticated. The
+  decision logic lives in `scripts/check_codex_release.py`.
 - **Formal codex-upgrade procedure.** `docs/UPGRADING-CODEX.md` documents the repeatable, ordered
   checklist for incorporating a new `codex` CLI version (drift detection, semantic review,
   replace-vs-add the tracked minor, lockstep files, breaking-vs-not, verification). The terse

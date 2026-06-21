@@ -1,0 +1,102 @@
+name: Codex release watch
+
+# Weekly no-spend watch for a new upstream `codex` minor. When the latest
+# published `@openai/codex` minor isn't in cli_contract.SUPPORTED_VERSIONS, open a
+# tracking issue pre-filled with the docs/UPGRADING-CODEX.md checklist. This is the
+# cheap "watch" half of the upgrade procedure — the mechanical drift check
+# (scripts/check_codex_contract.py) and the semantic review still run locally where
+# the real codex CLI is installed and authenticated.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays 13:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-release-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Detect new codex minor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Fetch latest published codex version
+        id: npm
+        run: |
+          set -euo pipefail
+          latest="$(curl -fsSL https://registry.npmjs.org/@openai/codex/latest \
+            | python3 -c 'import sys, json; print(json.load(sys.stdin)["version"])')"
+          if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected version from npm: ${latest}" >&2
+            exit 1
+          fi
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "Latest published codex: ${latest}"
+
+      - name: Compare against tracked SUPPORTED_VERSIONS
+        id: check
+        run: uv run python scripts/check_codex_release.py --latest "${{ steps.npm.outputs.latest }}"
+
+      - name: Open tracking issue
+        if: steps.check.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.npm.outputs.latest }}
+          LATEST_MINOR: ${{ steps.check.outputs.latest_minor }}
+          TRACKED: ${{ steps.check.outputs.tracked }}
+        run: |
+          set -euo pipefail
+          title="chore(cli-contract): track codex ${LATEST_MINOR}"
+
+          # Idempotent: skip if an open issue for this minor already exists.
+          existing="$(gh issue list --state open --search "${title} in:title" \
+            --json number --jq 'length')"
+          if [[ "${existing}" != "0" ]]; then
+            echo "An open issue for ${LATEST_MINOR} already exists; nothing to do."
+            exit 0
+          fi
+
+          # Self-provision the label so the issue create can't fail on a missing one.
+          gh label create codex-upgrade \
+            --color FBCA04 \
+            --description "A new upstream codex version needs the docs/UPGRADING-CODEX.md procedure" \
+            2>/dev/null || true
+
+          body="$(cat <<EOF
+          A new upstream \`codex\` minor is available.
+
+          - **Latest published:** \`${LATEST}\`
+          - **Latest minor:** \`${LATEST_MINOR}\`
+          - **Currently tracked:** \`${TRACKED}\` (\`cli_contract.SUPPORTED_VERSIONS\`)
+
+          This is an automated, no-spend notice from \`.github/workflows/codex-release-watch.yml\`.
+          It detects the new minor only — the evaluation can't run in CI (no authenticated codex).
+
+          ## Next steps
+          Follow [\`docs/UPGRADING-CODEX.md\`](../blob/main/docs/UPGRADING-CODEX.md) locally, where the real CLI is installed:
+
+          1. Install + authenticate \`codex ${LATEST}\`; branch \`chore/codex-${LATEST_MINOR//./-}\`.
+          2. Mechanical drift check (no spend): \`uv run python scripts/check_codex_contract.py\`.
+          3. Manual semantic + surface review (the judgment half a script can't do).
+          4. Decide replace vs. add the supported minor; update \`cli_contract.py\` + lockstep files.
+          5. Classify breaking vs. non-breaking (\`FINGERPRINT\`?).
+          6. Verify: full suite, ruff/ty, drift check, and the live \`integration\` suite.
+          EOF
+          )"
+
+          gh issue create \
+            --title "${title}" \
+            --body "${body}" \
+            --label codex-upgrade
