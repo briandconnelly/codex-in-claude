@@ -284,6 +284,8 @@ async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path)
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
     assert res["error"]["offending_param"] == "extra_context"
+    assert res["error"]["limit_bytes"] == 1000
+    assert res["error"]["actual_bytes"] == 2000
 
 
 async def test_dry_run_advertises_returnable_error_codes():
@@ -979,6 +981,8 @@ async def test_delegate_dry_run_input_too_large(monkeypatch, clean_env, tmp_path
     res = await server.codex_delegate_dry_run("z" * 2000, workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["limit_bytes"] == 1000
+    assert res["error"]["actual_bytes"] == 2000
 
 
 async def test_delegate_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
@@ -1155,6 +1159,8 @@ async def test_delegate_async_input_too_large(monkeypatch, clean_env, tmp_path):
     res = await server.codex_delegate_async("z" * 2000, workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["limit_bytes"] == 1000
+    assert res["error"]["actual_bytes"] == 2000
 
 
 async def test_job_status_done(monkeypatch, clean_env, tmp_path):
@@ -1583,6 +1589,9 @@ async def test_consult_async_input_too_large(monkeypatch, clean_env, tmp_path):
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
     assert res["error"]["offending_param"] == "extra_context"
+    assert res["error"]["limit_bytes"] == 1000
+    # actual_bytes covers question + extra_context: len("q") + 2000.
+    assert res["error"]["actual_bytes"] == 2001
 
 
 async def test_consult_async_placeholder_env(monkeypatch, clean_env, tmp_path):
