@@ -14,7 +14,9 @@ uv run pytest           # run tests (95% coverage floor)
 
 ## Before you open a PR
 
-Run the full gate locally — CI runs the same on Python 3.11–3.13:
+Run the full gate locally — CI runs the same across every supported Python version (the
+matrix in [`.github/workflows/test.yml`](.github/workflows/test.yml), kept in lockstep with the
+trove classifiers in [`pyproject.toml`](pyproject.toml)):
 
 ```bash
 uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
