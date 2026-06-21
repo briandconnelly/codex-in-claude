@@ -2110,12 +2110,9 @@ _ENUM_PARAM_TO_GATED_CODE = {
 
 def _is_enum_param(spec: object) -> bool:
     """True if a JSON-Schema property is enum-constrained, including an Optional param
-    whose enum lives inside an `anyOf` branch (e.g. `isolation: Isolation | None`)."""
-    if not isinstance(spec, dict):
-        return False
-    if "enum" in spec:
-        return True
-    return any(isinstance(b, dict) and "enum" in b for b in spec.get("anyOf", []))
+    whose enum lives inside an `anyOf` branch (e.g. `isolation: Isolation | None`).
+    Delegates enum extraction to `_param_enum` so the two stay in lockstep."""
+    return isinstance(spec, dict) and _param_enum(spec) is not None
 
 
 async def test_advertised_error_codes_exclude_schema_gated(clean_env):
@@ -2140,10 +2137,20 @@ async def test_advertised_error_codes_exclude_schema_gated(clean_env):
     assert covered == set(_ENUM_PARAM_TO_GATED_CODE.values())
 
 
+def _is_our_error_envelope(structured_content: object) -> bool:
+    """True if a call_tool result carries *our* `ok: false` ErrorResult envelope —
+    i.e. the handler ran and produced a structured error. The MCP-unreachability
+    invariant is that a bad enum value never produces this (FastMCP rejects it during
+    input validation first). Asserting "not our envelope" rather than
+    `structured_content is None` keeps the test robust if a future FastMCP (the repo
+    pins no upper bound) attaches its own structured validation details."""
+    return isinstance(structured_content, dict) and structured_content.get("ok") is False
+
+
 async def test_mcp_bad_enum_value_rejected_without_envelope(clean_env, tmp_path):
-    """A bad Literal value is rejected by MCP input validation: is_error with NO
-    structured envelope — proving the unsupported_*/invalid_scope codes are unreachable
-    over a real call_tool and so are correctly not advertised (#92)."""
+    """A bad Literal value is rejected by MCP input validation: is_error with no
+    ErrorResult envelope of ours — proving the unsupported_*/invalid_scope codes are
+    unreachable over a real call_tool and so are correctly not advertised (#92)."""
     from fastmcp import Client
 
     async with Client(server.mcp) as client:
@@ -2153,11 +2160,11 @@ async def test_mcp_bad_enum_value_rejected_without_envelope(clean_env, tmp_path)
         ):
             res = await client.call_tool("codex_consult", args, raise_on_error=False)
             assert res.is_error is True
-            assert res.structured_content is None
+            assert not _is_our_error_envelope(res.structured_content)
         res = await client.call_tool(
             "codex_review_changes",
             {"scope": "everything", "workspace_root": str(tmp_path)},
             raise_on_error=False,
         )
         assert res.is_error is True
-        assert res.structured_content is None
+        assert not _is_our_error_envelope(res.structured_content)
