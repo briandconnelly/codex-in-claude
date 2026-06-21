@@ -58,6 +58,17 @@ def test_iter_uses_ignores_uses_inside_folded_run_block_with_chomp():
     assert check.iter_uses(text) == []
 
 
+def test_iter_uses_ignores_block_with_indent_then_chomp_indicator():
+    # YAML allows the indentation indicator before the chomping indicator (|2-).
+    text = (
+        "    steps:\n"
+        "      - run: |2-\n"
+        "          uses: nope\n"
+        "      - uses: actions/checkout@" + "a" * 40 + "\n"
+    )
+    assert check.iter_uses(text) == [(4, "actions/checkout@" + "a" * 40)]
+
+
 def test_iter_uses_resumes_after_block_dedents():
     text = (
         "      - run: |\n          uses: ignored\n      - uses: actions/setup-uv@" + "b" * 40 + "\n"

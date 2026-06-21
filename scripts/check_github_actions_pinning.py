@@ -37,10 +37,11 @@ WARN = "WARN"
 
 # A ``uses:`` key, optionally as a YAML list item, capturing the rest of the line.
 _USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(.+?)\s*$")
-# A key opening a block scalar (``run: |``, ``run: >-``, ``script: |2`` …). Lines
+# A key opening a block scalar (``run: |``, ``run: >-``, ``script: |2-`` …). Lines
 # indented deeper than such a key are literal content, not YAML keys, so a content
-# line beginning ``uses:`` must NOT be treated as an action reference.
-_BLOCK_SCALAR_RE = re.compile(r"^\s*(?:-\s*)?[^\s:#]+:\s*[|>][+-]?\d*\s*(?:#.*)?$")
+# line beginning ``uses:`` must NOT be treated as an action reference. The header may
+# carry chomping (``+``/``-``) and indentation (digit) indicators in either order.
+_BLOCK_SCALAR_RE = re.compile(r"^\s*(?:-\s*)?[^\s:#]+:\s*[|>][-+0-9]*\s*(?:#.*)?$")
 # A full 40-char git commit SHA (case-insensitive; GitHub emits lowercase).
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 # A Docker image pinned by immutable digest: docker://image@sha256:<64 hex>.
