@@ -226,6 +226,23 @@ def _resolve_detail(value: str | None) -> tuple[str | None, ErrorInfo | None]:
     return detail, None
 
 
+def _workspace_error_result(
+    error_code: str, error_detail: str | None, roots: list[str], meta: Meta
+) -> dict:
+    """Build a workspace-resolution error envelope. For `workspace_outside_roots`, attach
+    the client-supplied MCP roots as `candidate_roots` so an agent can pick a valid
+    `workspace_root` without parsing prose — never arbitrary local paths (#95)."""
+    info = ErrorInfo(
+        code=cast("ErrorCode", error_code),
+        message=error_detail or "invalid workspace",
+        repair="Pass an absolute workspace_root inside the client's MCP roots.",
+        offending_param="workspace_root",
+    )
+    if error_code == "workspace_outside_roots" and roots:
+        info.candidate_roots = list(roots)
+    return ErrorResult(error=info, meta=meta).model_dump(mode="json")
+
+
 def _placeholder_error(meta: Meta) -> dict | None:
     placeholders = config.placeholder_env_vars()
     if not placeholders:
@@ -824,15 +841,7 @@ async def codex_consult(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", res.error_code),
-                message=res.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(res.error_code, res.error_detail, roots, meta)
 
     cwd = res.path or cwd_guess
     meta = _base_meta(
@@ -858,6 +867,8 @@ async def codex_consult(
                 message=f"question + extra_context exceeds {limit} bytes.",
                 repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
                 offending_param="extra_context",
+                limit_bytes=limit,
+                actual_bytes=len(combined.encode("utf-8")),
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -964,15 +975,7 @@ async def codex_review_changes(
         paths=paths,
     )
     if wres.error_code is not None:
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
@@ -1058,15 +1061,7 @@ async def codex_delegate(
         timeout_seconds=timeout,
     )
     if wres.error_code is not None:
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
@@ -1080,6 +1075,8 @@ async def codex_delegate(
                 message=f"task exceeds {limit} bytes.",
                 repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="task",
+                limit_bytes=limit,
+                actual_bytes=len((task or "").encode("utf-8")),
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1159,15 +1156,7 @@ async def codex_delegate_async(
         timeout_seconds=deadline,
     )
     if wres.error_code is not None:
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
@@ -1181,6 +1170,8 @@ async def codex_delegate_async(
                 message=f"task exceeds {limit} bytes.",
                 repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="task",
+                limit_bytes=limit,
+                actual_bytes=len((task or "").encode("utf-8")),
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1308,15 +1299,7 @@ async def codex_consult_async(
         timeout_seconds=deadline,
     )
     if wres.error_code is not None:
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
@@ -1331,6 +1314,8 @@ async def codex_consult_async(
                 message=f"question + extra_context exceeds {limit} bytes.",
                 repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
                 offending_param="extra_context",
+                limit_bytes=limit,
+                actual_bytes=len(combined.encode("utf-8")),
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1406,15 +1391,7 @@ async def codex_review_changes_async(
         paths=paths,
     )
     if wres.error_code is not None:
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
@@ -1486,15 +1463,7 @@ async def codex_dry_run(
             model=d.model,
             timeout_seconds=config.clamp_timeout(d.timeout_seconds),
         )
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     # Mirror codex_review_changes: surface an unexpanded ${...} env placeholder before
     # gathering the diff, so the preview fails exactly where the paid review would (#46).
@@ -1538,6 +1507,8 @@ async def codex_dry_run(
                 message=f"extra_context exceeds {max_bytes} bytes.",
                 repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="extra_context",
+                limit_bytes=max_bytes,
+                actual_bytes=len((extra_context or "").encode("utf-8")),
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1659,15 +1630,7 @@ async def codex_delegate_dry_run(
         timeout_seconds=timeout,
     )
     if wres.error_code is not None:
-        return ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
@@ -1681,6 +1644,8 @@ async def codex_delegate_dry_run(
                 message=f"task exceeds {limit} bytes.",
                 repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="task",
+                limit_bytes=limit,
+                actual_bytes=len((task or "").encode("utf-8")),
             ),
             meta=meta,
         ).model_dump(mode="json")
@@ -1823,15 +1788,7 @@ async def _resolve_job_workspace(
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
         meta = _job_meta(cwd, wres.source)
-        err = ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", wres.error_code),
-                message=wres.error_detail or "invalid workspace",
-                repair="Pass an absolute workspace_root inside the client's MCP roots.",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        err = _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
         return cwd, wres.source, err
     return cwd, wres.source, None
 

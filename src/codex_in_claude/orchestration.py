@@ -243,13 +243,16 @@ async def run_review(
 
     `extra_context` (optional author intent) is bounded by the same `max_bytes` limit
     as the diff and appended to the prompt as untrusted data."""
-    if len(extra_context.encode("utf-8")) > max_bytes:
+    extra_context_bytes = len(extra_context.encode("utf-8"))
+    if extra_context_bytes > max_bytes:
         return ErrorResult(
             error=ErrorInfo(
                 code="input_too_large",
                 message=f"extra_context exceeds {max_bytes} bytes.",
                 repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
                 offending_param="extra_context",
+                limit_bytes=max_bytes,
+                actual_bytes=extra_context_bytes,
             ),
             meta=meta,
         ).model_dump(mode="json")

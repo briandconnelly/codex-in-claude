@@ -7,6 +7,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Structured repair fields for size and workspace errors (#95).** Some error envelopes still
+  required prose parsing for the first repair. `ErrorInfo` gains three optional, backward-compatible
+  fields: `input_too_large` now carries `limit_bytes` and `actual_bytes` (so an agent can trim by an
+  exact amount), and `workspace_outside_roots` carries `candidate_roots` — populated *only* from the
+  MCP roots the client already supplied, never arbitrary local paths. The prose `repair`/`message` are
+  retained. The shared workspace-error path is consolidated into one helper so the new field can't
+  drift across tools. New `ErrorInfo` fields are agent-visible, so the result `fingerprint` bumps
+  `schema-5` → `schema-6`.
+
 - **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
   demand), fetches the latest published `@openai/codex` version from npm, and — when its minor isn't
   in `cli_contract.SUPPORTED_VERSIONS` — opens an idempotent tracking issue pre-filled with the

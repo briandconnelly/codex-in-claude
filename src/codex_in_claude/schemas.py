@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-5"
+FINGERPRINT = "codex-in-claude/0.1/schema-6"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -252,6 +252,14 @@ class ErrorInfo(BaseModel):
     # arguments aren't all strings.
     repair_tool_params: dict[str, Any] | None = None
     retry_after_ms: int | None = None  # suggested backoff before retrying a retryable error
+    # Size context for input_too_large, so an agent can trim by an exact amount without
+    # parsing the message prose (#95).
+    limit_bytes: int | None = None  # the byte limit that was exceeded
+    actual_bytes: int | None = None  # the offending input's actual byte size
+    # For workspace_outside_roots: the client-supplied MCP roots a valid workspace_root
+    # must sit inside. Populated ONLY from roots the client already provided — never
+    # arbitrary local filesystem paths — so it leaks no extra path context (#95).
+    candidate_roots: list[str] | None = None
 
 
 class ErrorResult(BaseModel):
