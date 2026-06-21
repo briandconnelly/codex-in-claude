@@ -287,20 +287,22 @@ async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path)
 
 
 async def test_dry_run_advertises_returnable_error_codes():
-    # codex_dry_run can return all of these via its pre-flight checks; capabilities
-    # must advertise each (input_too_large from extra_context, the placeholder guard,
-    # and the isolation validation).
+    # codex_dry_run can return these via its pre-flight checks; capabilities must
+    # advertise each (input_too_large from extra_context, the placeholder guard). It
+    # must NOT advertise unsupported_isolation — `isolation` is Literal-typed, so a bad
+    # value is rejected by MCP validation before the handler (#92).
     caps = server.codex_capabilities()
     dry = next(t for t in caps["tool_details"] if t["name"] == "codex_dry_run")
     assert "input_too_large" in dry["error_codes"]
-    assert "unsupported_isolation" in dry["error_codes"]
     assert "unexpanded_env_placeholder" in dry["error_codes"]
+    assert "unsupported_isolation" not in dry["error_codes"]
 
 
-def test_isolation_accepting_tools_advertise_unsupported_isolation():
-    # Every tool that accepts an `isolation` arg can return unsupported_isolation
-    # via _resolve_isolation; capabilities must advertise it for all of them so an
-    # agent's recovery branches are complete.
+def test_isolation_accepting_tools_do_not_advertise_unsupported_isolation():
+    # `isolation` is a Literal param, so an out-of-enum value is rejected by FastMCP
+    # input validation before the handler's _resolve_isolation guard runs — the
+    # unsupported_isolation envelope is MCP-unreachable and must not be advertised (#92).
+    # The param is still advertised; only the unreachable error code is dropped.
     caps = server.codex_capabilities()
     by_name = {t["name"]: t for t in caps["tool_details"]}
     for name in (
@@ -311,10 +313,8 @@ def test_isolation_accepting_tools_advertise_unsupported_isolation():
         "codex_dry_run",
         "codex_delegate_dry_run",
     ):
-        assert "unsupported_isolation" in by_name[name]["error_codes"], name
-        # ...and the param that drives that error is listed, so the summary is
-        # internally consistent (param exposed alongside its error).
         assert "isolation" in by_name[name]["key_optional_params"], name
+        assert "unsupported_isolation" not in by_name[name]["error_codes"], name
 
 
 async def test_review_extra_context_advertised_in_capabilities():
@@ -1352,8 +1352,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_6():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-6"
+def test_fingerprint_is_schema_10():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-10"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -1745,14 +1745,14 @@ def test_capabilities_lists_async_readonly_tools():
     assert {"codex_consult_async", "codex_review_changes_async"} <= names
 
 
-def test_review_tools_advertise_isolation_param_and_error():
-    # Both review tools accept `isolation` and can return unsupported_isolation, so
-    # capabilities must advertise the param and the code for each.
+def test_review_tools_advertise_isolation_param_not_unreachable_error():
+    # Both review tools accept `isolation`, so the param is advertised — but
+    # unsupported_isolation is MCP-unreachable (Literal param) and must not be (#92).
     caps = server.codex_capabilities()
     by_name = {t["name"]: t for t in caps["tool_details"]}
     for name in ("codex_review_changes", "codex_review_changes_async"):
         assert "isolation" in by_name[name]["key_optional_params"], name
-        assert "unsupported_isolation" in by_name[name]["error_codes"], name
+        assert "unsupported_isolation" not in by_name[name]["error_codes"], name
 
 
 def test_capabilities_lists_delegate_dry_run():
@@ -1933,8 +1933,10 @@ async def test_capabilities_list_error_codes_per_tool():
     for tool in details.values():
         assert "error_codes" in tool
         assert set(tool["error_codes"]) <= valid_codes, tool["name"]
-    assert "unsupported_isolation" in details["codex_consult"]["error_codes"]
-    assert "invalid_scope" in details["codex_review_changes"]["error_codes"]
+    # Reachable codes are advertised; schema-gated (Literal-param) codes are not (#92).
+    assert "invalid_workspace_root" in details["codex_consult"]["error_codes"]
+    assert "invalid_base" in details["codex_review_changes"]["error_codes"]
+    assert "invalid_scope" not in details["codex_review_changes"]["error_codes"]
     assert "job_running" in details["codex_job_result"]["error_codes"]
 
 
@@ -2105,3 +2107,238 @@ async def test_invalid_workspace_root_omits_candidate_roots(monkeypatch, clean_e
     res = await server.codex_consult("q", workspace_root="relative/not/abs")
     assert res["error"]["code"] == "invalid_workspace_root"
     assert res["error"]["candidate_roots"] is None
+
+
+# --- async job-lifecycle capability metadata (#94) ---------------------------
+def test_async_tools_advertise_job_lifecycle_metadata():
+    """Each *_async tool structurally declares no native task/progress support and the
+    custom codex_job_* lifecycle; the referenced tools and JobStatus fields are real, so
+    the metadata stays consistent with the registered surface (#94)."""
+    from codex_in_claude.schemas import JobStatus
+
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    all_tools = set(caps["active_tools"]) | set(caps["free_tools"])
+    async_tools = {"codex_consult_async", "codex_review_changes_async", "codex_delegate_async"}
+    status_fields = set(JobStatus.model_fields)
+    for name in async_tools:
+        meta = by_name[name].get("async_lifecycle")
+        assert meta is not None, name
+        assert meta["native_task_support"] is False
+        assert meta["progress_support"] == "none"
+        assert meta["lifecycle"] == "codex_job_*"
+        # Every referenced lifecycle tool is a real, registered tool.
+        for key in ("poll_tool", "result_tool", "consume_tool", "cancel_tool", "list_tool"):
+            assert meta[key] in all_tools, (name, key, meta[key])
+        # Every referenced JobStatus field actually exists on the model.
+        for key in ("status_field", "result_ready_field", "poll_after_field"):
+            assert meta[key] in status_fields, (name, key, meta[key])
+
+
+def test_non_async_tools_omit_lifecycle_metadata():
+    """async_lifecycle is omitted (exclude_none) for sync and job-lifecycle tools — only
+    the *_async tools carry it (#94)."""
+    caps = server.codex_capabilities()
+    async_tools = {"codex_consult_async", "codex_review_changes_async", "codex_delegate_async"}
+    for cap in caps["tool_details"]:
+        if cap["name"] not in async_tools:
+            assert "async_lifecycle" not in cap, cap["name"]
+
+
+# --- MCP boundary: protocol isError flag (#91) -------------------------------
+# These go through the real MCP boundary via an in-memory Client, so they assert
+# the protocol-level `is_error` flag a conformant client keys off — not just the
+# `ok` field inside our envelope, which the direct-call tests above cover.
+async def test_mcp_success_path_reports_is_error_false(clean_env):
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("codex_capabilities", {}, raise_on_error=False)
+    assert result.is_error is False
+    assert result.structured_content["ok"] is True
+
+
+async def test_mcp_semantic_failure_reports_is_error_true(clean_env):
+    """A handler-level failure (`ok: false`) must map to MCP `isError: true` while
+    leaving the ErrorInfo envelope intact in structured_content (#91)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_consult",
+            {"question": "q", "workspace_root": "relative/not/abs"},
+            raise_on_error=False,
+        )
+    assert result.is_error is True
+    # The envelope still carries the structured error for clients that parse it.
+    assert result.structured_content["ok"] is False
+    assert result.structured_content["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_mcp_codex_run_failure_reports_is_error_true(monkeypatch, clean_env, tmp_path):
+    """A failure surfaced from the codex run (not just input validation) also flips
+    the protocol flag, exercising the run path through the boundary."""
+    from fastmcp import Client
+
+    async def fake(*args, **kwargs):
+        return _fake_result(None, exit_code=1, stderr="not logged in")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_consult",
+            {"question": "q", "workspace_root": str(tmp_path)},
+            raise_on_error=False,
+        )
+    assert result.is_error is True
+    assert result.structured_content["error"]["code"] == "codex_auth_required"
+
+
+# --- advertised error codes must be MCP-reachable (#92) -----------------------
+# A code whose only production path is an out-of-enum value on a Literal-typed param
+# is rejected by FastMCP validation before the handler runs, so a real MCP caller can
+# never receive its envelope. These must not be advertised per-tool.
+_ENUM_PARAM_TO_GATED_CODE = {
+    "isolation": "unsupported_isolation",
+    "detail": "unsupported_detail",
+    "scope": "invalid_scope",
+}
+
+
+def _is_enum_param(spec: object) -> bool:
+    """True if a JSON-Schema property is enum-constrained, including an Optional param
+    whose enum lives inside an `anyOf` branch (e.g. `isolation: Isolation | None`).
+    Delegates enum extraction to `_param_enum` so the two stay in lockstep."""
+    return isinstance(spec, dict) and _param_enum(spec) is not None
+
+
+async def test_advertised_error_codes_exclude_schema_gated(clean_env):
+    """No tool advertises an error code that is unreachable over MCP because its only
+    trigger is an out-of-enum value on a Literal-typed param (#92). Inspects the real
+    advertised input schemas via the MCP boundary, so it guards against future drift."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    caps = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    covered: set[str] = set()
+    for tool in tools:
+        props = (tool.inputSchema or {}).get("properties", {})
+        advertised = set(caps.get(tool.name, {}).get("error_codes", []))
+        for param, gated_code in _ENUM_PARAM_TO_GATED_CODE.items():
+            if _is_enum_param(props.get(param)):
+                covered.add(gated_code)
+                assert gated_code not in advertised, (tool.name, param, gated_code)
+    # Guard against a vacuous pass: each gated code must actually be reached by at least
+    # one enum-constrained param somewhere, or the assertions above prove nothing.
+    assert covered == set(_ENUM_PARAM_TO_GATED_CODE.values())
+
+
+def _is_our_error_envelope(structured_content: object) -> bool:
+    """True if a call_tool result carries *our* ErrorResult envelope — i.e. the handler
+    ran and produced a structured error. The MCP-unreachability invariant is that a bad
+    enum value never produces this (FastMCP rejects it during input validation first).
+    Asserting "not our envelope" rather than `structured_content is None` keeps the test
+    robust if a future FastMCP (the repo pins no upper bound) attaches its own structured
+    validation details. Matches the full `ErrorResult` shape (`ok: false` + nested
+    `error.code`), not a bare `ok: false`, so unrelated structured details that merely
+    carry an `ok` field are not mistaken for our envelope."""
+    return (
+        isinstance(structured_content, dict)
+        and structured_content.get("ok") is False
+        and isinstance(structured_content.get("error"), dict)
+        and "code" in structured_content["error"]
+    )
+
+
+async def test_mcp_bad_enum_value_rejected_without_envelope(clean_env, tmp_path):
+    """A bad Literal value is rejected by MCP input validation: is_error with no
+    ErrorResult envelope of ours — proving the unsupported_*/invalid_scope codes are
+    unreachable over a real call_tool and so are correctly not advertised (#92)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        for args in (
+            {"question": "q", "workspace_root": str(tmp_path), "isolation": "bogus"},
+            {"question": "q", "workspace_root": str(tmp_path), "detail": "verbose"},
+        ):
+            res = await client.call_tool("codex_consult", args, raise_on_error=False)
+            assert res.is_error is True
+            assert not _is_our_error_envelope(res.structured_content)
+        res = await client.call_tool(
+            "codex_review_changes",
+            {"scope": "everything", "workspace_root": str(tmp_path)},
+            raise_on_error=False,
+        )
+        assert res.is_error is True
+        assert not _is_our_error_envelope(res.structured_content)
+
+
+# --- input schemas describe ambiguous params (#93) ---------------------------
+# Each param maps to a lowercase substring its advertised description must contain, so
+# the test pins meaning (not mere presence) and guards against drift.
+_DESCRIBED_PARAMS = {
+    "workspace_root": "absolute",
+    "base": "branch",
+    "commit": "commit",
+    "paths": "repo-relative",
+    "model": "model",
+    "timeout_seconds": "clamp",
+    "question": "codex",
+    "task": "implement",
+    "extra_context": "context",
+    "job_id": "job",
+    "scope": "review",
+    "detail": "verbosity",
+    "isolation": "isolation",
+}
+
+
+async def test_input_schemas_describe_ambiguous_params(clean_env):
+    """Ambiguous params carry a meaningful `description` in the advertised input schema,
+    so an agent need not parse docstring prose to use them correctly (#93). Inspects the
+    real schemas via the MCP boundary."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    seen: set[str] = set()
+    for tool in tools:
+        props = (tool.inputSchema or {}).get("properties", {})
+        for param, must_contain in _DESCRIBED_PARAMS.items():
+            if param in props:
+                seen.add(param)
+                desc = props[param].get("description", "")
+                assert desc, (tool.name, param)
+                assert must_contain in desc.lower(), (tool.name, param, desc)
+    # Non-vacuous: every named param actually appears on at least one tool.
+    assert seen == set(_DESCRIBED_PARAMS)
+
+
+async def test_timeout_seconds_description_matches_clamp_behavior(clean_env):
+    """The timeout_seconds description states the 10..600 clamp (and that out-of-range
+    is coerced, not rejected), so the schema agrees with clamp_timeout() runtime (#93)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    consult = next(t for t in tools if t.name == "codex_consult")
+    spec = consult.inputSchema["properties"]["timeout_seconds"]
+    desc = spec["description"]
+    assert "10" in desc and "600" in desc
+    # No numeric schema constraint — behavior is clamp, not reject.
+    assert "minimum" not in spec and "maximum" not in spec
+
+
+async def test_delegate_dry_run_param_descriptions_do_not_claim_a_run(clean_env):
+    """codex_delegate_dry_run reuses task/model but never calls Codex or returns a diff,
+    so its descriptions must not imply an active run (#93, Codex review)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    dry = next(t for t in tools if t.name == "codex_delegate_dry_run")
+    props = dry.inputSchema["properties"]
+    task_desc = props["task"]["description"].lower()
+    assert "does not call codex" in task_desc and "return a diff" in task_desc
+    assert "does not call codex" in props["model"]["description"].lower()

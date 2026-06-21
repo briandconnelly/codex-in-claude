@@ -14,12 +14,12 @@ import os
 import signal
 import sys
 import time
-from typing import TYPE_CHECKING, Any, cast, get_args
+from typing import TYPE_CHECKING, Annotated, Any, cast, get_args
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
     import logging
@@ -49,6 +49,7 @@ from codex_in_claude.schemas import (
     JOB_STATUS_SCHEMA,
     REVIEW_RESULT_SCHEMA,
     STATUS_SCHEMA,
+    AsyncLifecycle,
     CapabilitiesResult,
     ConsultResult,
     ContextSummary,
@@ -174,8 +175,146 @@ class _InputSchemaDialectMiddleware(Middleware):
 
 mcp.add_middleware(_InputSchemaDialectMiddleware())
 
+
+class _SemanticErrorMiddleware(Middleware):
+    """Map an envelope-level failure (``ok is False``) to MCP ``isError: true``.
+
+    Handlers return the normalized result envelope as plain structured data; a
+    semantic failure is ``ErrorResult{ok: false, ...}``. FastMCP turns a returned
+    dict into a ``ToolResult`` with ``is_error=False``, so an MCP-conformant client
+    that keys off the protocol ``isError`` flag (rather than parsing our envelope)
+    would misclassify a failed call as a success (#91). We flip the flag here at the
+    single tool boundary while leaving the structured content (and its text fallback)
+    untouched, so the ``ErrorInfo`` envelope still reaches clients that do parse it."""
+
+    async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
+        result = await call_next(context)
+        sc = result.structured_content
+        if isinstance(sc, dict) and sc.get("ok") is False:
+            result.is_error = True
+        return result
+
+
+mcp.add_middleware(_SemanticErrorMiddleware())
+
 # The propose orchestration lives in delegate.py; re-exported here for test access.
 _diffstat = delegate._diffstat
+
+
+# --------------------------------------------------------------------------- #
+# Described param annotations (#93)
+# --------------------------------------------------------------------------- #
+# Each ambiguous param's `description` is defined once here and reused across every tool
+# signature, so the advertised input schema carries the constraint/semantics that
+# previously lived only in docstring prose — and the wording can never drift between
+# tools. Descriptions only: no numeric/pattern constraints are added (a schema rule that
+# disagreed with runtime validation would be worse than none), so accepted values are
+# unchanged. timeout_seconds documents the clamp rather than enforcing ge/le, matching
+# config.clamp_timeout()'s coerce-don't-reject behavior.
+QuestionParam = Annotated[
+    str,
+    Field(
+        description="The question or prompt to send Codex (a different model) for a "
+        "read-only answer."
+    ),
+]
+TaskParam = Annotated[
+    str,
+    Field(
+        description="The coding task for Codex to implement inside a throwaway git "
+        "worktree; the resulting diff is returned for review, not applied to your tree."
+    ),
+]
+WorkspaceRootParam = Annotated[
+    str | None,
+    Field(
+        description="Absolute path to the target repository root. Pass it (or rely on an "
+        "MCP root) so the call targets the intended repo; otherwise it falls back to the "
+        "server's own cwd and meta.workspace_warning is set."
+    ),
+]
+ExtraContextParam = Annotated[
+    str | None,
+    Field(
+        description="Optional author intent / background, added to the prompt as "
+        "clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+    ),
+]
+ModelParam = Annotated[
+    str | None,
+    Field(
+        description="Override the Codex model slug for this call; defaults to the "
+        "server/Codex default when unset."
+    ),
+]
+TimeoutSecondsParam = Annotated[
+    int | None,
+    Field(
+        description="Per-call wall-clock timeout in seconds, clamped to 10..600 "
+        "(out-of-range values are coerced, not rejected). Defaults to the server's "
+        "configured timeout."
+    ),
+]
+BaseParam = Annotated[
+    str | None,
+    Field(description="Base git ref for scope='branch'; the review covers base...HEAD."),
+]
+CommitParam = Annotated[
+    str | None,
+    Field(description="Commit SHA or ref to review for scope='commit'."),
+]
+PathsParam = Annotated[
+    list[str] | None,
+    Field(
+        description="Repo-relative paths to narrow the review ('/' separators, no '..'); "
+        "omit to review all changes in scope."
+    ),
+]
+IsolationParam = Annotated[
+    Isolation | None,
+    Field(
+        description="Codex config isolation: 'inherit' (default), 'ignore-config', or "
+        "'ignore-rules'."
+    ),
+]
+ScopeParam = Annotated[
+    ReviewScope,
+    Field(
+        description="Which changes to review: 'working_tree' (uncommitted vs HEAD), "
+        "'branch' (needs base), or 'commit' (needs commit)."
+    ),
+]
+DetailParam = Annotated[
+    Detail,
+    Field(
+        description="Response verbosity: 'summary' (default) omits the raw model text; "
+        "'full' includes it."
+    ),
+]
+JobIdParam = Annotated[
+    str,
+    Field(
+        description="The job_id returned by an *_async call (codex_*_async); recover lost "
+        "ids with codex_job_list."
+    ),
+]
+# codex_delegate_dry_run reuses these params but never calls Codex or returns a diff, so
+# it needs preview-accurate wording rather than the active-delegate descriptions above.
+TaskDryRunParam = Annotated[
+    str,
+    Field(
+        description="The coding task you want Codex to implement via a real "
+        "codex_delegate call; this dry run only previews the seeded baseline and prompt "
+        "size — it does NOT call Codex or return a diff."
+    ),
+]
+ModelDryRunParam = Annotated[
+    str | None,
+    Field(
+        description="The Codex model slug the real codex_delegate call would use; this "
+        "dry run does not call Codex or validate the model."
+    ),
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -435,7 +574,9 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     "internal_error",
 )
 _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
-    "invalid_scope",
+    # invalid_scope is intentionally omitted: `scope` is a Literal param, so FastMCP
+    # rejects an out-of-enum value before the handler can reach the gitdiff guard that
+    # produces it — it is MCP-unreachable (#92). See _SCHEMA_GATED_CODES.
     "invalid_base",
     "invalid_commit",
     "invalid_paths",
@@ -445,7 +586,7 @@ _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
 _JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
 _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
-    "unsupported_detail",
+    # unsupported_detail omitted: `detail` is a Literal param, MCP-unreachable (#92).
     "job_running",
     "job_cancelled",
     "job_timeout",
@@ -463,34 +604,50 @@ def _err_codes(*groups: tuple[ErrorCode, ...]) -> list[ErrorCode]:
     return list(seen)
 
 
+# Error codes whose only production path is an out-of-enum value on a Literal-typed
+# tool param (isolation -> unsupported_isolation, detail -> unsupported_detail,
+# scope -> invalid_scope). FastMCP rejects such input with a generic validation error
+# (isError, no result envelope) BEFORE the handler runs, so a real MCP call_tool caller
+# can never receive these envelopes — advertising them would be a false contract (#92).
+# They stay in ErrorCode and the in-handler _resolve_*/gitdiff guards (which still fire
+# on direct Python calls, as defense-in-depth) but are never advertised per-tool. The
+# capabilities injector strips them defensively so a future re-add to a group can't leak
+# one back into the advertised surface; tests/test_server.py pins the invariant.
+_SCHEMA_GATED_CODES: frozenset[ErrorCode] = frozenset(
+    {"unsupported_isolation", "unsupported_detail", "invalid_scope"}
+)
+
+
 _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
+    # Note: unsupported_isolation/unsupported_detail (and invalid_scope, via
+    # _GITDIFF_ERROR_CODES) are deliberately absent — those params are Literal-typed, so
+    # FastMCP rejects out-of-enum input before the handler runs, making the codes
+    # MCP-unreachable (#92). _SCHEMA_GATED_CODES also strips them defensively below.
     "codex_consult": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "unsupported_detail", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_consult_async": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_review_changes": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unsupported_isolation", "unsupported_detail", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_review_changes_async": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_delegate": _err_codes(
         _WORKSPACE_ERRORS,
         (
-            "unsupported_isolation",
-            "unsupported_detail",
             "input_too_large",
             "not_a_git_repo",
             "worktree_error",
@@ -499,7 +656,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     ),
     "codex_delegate_async": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "input_too_large", "not_a_git_repo", "worktree_error"),
+        ("input_too_large", "not_a_git_repo", "worktree_error"),
         _RUNTIME_ERRORS,
     ),
     "codex_status": [],
@@ -508,7 +665,6 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
         (
-            "unsupported_isolation",
             "input_too_large",
             "unexpanded_env_placeholder",
             "internal_error",
@@ -517,7 +673,6 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         (
-            "unsupported_isolation",
             "unexpanded_env_placeholder",
             "input_too_large",
             "not_a_git_repo",
@@ -531,6 +686,25 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_job_cancel": _err_codes(_JOB_READ_ERRORS),
     "codex_job_list": _err_codes(_WORKSPACE_ERRORS, ("internal_error",)),
 }
+
+# The *_async tools run via this server's custom job lifecycle (no native MCP
+# tasks/progress). Advertised structurally on each so a client can discover the exact
+# poll/result/consume/cancel/list tools and JobStatus fields, and detect the absence of
+# native tasks/progress, without parsing description prose (#94). The tool names and
+# JobStatus field names are the single source of truth here.
+_ASYNC_TOOLS: frozenset[str] = frozenset(
+    {"codex_consult_async", "codex_review_changes_async", "codex_delegate_async"}
+)
+_ASYNC_LIFECYCLE = AsyncLifecycle(
+    poll_tool="codex_job_status",
+    result_tool="codex_job_result",
+    consume_tool="codex_job_consume_result",
+    cancel_tool="codex_job_cancel",
+    list_tool="codex_job_list",
+    status_field="status",
+    result_ready_field="result_available",
+    poll_after_field="poll_after_ms",
+)
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
@@ -758,12 +932,16 @@ def codex_capabilities() -> dict:
         "surface; the fingerprint changes when they do.",
     )
     # Inject per-tool error codes from the single source of truth; KeyError here
-    # means a newly advertised tool is missing from _TOOL_ERROR_CODES.
+    # means a newly advertised tool is missing from _TOOL_ERROR_CODES. Strip any
+    # schema-gated code defensively so a Literal-param rejection code can never be
+    # advertised as an MCP-returnable envelope (#92).
     for cap in caps.tool_details:
-        cap.error_codes = _TOOL_ERROR_CODES[cap.name]
-    # exclude_none so a tool that inherits the server-wide stability omits the field
-    # entirely (rather than emitting a noisy `stability: null`). The only optional
-    # field in this envelope is the per-tool `stability`.
+        cap.error_codes = [c for c in _TOOL_ERROR_CODES[cap.name] if c not in _SCHEMA_GATED_CODES]
+        if cap.name in _ASYNC_TOOLS:
+            cap.async_lifecycle = _ASYNC_LIFECYCLE
+    # exclude_none so optional per-tool fields are omitted entirely when unset (rather
+    # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
+    # it, and only the *_async tools carry `async_lifecycle`.
     return caps.model_dump(mode="json", exclude_none=True)
 
 
@@ -773,14 +951,14 @@ def codex_capabilities() -> dict:
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=CONSULT_RESULT_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult(
-    question: str,
+    question: QuestionParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    extra_context: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
-    timeout_seconds: int | None = None,
-    detail: Detail = "summary",
+    workspace_root: WorkspaceRootParam = None,
+    extra_context: ExtraContextParam = None,
+    model: ModelParam = None,
+    isolation: IsolationParam = None,
+    timeout_seconds: TimeoutSecondsParam = None,
+    detail: DetailParam = "summary",
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
@@ -891,17 +1069,17 @@ async def codex_consult(
 @mcp.tool(annotations=_ACTIVE_READONLY, output_schema=REVIEW_RESULT_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes(
-    scope: ReviewScope = "working_tree",
+    scope: ScopeParam = "working_tree",
     ctx: Context | None = None,
-    base: str | None = None,
-    commit: str | None = None,
-    paths: list[str] | None = None,
-    workspace_root: str | None = None,
-    extra_context: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
-    timeout_seconds: int | None = None,
-    detail: Detail = "summary",
+    base: BaseParam = None,
+    commit: CommitParam = None,
+    paths: PathsParam = None,
+    workspace_root: WorkspaceRootParam = None,
+    extra_context: ExtraContextParam = None,
+    model: ModelParam = None,
+    isolation: IsolationParam = None,
+    timeout_seconds: TimeoutSecondsParam = None,
+    detail: DetailParam = "summary",
 ) -> dict:
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
@@ -1004,13 +1182,13 @@ async def codex_review_changes(
 @mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=DELEGATE_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate(
-    task: str,
+    task: TaskParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
-    timeout_seconds: int | None = None,
-    detail: Detail = "summary",
+    workspace_root: WorkspaceRootParam = None,
+    model: ModelParam = None,
+    isolation: IsolationParam = None,
+    timeout_seconds: TimeoutSecondsParam = None,
+    detail: DetailParam = "summary",
 ) -> dict:
     """Delegate a coding task to Codex (a different model) in an isolated git
     worktree, and get back a **reviewable diff that is NOT applied** to your tree.
@@ -1105,11 +1283,11 @@ async def codex_delegate(
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_async(
-    task: str,
+    task: TaskParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
+    workspace_root: WorkspaceRootParam = None,
+    model: ModelParam = None,
+    isolation: IsolationParam = None,
 ) -> dict:
     """Delegate a coding task to Codex in the background and get a `job_id` back
     immediately (does not block on the run).
@@ -1254,12 +1432,12 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
 @mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult_async(
-    question: str,
+    question: QuestionParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    extra_context: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
+    workspace_root: WorkspaceRootParam = None,
+    extra_context: ExtraContextParam = None,
+    model: ModelParam = None,
+    isolation: IsolationParam = None,
 ) -> dict:
     """Ask Codex for a read-only second opinion in the background; get a `job_id`
     back immediately instead of blocking.
@@ -1338,23 +1516,24 @@ async def codex_consult_async(
 @mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes_async(
-    scope: ReviewScope = "working_tree",
+    scope: ScopeParam = "working_tree",
     ctx: Context | None = None,
-    base: str | None = None,
-    commit: str | None = None,
-    paths: list[str] | None = None,
-    workspace_root: str | None = None,
-    extra_context: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
+    base: BaseParam = None,
+    commit: CommitParam = None,
+    paths: PathsParam = None,
+    workspace_root: WorkspaceRootParam = None,
+    extra_context: ExtraContextParam = None,
+    model: ModelParam = None,
+    isolation: IsolationParam = None,
 ) -> dict:
     """Review your git changes in the background; get a `job_id` back immediately.
 
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
     redacted, and bounded, then reviewed read-only), but it runs detached — use it
     when the review may run long. The diff is gathered inside the job, so a bad
-    `scope`/`base`/`commit` comes back as the same structured error with **zero
-    spend**. Starting a job commits to spend. Poll with `codex_job_status`, read the
+    `base`/`commit` comes back as the same structured error with **zero spend** (a bad
+    `scope` is an out-of-enum value rejected by MCP input validation before the job
+    starts). Starting a job commits to spend. Poll with `codex_job_status`, read the
     review envelope with `codex_job_result`, delete it with `codex_job_consume_result`,
     or stop it with `codex_job_cancel`. Pass `workspace_root` (absolute)."""
     d = config.defaults()
@@ -1420,14 +1599,14 @@ async def codex_review_changes_async(
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_dry_run(
-    scope: ReviewScope = "working_tree",
+    scope: ScopeParam = "working_tree",
     ctx: Context | None = None,
-    base: str | None = None,
-    commit: str | None = None,
-    paths: list[str] | None = None,
-    workspace_root: str | None = None,
-    extra_context: str | None = None,
-    isolation: Isolation | None = None,
+    base: BaseParam = None,
+    commit: CommitParam = None,
+    paths: PathsParam = None,
+    workspace_root: WorkspaceRootParam = None,
+    extra_context: ExtraContextParam = None,
+    isolation: IsolationParam = None,
 ) -> dict:
     """Preview what a `codex_review_changes` call would send — scope, diff size,
     redactions, truncation — with NO model call and no spend. Use it before a
@@ -1584,11 +1763,11 @@ _DELEGATE_PLAN_NOTE = (
 @mcp.tool(annotations=_FREE_READ, output_schema=DELEGATE_DRY_RUN_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_dry_run(
-    task: str,
+    task: TaskDryRunParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    model: str | None = None,
-    isolation: Isolation | None = None,
+    workspace_root: WorkspaceRootParam = None,
+    model: ModelDryRunParam = None,
+    isolation: IsolationParam = None,
 ) -> dict:
     """Preview what a `codex_delegate`/`codex_delegate_async` call would do — the
     baseline it seeds from (HEAD commit, tracked file count/size, uncommitted and
@@ -1817,7 +1996,7 @@ def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_STATUS_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_status(
-    job_id: str, ctx: Context | None = None, workspace_root: str | None = None
+    job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
 ) -> dict:
     """Check a background job's lifecycle state without fetching the full result.
 
@@ -1879,7 +2058,7 @@ def _job_result_corrupt(detail: str, meta: Meta) -> dict:
 
 
 async def _job_result_impl(
-    job_id: str,
+    job_id: JobIdParam,
     ctx: Context | None,
     workspace_root: str | None,
     *,
@@ -1950,10 +2129,10 @@ async def _job_result_impl(
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_result(
-    job_id: str,
+    job_id: JobIdParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    detail: Detail = "summary",
+    workspace_root: WorkspaceRootParam = None,
+    detail: DetailParam = "summary",
 ) -> dict:
     """Fetch a finished background Codex job's result WITHOUT deleting the record.
 
@@ -1972,10 +2151,10 @@ async def codex_job_result(
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_RESULT_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_consume_result(
-    job_id: str,
+    job_id: JobIdParam,
     ctx: Context | None = None,
-    workspace_root: str | None = None,
-    detail: Detail = "summary",
+    workspace_root: WorkspaceRootParam = None,
+    detail: DetailParam = "summary",
 ) -> dict:
     """Fetch a finished background Codex job's result and delete the stored record.
 
@@ -1989,7 +2168,7 @@ async def codex_job_consume_result(
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_STATUS_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_cancel(
-    job_id: str, ctx: Context | None = None, workspace_root: str | None = None
+    job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
 ) -> dict:
     """Cancel a running background Codex job.
 
@@ -2010,7 +2189,9 @@ async def codex_job_cancel(
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
-async def codex_job_list(ctx: Context | None = None, workspace_root: str | None = None) -> dict:
+async def codex_job_list(
+    ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
+) -> dict:
     """List the background jobs known for this workspace, newest first.
 
     Use to recover job_ids lost across context compaction or interruption. Returns
