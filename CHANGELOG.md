@@ -5,6 +5,26 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP `isError` now reflects semantic tool failures (#91).** A handler-level failure was returned
+  as `ok: false` structured data but the MCP tool result still reported `isError: false`, so a
+  conformant client keying off the protocol flag (rather than parsing our envelope) misclassified a
+  failed call as a success. A single FastMCP boundary middleware now flips `isError: true` whenever a
+  tool returns an envelope with `ok is False`, while leaving the `ErrorInfo` envelope intact in
+  `structured_content` (and its text fallback). Agent-visible result semantics changed, so the result
+  `fingerprint` bumps `schema-5` → `schema-6`.
+- **Stop advertising MCP-unreachable error codes (#92).** `codex_capabilities` advertised
+  `unsupported_isolation`, `unsupported_detail`, and `invalid_scope` as per-tool error codes, but
+  those `ErrorInfo` envelopes can never be returned over a real MCP call: `isolation`, `detail`, and
+  `scope` are `Literal`-typed params, so FastMCP rejects an out-of-enum value with a generic
+  validation error (`isError: true`, no structured content) *before* the handler's `_resolve_*` /
+  gitdiff guards run. Those three codes are now stripped from the advertised per-tool `error_codes`
+  (a central `_SCHEMA_GATED_CODES` filter makes it structurally impossible to re-leak one). They
+  remain in the `ErrorCode` enum and the in-handler guards as direct-call defense-in-depth, so
+  behavior is unchanged — only the advertised discovery surface. The advertised error-code surface
+  changed, so the result `fingerprint` bumps `schema-6` → `schema-7`.
+
 ### Added
 
 - **Async job lifecycle is advertised structurally in `codex_capabilities` (#94).** Each `*_async`
@@ -15,7 +35,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `poll_after_ms`). A client looking specifically for native MCP tasks/progress can now infer their
   absence — and discover the polling contract — from the structured envelope instead of parsing
   description prose. Sync and job-lifecycle tools omit the field. The capabilities surface grows, so
-  the result `fingerprint` bumps `schema-5` → `schema-6`.
+  the result `fingerprint` bumps `schema-8` → `schema-9`.
 
 - **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
   demand), fetches the latest published `@openai/codex` version from npm, and — when its minor isn't
@@ -33,6 +53,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Input schemas describe their ambiguous params (#93).** Tool input schemas were strict but thin —
+  key params (`workspace_root`, `base`, `commit`, `paths`, `model`, `timeout_seconds`, `question`,
+  `task`, `extra_context`, `job_id`, `scope`, `detail`, `isolation`) exposed only `type`/`default`, so
+  an agent had to read docstring prose for their semantics and constraints. Each now carries a
+  `description` in the advertised schema, defined once via reusable `Annotated[..., Field(...)]`
+  aliases so the wording can't drift between tools. `timeout_seconds` documents its 10..600 clamp
+  (out-of-range is coerced, not rejected) rather than adding `ge`/`le`, so the schema agrees with
+  `config.clamp_timeout()` runtime — deliberately no numeric/pattern constraints are added (a schema
+  rule disagreeing with runtime validation would be worse than none). Accepted values are unchanged,
+  but the advertised input schema did change, so the result `fingerprint` bumps `schema-7` →
+  `schema-8` (clients cache by it).
 - **Tracked Codex version bumped to `0.141`.** `SUPPORTED_VERSIONS` now tracks `(0, 141)`; the
   contract, compatibility, and README notes are verified against `codex-cli 0.141.0`. Advisory only —
   a version mismatch warns but never blocks, and the tested set stays overridable via
