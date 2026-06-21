@@ -2129,14 +2129,17 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
     class _Ctx:
         async def list_roots(self):
             return [
-                _Root(f"file://{tmp_path}"),  # valid absolute -> kept
+                _Root(f"file://{tmp_path}"),  # valid absolute (empty authority) -> kept
+                _Root(f"file://localhost{tmp_path}"),  # localhost authority -> kept
                 _Root("file:relative/path"),  # relative -> dropped
                 _Root("file://"),  # empty path -> dropped
+                _Root("file://example.com/tmp/repo"),  # remote host -> dropped
+                _Root("file://C:/repo"),  # drive-letter authority -> dropped
                 _Root("https://example.com"),  # non-file scheme -> dropped
             ]
 
     paths = await server._roots_from_ctx(_Ctx())
-    assert paths == [str(tmp_path)]
+    assert paths == [str(tmp_path), str(tmp_path)]
 
 
 # --- async job-lifecycle capability metadata (#94) ---------------------------

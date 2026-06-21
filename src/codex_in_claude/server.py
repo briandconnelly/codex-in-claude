@@ -333,7 +333,10 @@ async def _roots_from_ctx(ctx: Context | None) -> list[str]:
     for root in roots:
         uri = str(root.uri)
         parsed = urlparse(uri)
-        if parsed.scheme == "file":
+        # Only local file URIs: an empty or "localhost" authority (RFC 8089). A
+        # non-local host (file://example.com/tmp) or a drive-letter authority
+        # (file://C:/repo) would otherwise have its path misread as a local path.
+        if parsed.scheme == "file" and parsed.netloc in ("", "localhost"):
             path = unquote(parsed.path)
             # Keep only non-empty absolute paths: a malformed file: URI (empty or
             # relative path) is not an actionable workspace and would contradict the
