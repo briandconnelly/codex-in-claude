@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     violations: list[str] = []
     for path in files:
         rel = path.relative_to(root)
-        for lineno, value in iter_uses(path.read_text()):
+        for lineno, value in iter_uses(path.read_text(encoding="utf-8")):
             reason = classify(value)
             if reason is not None:
                 violations.append(f"{rel}:{lineno}: {value} — {reason}")
