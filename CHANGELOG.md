@@ -14,6 +14,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   tool returns an envelope with `ok is False`, while leaving the `ErrorInfo` envelope intact in
   `structured_content` (and its text fallback). Agent-visible result semantics changed, so the result
   `fingerprint` bumps `schema-5` → `schema-6`.
+- **Stop advertising MCP-unreachable error codes (#92).** `codex_capabilities` advertised
+  `unsupported_isolation`, `unsupported_detail`, and `invalid_scope` as per-tool error codes, but
+  those `ErrorInfo` envelopes can never be returned over a real MCP call: `isolation`, `detail`, and
+  `scope` are `Literal`-typed params, so FastMCP rejects an out-of-enum value with a generic
+  validation error (`isError: true`, no structured content) *before* the handler's `_resolve_*` /
+  gitdiff guards run. Those three codes are now stripped from the advertised per-tool `error_codes`
+  (a central `_SCHEMA_GATED_CODES` filter makes it structurally impossible to re-leak one). They
+  remain in the `ErrorCode` enum and the in-handler guards as direct-call defense-in-depth, so
+  behavior is unchanged — only the advertised discovery surface. The advertised error-code surface
+  changed, so the result `fingerprint` bumps `schema-6` → `schema-7`.
 
 ### Added
 

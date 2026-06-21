@@ -440,7 +440,9 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     "internal_error",
 )
 _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
-    "invalid_scope",
+    # invalid_scope is intentionally omitted: `scope` is a Literal param, so FastMCP
+    # rejects an out-of-enum value before the handler can reach the gitdiff guard that
+    # produces it — it is MCP-unreachable (#92). See _SCHEMA_GATED_CODES.
     "invalid_base",
     "invalid_commit",
     "invalid_paths",
@@ -450,7 +452,7 @@ _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
 _JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
 _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
-    "unsupported_detail",
+    # unsupported_detail omitted: `detail` is a Literal param, MCP-unreachable (#92).
     "job_running",
     "job_cancelled",
     "job_timeout",
@@ -468,34 +470,50 @@ def _err_codes(*groups: tuple[ErrorCode, ...]) -> list[ErrorCode]:
     return list(seen)
 
 
+# Error codes whose only production path is an out-of-enum value on a Literal-typed
+# tool param (isolation -> unsupported_isolation, detail -> unsupported_detail,
+# scope -> invalid_scope). FastMCP rejects such input with a generic validation error
+# (isError, no result envelope) BEFORE the handler runs, so a real MCP call_tool caller
+# can never receive these envelopes — advertising them would be a false contract (#92).
+# They stay in ErrorCode and the in-handler _resolve_*/gitdiff guards (which still fire
+# on direct Python calls, as defense-in-depth) but are never advertised per-tool. The
+# capabilities injector strips them defensively so a future re-add to a group can't leak
+# one back into the advertised surface; tests/test_server.py pins the invariant.
+_SCHEMA_GATED_CODES: frozenset[ErrorCode] = frozenset(
+    {"unsupported_isolation", "unsupported_detail", "invalid_scope"}
+)
+
+
 _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
+    # Note: unsupported_isolation/unsupported_detail (and invalid_scope, via
+    # _GITDIFF_ERROR_CODES) are deliberately absent — those params are Literal-typed, so
+    # FastMCP rejects out-of-enum input before the handler runs, making the codes
+    # MCP-unreachable (#92). _SCHEMA_GATED_CODES also strips them defensively below.
     "codex_consult": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "unsupported_detail", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_consult_async": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_review_changes": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unsupported_isolation", "unsupported_detail", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_review_changes_async": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
-        ("unsupported_isolation", "input_too_large", "context_too_large"),
+        ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
     ),
     "codex_delegate": _err_codes(
         _WORKSPACE_ERRORS,
         (
-            "unsupported_isolation",
-            "unsupported_detail",
             "input_too_large",
             "not_a_git_repo",
             "worktree_error",
@@ -504,7 +522,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     ),
     "codex_delegate_async": _err_codes(
         _WORKSPACE_ERRORS,
-        ("unsupported_isolation", "input_too_large", "not_a_git_repo", "worktree_error"),
+        ("input_too_large", "not_a_git_repo", "worktree_error"),
         _RUNTIME_ERRORS,
     ),
     "codex_status": [],
@@ -513,7 +531,6 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
         (
-            "unsupported_isolation",
             "input_too_large",
             "unexpanded_env_placeholder",
             "internal_error",
@@ -522,7 +539,6 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_delegate_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         (
-            "unsupported_isolation",
             "unexpanded_env_placeholder",
             "input_too_large",
             "not_a_git_repo",
@@ -763,9 +779,11 @@ def codex_capabilities() -> dict:
         "surface; the fingerprint changes when they do.",
     )
     # Inject per-tool error codes from the single source of truth; KeyError here
-    # means a newly advertised tool is missing from _TOOL_ERROR_CODES.
+    # means a newly advertised tool is missing from _TOOL_ERROR_CODES. Strip any
+    # schema-gated code defensively so a Literal-param rejection code can never be
+    # advertised as an MCP-returnable envelope (#92).
     for cap in caps.tool_details:
-        cap.error_codes = _TOOL_ERROR_CODES[cap.name]
+        cap.error_codes = [c for c in _TOOL_ERROR_CODES[cap.name] if c not in _SCHEMA_GATED_CODES]
     # exclude_none so a tool that inherits the server-wide stability omits the field
     # entirely (rather than emitting a noisy `stability: null`). The only optional
     # field in this envelope is the per-tool `stability`.
@@ -1390,8 +1408,9 @@ async def codex_review_changes_async(
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
     redacted, and bounded, then reviewed read-only), but it runs detached — use it
     when the review may run long. The diff is gathered inside the job, so a bad
-    `scope`/`base`/`commit` comes back as the same structured error with **zero
-    spend**. Starting a job commits to spend. Poll with `codex_job_status`, read the
+    `base`/`commit` comes back as the same structured error with **zero spend** (a bad
+    `scope` is an out-of-enum value rejected by MCP input validation before the job
+    starts). Starting a job commits to spend. Poll with `codex_job_status`, read the
     review envelope with `codex_job_result`, delete it with `codex_job_consume_result`,
     or stop it with `codex_job_cancel`. Pass `workspace_root` (absolute)."""
     d = config.defaults()
