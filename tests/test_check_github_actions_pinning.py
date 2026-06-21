@@ -42,6 +42,29 @@ def test_iter_uses_ignores_uses_substring_in_run_block():
     assert check.iter_uses(text) == []
 
 
+def test_iter_uses_ignores_uses_inside_multiline_literal_run_block():
+    text = (
+        "    steps:\n"
+        "      - run: |\n"
+        "          uses: not/a-real-action\n"
+        "          echo done\n"
+        "      - uses: actions/checkout@" + "a" * 40 + "\n"
+    )
+    assert check.iter_uses(text) == [(5, "actions/checkout@" + "a" * 40)]
+
+
+def test_iter_uses_ignores_uses_inside_folded_run_block_with_chomp():
+    text = "    steps:\n      - run: >-\n          uses: nope\n          still text\n"
+    assert check.iter_uses(text) == []
+
+
+def test_iter_uses_resumes_after_block_dedents():
+    text = (
+        "      - run: |\n          uses: ignored\n      - uses: actions/setup-uv@" + "b" * 40 + "\n"
+    )
+    assert check.iter_uses(text) == [(3, "actions/setup-uv@" + "b" * 40)]
+
+
 def test_iter_uses_strips_surrounding_quotes():
     text = '      - uses: "actions/checkout@' + "a" * 40 + '"\n'
     assert check.iter_uses(text) == [(1, "actions/checkout@" + "a" * 40)]

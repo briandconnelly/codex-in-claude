@@ -37,6 +37,10 @@ WARN = "WARN"
 
 # A ``uses:`` key, optionally as a YAML list item, capturing the rest of the line.
 _USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(.+?)\s*$")
+# A key opening a block scalar (``run: |``, ``run: >-``, ``script: |2`` …). Lines
+# indented deeper than such a key are literal content, not YAML keys, so a content
+# line beginning ``uses:`` must NOT be treated as an action reference.
+_BLOCK_SCALAR_RE = re.compile(r"^\s*(?:-\s*)?[^\s:#]+:\s*[|>][+-]?\d*\s*(?:#.*)?$")
 # A full 40-char git commit SHA (case-insensitive; GitHub emits lowercase).
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 # A Docker image pinned by immutable digest: docker://image@sha256:<64 hex>.
@@ -53,10 +57,24 @@ def _clean_value(raw: str) -> str:
 
 
 def iter_uses(text: str) -> list[tuple[int, str]]:
-    """Return ``(lineno, value)`` for every ``uses:`` entry; lineno is 1-based."""
+    """Return ``(lineno, value)`` for every ``uses:`` entry; lineno is 1-based.
+
+    Lines inside a ``run: |`` / ``run: >`` block scalar (more indented than the key
+    that opened it) are skipped so a shell line starting ``uses:`` is not mistaken
+    for an action reference.
+    """
     found: list[tuple[int, str]] = []
+    block_indent: int | None = None  # column of the key that opened a block scalar
     for lineno, line in enumerate(text.splitlines(), start=1):
+        indent = len(line) - len(line.lstrip(" "))
+        if block_indent is not None:
+            if line.strip() == "" or indent > block_indent:
+                continue  # blank line or still inside the block's content
+            block_indent = None  # dedented back to the opener's level: block ended
         if line.lstrip().startswith("#"):
+            continue
+        if _BLOCK_SCALAR_RE.match(line):
+            block_indent = indent
             continue
         match = _USES_RE.match(line)
         if not match:
