@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.tracked is not None:
         try:
-            major, minor, *_ = (*parse_version(args.tracked + ".0"),)
+            major, minor, _patch = parse_version(args.tracked + ".0")
         except ValueError:
             print(f"FAIL: could not parse --tracked {args.tracked!r}.", file=sys.stderr)
             return 2
