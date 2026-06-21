@@ -27,6 +27,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Async job lifecycle is advertised structurally in `codex_capabilities` (#94).** Each `*_async`
+  tool's capability entry now carries an `async_lifecycle` object declaring that the server uses its
+  own custom job lifecycle rather than native MCP tasks/progress (`native_task_support: false`,
+  `progress_support: "none"`, `lifecycle: "codex_job_*"`) and naming the exact poll/result/consume/
+  cancel/list tools plus the `JobStatus` fields to branch on (`status`, `result_available`,
+  `poll_after_ms`). A client looking specifically for native MCP tasks/progress can now infer their
+  absence — and discover the polling contract — from the structured envelope instead of parsing
+  description prose. Sync and job-lifecycle tools omit the field. The capabilities surface grows, so
+  the result `fingerprint` bumps `schema-8` → `schema-9`.
+
 - **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
   demand), fetches the latest published `@openai/codex` version from npm, and — when its minor isn't
   in `cli_contract.SUPPORTED_VERSIONS` — opens an idempotent tracking issue pre-filled with the

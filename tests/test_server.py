@@ -1349,8 +1349,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_8():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-8"
+def test_fingerprint_is_schema_9():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-9"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2046,6 +2046,42 @@ async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path
     monkeypatch.setattr(server.codex, "run_codex_exec", cancel)
     with pytest.raises(asyncio.CancelledError):
         await server.codex_consult("q", workspace_root=str(tmp_path))
+
+
+# --- async job-lifecycle capability metadata (#94) ---------------------------
+def test_async_tools_advertise_job_lifecycle_metadata():
+    """Each *_async tool structurally declares no native task/progress support and the
+    custom codex_job_* lifecycle; the referenced tools and JobStatus fields are real, so
+    the metadata stays consistent with the registered surface (#94)."""
+    from codex_in_claude.schemas import JobStatus
+
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    all_tools = set(caps["active_tools"]) | set(caps["free_tools"])
+    async_tools = {"codex_consult_async", "codex_review_changes_async", "codex_delegate_async"}
+    status_fields = set(JobStatus.model_fields)
+    for name in async_tools:
+        meta = by_name[name].get("async_lifecycle")
+        assert meta is not None, name
+        assert meta["native_task_support"] is False
+        assert meta["progress_support"] == "none"
+        assert meta["lifecycle"] == "codex_job_*"
+        # Every referenced lifecycle tool is a real, registered tool.
+        for key in ("poll_tool", "result_tool", "consume_tool", "cancel_tool", "list_tool"):
+            assert meta[key] in all_tools, (name, key, meta[key])
+        # Every referenced JobStatus field actually exists on the model.
+        for key in ("status_field", "result_ready_field", "poll_after_field"):
+            assert meta[key] in status_fields, (name, key, meta[key])
+
+
+def test_non_async_tools_omit_lifecycle_metadata():
+    """async_lifecycle is omitted (exclude_none) for sync and job-lifecycle tools — only
+    the *_async tools carry it (#94)."""
+    caps = server.codex_capabilities()
+    async_tools = {"codex_consult_async", "codex_review_changes_async", "codex_delegate_async"}
+    for cap in caps["tool_details"]:
+        if cap["name"] not in async_tools:
+            assert "async_lifecycle" not in cap, cap["name"]
 
 
 # --- MCP boundary: protocol isError flag (#91) -------------------------------
