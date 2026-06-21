@@ -2138,13 +2138,20 @@ async def test_advertised_error_codes_exclude_schema_gated(clean_env):
 
 
 def _is_our_error_envelope(structured_content: object) -> bool:
-    """True if a call_tool result carries *our* `ok: false` ErrorResult envelope —
-    i.e. the handler ran and produced a structured error. The MCP-unreachability
-    invariant is that a bad enum value never produces this (FastMCP rejects it during
-    input validation first). Asserting "not our envelope" rather than
-    `structured_content is None` keeps the test robust if a future FastMCP (the repo
-    pins no upper bound) attaches its own structured validation details."""
-    return isinstance(structured_content, dict) and structured_content.get("ok") is False
+    """True if a call_tool result carries *our* ErrorResult envelope — i.e. the handler
+    ran and produced a structured error. The MCP-unreachability invariant is that a bad
+    enum value never produces this (FastMCP rejects it during input validation first).
+    Asserting "not our envelope" rather than `structured_content is None` keeps the test
+    robust if a future FastMCP (the repo pins no upper bound) attaches its own structured
+    validation details. Matches the full `ErrorResult` shape (`ok: false` + nested
+    `error.code`), not a bare `ok: false`, so unrelated structured details that merely
+    carry an `ok` field are not mistaken for our envelope."""
+    return (
+        isinstance(structured_content, dict)
+        and structured_content.get("ok") is False
+        and isinstance(structured_content.get("error"), dict)
+        and "code" in structured_content["error"]
+    )
 
 
 async def test_mcp_bad_enum_value_rejected_without_envelope(clean_env, tmp_path):
