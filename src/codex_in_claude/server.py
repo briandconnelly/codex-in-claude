@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, cast, get_args
 from urllib.parse import unquote, urlparse
 
@@ -333,7 +334,12 @@ async def _roots_from_ctx(ctx: Context | None) -> list[str]:
         uri = str(root.uri)
         parsed = urlparse(uri)
         if parsed.scheme == "file":
-            paths.append(unquote(parsed.path))
+            path = unquote(parsed.path)
+            # Keep only non-empty absolute paths: a malformed file: URI (empty or
+            # relative path) is not an actionable workspace and would contradict the
+            # "absolute filesystem paths" contract candidate_roots advertises (#95).
+            if path and Path(path).is_absolute():
+                paths.append(path)
     return paths
 
 

@@ -2118,6 +2118,27 @@ async def test_invalid_workspace_root_omits_candidate_roots(monkeypatch, clean_e
     assert res["error"]["candidate_roots"] is None
 
 
+async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
+    """_roots_from_ctx returns only non-empty absolute file:// paths, so candidate_roots
+    never advertises a malformed (empty/relative) or non-file root (#95, Copilot review)."""
+
+    class _Root:
+        def __init__(self, uri):
+            self.uri = uri
+
+    class _Ctx:
+        async def list_roots(self):
+            return [
+                _Root(f"file://{tmp_path}"),  # valid absolute -> kept
+                _Root("file:relative/path"),  # relative -> dropped
+                _Root("file://"),  # empty path -> dropped
+                _Root("https://example.com"),  # non-file scheme -> dropped
+            ]
+
+    paths = await server._roots_from_ctx(_Ctx())
+    assert paths == [str(tmp_path)]
+
+
 # --- async job-lifecycle capability metadata (#94) ---------------------------
 def test_async_tools_advertise_job_lifecycle_metadata():
     """Each *_async tool structurally declares no native task/progress support and the
