@@ -174,6 +174,28 @@ class _InputSchemaDialectMiddleware(Middleware):
 
 mcp.add_middleware(_InputSchemaDialectMiddleware())
 
+
+class _SemanticErrorMiddleware(Middleware):
+    """Map an envelope-level failure (``ok is False``) to MCP ``isError: true``.
+
+    Handlers return the normalized result envelope as plain structured data; a
+    semantic failure is ``ErrorResult{ok: false, ...}``. FastMCP turns a returned
+    dict into a ``ToolResult`` with ``is_error=False``, so an MCP-conformant client
+    that keys off the protocol ``isError`` flag (rather than parsing our envelope)
+    would misclassify a failed call as a success (#91). We flip the flag here at the
+    single tool boundary while leaving the structured content (and its text fallback)
+    untouched, so the ``ErrorInfo`` envelope still reaches clients that do parse it."""
+
+    async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
+        result = await call_next(context)
+        sc = result.structured_content
+        if isinstance(sc, dict) and sc.get("ok") is False:
+            result.is_error = True
+        return result
+
+
+mcp.add_middleware(_SemanticErrorMiddleware())
+
 # The propose orchestration lives in delegate.py; re-exported here for test access.
 _diffstat = delegate._diffstat
 

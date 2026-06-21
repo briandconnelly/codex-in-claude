@@ -1349,8 +1349,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_5():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-5"
+def test_fingerprint_is_schema_6():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-6"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2044,3 +2044,52 @@ async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path
     monkeypatch.setattr(server.codex, "run_codex_exec", cancel)
     with pytest.raises(asyncio.CancelledError):
         await server.codex_consult("q", workspace_root=str(tmp_path))
+
+
+# --- MCP boundary: protocol isError flag (#91) -------------------------------
+# These go through the real MCP boundary via an in-memory Client, so they assert
+# the protocol-level `is_error` flag a conformant client keys off — not just the
+# `ok` field inside our envelope, which the direct-call tests above cover.
+async def test_mcp_success_path_reports_is_error_false(clean_env):
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("codex_capabilities", {}, raise_on_error=False)
+    assert result.is_error is False
+    assert result.structured_content["ok"] is True
+
+
+async def test_mcp_semantic_failure_reports_is_error_true(clean_env):
+    """A handler-level failure (`ok: false`) must map to MCP `isError: true` while
+    leaving the ErrorInfo envelope intact in structured_content (#91)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_consult",
+            {"question": "q", "workspace_root": "relative/not/abs"},
+            raise_on_error=False,
+        )
+    assert result.is_error is True
+    # The envelope still carries the structured error for clients that parse it.
+    assert result.structured_content["ok"] is False
+    assert result.structured_content["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_mcp_codex_run_failure_reports_is_error_true(monkeypatch, clean_env, tmp_path):
+    """A failure surfaced from the codex run (not just input validation) also flips
+    the protocol flag, exercising the run path through the boundary."""
+    from fastmcp import Client
+
+    async def fake(*args, **kwargs):
+        return _fake_result(None, exit_code=1, stderr="not logged in")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_consult",
+            {"question": "q", "workspace_root": str(tmp_path)},
+            raise_on_error=False,
+        )
+    assert result.is_error is True
+    assert result.structured_content["error"]["code"] == "codex_auth_required"

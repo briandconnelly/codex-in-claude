@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP `isError` now reflects semantic tool failures (#91).** A handler-level failure was returned
+  as `ok: false` structured data but the MCP tool result still reported `isError: false`, so a
+  conformant client keying off the protocol flag (rather than parsing our envelope) misclassified a
+  failed call as a success. A single FastMCP boundary middleware now flips `isError: true` whenever a
+  tool returns an envelope with `ok is False`, while leaving the `ErrorInfo` envelope intact in
+  `structured_content` (and its text fallback). Agent-visible result semantics changed, so the result
+  `fingerprint` bumps `schema-5` → `schema-6`.
+
 ### Added
 
 - **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
