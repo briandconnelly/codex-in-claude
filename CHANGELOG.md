@@ -5,25 +5,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
-### Fixed
+## [0.3.0] - 2026-06-21
 
-- **MCP `isError` now reflects semantic tool failures (#91).** A handler-level failure was returned
-  as `ok: false` structured data but the MCP tool result still reported `isError: false`, so a
-  conformant client keying off the protocol flag (rather than parsing our envelope) misclassified a
-  failed call as a success. A single FastMCP boundary middleware now flips `isError: true` whenever a
-  tool returns an envelope with `ok is False`, while leaving the `ErrorInfo` envelope intact in
-  `structured_content` (and its text fallback). Agent-visible result semantics changed, so the result
-  `fingerprint` bumps `schema-5` → `schema-6`.
-- **Stop advertising MCP-unreachable error codes (#92).** `codex_capabilities` advertised
-  `unsupported_isolation`, `unsupported_detail`, and `invalid_scope` as per-tool error codes, but
-  those `ErrorInfo` envelopes can never be returned over a real MCP call: `isolation`, `detail`, and
-  `scope` are `Literal`-typed params, so FastMCP rejects an out-of-enum value with a generic
-  validation error (`isError: true`, no structured content) *before* the handler's `_resolve_*` /
-  gitdiff guards run. Those three codes are now stripped from the advertised per-tool `error_codes`
-  (a central `_SCHEMA_GATED_CODES` filter makes it structurally impossible to re-leak one). They
-  remain in the `ErrorCode` enum and the in-handler guards as direct-call defense-in-depth, so
-  behavior is unchanged — only the advertised discovery surface. The advertised error-code surface
-  changed, so the result `fingerprint` bumps `schema-6` → `schema-7`.
+The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-5` →
+`codex-in-claude/0.1/schema-10`), so pre-1.0 this is a minor release. Clients that cache by
+`fingerprint` re-fetch the contract.
 
 ### Added
 
@@ -44,7 +30,6 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   absence — and discover the polling contract — from the structured envelope instead of parsing
   description prose. Sync and job-lifecycle tools omit the field. The capabilities surface grows, so
   the result `fingerprint` bumps `schema-8` → `schema-9`.
-
 - **Automated codex-release watch.** `.github/workflows/codex-release-watch.yml` runs weekly (and on
   demand), fetches the latest published `@openai/codex` version from npm, and — when its minor isn't
   in `cli_contract.SUPPORTED_VERSIONS` — opens an idempotent tracking issue pre-filled with the
@@ -76,6 +61,26 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   contract, compatibility, and README notes are verified against `codex-cli 0.141.0`. Advisory only —
   a version mismatch warns but never blocks, and the tested set stays overridable via
   `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS`.
+
+### Fixed
+
+- **MCP `isError` now reflects semantic tool failures (#91).** A handler-level failure was returned
+  as `ok: false` structured data but the MCP tool result still reported `isError: false`, so a
+  conformant client keying off the protocol flag (rather than parsing our envelope) misclassified a
+  failed call as a success. A single FastMCP boundary middleware now flips `isError: true` whenever a
+  tool returns an envelope with `ok is False`, while leaving the `ErrorInfo` envelope intact in
+  `structured_content` (and its text fallback). Agent-visible result semantics changed, so the result
+  `fingerprint` bumps `schema-5` → `schema-6`.
+- **Stop advertising MCP-unreachable error codes (#92).** `codex_capabilities` advertised
+  `unsupported_isolation`, `unsupported_detail`, and `invalid_scope` as per-tool error codes, but
+  those `ErrorInfo` envelopes can never be returned over a real MCP call: `isolation`, `detail`, and
+  `scope` are `Literal`-typed params, so FastMCP rejects an out-of-enum value with a generic
+  validation error (`isError: true`, no structured content) *before* the handler's `_resolve_*` /
+  gitdiff guards run. Those three codes are now stripped from the advertised per-tool `error_codes`
+  (a central `_SCHEMA_GATED_CODES` filter makes it structurally impossible to re-leak one). They
+  remain in the `ErrorCode` enum and the in-handler guards as direct-call defense-in-depth, so
+  behavior is unchanged — only the advertised discovery surface. The advertised error-code surface
+  changed, so the result `fingerprint` bumps `schema-6` → `schema-7`.
 
 ### Security
 
