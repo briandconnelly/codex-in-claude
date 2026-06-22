@@ -77,6 +77,13 @@ def test_validate_rejects_empty_subject():
     assert check.validate("feat: ") is not None
 
 
+@pytest.mark.parametrize("subject", ["feat:  ", "feat: \t", "fix(core):   "])
+def test_validate_rejects_whitespace_only_subject(subject):
+    # A subject that is only whitespace (>=1 char so the regex matches) must be
+    # rejected, not silently accepted.
+    assert check.validate(subject) is not None
+
+
 def test_validate_rejects_capitalized_subject():
     assert check.validate("feat: Add a thing") is not None
 

@@ -89,7 +89,9 @@ def validate(header: str) -> str | None:
     scope = match.group("scope")
     if scope is not None and scope not in ALLOWED_SCOPES:
         return f"scope '{scope}' is not allowed"
-    subject = match.group("subject")
+    subject = match.group("subject").strip()
+    if not subject:
+        return "subject must not be empty"
     if subject[0].isupper():
         return "subject must not start with a capital letter"
     if subject.endswith("."):
