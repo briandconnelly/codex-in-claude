@@ -53,12 +53,14 @@ This is the only pattern that buys real cross-model diversity, and it buys it on
 - **Hand Codex a neutral task prompt — never your draft.**
   The moment Codex sees your attempt, it stops being an independent member and the panel silently degrades into Judge (correlated failure, false independence).
   If you want it to react to your draft, that's Judge — call it that and use pattern 1.
-- **Operational independence:** Codex works from the same task statement you did, not your reasoning, partial solution, or conclusion.
+- **Operational independence:** Codex works from the same task statement you did, not your reasoning, partial solution, conclusion, or workspace files containing your draft.
 - **Split by artifact:** `codex_consult` for a *design* panel (two approaches to compare), `codex_delegate` for a *diff* panel (two implementations — Codex's lands in a throwaway worktree as a `diff`, never applied).
-- **Diff-panel precondition — delegate *before* you draft.**
-  `codex_delegate` seeds its worktree from your live tracked state (`HEAD` + uncommitted *tracked* changes), so if your own attempt already lives in tracked files, Codex sees it and the panel silently degrades into Judge.
-  Run the Codex member first, or keep your draft out of the tracked baseline — stash it, or commit it on a branch and switch back to the clean baseline before delegating (the worktree seeds from `HEAD`, so staying on the draft branch still leaks it) — so Codex starts from the same baseline you did.
-  A brand-new *untracked* file is already safe: untracked files are never copied into the worktree.
+- **Panel precondition — run Codex from a clean baseline.**
+  Run the Codex member before you draft, or keep your draft outside any workspace/baseline Codex can read.
+  For a design panel, `codex_consult` runs read-only *in the resolved workspace*, so a saved tracked or untracked draft file can still leak even when it is not passed as `extra_context`.
+  For a diff panel, `codex_delegate` seeds its worktree from your live tracked state (`HEAD` + uncommitted *tracked* changes), so if your own attempt already lives in tracked files, Codex sees it and the panel silently degrades into Judge.
+  Either way, run the Codex member first, or keep your draft out of the baseline — stash it, or commit it on a branch and switch back to the clean baseline before delegating (the worktree seeds from `HEAD`, so staying on the draft branch still leaks it) — so Codex starts from the same baseline you did.
+  A brand-new *untracked* file is safe only for `codex_delegate` (untracked files are never copied into the delegate worktree) — *not* for `codex_consult`, which reads it in place.
 - **Cap: 1 Codex attempt.**
   Two members total: yours and Codex's.
 
