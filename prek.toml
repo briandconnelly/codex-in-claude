@@ -1,0 +1,54 @@
+# prek (https://prek.j178.dev) — local Git hooks mirroring the CI gate.
+# Run via uv: `uv run prek install --prepare-hooks` once, then hooks fire on
+# commit/push. See CONTRIBUTING.md / AGENTS.md.
+#
+# Without this, `prek install` only wires the pre-commit shim — the pytest
+# (pre-push) and commit-msg hooks would be configured but never fire.
+default_install_hook_types = ["pre-commit", "pre-push", "commit-msg"]
+
+# Offline, zero-setup file hygiene (prek's Rust-native builtins) — pre-commit stage.
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-merge-conflict" },
+  # tests/test_server.py embeds an OpenSSH private-key header as fixture data for
+  # the secret-redaction regression test (#57) — not a real key.
+  { id = "detect-private-key", exclude = "^tests/test_server\\.py$" },
+  { id = "check-added-large-files" },
+  { id = "check-yaml" },     # workflows, etc.
+  { id = "check-toml" },     # pyproject.toml, prek.toml
+  { id = "check-json" },     # .mcp.json, .claude-plugin/plugin.json
+]
+
+# Lint / format / type-check / lock via uv (versions pinned in pyproject dependency-groups).
+[[repos]]
+repo = "local"
+hooks = [
+  # Auto-fix lint + format on commit. NOTE: prek does NOT auto-restage — a fix
+  # fails the commit; re-`git add` the changed files and commit again. CI enforces --check.
+  { id = "ruff-check", name = "ruff check", language = "system", entry = "uv run ruff check --force-exclude --fix", types = ["python"] },
+  { id = "ruff-format", name = "ruff format", language = "system", entry = "uv run ruff format --force-exclude", types = ["python"] },
+  # ty needs whole-project context (include = ["src"]); its config also lives in
+  # pyproject.toml, so trigger on any staged .py OR pyproject.toml, not just .py.
+  { id = "ty", name = "ty check", language = "system", entry = "uv run ty check", types_or = ["python", "toml"], files = "(\\.py|^pyproject\\.toml)$", pass_filenames = false },
+  # Custom drift gate — only when a workflow file changes.
+  { id = "actions-pinning", name = "github actions sha pinning", language = "system", entry = "uv run python scripts/check_github_actions_pinning.py", files = "^\\.github/workflows/.*\\.ya?ml$", pass_filenames = false },
+  # Fail if uv.lock has drifted from pyproject.toml (verify only, no rewrite).
+  { id = "uv-lock-check", name = "uv lock --check", language = "system", entry = "uv lock --check", pass_filenames = false, files = "^(pyproject\\.toml|uv\\.lock|uv\\.toml)$" },
+]
+
+# Full test gate — pre-push only (slow; 95% coverage floor).
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "pytest", name = "pytest", language = "system", entry = "uv run pytest", stages = ["pre-push"], pass_filenames = false, always_run = true },
+]
+
+# Conventional-commit enforcement — commit-msg stage.
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "commit-msg", name = "conventional commit", language = "system", entry = "uv run python scripts/check_commit_message.py", stages = ["commit-msg"], pass_filenames = true },
+]
