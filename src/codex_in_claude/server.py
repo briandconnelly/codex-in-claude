@@ -757,6 +757,7 @@ def codex_capabilities() -> dict:
                     "extra_context",
                     "model",
                     "isolation",
+                    "timeout_seconds",
                     "detail",
                 ],
                 returns="A result envelope with summary, optional findings, and meta. "
@@ -788,6 +789,7 @@ def codex_capabilities() -> dict:
                     "extra_context",
                     "model",
                     "isolation",
+                    "timeout_seconds",
                     "detail",
                 ],
                 returns="A result envelope with verdict, findings, and a context summary. "
@@ -882,7 +884,10 @@ def codex_capabilities() -> dict:
                 stability="experimental",
                 use_when="To recover job_ids or inspect known jobs for a workspace.",
                 key_optional_params=["workspace_root"],
-                returns="Compact job summaries, newest first.",
+                returns="Compact job summaries, newest first. Not permanent storage: "
+                "terminal records expire after the TTL, and a per-workspace max count "
+                "(default 50) evicts the oldest terminal records as new jobs start "
+                "(running jobs are never evicted), so older finished jobs drop off.",
             ),
             ToolCapability(
                 name="codex_status",
@@ -922,7 +927,11 @@ def codex_capabilities() -> dict:
                 cost="free",
                 use_when="To discover the tool inventory, tiers, and result fingerprint "
                 "(cache by it).",
-                returns="This inventory: tools, tiers, sandboxes, scope, and fingerprint.",
+                returns="This inventory: tools, tiers, sandboxes, scope, negative_scope, "
+                "prerequisites, deprecation_policy, per-tool error_codes, async_lifecycle "
+                "(on the *_async tools), and fingerprint. A top-level `stability` names the "
+                "server lifecycle stage; a per-tool `stability` is an advisory maturity "
+                "override and, when omitted, inherits the server-wide value.",
             ),
         ],
         tiers=list(config.VALID_TIERS),
@@ -985,9 +994,11 @@ async def codex_consult(
     treat findings as unvalidated claims to verify by running the checks yourself.
 
     Progress: this is a blocking call that returns only when Codex finishes; it does
-    not stream incremental `notifications/progress`. If you need live status or
-    recoverability for a long run, use `codex_consult_async` for a `job_id` and poll
-    `codex_job_status`."""
+    not stream incremental `notifications/progress`. Typical runs take tens of seconds;
+    the configured default timeout is normally 180s, clamped to 10-600s, overridable
+    per call via `timeout_seconds` (`codex_status` reports the resolved default and
+    bounds). If you need live status or recoverability for a long run, use
+    `codex_consult_async` for a `job_id` and poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -1116,9 +1127,11 @@ async def codex_review_changes(
     unvalidated claims to verify by running those checks yourself before acting.
 
     Progress: this is a blocking call that returns only when Codex finishes; it does
-    not stream incremental `notifications/progress`. If you need live status or
-    recoverability for a long run, use `codex_review_changes_async` for a `job_id` and
-    poll `codex_job_status`."""
+    not stream incremental `notifications/progress`. Typical runs take tens of seconds;
+    the configured default timeout is normally 180s, clamped to 10-600s, overridable
+    per call via `timeout_seconds` (`codex_status` reports the resolved default and
+    bounds). If you need live status or recoverability for a long run, use
+    `codex_review_changes_async` for a `job_id` and poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2218,7 +2231,12 @@ async def codex_job_list(
 
     Use to recover job_ids lost across context compaction or interruption. Returns
     each job's id, kind, status, start time, result_available, and expiry. Free —
-    no model call."""
+    no model call.
+
+    This list is not permanent storage: terminal records expire after the TTL (default
+    24h), and a per-workspace max count (default 50, clamped 1-1000) evicts the oldest
+    terminal records as new jobs start — running jobs are never evicted. So older
+    finished jobs can silently drop off; read a result before its `expires_at`."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
