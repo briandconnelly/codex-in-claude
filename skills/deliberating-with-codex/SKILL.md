@@ -48,7 +48,8 @@ diff (set `scope`/`paths`) and `codex_consult` to judge a design or written
 argument.
 
 - **The verdict is signal, not truth.** A `codex_review_changes` `verdict`
-  (pass/concerns/fail) and any `codex_consult` finding are claims to verify against
+  (pass/concerns/fail, or `unknown` when Codex declines to commit — also the
+  default) and any `codex_consult` finding are claims to verify against
   the code — not a passing grade. `consult`/`review` are read-only and **static**:
   the sandbox blocks the writes a test/build/lint run needs, so a "this breaks X"
   finding was *not* validated by running X. Run the check yourself.
@@ -72,9 +73,12 @@ buys it only if independence is preserved:
 - **Diff-panel precondition — delegate *before* you draft.** `codex_delegate` seeds
   its worktree from your live tracked state (`HEAD` + uncommitted *tracked* changes),
   so if your own attempt already lives in tracked files, Codex sees it and the panel
-  silently degrades into Judge. Run the Codex member first, or keep your draft out
-  of the tracked baseline (stash it, or work it on a separate branch) so Codex starts
-  from the same clean baseline you did.
+  silently degrades into Judge. Run the Codex member first, or keep your draft out of
+  the tracked baseline — stash it, or commit it on a branch and switch back to the
+  clean baseline before delegating (the worktree seeds from `HEAD`, so staying on the
+  draft branch still leaks it) — so Codex starts from the same baseline you did. A
+  brand-new *untracked* file is already safe: untracked files are never copied into
+  the worktree.
 - **Cap: 1 Codex attempt.** Two members total: yours and Codex's.
 
 ### 3. Review–Revise loop — one critique pass

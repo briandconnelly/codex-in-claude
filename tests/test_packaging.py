@@ -104,14 +104,25 @@ def test_pyproject_version_matches_package():
         assert __version__ == pyproject["project"]["version"]
 
 
+def _frontmatter(text: str) -> str:
+    """The YAML block delimited by the leading `---`/`---` fence, or '' if absent."""
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    return text[3:end] if end != -1 else ""
+
+
 def test_skills_present_with_frontmatter():
-    """Every skills/<dir>/SKILL.md starts with frontmatter naming its own directory."""
+    """Every skills/<dir>/SKILL.md has frontmatter naming its own directory."""
     skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
     assert skill_files, "no skills found under skills/*/SKILL.md"
     for skill_md in skill_files:
-        text = skill_md.read_text()
-        assert text.startswith("---"), f"{skill_md} missing frontmatter"
-        assert f"name: {skill_md.parent.name}" in text, f"{skill_md} name mismatch"
+        front = _frontmatter(skill_md.read_text())
+        assert front, f"{skill_md} missing frontmatter"
+        # Match the `name:` key inside the frontmatter block only, not the body.
+        assert re.search(rf"^name: {re.escape(skill_md.parent.name)}$", front, re.MULTILINE), (
+            f"{skill_md} frontmatter name mismatch"
+        )
     # The composition skill and its reference home must both ship.
     names = {p.parent.name for p in skill_files}
     assert {"collaborating-with-codex", "deliberating-with-codex"} <= names
