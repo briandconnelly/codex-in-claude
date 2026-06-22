@@ -16,6 +16,13 @@ package — **`_core` must never import from its parent package** (one-way depen
   `uv run ruff check . && uv run ruff format --check . && uv run ty check`.
 - Tests use `pytest` with a **95% coverage floor**. Live tests that call the real `codex` CLI are
   marked `integration` and excluded by default; run them with `uv run pytest -m integration --no-cov`.
+- Local Git hooks are configured in `prek.toml` and run via [`prek`](https://prek.j178.dev) (a dev
+  dependency). One-time setup: `uv run prek install --prepare-hooks`. Hooks mirror the CI gate —
+  pre-commit runs file hygiene + `ruff`/`ty`/Actions-pinning/`uv lock --check`; pre-push runs
+  `pytest`; commit-msg validates Conventional Commits via `scripts/check_commit_message.py` (its
+  allowed types/scopes mirror the Git/PRs section — change both together). prek is a local
+  convenience; CI (`test.yml`) remains the authoritative gate and does not run the builtin
+  file-hygiene hooks.
 
 ## The CLI contract
 

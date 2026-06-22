@@ -10,7 +10,13 @@ This project uses [`uv`](https://docs.astral.sh/uv/) for everything.
 ```bash
 uv sync                 # create the env and install deps (incl. dev group)
 uv run pytest           # run tests (95% coverage floor)
+uv run prek install --prepare-hooks   # one-time: install local Git hooks
 ```
+
+[`prek`](https://prek.j178.dev) runs the same checks locally that CI enforces (see
+[`prek.toml`](prek.toml)): file hygiene + `ruff` / `ty` / Actions-pinning / `uv lock --check` on
+commit, `pytest` on push, and Conventional Commit validation on the commit message. It's a local
+convenience — CI remains the authoritative gate.
 
 ## Before you open a PR
 

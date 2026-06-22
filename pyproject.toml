@@ -46,6 +46,7 @@ packages = ["src/codex_in_claude"]
 
 [dependency-groups]
 dev = [
+    "prek>=0.4.5",
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov>=7",
