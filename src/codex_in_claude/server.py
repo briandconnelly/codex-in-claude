@@ -757,7 +757,6 @@ def codex_capabilities() -> dict:
                     "extra_context",
                     "model",
                     "isolation",
-                    "timeout_seconds",
                     "detail",
                 ],
                 returns="A result envelope with summary, optional findings, and meta. "
@@ -789,7 +788,6 @@ def codex_capabilities() -> dict:
                     "extra_context",
                     "model",
                     "isolation",
-                    "timeout_seconds",
                     "detail",
                 ],
                 returns="A result envelope with verdict, findings, and a context summary. "
@@ -885,9 +883,10 @@ def codex_capabilities() -> dict:
                 use_when="To recover job_ids or inspect known jobs for a workspace.",
                 key_optional_params=["workspace_root"],
                 returns="Compact job summaries, newest first. Not permanent storage: "
-                "terminal records expire after the TTL, and a per-workspace max count "
-                "(default 50) evicts the oldest terminal records as new jobs start "
-                "(running jobs are never evicted), so older finished jobs drop off.",
+                "terminal records expire after the TTL, and a per-workspace soft cap "
+                "(default 50) evicts the oldest terminal records as new jobs start. "
+                "Running jobs are never evicted, so the list can transiently exceed the "
+                "cap; older finished jobs drop off.",
             ),
             ToolCapability(
                 name="codex_status",
@@ -2234,9 +2233,10 @@ async def codex_job_list(
     no model call.
 
     This list is not permanent storage: terminal records expire after the TTL (default
-    24h), and a per-workspace max count (default 50, clamped 1-1000) evicts the oldest
-    terminal records as new jobs start — running jobs are never evicted. So older
-    finished jobs can silently drop off; read a result before its `expires_at`."""
+    24h), and a per-workspace soft cap (default 50, clamped 1-1000) evicts the oldest
+    terminal records as new jobs start. Running jobs are never evicted, so the list can
+    transiently exceed the cap; older finished jobs can silently drop off, so read a
+    result before its `expires_at`."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
