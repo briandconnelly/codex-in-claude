@@ -134,6 +134,17 @@ Slash commands wrap these: `/codex:status`, `/codex:consult`, `/codex:review`,
 Active tools send the prompt and relevant context/diffs to OpenAI through the `codex` CLI. Treat
 Codex's output as claims to verify, not as instructions to follow blindly.
 
+## Skills
+
+The plugin ships two Claude Code skills (auto-discovered from `skills/`):
+
+- **`collaborating-with-codex`** — the tool reference and guardrail home: which tool to call
+  (consult / review / delegate), how to read the envelope, background jobs, and the server-down
+  fallback.
+- **`deliberating-with-codex`** — how to *compose* those tools with your own work into a deliberate
+  two-model pattern (Judge, two-member panel, review–revise loop), with a value/risk gate so a single
+  consult stays the default.
+
 ## Result envelopes
 
 Every tool returns a discriminated envelope keyed by `ok`. Success carries `summary`/`findings`/`meta`

@@ -104,10 +104,17 @@ def test_pyproject_version_matches_package():
         assert __version__ == pyproject["project"]["version"]
 
 
-def test_skill_present_with_frontmatter():
-    skill = (ROOT / "skills/collaborating-with-codex/SKILL.md").read_text()
-    assert skill.startswith("---")
-    assert "name: collaborating-with-codex" in skill
+def test_skills_present_with_frontmatter():
+    """Every skills/<dir>/SKILL.md starts with frontmatter naming its own directory."""
+    skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
+    assert skill_files, "no skills found under skills/*/SKILL.md"
+    for skill_md in skill_files:
+        text = skill_md.read_text()
+        assert text.startswith("---"), f"{skill_md} missing frontmatter"
+        assert f"name: {skill_md.parent.name}" in text, f"{skill_md} name mismatch"
+    # The composition skill and its reference home must both ship.
+    names = {p.parent.name for p in skill_files}
+    assert {"collaborating-with-codex", "deliberating-with-codex"} <= names
 
 
 def test_commands_present():
