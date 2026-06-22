@@ -749,7 +749,8 @@ def codex_capabilities() -> dict:
                 name="codex_consult",
                 cost="active",
                 use_when="You want a read-only second opinion or answer from Codex "
-                "(a different model) on a question, design, or diff.",
+                "(a different model) on a question, design, or an ad-hoc diff you paste "
+                "inline; use codex_review_changes when the diff comes from git.",
                 required_params=["question"],
                 key_optional_params=[
                     "workspace_root",
@@ -765,8 +766,9 @@ def codex_capabilities() -> dict:
                 name="codex_consult_async",
                 cost="active",
                 stability="experimental",
-                use_when="Same as codex_consult, but the consult may run long and you "
-                "want a job_id immediately instead of blocking.",
+                use_when="You want a read-only second opinion from Codex, but the consult "
+                "may run long, so you want a job_id immediately instead of blocking; "
+                "async counterpart to codex_consult.",
                 required_params=["question"],
                 key_optional_params=["workspace_root", "extra_context", "model", "isolation"],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
@@ -795,8 +797,9 @@ def codex_capabilities() -> dict:
                 name="codex_review_changes_async",
                 cost="active",
                 stability="experimental",
-                use_when="Same as codex_review_changes, but the review may run long and "
-                "you want a job_id immediately instead of blocking.",
+                use_when="You want Codex to review your git changes (working_tree, branch, "
+                "or commit), but the review may run long, so you want a job_id immediately "
+                "instead of blocking; async counterpart to codex_review_changes.",
                 key_optional_params=[
                     "scope",
                     "base",
@@ -826,8 +829,10 @@ def codex_capabilities() -> dict:
                 name="codex_delegate_async",
                 cost="active",
                 stability="experimental",
-                use_when="Same as codex_delegate, but the task is long-running and you "
-                "want a job_id immediately instead of blocking.",
+                use_when="You want Codex to implement a coding task as a reviewable diff "
+                "(NOT applied to your working tree), but the task is long-running, so you "
+                "want a job_id immediately instead of blocking; async counterpart to "
+                "codex_delegate.",
                 required_params=["task"],
                 key_optional_params=["workspace_root", "model", "isolation"],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
@@ -974,8 +979,9 @@ async def codex_consult(
     Runs `codex exec` in a read-only sandbox — Codex never edits files. This is a
     STATIC review, not a verify mode: the read-only sandbox blocks the writes a
     test/build/lint run typically needs (a writable cache/temp), so Codex can't
-    rely on executing your checks to confirm its claims. Pass `workspace_root`
-    (absolute) so Codex reasons about the right repo. Returns a result envelope;
+    rely on executing your checks to confirm its claims. For a repo-grounded
+    question, pass `workspace_root` (absolute) so Codex reasons about the right repo;
+    it is optional for pure Q&A that needs no codebase. Returns a result envelope;
     treat findings as unvalidated claims to verify by running the checks yourself.
 
     Progress: this is a blocking call that returns only when Codex finishes; it does
@@ -2015,7 +2021,8 @@ async def codex_job_status(
 ) -> dict:
     """Check a background job's lifecycle state without fetching the full result.
 
-    Use after codex_delegate_async. Returns status, elapsed time, expiry, and
+    Use after any `*_async` call (codex_delegate_async, codex_consult_async,
+    codex_review_changes_async). Returns status, elapsed time, expiry, and
     `result_available`; when it is true, call codex_job_result. Free — no model call.
 
     Honor `poll_after_ms` between polls — for a running job it GROWS with elapsed

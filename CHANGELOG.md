@@ -15,6 +15,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   only from the shipped tools: no MCP-surface change, so the result `fingerprint` is unchanged.
   Cross-linked with `collaborating-with-codex`, which remains the tool reference and guardrail home.
 
+### Changed
+
+- **Tighter tool descriptions for cleaner selection (#115).** Documentation-only wording fixes to
+  three descriptions that mislead tool selection: `codex_consult`'s `use_when` now qualifies "diff"
+  as an ad-hoc inline paste and points at `codex_review_changes` for git-scoped diffs, and its
+  docstring presents `workspace_root` as optional context for repo-grounded questions rather than a
+  requirement; `codex_job_status` no longer reads as delegate-only ("Use after any `*_async` call",
+  naming all three); and each `*_async` tool's `use_when` is now a standalone sentence that names its
+  sync counterpart instead of deferring to it with "Same as …". No MCP-surface change (tool names,
+  params, error codes, and value enums are unchanged), so the result `fingerprint` is unchanged.
+
 ## [0.3.0] - 2026-06-21
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-5` →
