@@ -33,6 +33,10 @@ tools in a loop.
 Users may also invoke these via slash commands: `/codex:status`, `/codex:consult`,
 `/codex:review`, `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
 
+This skill is the tool reference and guardrail home. To **compose** these tools with
+your own work into a deliberate two-model pattern (Judge / two-member panel /
+review–revise loop), see the `deliberating-with-codex` skill.
+
 - **codex_consult** — read-only. Pass a focused `question` and optional
   `extra_context`. Codex never edits files. Good for "is this approach sound?",
   "what am I missing?", a different model's take.

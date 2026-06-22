@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`deliberating-with-codex` skill (#117).** A documentation-only skill that composes the existing
+  Codex tools into three deliberate two-model patterns — Judge (Codex critiques your draft/diff),
+  two-member panel (you and Codex attempt independently, you synthesize), and a one-pass
+  review–revise loop — gated behind a value/risk check, with a false-agreement warning,
+  total-Codex-call caps, a scope/safety preflight, and a schema-compatible synthesis checklist. Built
+  only from the shipped tools: no MCP-surface change, so the result `fingerprint` is unchanged.
+  Cross-linked with `collaborating-with-codex`, which remains the tool reference and guardrail home.
+
 ## [0.3.0] - 2026-06-21
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-5` →
