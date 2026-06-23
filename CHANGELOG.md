@@ -5,6 +5,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-22
+
+The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-10` →
+`codex-in-claude/0.1/schema-11`), so pre-1.0 this is a minor release. Clients that cache by
+`fingerprint` re-fetch the contract.
+
 ### Added
 
 - `codex_models` tool and `codex://models` resource expose an advisory catalog of
