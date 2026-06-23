@@ -561,8 +561,9 @@ def codex_status() -> dict:
             timeout_bounds=[config.MIN_TIMEOUT_SECONDS, config.MAX_TIMEOUT_SECONDS],
         ),
         caveat="The active tools send your content to OpenAI via the codex CLI: "
-        "codex_consult sends your question and context (and, with a workspace, files "
-        "Codex reads); codex_review_changes sends the secret-redacted diff plus your "
+        "codex_consult sends your question and context (plus files Codex reads from "
+        "the resolved working dir — workspace_root, your MCP roots, or the server cwd); "
+        "codex_review_changes sends the secret-redacted diff plus your "
         "raw extra_context, and Codex may read/send other repo files; codex_delegate "
         "sends your task and the worktree files Codex reads. Secret redaction is "
         "best-effort and does not cover your inputs. Treat results as claims to verify.",
@@ -765,8 +766,9 @@ def codex_capabilities() -> dict:
                 ],
                 returns="A result envelope with summary, optional findings, and meta. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
-                "Egress: sends question+extra_context (raw, unredacted) to OpenAI, and with a "
-                "workspace Codex may read and send repo files.",
+                "Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex "
+                "always runs with a resolved working dir (workspace_root, your MCP roots, "
+                "or the server cwd) and may read and send files from it.",
             ),
             ToolCapability(
                 name="codex_consult_async",
@@ -780,7 +782,8 @@ def codex_capabilities() -> dict:
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the consult envelope with codex_job_result. "
                 "Egress: same as codex_consult — sends question+extra_context (raw) to "
-                "OpenAI, plus any repo files Codex reads.",
+                "OpenAI, plus files Codex reads from its resolved working dir "
+                "(workspace_root, your MCP roots, or the server cwd).",
             ),
             ToolCapability(
                 name="codex_review_changes",
@@ -964,7 +967,8 @@ def codex_capabilities() -> dict:
             "Does not keep your content on the machine: consult, review, and delegate "
             "(and their *_async variants) each send caller content to OpenAI via the "
             "codex CLI — consult sends question+extra_context (plus files Codex reads "
-            "when given a workspace); review sends the bounded, secret-redacted diff "
+            "from its resolved working dir: workspace_root, your MCP roots, or the "
+            "server cwd); review sends the bounded, secret-redacted diff "
             "plus your raw extra_context; delegate sends the task and lets Codex read "
             "tracked files in the throwaway worktree.",
             "Delegate's no-network sandbox does NOT mean nothing leaves the machine: "
@@ -1022,8 +1026,9 @@ async def codex_consult(
     treat findings as unvalidated claims to verify by running the checks yourself.
 
     Data egress: this sends your `question` and `extra_context` to OpenAI via the
-    codex CLI, and when given a workspace Codex may read repo files and send their
-    content too. Your inputs are sent raw — secret redaction is best-effort and does
+    codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
+    your MCP roots, or the server's cwd as a fallback), so it may read files there and
+    send their content too. Your inputs are sent raw — secret redaction is best-effort and does
     not cover them (it covers gathered diffs and Codex's returned output, not what you
     type or what Codex reads from files).
 
@@ -1527,7 +1532,8 @@ async def codex_consult_async(
     it with `codex_job_consume_result`, or stop it with `codex_job_cancel`.
 
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
-    (raw, unredacted) to OpenAI via the codex CLI, plus any repo files Codex reads."""
+    (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
+    resolved working directory (`workspace_root`, your MCP roots, or the server cwd)."""
     d = config.defaults()
     deadline = config.job_max_seconds()
     isolation_v, iso_err = _resolve_isolation(isolation)
