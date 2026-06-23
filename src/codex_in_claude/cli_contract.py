@@ -89,7 +89,7 @@ MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Copied from codex-cli 0.141.0's models_cache.json on 2026-06-22. NOT authoritative
 # and will age: it documents what shipped with the pinned CLI, not the live account's
 # available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping the CLI.
-KNOWN_MODEL_SLUGS = ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "codex-auto-review")
+KNOWN_MODEL_SLUGS: tuple[str, ...] = ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "codex-auto-review")
 
 # Cache TTL for the `codex exec --help` probe, so a long-lived server re-probes
 # after an in-place CLI upgrade instead of trusting a stale snapshot forever.
