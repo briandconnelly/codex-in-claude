@@ -100,6 +100,67 @@ def test_workspace_write_no_egress_is_documented():
     assert any("network" in entry.lower() for entry in negative_scope)
 
 
+# Active tools that send caller content to OpenAI via the codex CLI (issue #114).
+_ACTIVE_EGRESS_TOOLS = (
+    "codex_consult",
+    "codex_consult_async",
+    "codex_review_changes",
+    "codex_review_changes_async",
+    "codex_delegate",
+    "codex_delegate_async",
+)
+
+
+@pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
+def test_egress_disclosed_in_active_tool_docstrings(name):
+    """Every active tool's description states it sends content to OpenAI (issue #114).
+
+    An agent must be able to determine, without making a call, that the tool
+    transmits repo content off the machine."""
+    doc = getattr(server, name).__doc__
+    assert doc is not None
+    assert "OpenAI" in doc, name
+
+
+@pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
+def test_egress_disclosed_in_capabilities(name):
+    """codex_capabilities alone discloses OpenAI egress per active tool (issue #114).
+
+    AC1: capabilities OR the tool descriptions must suffice; this asserts the
+    capabilities path independently of the docstrings."""
+    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    detail = by_name[name]
+    assert "OpenAI" in (detail["use_when"] + detail["returns"]), name
+
+
+def test_redaction_limits_disclosed_in_capabilities():
+    """negative_scope states redaction is best-effort and what it does not cover (issue #114)."""
+    negative_scope = server.codex_capabilities()["negative_scope"]
+    blob = " ".join(negative_scope).lower()
+    assert "redact" in blob
+    assert "best-effort" in blob
+    # It must be clear that user-supplied inputs are not redacted.
+    assert "input" in blob
+
+
+def test_delegate_no_network_not_misread_as_no_egress():
+    """The delegate no-network line cannot be read as 'nothing leaves the machine' (issue #114).
+
+    Some negative_scope entry must tie the network-sandbox claim to the fact that
+    the model call still sends task/repo context to OpenAI."""
+    negative_scope = server.codex_capabilities()["negative_scope"]
+    assert any("network" in entry.lower() and "openai" in entry.lower() for entry in negative_scope)
+
+
+def test_status_caveat_names_review_and_delegate(monkeypatch, clean_env):
+    """The status caveat discloses egress for review and delegate, not just consult (issue #114)."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.141.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    caveat = server.codex_status()["caveat"].lower()
+    assert "review" in caveat
+    assert "delegate" in caveat
+
+
 # --- consult: success paths --------------------------------------------------
 async def test_consult_structured_success(monkeypatch, clean_env, tmp_path):
     payload = {

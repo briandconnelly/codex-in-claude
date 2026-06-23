@@ -17,6 +17,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Disclose OpenAI data egress and redaction limits in the agent-visible surface (#114).**
+  Documentation-only wording fixes so an agent can determine, without making a call, that
+  `codex_consult`/`codex_review_changes`/`codex_delegate` (and their `*_async` variants) transmit repo
+  content to OpenAI, and what secret redaction does and does not cover. Each active tool's docstring
+  and `codex_capabilities` `returns` now name the egress and the unredacted inputs; `negative_scope`
+  gains an egress entry and a redaction-limits entry, and its delegate no-network line now states that
+  `workspace-write` blocks egress only for commands Codex runs in the sandbox — the model call still
+  sends task/repo context to OpenAI; the `codex_status` caveat now covers review and delegate, not
+  just consult. No MCP-surface change (tool names, params, error codes, and value enums are
+  unchanged), so the result `fingerprint` is unchanged.
 - **Tighter tool descriptions for cleaner selection (#115).** Documentation-only wording fixes to
   three descriptions that mislead tool selection: `codex_consult`'s `use_when` now qualifies "diff"
   as an ad-hoc inline paste and points at `codex_review_changes` for git-scoped diffs, and its
