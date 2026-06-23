@@ -43,3 +43,9 @@ def test_unreadable_file_returns_none(tmp_path: Path):
         assert read_bounded_json(p, 1000) is None
     finally:
         p.chmod(0o644)  # restore so tmp cleanup can remove it
+
+
+def test_invalid_utf8_returns_none(tmp_path: Path):
+    p = tmp_path / "binary.json"
+    p.write_bytes(b"\xff\xfe not utf-8")
+    assert read_bounded_json(p, 1000) is None
