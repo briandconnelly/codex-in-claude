@@ -87,3 +87,21 @@ def test_is_rate_limited_false(text):
 )
 def test_parse_retry_after_ms(text, expected_ms):
     assert cli_contract.parse_retry_after_ms(text) == expected_ms
+
+
+def test_known_model_slugs_match_slug_pattern():
+    assert cli_contract.KNOWN_MODEL_SLUGS  # non-empty bundled fallback
+    for slug in cli_contract.KNOWN_MODEL_SLUGS:
+        assert cli_contract.MODEL_SLUG_PATTERN.match(slug), slug
+
+
+def test_models_cache_filename_is_a_bare_name():
+    # Joined under $CODEX_HOME — must never be absolute or contain a path separator.
+    assert cli_contract.MODELS_CACHE_FILENAME == "models_cache.json"
+    assert "/" not in cli_contract.MODELS_CACHE_FILENAME
+
+
+def test_model_slug_pattern_rejects_junk():
+    assert cli_contract.MODEL_SLUG_PATTERN.match("gpt-5.5")
+    assert not cli_contract.MODEL_SLUG_PATTERN.match("bad slug!")
+    assert not cli_contract.MODEL_SLUG_PATTERN.match("")
