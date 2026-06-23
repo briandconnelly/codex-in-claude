@@ -1,4 +1,8 @@
+import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from codex_in_claude._core.jsoncache import read_bounded_json
 
@@ -27,3 +31,15 @@ def test_invalid_json_returns_none(tmp_path: Path):
     p = tmp_path / "bad.json"
     p.write_text("{not json", encoding="utf-8")
     assert read_bounded_json(p, 1000) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root bypasses file perms")
+def test_unreadable_file_returns_none(tmp_path: Path):
+    p = tmp_path / "locked.json"
+    p.write_text('{"a": 1}', encoding="utf-8")
+    p.chmod(0o000)
+    try:
+        assert read_bounded_json(p, 1000) is None
+    finally:
+        p.chmod(0o644)  # restore so tmp cleanup can remove it
