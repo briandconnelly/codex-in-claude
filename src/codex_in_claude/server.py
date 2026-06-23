@@ -823,7 +823,8 @@ def codex_capabilities() -> dict:
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the review envelope with codex_job_result. "
                 "Egress: same as codex_review_changes — sends the secret-redacted diff "
-                "plus your raw extra_context to OpenAI.",
+                "plus your raw extra_context to OpenAI; Codex may also read other repo "
+                "files.",
             ),
             ToolCapability(
                 name="codex_delegate",

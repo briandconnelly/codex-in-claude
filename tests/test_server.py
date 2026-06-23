@@ -101,14 +101,9 @@ def test_workspace_write_no_egress_is_documented():
 
 
 # Active tools that send caller content to OpenAI via the codex CLI (issue #114).
-_ACTIVE_EGRESS_TOOLS = (
-    "codex_consult",
-    "codex_consult_async",
-    "codex_review_changes",
-    "codex_review_changes_async",
-    "codex_delegate",
-    "codex_delegate_async",
-)
+# Derived from the capabilities source of truth so the disclosure contract tracks
+# the active-tool set automatically as tools are added/removed/renamed.
+_ACTIVE_EGRESS_TOOLS = tuple(server.codex_capabilities()["active_tools"])
 
 
 @pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
@@ -129,6 +124,7 @@ def test_egress_disclosed_in_capabilities(name):
     AC1: capabilities OR the tool descriptions must suffice; this asserts the
     capabilities path independently of the docstrings."""
     by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    assert name in by_name, f"capabilities omitted active tool {name}"
     detail = by_name[name]
     assert "OpenAI" in (detail["use_when"] + detail["returns"]), name
 
