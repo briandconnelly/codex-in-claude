@@ -65,6 +65,7 @@ def test_capability_summary_covers_all_task_families():
         "codex_delegate_async",
         "codex_job_status",  # the codex_job_* lifecycle family (first entry, full name)
         "codex_status",
+        "codex_models",  # advisory model-slug discovery (tool + codex://models resource)
     ):
         assert tool in summary, tool
     # The job shorthand must use real tool suffixes — `consume_result`, not `consume`

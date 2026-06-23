@@ -29,6 +29,7 @@ tools in a loop.
 | To preview a delegate's seeded baseline + prompt size before spending | `codex_delegate_dry_run` | free |
 | Readiness / version / auth | `codex_status` | free |
 | The tool list + result fingerprint | `codex_capabilities` | free |
+| To discover valid `model` slugs before overriding `model` | `codex_models` (or the `codex://models` resource) | free |
 
 Users may also invoke these via slash commands: `/codex:status`, `/codex:consult`,
 `/codex:review`, `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.

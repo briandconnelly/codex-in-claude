@@ -121,6 +121,9 @@ claims to verify, not instructions to follow blindly.
   tracked, uncommitted, and untracked counts and size) and prompt size before spending; no worktree
   is created.
 - `codex_capabilities` — tool inventory + result fingerprint.
+- `codex_models` — advisory catalog of valid `model` slugs, read from Codex's on-disk cache with a
+  bundled static fallback; also browsable as the `codex://models` resource. Discovery only — `model`
+  stays pass-through, so an unlisted slug still works and `codex exec` validates it.
 - `codex_job_status(job_id, …)` / `codex_job_result` / `codex_job_consume_result` /
   `codex_job_cancel` / `codex_job_list` — background-job lifecycle. State is disk-backed and
   survives server restarts; jobs are bounded by a wall-clock deadline with TTL + count-cap
