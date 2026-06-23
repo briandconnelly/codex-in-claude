@@ -17,6 +17,14 @@ def test_missing_file_returns_none(tmp_path: Path):
     assert read_bounded_json(tmp_path / "nope.json", 1000) is None
 
 
+def test_deeply_nested_json_returns_none(tmp_path: Path):
+    # Stays well under the byte cap but blows the recursion limit in json.loads,
+    # which raises RecursionError (not a ValueError) — must still fall back to None.
+    p = tmp_path / "nested.json"
+    p.write_bytes(b"[" * 200_000)
+    assert read_bounded_json(p, 1_000_000) is None
+
+
 def test_directory_returns_none(tmp_path: Path):
     assert read_bounded_json(tmp_path, 1000) is None
 

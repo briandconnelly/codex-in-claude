@@ -67,9 +67,10 @@ def test_junk_entries_are_filtered(tmp_path, monkeypatch):
 
 
 def test_oversize_cache_falls_back(tmp_path, monkeypatch):
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    big = {"models": [{"slug": f"m{i}", "display_name": "x" * 100} for i in range(100_000)]}
-    (tmp_path / cli_contract.MODELS_CACHE_FILENAME).write_text(json.dumps(big), encoding="utf-8")
+    # Exceed the byte cap directly — the size check rejects before parsing, so the
+    # content need not be valid JSON and we avoid building a multi-MB document.
+    oversize = b"x" * (cli_contract.MODELS_CACHE_MAX_BYTES + 1)
+    (tmp_path / cli_contract.MODELS_CACHE_FILENAME).write_bytes(oversize)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     assert codex_models.read_model_catalog().source == "static"
 

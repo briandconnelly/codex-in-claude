@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
-import codex_in_claude.codex_models as _codex_models_module
 from codex_in_claude import (
     __version__,
     codex,
@@ -38,6 +37,7 @@ from codex_in_claude import (
     prompts,
 )
 from codex_in_claude._core import gitdiff, workspace, worktree
+from codex_in_claude.codex_models import read_model_catalog
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     CONSULT_RESULT_SCHEMA,
@@ -1018,7 +1018,7 @@ def codex_capabilities() -> dict:
 
 def _model_catalog_payload() -> dict:
     """Single source for the tool and resource so their payloads cannot drift."""
-    return _codex_models_module.read_model_catalog().model_dump(mode="json", exclude_none=True)
+    return read_model_catalog().model_dump(mode="json", exclude_none=True)
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=MODEL_CATALOG_SCHEMA)
