@@ -12,7 +12,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-10"
+FINGERPRINT = "codex-in-claude/0.1/schema-11"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -374,6 +374,37 @@ class CapabilitiesResult(BaseModel):
     deprecation_policy: str
 
 
+ModelCatalogSource = Literal["cache", "static", "none"]
+
+
+class ModelInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug: str
+    display_name: str | None = None
+
+
+class ModelCatalogResult(BaseModel):
+    """Advisory list of Codex model slugs for the optional `model` param.
+
+    Discovery only: `source` says where it came from and `advisory` states it is not
+    authoritative (Codex validates the real slug at exec time). Returned by the
+    codex_models tool and the codex://models resource; deliberately NOT embedded in
+    codex_capabilities, whose payload is fingerprint-cacheable and must stay stable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    ok: Literal[True] = True
+    source: ModelCatalogSource
+    models: list[ModelInfo] = Field(default_factory=list)
+    # From the on-disk cache; None for the static fallback / none.
+    fetched_at: str | None = None
+    cache_client_version: str | None = None
+    advisory: str
+    # Set only when source == "none" (no cache and no static fallback).
+    unavailable_reason: str | None = None
+    fingerprint: str = FINGERPRINT
+
+
 class JobStarted(BaseModel):
     """Returned by the *_async tools: a handle to poll, not a result."""
 
@@ -537,6 +568,7 @@ JOB_RESULT_SCHEMA = _object_union_schema(
 )
 STATUS_SCHEMA = StatusResult.model_json_schema()
 CAPABILITIES_SCHEMA = CapabilitiesResult.model_json_schema()
+MODEL_CATALOG_SCHEMA = ModelCatalogResult.model_json_schema()
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate
 # result is fetched separately via codex_job_result (DELEGATE_RESULT_SCHEMA).
 JOB_STARTED_SCHEMA = _object_union_schema(TypeAdapter(JobStarted | ErrorResult))
