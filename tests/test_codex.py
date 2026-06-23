@@ -61,6 +61,20 @@ def test_build_exec_command_drops_unsupported_model(tmp_path):
     assert dropped == ["--model"]
 
 
+def test_build_exec_command_passes_arbitrary_model_through(tmp_path):
+    # An unlisted/unknown slug is NOT validated here — codex exec is the validator.
+    cmd, dropped = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="totally-made-up-model-9000",
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd[cmd.index("--model") + 1] == "totally-made-up-model-9000"
+    assert dropped == []
+
+
 def test_build_exec_command_schema_and_add_dir(tmp_path):
     cmd, _ = codex.build_exec_command(
         cwd="/repo",

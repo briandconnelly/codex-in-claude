@@ -143,3 +143,17 @@ async def test_delegate_async_live(tmp_path, monkeypatch):
     await server.codex_job_consume_result(job_id, workspace_root=str(tmp_path))
     gone = await server.codex_job_status(job_id, workspace_root=str(tmp_path))
     assert gone["ok"] is False and gone["error"]["code"] == "job_not_found"
+
+
+async def test_unknown_model_returns_envelope_not_exception(tmp_path):
+    """An unknown slug surfaces a structured envelope (likely ok:false), never a crash.
+
+    Opt-in — calls the real codex CLI and may spend. Run with:
+        uv run pytest -m integration --no-cov -k unknown_model
+    """
+    res = await server.codex_consult(
+        "ping",
+        model="definitely-not-a-real-model-zzz",
+        workspace_root=str(tmp_path),
+    )
+    assert "ok" in res  # structured envelope, not an exception
