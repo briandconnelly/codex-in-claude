@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Bot Identity"
+  short_description: "Route attribution to a bot, not containment"
+  default_prompt: "Use $agent-bot-identity to set up or audit a GitHub App bot identity for a local coding agent."

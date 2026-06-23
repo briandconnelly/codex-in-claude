@@ -49,6 +49,15 @@ def test_default_home_used_when_env_unset(tmp_path, monkeypatch):
     assert [m.slug for m in cat.models] == ["gpt-5.5"]
 
 
+def test_unexpandable_codex_home_falls_back_to_static(monkeypatch):
+    # CODEX_HOME=~missing_user makes Path.expanduser() raise RuntimeError; the catalog
+    # must fall back instead of letting that escape the defensive path.
+    monkeypatch.setenv("CODEX_HOME", "~definitely_not_a_real_user_zzzz")
+    cat = codex_models.read_model_catalog()
+    assert cat.source == "static"
+    assert {m.slug for m in cat.models} == set(cli_contract.KNOWN_MODEL_SLUGS)
+
+
 def test_malformed_shape_falls_back_to_static(tmp_path, monkeypatch):
     _write_cache(tmp_path, {"models": "not-a-list"})
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))

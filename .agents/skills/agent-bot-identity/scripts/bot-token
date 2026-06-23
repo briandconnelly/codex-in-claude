@@ -1,0 +1,39 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyjwt[crypto]", "httpx"]
+# ///
+import datetime, json, os, sys, tempfile, time
+from pathlib import Path
+import httpx, jwt
+
+APP_ID = "REPLACE"
+INSTALL_ID = "REPLACE"
+KEY = Path.home() / ".config/acme-agent/key.pem"
+CACHE = Path.home() / ".config/acme-agent/token.json"
+
+if CACHE.exists():
+    try:
+        c = json.loads(CACHE.read_text())
+        if c["exp"] - time.time() > 300:
+            print(c["token"])
+            sys.exit()
+    except (ValueError, KeyError, TypeError, OSError):
+        pass  # Partial/corrupt cache: treat as a miss and re-mint.
+
+now = int(time.time())
+app_jwt = jwt.encode({"iat": now - 60, "exp": now + 540, "iss": APP_ID}, KEY.read_text(), algorithm="RS256")
+r = httpx.post(
+    f"https://api.github.com/app/installations/{INSTALL_ID}/access_tokens",
+    headers={"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"},
+    timeout=10,
+)
+r.raise_for_status()
+data = r.json()
+exp = datetime.datetime.fromisoformat(data["expires_at"]).timestamp()
+CACHE.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=CACHE.parent, suffix=".tmp")
+with os.fdopen(fd, "w") as f:
+    json.dump({"token": data["token"], "exp": exp}, f)
+os.replace(tmp, CACHE)
+print(data["token"])

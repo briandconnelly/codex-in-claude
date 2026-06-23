@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ORG="acme"
+BOT_NAME="${ORG}-agent[bot]"
+BOT_EMAIL="<BOT_UID>+${ORG}-agent[bot]@users.noreply.github.com"
+ORG_LC="$(printf '%s' "$ORG" | tr '[:upper:]' '[:lower:]')"
+
+verdict=personal
+rc=0
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  if remotes="$(git remote -v 2>/dev/null)"; then
+    if [ -z "$remotes" ]; then
+      verdict=bot
+      echo "bot-env: no remotes in $PWD; ambiguous, using the bot identity" >&2
+    else
+      while read -r _ url _; do
+        [ -n "$url" ] || continue
+        case "$url" in
+          *://*) rest="${url#*://}"; auth="${rest%%/*}"; auth="${auth#*@}"; host="${auth%%:*}"; path="${rest#*/}" ;;
+          *)     rest="${url#*@}"; host="${rest%%:*}"; path="${rest#*:}" ;;
+        esac
+        host_lc="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+        org_segment_lc="$(printf '%s' "${path%%/*}" | tr '[:upper:]' '[:lower:]')"
+        if [ "$host_lc" = github.com ] && [ "$org_segment_lc" = "$ORG_LC" ]; then
+          verdict=bot
+          break
+        fi
+      done <<EOF
+$remotes
+EOF
+    fi
+  else
+    verdict=bot
+    echo "bot-env: git remote query failed in $PWD; using the bot identity" >&2
+  fi
+elif [ "$rc" -ne 128 ]; then
+  verdict=bot
+  echo "bot-env: git probe failed (exit $rc) in $PWD; ambiguous, using the bot identity" >&2
+fi
+
+if [ "$verdict" != bot ]; then
+  cat <<'EOF'
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2 GIT_CONFIG_KEY_3 GIT_CONFIG_VALUE_3
+unset GH_TOKEN
+EOF
+  exit 0
+fi
+
+token="$("$HOME/.claude/bot-shims/bot-token")" || token="BOT-TOKEN-MINT-FAILED"
+
+cat <<EOF
+export GIT_AUTHOR_NAME='${BOT_NAME}'
+export GIT_AUTHOR_EMAIL='${BOT_EMAIL}'
+export GIT_COMMITTER_NAME='${BOT_NAME}'
+export GIT_COMMITTER_EMAIL='${BOT_EMAIL}'
+export GIT_CONFIG_COUNT=4
+export GIT_CONFIG_KEY_0='credential.helper'
+export GIT_CONFIG_VALUE_0=''
+export GIT_CONFIG_KEY_1='credential.helper'
+export GIT_CONFIG_VALUE_1='!${HOME}/.claude/bot-shims/git-credential-bot'
+export GIT_CONFIG_KEY_2='url.https://github.com/${ORG}/.insteadOf'
+export GIT_CONFIG_VALUE_2='git@github.com:${ORG}/'
+export GIT_CONFIG_KEY_3='commit.gpgsign'
+export GIT_CONFIG_VALUE_3='false'
+export GH_TOKEN='${token}'
+EOF

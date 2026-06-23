@@ -27,10 +27,17 @@ _UNAVAILABLE = (
 )
 
 
-def _codex_home() -> Path:
-    """$CODEX_HOME if set, else ~/.codex (matching the codex CLI's own resolution)."""
+def _codex_home() -> Path | None:
+    """$CODEX_HOME if set, else ~/.codex (matching the codex CLI's own resolution).
+
+    Returns None if the path cannot be expanded (e.g. CODEX_HOME=~missing_user, where
+    expanduser() raises RuntimeError) so the caller falls back instead of crashing.
+    """
     env = os.environ.get("CODEX_HOME")
-    return Path(env).expanduser() if env else Path.home() / ".codex"
+    try:
+        return Path(env).expanduser() if env else Path.home() / ".codex"
+    except RuntimeError:
+        return None
 
 
 def _parse_models(raw: object) -> tuple[list[ModelInfo], str | None, str | None] | None:
@@ -66,9 +73,14 @@ def _parse_models(raw: object) -> tuple[list[ModelInfo], str | None, str | None]
 
 def read_model_catalog() -> ModelCatalogResult:
     """The advisory model catalog: live cache if usable, else bundled static, else none."""
-    raw = read_bounded_json(
-        _codex_home() / cli_contract.MODELS_CACHE_FILENAME,
-        cli_contract.MODELS_CACHE_MAX_BYTES,
+    home = _codex_home()
+    raw = (
+        read_bounded_json(
+            home / cli_contract.MODELS_CACHE_FILENAME,
+            cli_contract.MODELS_CACHE_MAX_BYTES,
+        )
+        if home is not None
+        else None
     )
     parsed = _parse_models(raw) if raw is not None else None
     if parsed is not None:
