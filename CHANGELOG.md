@@ -7,6 +7,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- `codex_models` tool and `codex://models` resource expose an advisory catalog of
+  Codex `model` slugs, read from Codex's on-disk cache (`$CODEX_HOME/models_cache.json`)
+  with a bundled static fallback. Discovery only — `model` stays pass-through and
+  `codex exec` validates the real slug. (`FINGERPRINT` → `schema-11`.)
+
 - **`deliberating-with-codex` skill (#117).** A documentation-only skill that composes the existing
   Codex tools into three deliberate two-model patterns — Judge (Codex critiques your draft/diff),
   two-member panel (you and Codex attempt independently, you synthesize), and a one-pass

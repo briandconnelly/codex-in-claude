@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
+import codex_in_claude.codex_models as _codex_models_module
 from codex_in_claude import (
     __version__,
     codex,
@@ -48,6 +49,7 @@ from codex_in_claude.schemas import (
     JOB_RESULT_SCHEMA,
     JOB_STARTED_SCHEMA,
     JOB_STATUS_SCHEMA,
+    MODEL_CATALOG_SCHEMA,
     REVIEW_RESULT_SCHEMA,
     STATUS_SCHEMA,
     AsyncLifecycle,
@@ -673,6 +675,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         ("input_too_large", "not_a_git_repo", "worktree_error"),
         _RUNTIME_ERRORS,
     ),
+    "codex_models": [],
     "codex_status": [],
     "codex_capabilities": [],
     "codex_dry_run": _err_codes(
@@ -739,6 +742,7 @@ def codex_capabilities() -> dict:
             "codex_delegate_async",
         ],
         free_tools=[
+            "codex_models",
             "codex_status",
             "codex_dry_run",
             "codex_delegate_dry_run",
@@ -952,6 +956,17 @@ def codex_capabilities() -> dict:
                 "server lifecycle stage; a per-tool `stability` is an advisory maturity "
                 "override and, when omitted, inherits the server-wide value.",
             ),
+            ToolCapability(
+                name="codex_models",
+                cost="free",
+                use_when="To discover valid `model` slugs before passing `model` to a "
+                "Codex call; also available at the codex://models resource. Advisory — "
+                "codex validates the real slug at run time.",
+                returns="An advisory model catalog: source (cache|static|none), models "
+                "(slug + display_name), and the cache's fetched_at/client_version when "
+                "read from Codex's on-disk cache. Not fingerprint-stable — do not cache "
+                "it by the capabilities fingerprint.",
+            ),
         ],
         tiers=list(config.VALID_TIERS),
         sandboxes=list(codex.cli_contract.VALID_SANDBOXES),
@@ -998,6 +1013,29 @@ def codex_capabilities() -> dict:
     # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
     # it, and only the *_async tools carry `async_lifecycle`.
     return caps.model_dump(mode="json", exclude_none=True)
+
+
+def _model_catalog_payload() -> dict:
+    """Single source for the tool and resource so their payloads cannot drift."""
+    return _codex_models_module.read_model_catalog().model_dump(mode="json", exclude_none=True)
+
+
+@mcp.tool(annotations=_FREE_READ, output_schema=MODEL_CATALOG_SCHEMA)
+def codex_models() -> dict:
+    """List Codex model slugs you can pass as `model`. Free — no model call.
+
+    Advisory discovery only: read from Codex's on-disk cache when present, else a
+    bundled fallback (`source` says which). `codex exec` validates the real slug, so an
+    unlisted slug may still work and a listed one may be unavailable to your account.
+    Same payload as the codex://models resource. Not fingerprint-stable — do not cache
+    it by the capabilities fingerprint."""
+    return _model_catalog_payload()
+
+
+@mcp.resource("codex://models", mime_type="application/json")
+def codex_models_resource() -> dict:
+    """Advisory Codex model catalog (same payload as the codex_models tool)."""
+    return _model_catalog_payload()
 
 
 # --------------------------------------------------------------------------- #

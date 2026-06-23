@@ -1415,8 +1415,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_10():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-10"
+def test_fingerprint_is_schema_11():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-11"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2432,3 +2432,30 @@ async def test_delegate_dry_run_param_descriptions_do_not_claim_a_run(clean_env)
     task_desc = props["task"]["description"].lower()
     assert "does not call codex" in task_desc and "return a diff" in task_desc
     assert "does not call codex" in props["model"]["description"].lower()
+
+
+# --- codex_models tool + codex://models resource -----------------------------
+
+
+def test_codex_models_tool_returns_advisory_catalog():
+    res = server.codex_models()
+    assert res["ok"] is True
+    assert res["source"] in {"cache", "static", "none"}
+    assert res["advisory"]
+    assert res["fingerprint"] == server.FINGERPRINT
+
+
+def test_codex_models_listed_as_free_tool_and_detailed():
+    caps = server.codex_capabilities()
+    assert "codex_models" in caps["free_tools"]
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    assert "codex_models" in by_name
+    assert by_name["codex_models"]["cost"] == "free"
+
+
+async def test_codex_models_resource_matches_tool_payload():
+    # FastMCP 3.x returns a ResourceResult with .contents list;
+    # each ResourceContent has a .content str (serialized JSON).
+    result = await server.mcp.read_resource("codex://models")
+    payload = json.loads(result.contents[0].content)
+    assert payload == server.codex_models()
