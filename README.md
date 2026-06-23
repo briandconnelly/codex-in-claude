@@ -162,12 +162,15 @@ Calling the MCP tools directly instead of through the `/codex:*` commands? See
 - `propose` (the `delegate` tools) lets Codex write, but only inside a throwaway git worktree
   seeded from `HEAD` plus replayable uncommitted tracked changes. Untracked files are not copied.
   Your working tree is never modified by the plugin; you review the returned diff and apply it
-  yourself.
+  yourself. Delegate's no-network sandbox (`workspace-write`) blocks egress only for commands Codex
+  *runs* in the sandbox — it does not mean nothing leaves the machine: the model call still sends
+  your task and repo context to OpenAI.
 - Secret-looking content is redacted before it leaves the plugin (defense-in-depth, not a guarantee —
   Codex can read files itself during a run; use `isolation` and a clean workspace for sensitive
   repos). This covers gathered diffs and the free-text Codex returns (`summary`, `findings`,
   `raw_response.text`): secret-looking file hunks are dropped, and inline secret values become
-  `[redacted: secret value]`.
+  `[redacted: secret value]`. It does **not** cover your supplied inputs (`question`, `task`,
+  `extra_context`), which are sent raw, nor secrets Codex reads from files itself during a run.
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 

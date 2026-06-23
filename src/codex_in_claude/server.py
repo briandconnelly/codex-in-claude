@@ -560,8 +560,13 @@ def codex_status() -> dict:
             timeout_seconds=timeout,
             timeout_bounds=[config.MIN_TIMEOUT_SECONDS, config.MAX_TIMEOUT_SECONDS],
         ),
-        caveat="codex_consult sends your question and context to OpenAI via the "
-        "codex CLI. Treat results as claims to verify.",
+        caveat="The active tools send your content to OpenAI via the codex CLI: "
+        "codex_consult sends your question and context (plus files Codex reads from "
+        "the resolved working dir — workspace_root, your MCP roots, or the server cwd); "
+        "codex_review_changes sends the secret-redacted diff plus your "
+        "raw extra_context, and Codex may read/send other repo files; codex_delegate "
+        "sends your task and the worktree files Codex reads. Secret redaction is "
+        "best-effort and does not cover your inputs. Treat results as claims to verify.",
     ).model_dump(mode="json")
 
 
@@ -760,7 +765,10 @@ def codex_capabilities() -> dict:
                     "detail",
                 ],
                 returns="A result envelope with summary, optional findings, and meta. "
-                "detail='summary' (default) omits raw_response.text; detail='full' includes it.",
+                "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
+                "Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex "
+                "always runs with a resolved working dir (workspace_root, your MCP roots, "
+                "or the server cwd) and may read and send files from it.",
             ),
             ToolCapability(
                 name="codex_consult_async",
@@ -772,7 +780,10 @@ def codex_capabilities() -> dict:
                 required_params=["question"],
                 key_optional_params=["workspace_root", "extra_context", "model", "isolation"],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
-                "codex_job_status; read the consult envelope with codex_job_result.",
+                "codex_job_status; read the consult envelope with codex_job_result. "
+                "Egress: same as codex_consult — sends question+extra_context (raw) to "
+                "OpenAI, plus files Codex reads from its resolved working dir "
+                "(workspace_root, your MCP roots, or the server cwd).",
             ),
             ToolCapability(
                 name="codex_review_changes",
@@ -791,7 +802,9 @@ def codex_capabilities() -> dict:
                     "detail",
                 ],
                 returns="A result envelope with verdict, findings, and a context summary. "
-                "detail='summary' (default) omits raw_response.text; detail='full' includes it.",
+                "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
+                "Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) "
+                "extra_context to OpenAI; Codex may also read other repo files.",
             ),
             ToolCapability(
                 name="codex_review_changes_async",
@@ -811,7 +824,10 @@ def codex_capabilities() -> dict:
                     "isolation",
                 ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
-                "codex_job_status; read the review envelope with codex_job_result.",
+                "codex_job_status; read the review envelope with codex_job_result. "
+                "Egress: same as codex_review_changes — sends the secret-redacted diff "
+                "plus your raw extra_context to OpenAI; Codex may also read other repo "
+                "files.",
             ),
             ToolCapability(
                 name="codex_delegate",
@@ -823,7 +839,9 @@ def codex_capabilities() -> dict:
                 key_optional_params=["workspace_root", "model", "isolation", "detail"],
                 returns="A result envelope whose `diff` holds Codex's proposed, "
                 "unapplied changes plus a summary. detail='summary' (default) omits "
-                "raw_response.text; detail='full' includes it.",
+                "raw_response.text; detail='full' includes it. "
+                "Egress: sends your task (raw) to OpenAI and lets Codex read tracked "
+                "files in the throwaway worktree and send their content.",
             ),
             ToolCapability(
                 name="codex_delegate_async",
@@ -836,7 +854,9 @@ def codex_capabilities() -> dict:
                 required_params=["task"],
                 key_optional_params=["workspace_root", "model", "isolation"],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
-                "codex_job_status; read with codex_job_result.",
+                "codex_job_status; read with codex_job_result. "
+                "Egress: same as codex_delegate — sends your task (raw) to OpenAI plus "
+                "the worktree files Codex reads.",
             ),
             ToolCapability(
                 name="codex_job_status",
@@ -944,9 +964,22 @@ def codex_capabilities() -> dict:
         negative_scope=[
             "Does not apply edits to your working tree (delegate returns a diff).",
             "Does not bypass the Codex sandbox or approvals.",
-            "Delegate tasks run under workspace-write, which blocks network egress: a "
-            "delegated task cannot push/fetch/publish/install or otherwise reach the "
-            "network — keep it self-contained and do any network step yourself.",
+            "Does not keep your content on the machine: consult, review, and delegate "
+            "(and their *_async variants) each send caller content to OpenAI via the "
+            "codex CLI — consult sends question+extra_context (plus files Codex reads "
+            "from its resolved working dir: workspace_root, your MCP roots, or the "
+            "server cwd); review sends the bounded, secret-redacted diff "
+            "plus your raw extra_context; delegate sends the task and lets Codex read "
+            "tracked files in the throwaway worktree.",
+            "Delegate's no-network sandbox does NOT mean nothing leaves the machine: "
+            "workspace-write blocks network egress only for commands Codex RUNS in the "
+            "sandbox (so a delegated task cannot push/fetch/publish/install — keep it "
+            "self-contained and do any network step yourself), but the Codex model call "
+            "itself still sends your task and repo context to OpenAI.",
+            "Does not guarantee secrets stay local: secret redaction is best-effort and "
+            "covers the gathered diff and Codex's returned output — NOT your supplied "
+            "inputs (question/task/extra_context), and not secrets Codex reads from "
+            "files itself during a run.",
             "In-place edits to the live tree are a later, opt-in milestone.",
         ],
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
@@ -991,6 +1024,13 @@ async def codex_consult(
     question, pass `workspace_root` (absolute) so Codex reasons about the right repo;
     it is optional for pure Q&A that needs no codebase. Returns a result envelope;
     treat findings as unvalidated claims to verify by running the checks yourself.
+
+    Data egress: this sends your `question` and `extra_context` to OpenAI via the
+    codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
+    your MCP roots, or the server's cwd as a fallback), so it may read files there and
+    send their content too. Your inputs are sent raw — secret redaction is best-effort and does
+    not cover them (it covers gathered diffs and Codex's returned output, not what you
+    type or what Codex reads from files).
 
     Progress: this is a blocking call that returns only when Codex finishes; it does
     not stream incremental `notifications/progress`. Typical runs take tens of seconds;
@@ -1125,6 +1165,11 @@ async def codex_review_changes(
     rely on running the project's checks to confirm its findings. Treat findings as
     unvalidated claims to verify by running those checks yourself before acting.
 
+    Data egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is
+    secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),
+    and Codex may read and send other repo files. Redaction is not a guarantee — do
+    not point a review at a tree full of live credentials and assume it protects them.
+
     Progress: this is a blocking call that returns only when Codex finishes; it does
     not stream incremental `notifications/progress`. Typical runs take tens of seconds;
     the configured default timeout is normally 180s, clamped to 10-600s, overridable
@@ -1226,10 +1271,14 @@ async def codex_delegate(
     review it, then apply it yourself if you want it. Requires a git repo with at
     least one commit. Pass `workspace_root` (absolute).
 
-    NO NETWORK: `workspace-write` blocks network egress, so the task must be
-    self-contained — it cannot `git push`/`fetch`, `gh` anything, `curl`, publish, or
-    install dependencies (those fail inside the sandbox with a DNS/host-resolution
-    error). Ask only for local code changes; do any network step yourself afterward.
+    NO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the
+    sandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`
+    anything, `curl`, publish, or install dependencies (those fail inside the sandbox
+    with a DNS/host-resolution error). Ask only for local code changes; do any network
+    step yourself afterward. This does NOT mean nothing leaves the machine: the Codex
+    model call still sends your `task` to OpenAI and lets Codex read tracked files in
+    the worktree and send their content. Your `task` is sent raw — secret redaction is
+    best-effort and does not cover it or files Codex reads itself.
 
     Progress: this is a blocking call that returns only when Codex finishes; it does
     not stream incremental `notifications/progress`, and a delegate can run ~20s+. If
@@ -1330,8 +1379,12 @@ async def codex_delegate_async(
     pass `workspace_root` (absolute).
 
     NO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks
-    network egress — the task must be self-contained (no push/fetch/`gh`/curl/publish/
-    dependency install; those fail with a DNS/host-resolution error in the sandbox)."""
+    network egress for commands Codex RUNS in the sandbox — the task must be
+    self-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with
+    a DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the
+    machine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex
+    read tracked files in the worktree and send their content. Secret redaction is
+    best-effort and does not cover your `task` or files Codex reads itself."""
     d = config.defaults()
     # Background jobs are bounded by the wall-clock deadline, not the sync timeout.
     deadline = config.job_max_seconds()
@@ -1476,7 +1529,11 @@ async def codex_consult_async(
     detached — use it when the consult may run long. Starting a job commits to spend
     (it runs to completion or its wall-clock deadline even if you never poll). Poll
     with `codex_job_status`, read the consult envelope with `codex_job_result`, delete
-    it with `codex_job_consume_result`, or stop it with `codex_job_cancel`."""
+    it with `codex_job_consume_result`, or stop it with `codex_job_cancel`.
+
+    Data egress: same as `codex_consult` — sends your `question` and `extra_context`
+    (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
+    resolved working directory (`workspace_root`, your MCP roots, or the server cwd)."""
     d = config.defaults()
     deadline = config.job_max_seconds()
     isolation_v, iso_err = _resolve_isolation(isolation)
@@ -1566,7 +1623,11 @@ async def codex_review_changes_async(
     `scope` is an out-of-enum value rejected by MCP input validation before the job
     starts). Starting a job commits to spend. Poll with `codex_job_status`, read the
     review envelope with `codex_job_result`, delete it with `codex_job_consume_result`,
-    or stop it with `codex_job_cancel`. Pass `workspace_root` (absolute)."""
+    or stop it with `codex_job_cancel`. Pass `workspace_root` (absolute).
+
+    Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
+    your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
+    read other repo files. Redaction is best-effort, not a guarantee."""
     d = config.defaults()
     deadline = config.job_max_seconds()
     isolation_v, iso_err = _resolve_isolation(isolation)
