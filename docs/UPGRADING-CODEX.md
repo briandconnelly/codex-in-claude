@@ -102,8 +102,9 @@ through this practice — review the new help in absolute terms instead.) Then c
 ## 4. Update `cli_contract.py` + files in lockstep
 
 For a normal (non-breaking) codex minor bump. **Start by grepping the whole repo for the old
-literal** — `grep -rn '0\.141' src tests docs *.md` — and reconcile every hit. The table names the
-usual ones, but treat the grep as authoritative: a stale enumerated list *will* miss a file (e.g.
+literal** — `grep -rFn <old-minor> src tests docs *.md` (e.g. `grep -rFn 0.141 …` for a 0.141 → 0.142
+bump; `-F` keeps the `.` a literal, not a regex wildcard) — and reconcile every hit. The table names
+the usual ones, but treat the grep as authoritative: a stale enumerated list *will* miss a file (e.g.
 `tests/test_check_codex_contract.py`'s `VERSION` was nearly missed this way).
 
 | File | What changes |
