@@ -29,7 +29,7 @@ def _fake_result(last_message, *, exit_code=0, stderr="", events=""):
 
 # --- status / capabilities ---------------------------------------------------
 def test_status_ready(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.141.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
     res = server.codex_status()
     assert res["ok"] is True
@@ -46,7 +46,7 @@ def test_status_not_found(monkeypatch, clean_env):
 
 
 def test_status_not_authenticated(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.141.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
     res = server.codex_status()
     assert res["ready"] is False
@@ -151,7 +151,7 @@ def test_delegate_no_network_not_misread_as_no_egress():
 
 def test_status_caveat_names_review_and_delegate(monkeypatch, clean_env):
     """The status caveat discloses egress for review and delegate, not just consult (issue #114)."""
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.141.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
     caveat = server.codex_status()["caveat"].lower()
     assert "review" in caveat

@@ -47,8 +47,12 @@ This is the mechanical half only. Steps 2–3 are the judgment half the script c
 
 ## 2. Manual semantic + surface review (judgment — not automatable)
 
-The script confirms shapes; you confirm meaning. Diff `codex exec --help` (and `codex --help`,
-`codex review --help`) against the previously verified version and check:
+The script confirms shapes; you confirm meaning. Diff the new CLI's help against the **committed
+snapshot of the previously verified version** under [`docs/codex-help/`](codex-help/) — an in-place
+upgrade (Homebrew, `codex update`) destroys the old binary, so that snapshot is the only diff source
+once you've upgraded. The snapshot covers `codex --help`, `codex exec --help`, `codex review --help`,
+`codex exec review --help`, and `codex features list`. (If no prior snapshot exists — the first time
+through this practice — review the new help in absolute terms instead.) Then check:
 
 - **Flag semantics unchanged.** A flag the script found may have changed behavior. Spot-check the
   guarantee-bearing ones: does `--sandbox read-only` still block writes? does `workspace-write` still
@@ -58,8 +62,17 @@ The script confirms shapes; you confirm meaning. Diff `codex exec --help` (and `
 - **Sandbox values** (`read-only`, `workspace-write`, `danger-full-access`) still present and still
   mean the same boundary. Confirm the default paths still never emit `danger-full-access` or any
   `--dangerously-bypass-*`.
-- **New flags worth adopting or explicitly avoiding** (from the script's `INFO` list). Adopting one
-  is a separate, deliberate change — not part of a version bump.
+- **New capabilities worth adopting or explicitly avoiding.** Don't stop at the script's flag `INFO`
+  list — it only sees `codex exec` flags. Also scan the `Commands:` section of `codex --help` for new
+  **subcommands** and run `codex features list` for new **feature flags** (the `--enable`/`--disable`
+  surface). A release's most relevant new surface often lives there rather than in `codex exec`'s
+  flags — e.g. 0.142 added the `features` subcommand and a native `codex exec review --output-schema`.
+  Adopting any of these is a separate, deliberate change — not part of a version bump.
+- **Model catalog fallback.** `cli_contract.py`'s `KNOWN_MODEL_SLUGS` is a bundled fallback copied
+  from a specific CLI's `$CODEX_HOME/models_cache.json`, meant to stay in lockstep with
+  `SUPPORTED_VERSIONS`. Diff its **slug set** (not the volatile `client_version`/`fetched_at`) against
+  the new CLI's live cache. If slugs changed, update the tuple; either way refresh the provenance
+  comment's re-verified date.
 - **Structured output.** Run a small live `codex exec --output-schema <file>` and confirm the final
   message still conforms to the strict-mode schema in `schemas.py`. (Reminder, already in
   `COMPATIBILITY.md`: native `codex review --output-schema` is **not** honored for the final message
@@ -88,12 +101,16 @@ The script confirms shapes; you confirm meaning. Diff `codex exec --help` (and `
 
 ## 4. Update `cli_contract.py` + files in lockstep
 
-For a normal (non-breaking) codex minor bump:
+For a normal (non-breaking) codex minor bump. **Start by grepping the whole repo for the old
+literal** — `grep -rn '0\.141' src tests docs *.md` — and reconcile every hit. The table names the
+usual ones, but treat the grep as authoritative: a stale enumerated list *will* miss a file (e.g.
+`tests/test_check_codex_contract.py`'s `VERSION` was nearly missed this way).
 
 | File | What changes |
 |------|--------------|
-| `src/codex_in_claude/cli_contract.py` | `SUPPORTED_VERSIONS`; the `Verified against …` / `0.x` comments; any flag, sandbox, signature, or event-marker drift found in step 2 |
-| `tests/test_config.py`, `tests/test_coverage_extra.py`, `tests/test_codex.py`, `tests/test_server.py` | version literals and any expected-warning assertions (grep the old `X.Y.0`) |
+| `src/codex_in_claude/cli_contract.py` | `SUPPORTED_VERSIONS`; the `Verified against …` / `0.x` comments; the `KNOWN_MODEL_SLUGS` provenance comment; any flag, sandbox, signature, or event-marker drift found in step 2 |
+| Test version literals | Bump the literals that represent **the supported/current version** — `test_config.py`, `test_coverage_extra.py`, `test_codex.py`, `test_server.py`, and `test_check_codex_contract.py`'s `VERSION`. **Leave deliberate logic fixtures alone:** `test_check_codex_release.py` exercises the watcher's "new vs. tracked" logic with arbitrary versions, and `test_codex_models.py` uses a synthetic cache fixture — neither is the supported-set, so flipping them is wrong. |
+| `docs/codex-help/<new-version>/` | Commit fresh `--help` + `features list` snapshots for the new version (the diff source for the *next* upgrade — see step 2) |
 | `COMPATIBILITY.md` | the `Verified against` line; any changed policy |
 | `README.md` | only if user-facing compatibility text changes (it carries no pinned literal otherwise) |
 | `CHANGELOG.md` | an entry under `## [Unreleased]` |

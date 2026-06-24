@@ -10,8 +10,10 @@ default_install_hook_types = ["pre-commit", "pre-push", "commit-msg"]
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "trailing-whitespace" },
-  { id = "end-of-file-fixer" },
+  # docs/codex-help/ holds byte-faithful `codex --help` captures (continuation
+  # lines carry codex's own trailing padding) — never rewrite them.
+  { id = "trailing-whitespace", exclude = "^docs/codex-help/" },
+  { id = "end-of-file-fixer", exclude = "^docs/codex-help/" },
   { id = "check-merge-conflict" },
   # tests/test_server.py embeds an OpenSSH private-key header as fixture data for
   # the secret-redaction regression test (#57) — not a real key.

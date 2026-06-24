@@ -187,9 +187,9 @@ def test_codex_version(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,
         "run_sync_capture",
-        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.141.0\n", "", 0, 1, False),
+        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.142.0\n", "", 0, 1, False),
     )
-    assert codex.codex_version() == "codex-cli 0.141.0"
+    assert codex.codex_version() == "codex-cli 0.142.0"
 
 
 def test_codex_version_missing(monkeypatch):
