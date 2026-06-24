@@ -5,6 +5,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tracked Codex version bumped to `0.142`.** `SUPPORTED_VERSIONS` now tracks `(0, 142)`; the
+  contract, compatibility, and README notes are verified against `codex-cli 0.142.0`. The mechanical
+  drift check passes (all `ALWAYS_SEND_FLAGS`, `HELP_GATED_FLAGS`, and sandbox values present) and the
+  advisory model catalog is unchanged. Advisory only — an untracked version warns but never blocks.
+  No agent-visible surface change, so the result `fingerprint` is unchanged.
+
 ## [0.4.0] - 2026-06-22
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-10` →

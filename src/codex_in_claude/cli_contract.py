@@ -6,7 +6,7 @@ versions, and the stderr phrasings that mean the contract drifted — lives here
 an upstream breaking change is a one-file, greppable, testable edit. See
 COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.141.0`.
+Verified against `codex-cli 0.142.0`.
 """
 
 from __future__ import annotations
@@ -86,7 +86,8 @@ MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # malformed/hostile cache surfacing junk to an agent).
 MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Bundled advisory fallback used ONLY when the on-disk cache is absent/unreadable.
-# Copied from codex-cli 0.141.0's models_cache.json on 2026-06-22. NOT authoritative
+# Copied from codex-cli 0.141.0's models_cache.json on 2026-06-22 and re-verified
+# unchanged against codex-cli 0.142.0 on 2026-06-24. NOT authoritative
 # and will age: it documents what shipped with the pinned CLI, not the live account's
 # available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping the CLI.
 KNOWN_MODEL_SLUGS: tuple[str, ...] = ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "codex-auto-review")
@@ -96,11 +97,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "cod
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.141.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.142.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 141)})
+SUPPORTED_VERSIONS = frozenset({(0, 142)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------
