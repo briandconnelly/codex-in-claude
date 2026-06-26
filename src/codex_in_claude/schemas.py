@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 
@@ -127,12 +128,50 @@ class Usage(BaseModel):
 
 class RateLimitWindowSnapshot(BaseModel):
     """Raw per-window quota as emitted by codex's token_count event (one of the
-    primary/secondary windows). Parsed tolerantly; unknown fields ignored."""
+    primary/secondary windows). Parsed tolerantly; unknown fields ignored.
+
+    Field validators (mode="before") enforce numeric bounds on all three fields so
+    both the live-parse path (normalize._window_from) and the cache-read path
+    (RateLimitSnapshot.model_validate) are covered in one place:
+    - used_percent: must be a finite float in [0, 100]; out-of-range or non-finite
+      → None (treated as absent — never clamped to a valid-looking value).
+    - resets_at / window_minutes: must be a finite numeric; non-finite → None.
+    """
 
     model_config = ConfigDict(extra="ignore")
     used_percent: float | None = None
     window_minutes: int | None = None
     resets_at: int | None = None  # epoch seconds
+
+    @field_validator("used_percent", mode="before")
+    @classmethod
+    def _validate_used_percent(cls, v: object) -> float | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+        fv = float(v)
+        if fv < 0.0 or fv > 100.0:
+            return None
+        return fv
+
+    @field_validator("resets_at", mode="before")
+    @classmethod
+    def _validate_resets_at(cls, v: object) -> int | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+        return int(v)
+
+    @field_validator("window_minutes", mode="before")
+    @classmethod
+    def _validate_window_minutes(cls, v: object) -> int | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+        return int(v)
 
 
 class RateLimitSnapshot(BaseModel):

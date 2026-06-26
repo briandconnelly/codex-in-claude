@@ -297,8 +297,10 @@ def test_current_home_unverified_when_codex_home_differs(monkeypatch):
     monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/new/.codex"))
     rl = rate_limit.current()
     assert rl.home_unverified is True
-    # Healthy snapshot -> status reflects window data, not the home mismatch.
-    assert rl.status in ("available", "limited", "exhausted")
+    # Cross-home snapshot is degraded to unknown regardless of window health.
+    assert rl.status == "unknown"
+    assert rl.limiting_window is None
+    assert rl.note is not None and "CODEX_HOME" in rl.note
 
 
 # ---------------------------------------------------------------------------
@@ -347,3 +349,93 @@ def test_capture_parse_raise_returns_none(monkeypatch):
     monkeypatch.setattr(rate_limit.normalize, "parse_rate_limit", boom)
     result = rate_limit.capture("irrelevant events", now_epoch=1000)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: cross-CODEX_HOME snapshot must degrade to unknown
+# ---------------------------------------------------------------------------
+
+
+def test_interpret_cross_home_healthy_snapshot_is_unknown():
+    """A healthy snapshot captured under a different CODEX_HOME must never report
+    available — home_unverified=True overrides status to unknown regardless of
+    window health, and keeps window objects for transparency."""
+    snap = _both(10.0, 9999999999, 10.0, 9999999999)
+    rl = rate_limit.interpret(
+        snap,
+        now_epoch=1000,
+        captured_at=900,
+        cache_home="/other/.codex",
+        current_home="/current/.codex",
+    )
+    assert rl.status == "unknown"
+    assert rl.limiting_window is None
+    assert rl.home_unverified is True
+    assert rl.note is not None and "CODEX_HOME" in rl.note
+    # Window objects are preserved for transparency.
+    assert rl.primary is not None
+    assert rl.secondary is not None
+
+
+def test_interpret_same_home_healthy_snapshot_is_available():
+    """Same-home check: home_unverified=False must not degrade a healthy snapshot."""
+    snap = _both(10.0, 1_700_009_000, 10.0, 1_700_009_000)
+    rl = rate_limit.interpret(
+        snap,
+        now_epoch=1_700_001_000,
+        captured_at=1_700_000_900,
+        cache_home="/same/.codex",
+        current_home="/same/.codex",
+    )
+    assert rl.status == "available"
+    assert rl.home_unverified is False
+
+
+# ---------------------------------------------------------------------------
+# Findings 2 & 3: out-of-range and non-finite used_percent via cache-read path
+# ---------------------------------------------------------------------------
+
+
+def _raw_with_snapshot(primary_used_percent: object) -> dict:
+    """Build a raw cache dict with the given used_percent for the primary window."""
+    snap = _future_snap()
+    dumped = snap.model_dump(mode="json")
+    dumped["primary"]["used_percent"] = primary_used_percent
+    return {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": 1780530000,
+        "codex_home": "/home/.codex",
+        "snapshot": dumped,
+    }
+
+
+def test_current_cache_nan_used_percent_is_none(monkeypatch):
+    """A cached used_percent=NaN must be coerced to None; no raise; not false available."""
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: _raw_with_snapshot(float("nan")))
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.primary is not None
+    assert rl.primary.used_percent is None
+    assert rl.primary.remaining_percent is None
+    assert rl.status != "available"
+
+
+def test_current_cache_negative_used_percent_is_none(monkeypatch):
+    """A cached used_percent=-50 (out-of-range) must be coerced to None; no false available."""
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: _raw_with_snapshot(-50.0))
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.primary is not None
+    assert rl.primary.used_percent is None
+    assert rl.primary.remaining_percent is None
+    assert rl.status != "available"
+
+
+def test_current_cache_over_100_used_percent_is_none(monkeypatch):
+    """A cached used_percent=150 (out-of-range) must be coerced to None."""
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: _raw_with_snapshot(150.0))
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.primary is not None
+    assert rl.primary.used_percent is None
+    assert rl.primary.remaining_percent is None

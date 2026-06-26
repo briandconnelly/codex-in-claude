@@ -7,7 +7,6 @@ so an event-schema change degrades metadata rather than breaking a run."""
 from __future__ import annotations
 
 import json
-import math
 
 from codex_in_claude import cli_contract
 from codex_in_claude.schemas import (
@@ -74,22 +73,23 @@ def _window_from(blob: object) -> RateLimitWindowSnapshot | None:
     used = blob.get("used_percent")
     window = blob.get("window_minutes")
     resets = blob.get("resets_at")
-    used_f = (
-        float(used)
-        if isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used)
-        else None
+
+    # isinstance guards narrow to the expected types so ty is satisfied; semantic
+    # validation (finite, range) is delegated to RateLimitWindowSnapshot validators.
+    def _num(v: object) -> float | None:
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # type: ignore[return-value]
+
+    def _int(v: object) -> int | None:
+        return v if isinstance(v, int) and not isinstance(v, bool) else None  # type: ignore[return-value]
+
+    win = RateLimitWindowSnapshot(
+        used_percent=_num(used),
+        window_minutes=_int(window),
+        resets_at=_int(resets),
     )
-    window_i = window if isinstance(window, int) and not isinstance(window, bool) else None
-    resets_i = (
-        int(resets)
-        if isinstance(resets, (int, float))
-        and not isinstance(resets, bool)
-        and math.isfinite(resets)
-        else None
-    )
-    if used_f is None and resets_i is None:
+    if win.used_percent is None and win.resets_at is None:
         return None
-    return RateLimitWindowSnapshot(used_percent=used_f, window_minutes=window_i, resets_at=resets_i)
+    return win
 
 
 def parse_event_metadata(events: str) -> tuple[Usage | None, str | None]:

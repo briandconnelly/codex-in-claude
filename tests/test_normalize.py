@@ -208,3 +208,21 @@ def test_parse_rate_limit_used_percent_nan_does_not_raise():
     assert snap is not None
     assert snap.primary is not None
     assert snap.primary.used_percent is None
+
+
+def test_parse_rate_limit_used_percent_negative_is_none():
+    """used_percent=-50 (out-of-range) must be coerced to None; window survives via resets_at."""
+    event = _rate_limit_event("1780534461", used_percent_token="-50.0")
+    snap = normalize.parse_rate_limit(event)
+    assert snap is not None
+    assert snap.primary is not None
+    assert snap.primary.used_percent is None
+
+
+def test_parse_rate_limit_used_percent_over_100_is_none():
+    """used_percent=150 (out-of-range) must be coerced to None; window survives via resets_at."""
+    event = _rate_limit_event("1780534461", used_percent_token="150.0")
+    snap = normalize.parse_rate_limit(event)
+    assert snap is not None
+    assert snap.primary is not None
+    assert snap.primary.used_percent is None

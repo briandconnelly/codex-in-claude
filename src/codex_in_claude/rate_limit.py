@@ -114,6 +114,13 @@ def interpret(
     primary = _window(snapshot.primary, now_epoch)
     secondary = _window(snapshot.secondary, now_epoch)
     status, limiting, note = _status(snapshot, primary, secondary)
+    if home_unverified:
+        status = "unknown"
+        limiting = None
+        note = (
+            "cached rate-limit snapshot came from a different CODEX_HOME;"
+            " refresh before relying on availability."
+        )
     return RateLimit(
         status=status,
         source=source,
