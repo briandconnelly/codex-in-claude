@@ -1416,8 +1416,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_11():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-11"
+def test_fingerprint_is_schema_12():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-12"
 
 
 def test_capabilities_mark_m4_surface_experimental():
