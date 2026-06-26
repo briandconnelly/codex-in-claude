@@ -2490,12 +2490,12 @@ def test_codex_status_reports_cached_snapshot(monkeypatch):
                 "primary": {
                     "used_percent": 10.0,
                     "window_minutes": 300,
-                    "resets_at": 1_900_000_000,
+                    "resets_at": 9999999999,
                 },
                 "secondary": {
                     "used_percent": 5.0,
                     "window_minutes": 10080,
-                    "resets_at": 1_900_000_000,
+                    "resets_at": 9999999999,
                 },
             },
         },
@@ -2518,7 +2518,7 @@ def test_codex_status_tolerates_corrupt_cache_envelope(monkeypatch):
             "version": rate_limit.CACHE_VERSION,
             "captured_at": "not-a-number",
             "codex_home": ["bad"],
-            "snapshot": {"primary": {"used_percent": 10.0, "resets_at": 1_900_000_000}},
+            "snapshot": {"primary": {"used_percent": 10.0, "resets_at": 9999999999}},
         },
     )
     result = server.codex_status()

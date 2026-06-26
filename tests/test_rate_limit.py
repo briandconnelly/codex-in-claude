@@ -202,7 +202,7 @@ def test_save_leaves_no_temp_files(tmp_path: Path):
 # _snap() resets_at values are near-term and will have passed by the time current()
 # runs against int(time.time()), so current() tests use a snapshot with resets_at
 # far enough in the future (year ~2030) that windows always appear open.
-_FAR_FUTURE_RESETS = 1_900_000_000  # 2030-03-17
+_FAR_FUTURE_RESETS = 9999999999  # 2286-11-20
 
 
 def _future_snap() -> RateLimitSnapshot:

@@ -514,7 +514,7 @@ def codex_status() -> dict:
     (a cached snapshot, not a live query). Use it to decide whether to spend: `available`
     is deliberately conservative (only when both windows are observed and healthy);
     `limited`/`exhausted` are reasons to defer non-urgent Codex calls; `unknown` means no
-    fresh/usable reading (run any Codex call to populate it), not that anything is wrong.
+    fresh/usable reading (run any **paid** Codex call to populate it), not that anything is wrong.
     `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
     CODEX_HOME."""
     d = config.defaults()
