@@ -299,3 +299,51 @@ def test_current_home_unverified_when_codex_home_differs(monkeypatch):
     assert rl.home_unverified is True
     # Healthy snapshot -> status reflects window data, not the home mismatch.
     assert rl.status in ("available", "limited", "exhausted")
+
+
+# ---------------------------------------------------------------------------
+# Non-finite float regression tests (NaN / Infinity in captured_at / capture())
+# ---------------------------------------------------------------------------
+
+
+def _raw_with_captured_at(value: float) -> dict:
+    return {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": value,
+        "codex_home": "/home/.codex",
+        "snapshot": _future_snap().model_dump(mode="json"),
+    }
+
+
+def test_current_captured_at_nan_does_not_raise(monkeypatch):
+    """captured_at=NaN must NOT raise; as_of and age_seconds must be None."""
+
+    monkeypatch.setattr(
+        rate_limit, "_load_raw", lambda path=None: _raw_with_captured_at(float("nan"))
+    )
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.as_of is None
+    assert rl.age_seconds is None
+
+
+def test_current_captured_at_infinity_does_not_raise(monkeypatch):
+    """captured_at=Infinity must NOT raise; as_of and age_seconds must be None."""
+    monkeypatch.setattr(
+        rate_limit, "_load_raw", lambda path=None: _raw_with_captured_at(float("inf"))
+    )
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.as_of is None
+    assert rl.age_seconds is None
+
+
+def test_capture_parse_raise_returns_none(monkeypatch):
+    """capture() must return None (not raise) when normalize.parse_rate_limit raises."""
+
+    def boom(_events: str) -> None:
+        raise RuntimeError("injected parse failure")
+
+    monkeypatch.setattr(rate_limit.normalize, "parse_rate_limit", boom)
+    result = rate_limit.capture("irrelevant events", now_epoch=1000)
+    assert result is None

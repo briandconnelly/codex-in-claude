@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -144,7 +145,11 @@ def current() -> RateLimit:
     if raw is None:
         return interpret(None, now_epoch=now)
     captured_at = raw.get("captured_at")
-    if isinstance(captured_at, bool) or not isinstance(captured_at, (int, float)):
+    if (
+        isinstance(captured_at, bool)
+        or not isinstance(captured_at, (int, float))
+        or not math.isfinite(captured_at)
+    ):
         captured_at = None
     else:
         captured_at = int(captured_at)
@@ -167,12 +172,16 @@ def current() -> RateLimit:
 def capture(events: str, *, now_epoch: int | None = None) -> RateLimit | None:
     """Parse a paid run's events for a rate_limits block; persist it (best-effort) and
     return the live RateLimit for the call's Meta. None when no block was emitted."""
-    now = now_epoch if now_epoch is not None else int(time.time())
-    snapshot = normalize.parse_rate_limit(events)
-    if snapshot is None:
+    try:
+        # best-effort: metadata capture must never fail a paid call
+        now = now_epoch if now_epoch is not None else int(time.time())
+        snapshot = normalize.parse_rate_limit(events)
+        if snapshot is None:
+            return None
+        save(snapshot, now_epoch=now)
+        return live(snapshot, now_epoch=now)
+    except Exception:
         return None
-    save(snapshot, now_epoch=now)
-    return live(snapshot, now_epoch=now)
 
 
 def _window(snap: RateLimitWindowSnapshot | None, now_epoch: int) -> RateLimitWindow | None:

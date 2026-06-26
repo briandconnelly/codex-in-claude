@@ -160,3 +160,51 @@ def test_parse_rate_limit_last_event_wins():
 
 def test_parse_rate_limit_tolerates_malformed_lines():
     assert normalize.parse_rate_limit("not json\n{bad\n" + _TOKEN_COUNT_LINE) is not None
+
+
+# ---------------------------------------------------------------------------
+# Non-finite float regression tests (NaN / Infinity)
+# ---------------------------------------------------------------------------
+
+
+def _rate_limit_event(resets_at_token: str, used_percent_token: str = "12.0") -> str:
+    """Build a token_count event string with raw JSON literal tokens so json.loads
+    parses them as NaN/Infinity (Python's json.loads accepts those by default)."""
+    return (
+        '{"type":"event_msg","payload":{"type":"token_count",'
+        '"rate_limits":{"primary":{"used_percent":'
+        + used_percent_token
+        + ',"window_minutes":300,"resets_at":'
+        + resets_at_token
+        + "}}}}"
+    )
+
+
+def test_parse_rate_limit_resets_at_nan_does_not_raise():
+    """resets_at=NaN must NOT raise; the window should degrade to resets_at=None."""
+    event = _rate_limit_event("NaN")
+    snap = normalize.parse_rate_limit(event)
+    # A non-finite resets_at is treated as absent; used_percent is still present so the
+    # window and snapshot survive (not dropped entirely).
+    assert snap is not None
+    assert snap.primary is not None
+    assert snap.primary.resets_at is None
+
+
+def test_parse_rate_limit_resets_at_infinity_does_not_raise():
+    """resets_at=Infinity must NOT raise; the window should degrade to resets_at=None."""
+    event = _rate_limit_event("Infinity")
+    snap = normalize.parse_rate_limit(event)
+    assert snap is not None
+    assert snap.primary is not None
+    assert snap.primary.resets_at is None
+
+
+def test_parse_rate_limit_used_percent_nan_does_not_raise():
+    """used_percent=NaN must NOT raise; the window should degrade to used_percent=None."""
+    event = _rate_limit_event("1780534461", used_percent_token="NaN")
+    snap = normalize.parse_rate_limit(event)
+    # used_percent=NaN -> None; resets_at is a valid int so the window survives.
+    assert snap is not None
+    assert snap.primary is not None
+    assert snap.primary.used_percent is None

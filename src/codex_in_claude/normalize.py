@@ -7,6 +7,7 @@ so an event-schema change degrades metadata rather than breaking a run."""
 from __future__ import annotations
 
 import json
+import math
 
 from codex_in_claude import cli_contract
 from codex_in_claude.schemas import (
@@ -73,10 +74,18 @@ def _window_from(blob: object) -> RateLimitWindowSnapshot | None:
     used = blob.get("used_percent")
     window = blob.get("window_minutes")
     resets = blob.get("resets_at")
-    used_f = float(used) if isinstance(used, (int, float)) and not isinstance(used, bool) else None
+    used_f = (
+        float(used)
+        if isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used)
+        else None
+    )
     window_i = window if isinstance(window, int) and not isinstance(window, bool) else None
     resets_i = (
-        int(resets) if isinstance(resets, (int, float)) and not isinstance(resets, bool) else None
+        int(resets)
+        if isinstance(resets, (int, float))
+        and not isinstance(resets, bool)
+        and math.isfinite(resets)
+        else None
     )
     if used_f is None and resets_i is None:
         return None
