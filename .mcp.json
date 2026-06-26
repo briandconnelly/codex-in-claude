@@ -4,7 +4,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "codex-in-claude==0.4.0",
+        "codex-in-claude==0.4.1",
         "codex-in-claude-mcp"
       ]
     }
