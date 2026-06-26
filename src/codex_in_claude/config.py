@@ -239,6 +239,30 @@ def state_dir() -> Path:
     return root / "codex-in-claude" / "jobs"
 
 
+def rate_limit_snapshot_file() -> Path:
+    """Plugin-owned cache file for the latest Codex rate-limit snapshot (sibling of
+    the jobs/ store; honors CODEX_IN_CLAUDE_RATE_LIMIT_FILE / STATE_DIR / XDG_CACHE_HOME)."""
+    override = os.environ.get(f"{ENV_PREFIX}RATE_LIMIT_FILE")
+    if override:
+        return Path(override).expanduser()
+    return state_dir().parent / "rate_limit_snapshot.json"
+
+
+def rate_limit_stale_seconds() -> int:
+    """Age (seconds) past which a cached snapshot is flagged is_stale. Advisory only —
+    the reset-aware interpretation, not this threshold, is the real staleness guard."""
+    raw = os.environ.get(f"{ENV_PREFIX}RATE_LIMIT_STALE_SECONDS")
+    if raw and raw.isdigit():
+        return int(raw)
+    return 1800  # 30 minutes
+
+
+def codex_home() -> Path:
+    """Resolved CODEX_HOME (defaults to ~/.codex), used for snapshot provenance."""
+    override = os.environ.get("CODEX_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".codex"
+
+
 def worktree_base() -> Path | None:
     """Optional override for where temp worktrees are created (default: alongside
     the repo, managed by git). None means let the worktree module choose."""
