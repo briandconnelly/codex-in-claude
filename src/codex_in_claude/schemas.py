@@ -172,7 +172,9 @@ class RateLimit(BaseModel):
     observed and healthy; an unobserved window (reset-passed, missing, or lacking
     resets_at) never yields `available` — it degrades to `unknown`. `limited`/
     `exhausted` come only from still-open windows, so they stay conservative even when
-    the snapshot is stale (captured usage is a lower bound on current usage)."""
+    the snapshot is stale (captured usage is a lower bound on current usage).
+    `unknown` means no fresh/usable reading yet — run any paid Codex call to populate
+    it — not that anything is wrong."""
 
     model_config = ConfigDict(extra="forbid")
     status: RateLimitStatus
