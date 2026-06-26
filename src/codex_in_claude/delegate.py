@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from codex_in_claude import codex, config, normalize, prompts
+from codex_in_claude import codex, config, normalize, prompts, rate_limit
 from codex_in_claude._core import redaction, worktree
 from codex_in_claude.schemas import (
     ContextSummary,
@@ -64,6 +64,7 @@ def _apply_run_meta(meta: Meta, result: codex.CodexExecResult) -> tuple[Usage | 
     usage, session_id = normalize.parse_event_metadata(result.events)
     meta.usage = usage
     meta.session_id = session_id
+    meta.rate_limit = rate_limit.capture(result.events)
     return usage, session_id
 
 

@@ -256,6 +256,9 @@ class Meta(BaseModel):
     security_warnings: list[str] = Field(default_factory=list)
     redacted_paths: list[str] = Field(default_factory=list)
     usage: Usage | None = None
+    # Live rate-limit quota snapshot captured from this call's event stream (the same
+    # data codex_status reports from cache). None when codex emitted no rate_limits block.
+    rate_limit: RateLimit | None = None
     context_summary: ContextSummary | None = None
     job_id: str | None = None  # set on background-job results; None for sync calls
     request_id: str = Field(default_factory=lambda: uuid4().hex)

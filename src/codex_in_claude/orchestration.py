@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, cast, get_args
 
-from codex_in_claude import codex, normalize, prompts
+from codex_in_claude import codex, normalize, prompts, rate_limit
 from codex_in_claude._core import gitdiff, redaction
 from codex_in_claude.schemas import (
     CONSULT_OUTPUT_SCHEMA,
@@ -42,6 +42,7 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     usage, session_id = normalize.parse_event_metadata(result.events)
     meta.usage = usage
     meta.session_id = session_id
+    meta.rate_limit = rate_limit.capture(result.events)
     if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
         err = codex.classify_failure(
             result.run, last_message=result.last_message, events=result.events
