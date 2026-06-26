@@ -4,7 +4,7 @@
 
 **Goal:** Report how much of the account's Codex rate-limit quota remains, surfaced by the free `codex_status` tool and on every active call's `Meta`, captured opportunistically from paid calls at zero extra spend.
 
-**Architecture:** Every paid `codex exec` turn streams a `token_count` JSONL event whose `payload.rate_limits` block carries account-wide quota usage for a 5-hour (`primary`) and weekly (`secondary`) window. We parse that block, persist the latest snapshot to a plugin-owned JSON file, and interpret it against each window's own `resets_at` so a stale file self-corrects (a window past its reset reports as `replenished`, not as a stale high-usage number) rather than misleading.
+**Architecture:** Every paid `codex exec` turn streams a `token_count` JSONL event whose `payload.rate_limits` block carries account-wide quota usage for a 5-hour (`primary`) and weekly (`secondary`) window. We parse that block, persist the latest snapshot to a plugin-owned JSON file, and interpret it against each window's own `resets_at` with an asymmetric rule: an unobserved window (reset-passed or missing) never yields a positive `available` signal (it degrades to `unknown`), while conservative `limited`/`exhausted` verdicts from still-open windows survive staleness — so a stale file can't mislead an agent into spending on a throttled account.
 
 **Tech Stack:** Python 3.11+, Pydantic v2, FastMCP, `uv`, `pytest`, `ruff`, `ty`.
 
@@ -277,6 +277,13 @@ def test_save_is_best_effort_on_unwritable_path(tmp_path: Path):
     blocker = tmp_path / "blocker"
     blocker.write_text("x", encoding="utf-8")
     rate_limit.save(_snap(), now_epoch=1, path=blocker / "nested" / "snap.json", home="/h")
+
+
+def test_save_leaves_no_temp_files(tmp_path: Path):
+    target = tmp_path / "snap.json"
+    rate_limit.save(_snap(), now_epoch=1, path=target, home="/h")
+    assert target.exists()
+    assert list(tmp_path.glob("*.tmp")) == []  # atomic write cleaned up its temp
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -321,11 +328,14 @@ def codex_home() -> Path:
 Capture is opportunistic: paid calls already parse the token_count event for token
 usage, so we lift the sibling rate_limits block at no extra spend, persist the latest,
 and interpret it against each window's own resets_at when read — so a stale cache
-self-corrects (a window past its reset reports replenished) rather than misleading."""
+can't mislead: an unobserved (reset-passed or missing) window never reports as
+available, while conservative limited/exhausted verdicts from open windows survive."""
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -348,8 +358,10 @@ def save(
     path: Path | None = None,
     home: str | None = None,
 ) -> None:
-    """Persist the latest snapshot, best-effort. Never raises: a write failure must
-    never fail the underlying paid call."""
+    """Persist the latest snapshot, best-effort and atomically. Never raises: a write
+    failure must never fail the underlying paid call. Uses a unique temp file +
+    os.replace (mirroring _worker._atomic_write) so a concurrent paid call or a
+    codex_status read never observes a truncated file. Last writer wins."""
     target = path or config.rate_limit_snapshot_file()
     home_str = home if home is not None else str(config.codex_home())
     payload = {
@@ -360,9 +372,18 @@ def save(
     }
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(payload), encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     except OSError:
         return
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload))
+        os.replace(tmp, target)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _load_raw(path: Path | None = None) -> dict | None:
@@ -407,7 +428,7 @@ git commit -m "feat(config): persist latest codex rate-limit snapshot to cache f
 - Test: `tests/test_rate_limit.py`
 
 **Interfaces:**
-- Produces: `schemas.RateLimitWindow`, `schemas.RateLimit` (status `Literal["available","limited","exhausted","replenished","unknown"]`); `rate_limit.interpret(snapshot, *, now_epoch, captured_at=None, cache_home=None, current_home=None, stale_seconds=None) -> RateLimit`; `rate_limit.live(snapshot, *, now_epoch) -> RateLimit | None`; `rate_limit.current() -> RateLimit`; `rate_limit.capture(events: str, *, now_epoch=None) -> RateLimit | None`.
+- Produces: `schemas.RateLimitWindow`, `schemas.RateLimit` (status `Literal["available","limited","exhausted","unknown"]`, source `Literal["current_run","plugin_cache"]`, field `home_unverified`); `rate_limit.interpret(snapshot, *, now_epoch, captured_at=None, cache_home=None, current_home=None, stale_seconds=None, source="plugin_cache") -> RateLimit`; `rate_limit.live(snapshot, *, now_epoch) -> RateLimit | None` (source `current_run`); `rate_limit.current() -> RateLimit`; `rate_limit.capture(events: str, *, now_epoch=None) -> RateLimit | None`. Internal `_status(...) -> tuple[status, limiting_window|None, note|None]`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -422,69 +443,111 @@ def _win(used, resets):
     return RateLimitWindowSnapshot(used_percent=used, window_minutes=300, resets_at=resets)
 
 
+def _both(p_used, p_reset, s_used, s_reset):
+    return RateLimitSnapshot(plan_type="plus", primary=_win(p_used, p_reset), secondary=_win(s_used, s_reset))
+
+
 def test_interpret_no_snapshot_is_unknown():
     rl = rate_limit.interpret(None, now_epoch=1000)
     assert rl.status == "unknown"
     assert rl.note  # carries a refresh hint
+    assert rl.as_of is None
 
 
-def test_interpret_available_uses_limiting_window():
-    snap = RateLimitSnapshot(plan_type="plus", primary=_win(10.0, 2000), secondary=_win(40.0, 9000))
+def test_interpret_available_requires_both_windows_open_and_healthy():
+    snap = _both(10.0, 9000, 40.0, 9000)  # both open (now < resets), both > 25% remaining
     rl = rate_limit.interpret(snap, now_epoch=1000, captured_at=900)
     assert rl.status == "available"
     assert rl.limiting_window == "secondary"  # lower remaining (60 vs 90)
     assert rl.secondary.remaining_percent == 60.0
-    assert rl.primary.seconds_until_reset == 1000
+    assert rl.primary.seconds_until_reset == 8000
     assert rl.age_seconds == 100
     assert rl.as_of.startswith("20")  # ISO-8601
 
 
-def test_interpret_limited_when_remaining_below_25():
-    snap = RateLimitSnapshot(primary=_win(80.0, 2000))
-    assert rate_limit.interpret(snap, now_epoch=1000).status == "limited"
+def test_interpret_limited_when_open_window_below_25():
+    snap = _both(80.0, 9000, 5.0, 9000)  # primary 20% remaining -> limited
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.status == "limited"
+    assert rl.limiting_window == "primary"
 
 
-def test_interpret_exhausted_on_reached_type():
-    snap = RateLimitSnapshot(rate_limit_reached_type="primary", primary=_win(100.0, 2000))
-    assert rate_limit.interpret(snap, now_epoch=1000).status == "exhausted"
+def test_interpret_exhausted_on_reached_type_names_open_window():
+    snap = _both(100.0, 9000, 5.0, 9000)
+    snap.rate_limit_reached_type = "primary"
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.status == "exhausted"
+    assert rl.limiting_window == "primary"
 
 
-def test_interpret_replenished_when_all_windows_reset_passed():
-    snap = RateLimitSnapshot(primary=_win(95.0, 500), secondary=_win(95.0, 600))
-    rl = rate_limit.interpret(snap, now_epoch=1000)  # now > both resets_at
-    assert rl.status == "replenished"
+def test_interpret_reached_type_on_reset_window_degrades_to_unknown():
+    # Codex said primary hit its limit, but primary has since reset -> not actionable.
+    snap = _both(100.0, 500, 5.0, 9000)  # now=1000 > primary reset 500
+    snap.rate_limit_reached_type = "primary"
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.status == "unknown"
+
+
+def test_interpret_all_windows_reset_passed_is_unknown_not_healthy():
+    snap = _both(10.0, 500, 10.0, 600)  # now=1000 past both resets
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.status == "unknown"  # post-reset usage unobserved; never 'available'
     assert rl.primary.reset_passed is True
+    assert rl.primary.remaining_percent is None  # nulled on reset
+    assert rl.primary.used_percent is None
     assert rl.limiting_window is None
 
 
-def test_interpret_mixed_uses_unreset_window_only():
-    # primary reset (now > 500), secondary still active and nearly full
-    snap = RateLimitSnapshot(primary=_win(90.0, 500), secondary=_win(80.0, 9000))
+def test_interpret_one_window_reset_blocks_available():
+    # primary reset (unobserved), secondary open and healthy -> still unknown,
+    # because the unobserved 5h window could already be re-exhausted.
+    snap = _both(10.0, 500, 10.0, 9000)
     rl = rate_limit.interpret(snap, now_epoch=1000)
-    assert rl.status == "limited"
+    assert rl.status == "unknown"
+
+
+def test_interpret_open_risk_wins_even_with_other_window_reset():
+    # secondary open and exhausted -> conservative 'exhausted' despite primary reset.
+    snap = _both(10.0, 500, 100.0, 9000)
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.status == "exhausted"
     assert rl.limiting_window == "secondary"
 
 
-def test_interpret_clamps_negative_seconds_until_reset():
-    snap = RateLimitSnapshot(primary=_win(10.0, 500))
+def test_interpret_missing_resets_at_cannot_be_available():
+    snap = RateLimitSnapshot(
+        primary=RateLimitWindowSnapshot(used_percent=10.0, window_minutes=300, resets_at=None),
+        secondary=_win(10.0, 9000),
+    )
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.status == "unknown"  # primary freshness unverifiable
+    assert rl.primary.reset_passed is False
+    assert rl.primary.seconds_until_reset is None
+
+
+def test_interpret_clamps_negative_seconds_until_reset_on_open_window():
+    # resets_at exactly now -> reset_passed true, seconds 0
+    snap = _both(10.0, 1000, 10.0, 1000)
     rl = rate_limit.interpret(snap, now_epoch=1000)
     assert rl.primary.seconds_until_reset == 0
+    assert rl.primary.reset_passed is True
 
 
-def test_interpret_flags_stale_and_unverified():
-    snap = RateLimitSnapshot(primary=_win(10.0, 9000))
+def test_interpret_flags_stale_and_home_unverified():
+    snap = _both(10.0, 9999999, 10.0, 9999999)
     rl = rate_limit.interpret(
         snap, now_epoch=10000, captured_at=1000, cache_home="/a/.codex",
         current_home="/b/.codex", stale_seconds=1800,
     )
     assert rl.is_stale is True
-    assert rl.unverified is True
+    assert rl.home_unverified is True
 
 
-def test_live_age_zero_not_stale():
-    snap = RateLimitSnapshot(primary=_win(10.0, 9000))
+def test_live_age_zero_not_stale_and_source_current_run():
+    snap = _both(10.0, 9999999, 10.0, 9999999)
     rl = rate_limit.live(snap, now_epoch=1000)
     assert rl.age_seconds == 0 and rl.is_stale is False
+    assert rl.source == "current_run"
 
 
 def test_live_none_when_no_snapshot():
@@ -501,35 +564,43 @@ Expected: FAIL with `AttributeError: module 'codex_in_claude.rate_limit' has no 
 Insert after the `RateLimitSnapshot` model from Task 1:
 
 ```python
-RateLimitStatus = Literal["available", "limited", "exhausted", "replenished", "unknown"]
+RateLimitStatus = Literal["available", "limited", "exhausted", "unknown"]
 
 
 class RateLimitWindow(BaseModel):
     """One quota window, interpreted for an agent. used_percent/remaining_percent are
-    as of `as_of`; reset_passed=True means the window has rolled over since capture, so
-    those numbers are likely better now (see the parent RateLimit.status)."""
+    current-ish (as of `as_of`) for an open window and are NULLED when reset_passed is
+    true (the window rolled over since capture, so its captured usage is obsolete and
+    its post-reset usage is unobserved). One source of truth: a present percentage
+    always means current-ish, never stale."""
 
     model_config = ConfigDict(extra="forbid")
     used_percent: float | None = None
-    remaining_percent: float | None = None  # max(0, 100 - used_percent)
+    remaining_percent: float | None = None  # max(0, 100 - used_percent); None if reset_passed
     window_minutes: int | None = None
     resets_at: int | None = None  # epoch seconds
-    seconds_until_reset: int | None = None  # clamped >= 0; None if resets_at unknown
+    seconds_until_reset: int | None = None  # clamped >= 0; 0 if reset_passed; None if resets_at unknown
     reset_passed: bool = False
 
 
 class RateLimit(BaseModel):
     """Agent-facing rate-limit quota. A snapshot captured opportunistically from a
-    prior paid call, interpreted against each window's reset clock. NOT a live query."""
+    paid call, interpreted against each window's reset clock. NOT a live query.
+
+    Asymmetric by design: `available` is reported only when every binding window is
+    observed and healthy; an unobserved window (reset-passed, missing, or lacking
+    resets_at) never yields `available` — it degrades to `unknown`. `limited`/
+    `exhausted` come only from still-open windows, so they stay conservative even when
+    the snapshot is stale (captured usage is a lower bound on current usage)."""
 
     model_config = ConfigDict(extra="forbid")
     status: RateLimitStatus
-    source: Literal["plugin_cache"] = "plugin_cache"
-    as_of: str | None = None  # ISO-8601 capture time; None when status == unknown
+    source: Literal["current_run", "plugin_cache"] = "plugin_cache"
+    as_of: str | None = None  # ISO-8601 capture time; None when no snapshot
     age_seconds: int | None = None
     is_stale: bool = False  # older than the configured warn threshold (advisory)
-    plan_type: str | None = None
-    unverified: bool = False  # cached CODEX_HOME differs from the current environment
+    plan_type: str | None = None  # captured metadata, NOT a verified current plan
+    home_unverified: bool = False  # cached CODEX_HOME differs from the current environment
     limiting_window: Literal["primary", "secondary"] | None = None
     primary: RateLimitWindow | None = None  # 5-hour window
     secondary: RateLimitWindow | None = None  # weekly window
@@ -544,6 +615,8 @@ Append to `src/codex_in_claude/rate_limit.py`:
 _REFRESH_HINT = (
     "No Codex rate-limit data yet; run any Codex call (consult/review/delegate) to populate it."
 )
+_LIMITED_THRESHOLD = 25.0  # remaining_percent below this on an open window -> 'limited'
+_EXPECTED_WINDOWS = ("primary", "secondary")
 
 
 def interpret(
@@ -554,45 +627,62 @@ def interpret(
     cache_home: str | None = None,
     current_home: str | None = None,
     stale_seconds: int | None = None,
+    source: str = "plugin_cache",
 ) -> RateLimit:
     """Turn a raw snapshot into the agent-facing RateLimit, reasoning about staleness
-    against each window's own resets_at. A None snapshot yields status 'unknown'."""
+    against each window's own resets_at. A None snapshot yields status 'unknown'.
+
+    Asymmetric: `available` only when every expected window is open (not reset-passed,
+    has resets_at) and healthy; an unobserved window degrades to `unknown`. Risk
+    verdicts (`limited`/`exhausted`) come only from open windows, so they stay
+    conservative under staleness."""
     if snapshot is None:
-        return RateLimit(status="unknown", note=_REFRESH_HINT)
+        return RateLimit(status="unknown", source=source, note=_REFRESH_HINT)
     threshold = stale_seconds if stale_seconds is not None else config.rate_limit_stale_seconds()
     age = max(0, now_epoch - captured_at) if captured_at is not None else None
     is_stale = age is not None and age > threshold
-    unverified = bool(cache_home and current_home and cache_home != current_home)
+    home_unverified = bool(cache_home and current_home and cache_home != current_home)
     primary = _window(snapshot.primary, now_epoch)
     secondary = _window(snapshot.secondary, now_epoch)
-    status, limiting = _status(snapshot, primary, secondary)
+    status, limiting, note = _status(snapshot, primary, secondary)
     return RateLimit(
         status=status,
+        source=source,
         as_of=_iso(captured_at) if captured_at is not None else None,
         age_seconds=age,
         is_stale=is_stale,
         plan_type=snapshot.plan_type,
-        unverified=unverified,
+        home_unverified=home_unverified,
         limiting_window=limiting,
         primary=primary,
         secondary=secondary,
+        note=note,
     )
 
 
 def live(snapshot: RateLimitSnapshot | None, *, now_epoch: int) -> RateLimit | None:
-    """RateLimit for a just-captured snapshot (for Meta): age 0, never stale. None
-    when there is no snapshot."""
+    """RateLimit for a just-captured snapshot (for Meta): age 0, never stale, source
+    'current_run'. None when there is no snapshot."""
     if snapshot is None:
         return None
-    return interpret(snapshot, now_epoch=now_epoch, captured_at=now_epoch)
+    return interpret(snapshot, now_epoch=now_epoch, captured_at=now_epoch, source="current_run")
 
 
 def current() -> RateLimit:
-    """Load and interpret the cached snapshot for codex_status (free, local)."""
+    """Load and interpret the cached snapshot for codex_status (free, local). Tolerant:
+    a missing/corrupt cache or bad envelope types degrade to 'unknown', never raise."""
     now = int(time.time())
     raw = _load_raw()
     if raw is None:
         return interpret(None, now_epoch=now)
+    captured_at = raw.get("captured_at")
+    if isinstance(captured_at, bool) or not isinstance(captured_at, (int, float)):
+        captured_at = None
+    else:
+        captured_at = int(captured_at)
+    cache_home = raw.get("codex_home")
+    if not isinstance(cache_home, str):
+        cache_home = None
     try:
         snapshot = RateLimitSnapshot.model_validate(raw.get("snapshot"))
     except Exception:
@@ -600,8 +690,8 @@ def current() -> RateLimit:
     return interpret(
         snapshot,
         now_epoch=now,
-        captured_at=raw.get("captured_at"),
-        cache_home=raw.get("codex_home"),
+        captured_at=captured_at,
+        cache_home=cache_home,
         current_home=str(config.codex_home()),
     )
 
@@ -620,10 +710,22 @@ def capture(events: str, *, now_epoch: int | None = None) -> RateLimit | None:
 def _window(snap: RateLimitWindowSnapshot | None, now_epoch: int) -> RateLimitWindow | None:
     if snap is None:
         return None
-    used = snap.used_percent
-    remaining = max(0.0, 100.0 - used) if used is not None else None
     resets = snap.resets_at
     reset_passed = resets is not None and now_epoch >= resets
+    if reset_passed:
+        # The window rolled over since capture: captured usage is obsolete, post-reset
+        # usage is unobserved. Null the percentages so a present value always means
+        # current-ish.
+        return RateLimitWindow(
+            used_percent=None,
+            remaining_percent=None,
+            window_minutes=snap.window_minutes,
+            resets_at=resets,
+            seconds_until_reset=0,
+            reset_passed=True,
+        )
+    used = snap.used_percent
+    remaining = max(0.0, 100.0 - used) if used is not None else None
     secs = max(0, resets - now_epoch) if resets is not None else None
     return RateLimitWindow(
         used_percent=used,
@@ -631,7 +733,18 @@ def _window(snap: RateLimitWindowSnapshot | None, now_epoch: int) -> RateLimitWi
         window_minutes=snap.window_minutes,
         resets_at=resets,
         seconds_until_reset=secs,
-        reset_passed=reset_passed,
+        reset_passed=False,
+    )
+
+
+def _is_open(w: RateLimitWindow | None) -> bool:
+    """A window usable for a current decision: present, not rolled over, with a usable
+    resets_at (so we can trust its freshness) and a known remaining."""
+    return (
+        w is not None
+        and not w.reset_passed
+        and w.resets_at is not None
+        and w.remaining_percent is not None
     )
 
 
@@ -639,25 +752,40 @@ def _status(
     snapshot: RateLimitSnapshot,
     primary: RateLimitWindow | None,
     secondary: RateLimitWindow | None,
-) -> tuple[str, str | None]:
-    windows = [("primary", primary), ("secondary", secondary)]
-    present = [(name, w) for name, w in windows if w is not None]
+) -> tuple[str, str | None, str | None]:
+    """Return (status, limiting_window, note)."""
+    windows = dict(zip(_EXPECTED_WINDOWS, (primary, secondary), strict=True))
+    present = {name: w for name, w in windows.items() if w is not None}
     if not present:
-        return "unknown", None
-    active = [
-        (name, w)
-        for name, w in present
-        if not w.reset_passed and w.remaining_percent is not None
-    ]
-    if not active:
-        return "replenished", None
-    name, w = min(active, key=lambda nw: nw[1].remaining_percent)
-    remaining = w.remaining_percent
-    if snapshot.rate_limit_reached_type or remaining <= 0:
-        return "exhausted", name
-    if remaining < 25:
-        return "limited", name
-    return "available", name
+        return "unknown", None, _REFRESH_HINT
+    open_windows = {name: w for name, w in windows.items() if _is_open(w)}
+
+    # 1. Codex explicitly named the window that hit its limit.
+    reached = (snapshot.rate_limit_reached_type or "").strip().lower()
+    if reached:
+        if reached in open_windows:
+            return "exhausted", reached, None
+        # The reached window has since reset or is absent -> snapshot not actionable.
+        return "unknown", None, f"codex reported '{reached}' reached its limit but that window is no longer observable; refresh."
+
+    # 2. Conservative risk from open windows (safe even if stale: captured usage is a
+    #    lower bound on current usage within an open window).
+    exhausted = {n: w for n, w in open_windows.items() if w.remaining_percent <= 0}
+    if exhausted:
+        n = min(exhausted, key=lambda k: exhausted[k].remaining_percent)
+        return "exhausted", n, None
+    limited = {n: w for n, w in open_windows.items() if w.remaining_percent < _LIMITED_THRESHOLD}
+    if limited:
+        n = min(limited, key=lambda k: limited[k].remaining_percent)
+        return "limited", n, None
+
+    # 3. No risk signal. `available` only if EVERY expected window is open and healthy;
+    #    any unobserved window could be the binding constraint -> unknown.
+    unobserved = [n for n in _EXPECTED_WINDOWS if n not in open_windows]
+    if unobserved:
+        return "unknown", None, f"quota for the {', '.join(unobserved)} window(s) is unobserved (reset, missing, or stale); refresh before relying on availability."
+    n = min(open_windows, key=lambda k: open_windows[k].remaining_percent)
+    return "available", n, None
 
 
 def _iso(epoch: int) -> str:
@@ -827,7 +955,28 @@ def test_codex_status_reports_cached_snapshot(monkeypatch):
     result = server.codex_status()
     assert result["rate_limit"]["status"] == "available"
     assert result["rate_limit"]["plan_type"] == "plus"
-    assert result["rate_limit"]["unverified"] is False
+    assert result["rate_limit"]["source"] == "plugin_cache"
+    assert result["rate_limit"]["home_unverified"] is False
+
+
+def test_codex_status_tolerates_corrupt_cache_envelope(monkeypatch):
+    from codex_in_claude import rate_limit, server
+
+    # captured_at as a string would crash arithmetic if not validated -> must degrade.
+    monkeypatch.setattr(
+        rate_limit,
+        "_load_raw",
+        lambda path=None: {
+            "version": rate_limit.CACHE_VERSION,
+            "captured_at": "not-a-number",
+            "codex_home": ["bad"],
+            "snapshot": {"primary": {"used_percent": 10.0, "resets_at": 9999999999}},
+        },
+    )
+    result = server.codex_status()
+    # captured_at invalid -> as_of/age drop out, but interpretation must not raise.
+    assert result["rate_limit"]["as_of"] is None
+    assert result["rate_limit"]["status"] in {"unknown", "available", "limited", "exhausted"}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -906,12 +1055,14 @@ Under `## [Unreleased]` in `CHANGELOG.md`, add:
 
 - **`codex_status` now reports Codex rate-limit quota.** A new `rate_limit` block reports how much of
   the 5-hour (`primary`) and weekly (`secondary`) windows remains, with `status`
-  (`available`/`limited`/`exhausted`/`replenished`/`unknown`), per-window `remaining_percent`,
-  `resets_at`/`seconds_until_reset`, `is_stale`, and `unverified` (provenance) flags. The snapshot is
-  captured opportunistically from paid `codex_consult`/`codex_review_changes`/`codex_delegate` calls
-  (zero extra spend) and cached locally; the live snapshot is also attached to each active call's
-  `meta.rate_limit`. Staleness is interpreted against each window's own reset clock, so an old
-  snapshot reports `replenished` rather than a misleading high-usage number. Configurable via
+  (`available`/`limited`/`exhausted`/`unknown`), per-window `remaining_percent`,
+  `resets_at`/`seconds_until_reset`, `is_stale`, and `home_unverified` (provenance) flags. The
+  snapshot is captured opportunistically from paid
+  `codex_consult`/`codex_review_changes`/`codex_delegate` calls (zero extra spend) and cached
+  locally; the live snapshot is also attached to each active call's `meta.rate_limit` (`source`
+  distinguishes `current_run` from `plugin_cache`). Staleness is interpreted against each window's own
+  reset clock with an asymmetric rule — an unobserved (reset-passed or missing) window degrades to
+  `unknown` rather than reporting as available — so an old snapshot can't mislead. Configurable via
   `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` and `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS`.
 
 ### Changed
@@ -948,16 +1099,23 @@ bumps codex-in-claude/0.1/schema-11 -> codex-in-claude/0.1/schema-12."
 
 ## Self-Review
 
+This plan incorporates a cross-model (Codex) review of the original draft; the
+status model was revised so an unobserved window never yields a positive spend
+signal (no `replenished` "healthy" state), `rate_limit_reached_type` selects the
+window, reset-passed windows null their percentages, cache writes are atomic, and the
+cache envelope is type-validated.
+
 **Spec coverage:**
-- B1 opportunistic capture → Task 4 (`rate_limit.capture` on both paid paths). ✓
-- Plugin-owned cache file, provenance stamp → Task 2 (`save` with `captured_at`/`codex_home`/`version`). ✓
-- Report in `codex_status` → Task 5; on `Meta` → Task 4. ✓
-- Per-window reset awareness / `replenished` → Task 3 (`_window.reset_passed`, `_status`). ✓
-- Hard expiry / `unknown` when no usable data → Task 3 (no snapshot → unknown; all-passed → replenished, which is the spec's "self-expiring" behavior). ✓
+- B1 opportunistic capture → Task 4 (`rate_limit.capture` on both paid paths, covering sync + async via `_stamp_meta`/`_apply_run_meta`). ✓
+- Plugin-owned cache file, provenance stamp, atomic write → Task 2 (`save` with `captured_at`/`codex_home`/`version`, temp+`os.replace`). ✓
+- Report in `codex_status` → Task 5; on `Meta` (source `current_run`) → Task 4. ✓
+- Per-window reset awareness → Task 3 (`_window.reset_passed` nulls percentages, `_is_open`). ✓
+- Asymmetric status: `available` only when both windows open+healthy; unobserved → `unknown`; conservative `limited`/`exhausted` from open windows; `rate_limit_reached_type` selects/degrades → Task 3 (`_status`). ✓
 - Freshness fields (`as_of`/`age_seconds`/`is_stale`) → Task 3. ✓
-- Provenance guard (`unverified`) → Task 3. ✓
-- Clock-skew clamp → Task 3 (`seconds_until_reset = max(0, …)`). ✓
-- `remaining_percent` + raw `used_percent`, two windows, `limiting_window` → Task 3. ✓
+- Provenance guard (`home_unverified`, CODEX_HOME-only) → Task 3. ✓
+- Clock-skew clamp → Task 3 (`seconds_until_reset = max(0, …)`, 0 when reset_passed). ✓
+- Tolerant cache reads (type-validated envelope, corrupt → unknown, never raises) → Task 3 `current()` / Task 5 test. ✓
+- `remaining_percent` + `used_percent` (nulled on reset), two windows, `limiting_window` → Task 3. ✓
 - `cli_contract.py` owns the field name → Task 1. ✓
 - Tolerant parsing → Task 1 (`extra="ignore"`, try/except). ✓
 - FINGERPRINT + version set + CHANGELOG → Task 6. ✓
@@ -965,4 +1123,4 @@ bumps codex-in-claude/0.1/schema-11 -> codex-in-claude/0.1/schema-12."
 
 **Placeholder scan:** No TBD/TODO; every code step shows complete code. Task 4 Step 1 references the file's existing `CodexExecResult` construction pattern with an explicit fallback instruction. ✓
 
-**Type consistency:** `RateLimitSnapshot`/`RateLimitWindowSnapshot` (raw) and `RateLimit`/`RateLimitWindow` (agent-facing) used consistently; `capture`/`live`/`interpret`/`current` signatures match across Tasks 3–5; `Meta.rate_limit` and `StatusResult.rate_limit` both typed `RateLimit`. ✓
+**Type consistency:** `RateLimitSnapshot`/`RateLimitWindowSnapshot` (raw) and `RateLimit`/`RateLimitWindow` (agent-facing) used consistently; status enum is `available|limited|exhausted|unknown` everywhere (no `replenished`); `interpret` takes `source` and returns a `RateLimit` whose `note` comes from `_status`'s 3-tuple; `home_unverified` (not `unverified`) in schema + interpret + tests; `capture`/`live`/`interpret`/`current` signatures match across Tasks 3–5; `Meta.rate_limit` and `StatusResult.rate_limit` both typed `RateLimit`. ✓

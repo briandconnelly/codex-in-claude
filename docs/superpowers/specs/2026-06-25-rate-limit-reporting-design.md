@@ -74,51 +74,76 @@ persist the latest snapshot to a plugin-owned file, and report it from
 ## Staleness mitigation (core design point)
 
 A snapshot is **never** read as a flat "current" number. It is always interpreted
-against each window's own `resets_at`, which makes a stale file self-correcting:
+against each window's own `resets_at`. The governing principle (refined after a
+cross-model review): **a window whose current usage is unobserved must never produce
+a positive "go ahead and spend" signal.** Within a window, usage only climbs until
+the reset, so a captured `used_percent` is a *lower bound* on current usage — which
+means low-remaining verdicts are conservative (safe even when stale), but
+high-remaining verdicts are optimistic and only trustworthy for a still-open window.
 
-- **Per-window reset awareness.** If `now > resets_at` for a window, that window
-  has certainly rolled over since capture → report it as `replenished`
-  (`remaining_percent` treated as full / `reset_passed: true`), **not** as a stale
-  high-usage number. This is what makes the 5-hour window safe: a snapshot older
-  than 5 hours is recognized as reset, not shown as "90% used".
-- **Hard expiry at the weekly window.** Once even the secondary window's reset has
-  passed (≈7 days; both windows have definitely rolled over), the file carries no
-  real information → report `status: "unknown"` plus a "run any Codex call to
-  refresh" hint, instead of misleading numbers. The snapshot is self-expiring.
+This yields a deliberately asymmetric status rule:
+
+- **`available` is earned, not assumed.** Reported only when **both** windows are
+  present, **not** reset-passed, carry a usable `resets_at`, and sit above the
+  threshold. If any window has rolled over, is missing, or lacks `resets_at`, its
+  current state is unobserved and could be the binding constraint → `unknown`, never
+  `available`. (There is no `replenished` "healthy" status: a window past its reset
+  tells us nothing about post-reset usage, so claiming health would be unsound.)
+- **Risk signals are conservative and survive staleness.** `limited`
+  (remaining < 25%) and `exhausted` (remaining ≤ 0, or `rate_limit_reached_type`
+  names that window) are derived only from still-open windows; because captured
+  usage is a lower bound, these verdicts only err toward caution.
+- **`rate_limit_reached_type` selects the window.** When Codex names the window that
+  hit its limit, `limiting_window` reports that exact window (when still open); if
+  the named window has since reset or is absent, the snapshot is no longer actionable
+  → `unknown`.
+- **Reset-passed windows null their percentages.** A rolled-over window sets
+  `reset_passed: true`, `seconds_until_reset: 0`, and **nulls**
+  `used_percent`/`remaining_percent` — there is one source of truth, so a present
+  percentage always means "current-ish," never "obsolete."
 - **Always-visible freshness.** `as_of`, `age_seconds`, and `is_stale` (a
-  configurable warn threshold) ride along on every report, plus a one-line caveat.
-  Stale-but-pre-reset data is shown, clearly labeled — never silently presented as
-  live.
-- **Provenance guard.** Persist `CODEX_HOME` (resolved config root) and `plan_type`
-  with the snapshot. If either differs from the current environment at read time,
-  mark the snapshot `unverified` rather than trusting it (it may be from a previous
-  login or a changed plan).
+  configurable warn threshold) ride along, plus a `note`. `unknown` with no data
+  carries a "run any Codex call to refresh" hint.
+- **Provenance guard (CODEX_HOME-only).** Persist `CODEX_HOME` (resolved config
+  root) and `plan_type`. If the cached `CODEX_HOME` differs from the current
+  environment, set `home_unverified` (honestly named — it does **not** verify the
+  account or current plan, which have no free source). `plan_type` is captured
+  metadata, not a verified current-plan assertion.
 - **Clock-skew defense.** `resets_at` is advisory: compute `seconds_until_reset`
-  defensively and clamp negatives to `0`. Never derive a hard guarantee from it.
+  defensively and clamp negatives to `0`.
+- **Tolerant reads.** The cache envelope is type-validated before interpretation
+  (`captured_at` must be numeric, `codex_home` a string); a corrupt or
+  hand-edited file degrades to `unknown` rather than raising — `codex_status` must
+  never crash.
+- **Atomic writes.** The cache is written via a unique temp file + `replace`, so a
+  concurrent paid call or a `codex_status` read never observes a truncated file.
 
-Net: the disk snapshot can get old, but it cannot *mislead* — old short-window data
-reports as `replenished`, very old data downgrades to `unknown`, and freshness is
-always on the label.
+Net: the disk snapshot can get old, but it cannot *mislead* — an unobserved window
+never yields `available`, risk signals stay conservative, and freshness/provenance
+are always on the label.
 
 ## Agent-visible schema
 
 A `rate_limit` block on both `StatusResult` and `Meta`. Each window is an object.
 
 ```
-status:          available | limited | exhausted | replenished | unknown
+status:          available | limited | exhausted | unknown
+source:          "current_run" (live, on Meta) | "plugin_cache" (from codex_status)
 as_of:           ISO-8601 capture time
 age_seconds:     int
 is_stale:        bool (past the warn threshold)
-source:          "plugin_cache"
-plan_type:       str | null
-unverified:      bool (provenance mismatch — CODEX_HOME/plan_type differs)
+plan_type:       str | null   (captured metadata, not a verified current plan)
+home_unverified: bool (cached CODEX_HOME differs from the current environment)
 limiting_window: "primary" | "secondary" | null   (the binding constraint:
-                 lowest remaining, or whichever reached its limit)
+                 the window reaching its limit, or lowest remaining among open windows)
+note:            str | null   (e.g. refresh hint, or which window is unobserved)
 primary:   { used_percent, remaining_percent, window_minutes, resets_at,
              seconds_until_reset, reset_passed }   # 5-hour window
 secondary: { used_percent, remaining_percent, window_minutes, resets_at,
              seconds_until_reset, reset_passed }   # weekly window
 ```
+
+(`used_percent`/`remaining_percent` are null on a `reset_passed` window.)
 
 - `remaining_percent = max(0, 100 - used_percent)` is the decision-oriented value;
   raw `used_percent` is retained because it is what Codex actually emitted.
@@ -152,9 +177,12 @@ the `.mcp.json` PyPI pin, `CHANGELOG.md`).
 - TDD: failing test first, then minimal code.
 - Parsing: `rate_limits` extracted from a representative `token_count` event;
   tolerant degradation on missing/renamed fields.
-- Interpretation matrix: fresh snapshot; primary reset passed → `replenished`;
-  both resets passed / age past weekly → `unknown`; provenance mismatch →
-  `unverified`; clock skew → `seconds_until_reset` clamped to 0.
+- Interpretation matrix: both windows open + healthy → `available`; an open window
+  below threshold → `limited`/`exhausted`; one window reset-passed → `unknown` (never
+  `available`); both reset-passed → `unknown`; `rate_limit_reached_type` naming an
+  open vs reset window; a window missing `resets_at` → `unknown`; provenance mismatch
+  → `home_unverified`; clock skew → `seconds_until_reset` clamped to 0; corrupt cache
+  envelope → `unknown` without raising.
 - Persistence: write best-effort; a write failure does not fail the call; corrupt
   file degrades to `unknown`.
 - `codex_status` with and without a cached snapshot.
