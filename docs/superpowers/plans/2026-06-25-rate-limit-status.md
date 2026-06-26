@@ -1097,6 +1097,113 @@ bumps codex-in-claude/0.1/schema-11 -> codex-in-claude/0.1/schema-12."
 
 ---
 
+### Task 7: Make agents aware of the rate_limit block
+
+Docs/guidance only — no schema change, no `FINGERPRINT` bump (this changes freeform
+instruction/description prose, not tool names/params/error codes/value enums), no
+version bump beyond Task 6's. This is the last task so it does not collide with Tasks
+4/5, which also edit `server.py`.
+
+**Files:**
+- Modify: `src/codex_in_claude/server.py` (server `instructions` / `CAPABILITY_SUMMARY` ~line 96; `codex_status` docstring ~line 506)
+- Modify: `src/codex_in_claude/schemas.py` (`RateLimit` model docstring — confirm/enrich the agent-action note)
+- Modify: `skills/collaborating-with-codex/SKILL.md` ("First, confirm Codex is ready" section)
+- Modify: `README.md` (Tools → Free list ~line 118; Result envelopes ~line 151)
+- Test: none (prose only). Verify with the gate + a docstring-presence assertion if one already exists; otherwise no new test.
+
+**Interfaces:** none new.
+
+- [ ] **Step 1: Server instructions (A)**
+
+In `server.py`, the `CAPABILITY_SUMMARY` string (~line 96), change:
+
+```python
+    "Run codex_status first (free) to confirm the codex CLI is installed and "
+    "authenticated; use codex_capabilities for the full inventory, codex_models (or "
+```
+
+to:
+
+```python
+    "Run codex_status first (free) to confirm the codex CLI is installed and "
+    "authenticated and to see how much Codex rate-limit quota remains (its rate_limit "
+    "block: status available|limited|exhausted|unknown, where unknown means no fresh "
+    "reading yet, not a problem); use codex_capabilities for the full inventory, codex_models (or "
+```
+
+- [ ] **Step 2: `codex_status` docstring (B)**
+
+In `server.py`, append to the `codex_status` docstring (~line 506), after the existing
+"Call this first when a run fails with a setup error." sentence:
+
+```
+    Also reports a `rate_limit` block — how much of the Codex 5-hour (`primary`) and
+    weekly (`secondary`) quota windows remains, captured from your last paid Codex call
+    (a cached snapshot, not a live query). Use it to decide whether to spend: `available`
+    is deliberately conservative (only when both windows are observed and healthy);
+    `limited`/`exhausted` are reasons to defer non-urgent Codex calls; `unknown` means no
+    fresh/usable reading (run any Codex call to populate it), not that anything is wrong.
+    `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
+    CODEX_HOME.
+```
+
+- [ ] **Step 3: RateLimit model docstring (C)**
+
+In `schemas.py`, confirm the `RateLimit` class docstring already conveys: it is a
+cached snapshot (not live); `available` is asymmetric/conservative; `unknown` means no
+usable data, not a fault. The docstring written in Task 3 covers the asymmetry; if the
+"`unknown` is not a fault / run a call to refresh" guidance is not present, add one
+sentence. Do not duplicate the full field list — Field/comment docs already carry it.
+
+- [ ] **Step 4: collaborating-with-codex skill (D)**
+
+In `skills/collaborating-with-codex/SKILL.md`, in the "First, confirm Codex is ready"
+section, after the existing paragraph (before the `## Choosing a tool` heading), add:
+
+```markdown
+`codex_status` also reports a `rate_limit` block — how much of the Codex 5-hour and
+weekly quota windows remains, captured from your last paid call (a cached snapshot, not
+a live query). Let it inform *whether* to spend: prefer to defer non-urgent Codex calls
+when `status` is `limited`/`exhausted`; `available` is deliberately conservative;
+`unknown` just means there is no fresh reading yet (any paid call refreshes it) — it is
+not an error. Treat it as advisory, and check `is_stale`/`as_of` for freshness.
+```
+
+- [ ] **Step 5: README (E)**
+
+In `README.md`, change the Free-tools bullet (~line 118):
+
+```markdown
+- `codex_status` — readiness, version, auth, resolved defaults.
+```
+
+to:
+
+```markdown
+- `codex_status` — readiness, version, auth, resolved defaults, and a `rate_limit` block
+  (remaining Codex quota for the 5-hour/weekly windows, captured from your last paid call;
+  `status` is `available`/`limited`/`exhausted`/`unknown`). Advisory — informs whether to
+  spend; `unknown` just means no fresh reading yet.
+```
+
+And in the Result envelopes section (~line 151), add one line noting that each active
+call's `meta.rate_limit` carries the live snapshot from that call (`source: current_run`),
+while `codex_status` reports the cached one (`source: plugin_cache`).
+
+- [ ] **Step 6: Run the gate**
+
+Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q`
+Expected: all pass (no behavior change; prose only).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/codex_in_claude/server.py src/codex_in_claude/schemas.py skills/collaborating-with-codex/SKILL.md README.md
+git commit -m "docs(tools): explain the rate_limit block to agents (instructions, status, skill, README)"
+```
+
+---
+
 ## Self-Review
 
 This plan incorporates a cross-model (Codex) review of the original draft; the
