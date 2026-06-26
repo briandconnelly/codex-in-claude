@@ -193,3 +193,109 @@ def test_save_leaves_no_temp_files(tmp_path: Path):
     rate_limit.save(_snap(), now_epoch=1, path=target, home="/h")
     assert target.exists()
     assert list(tmp_path.glob("*.tmp")) == []  # atomic write cleaned up its temp
+
+
+# ---------------------------------------------------------------------------
+# current() — load-and-interpret path
+# ---------------------------------------------------------------------------
+
+# _snap() resets_at values are near-term and will have passed by the time current()
+# runs against int(time.time()), so current() tests use a snapshot with resets_at
+# far enough in the future (year ~2030) that windows always appear open.
+_FAR_FUTURE_RESETS = 1_900_000_000  # 2030-03-17
+
+
+def _future_snap() -> RateLimitSnapshot:
+    """RateLimitSnapshot whose windows are always open for current() envelope tests."""
+    return RateLimitSnapshot(
+        plan_type="plus",
+        primary=RateLimitWindowSnapshot(
+            used_percent=12.0, window_minutes=300, resets_at=_FAR_FUTURE_RESETS
+        ),
+        secondary=RateLimitWindowSnapshot(
+            used_percent=8.0, window_minutes=10080, resets_at=_FAR_FUTURE_RESETS
+        ),
+    )
+
+
+def test_current_no_cache_is_unknown(monkeypatch):
+    """_load_raw returns None -> status 'unknown', no raise."""
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: None)
+    rl = rate_limit.current()
+    assert rl.status == "unknown"
+    assert rl.as_of is None
+    assert rl.age_seconds is None
+
+
+def test_current_captured_at_bool_drops_timestamp(monkeypatch):
+    """captured_at as bool is rejected: as_of and age_seconds are None, no raise."""
+    raw = {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": True,
+        "codex_home": "/home/.codex",
+        "snapshot": _future_snap().model_dump(mode="json"),
+    }
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.as_of is None
+    assert rl.age_seconds is None
+
+
+def test_current_captured_at_non_numeric_string_drops_timestamp(monkeypatch):
+    """captured_at as a non-numeric string is rejected: as_of and age_seconds are None, no raise."""
+    raw = {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": "not-a-number",
+        "codex_home": "/home/.codex",
+        "snapshot": _future_snap().model_dump(mode="json"),
+    }
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.as_of is None
+    assert rl.age_seconds is None
+
+
+def test_current_codex_home_non_str_treated_as_absent(monkeypatch):
+    """codex_home as a non-str (list) is dropped; home_unverified is False, no raise."""
+    raw = {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": 1780530000,
+        "codex_home": ["/home/.codex"],  # non-str
+        "snapshot": _future_snap().model_dump(mode="json"),
+    }
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.home_unverified is False
+
+
+def test_current_unvalidatable_snapshot_is_unknown(monkeypatch):
+    """An envelope whose snapshot fails model_validate degrades to status 'unknown', no raise."""
+    raw = {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": 1780530000,
+        "codex_home": "/home/.codex",
+        "snapshot": {"primary": "not-a-dict"},  # fails RateLimitSnapshot.model_validate
+    }
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
+    rl = rate_limit.current()
+    assert rl.status == "unknown"
+
+
+def test_current_home_unverified_when_codex_home_differs(monkeypatch):
+    """home_unverified is True when the cached codex_home differs from config.codex_home()."""
+    raw = {
+        "version": rate_limit.CACHE_VERSION,
+        "captured_at": 1780530000,
+        "codex_home": "/old/.codex",
+        "snapshot": _future_snap().model_dump(mode="json"),
+    }
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
+    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/new/.codex"))
+    rl = rate_limit.current()
+    assert rl.home_unverified is True
+    # Healthy snapshot -> status reflects window data, not the home mismatch.
+    assert rl.status in ("available", "limited", "exhausted")
