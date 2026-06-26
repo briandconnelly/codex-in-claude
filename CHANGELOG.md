@@ -5,6 +5,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-26
+
+The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-11` →
+`codex-in-claude/0.1/schema-12`), so pre-1.0 this is a minor release. Clients that cache by
+`fingerprint` re-fetch the contract.
+
 ### Added
 
 - **`codex_status` now reports Codex rate-limit quota.** A new `rate_limit` block reports how much of
