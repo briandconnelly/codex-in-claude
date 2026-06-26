@@ -59,14 +59,17 @@ See `docs/RELEASING.md` for the full release procedure and the one-time PyPI/Git
 
 **The lockstep version bump belongs only in the dedicated `chore: release X.Y.Z` PR — never in a
 feature/fix PR.** Feature and fix PRs change `FINGERPRINT` (when the surface changed) and add their
-entry under `## [Unreleased]`, but leave `pyproject.toml`, `.claude-plugin/plugin.json`, `.mcp.json`,
-and `uv.lock` at the current released version. The release PR is the *only* place those four move,
-and it is merged immediately before the tag/publish. The reason is the `.mcp.json` pin
-(`codex-in-claude==X.Y.Z`): the moment it lands on `main`, that version must already exist on PyPI,
-or a plugin install from `main` hits an unresolvable pin. Bumping it in a feature PR opens that
-broken-pin window for the entire gap until the release ships. So a release is two PRs: the work lands
-under `## [Unreleased]` (no version-file change), then a `chore: release` PR does the lockstep bump
-plus the `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` rollover.
+entry under `## [Unreleased]`, but leave the three version literals — `pyproject.toml`,
+`.claude-plugin/plugin.json`, and the `.mcp.json` pin — at the current released version. (`uv.lock`
+is not a version source and still changes freely in feature PRs when dependencies move; its own
+`codex-in-claude` `version` line is a derived mirror of `pyproject.toml` that `uv lock` refreshes as
+part of the release PR.) The release PR is the *only* place those three literals move, and it is
+merged immediately before the tag/publish. The reason is the `.mcp.json` pin (`codex-in-claude==X.Y.Z`):
+the moment it lands on `main`, that version must already exist on PyPI, or a plugin install from
+`main` hits an unresolvable pin. Bumping it in a feature PR opens that broken-pin window for the
+entire gap until the release ships. So a release is two PRs: the work lands under `## [Unreleased]`
+(no version-literal change), then a `chore: release` PR does the lockstep bump plus the
+`## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` rollover.
 
 ## Python support
 
