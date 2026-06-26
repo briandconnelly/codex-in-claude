@@ -123,3 +123,40 @@ def repr_json(s: str) -> str:
     import json
 
     return json.dumps(s)
+
+
+_TOKEN_COUNT_LINE = (
+    '{"type":"event_msg","payload":{"type":"token_count",'
+    '"info":{"total_token_usage":{"input_tokens":17866,"output_tokens":308,"total_tokens":18174}},'
+    '"rate_limits":{"limit_id":"codex","limit_name":null,'
+    '"primary":{"used_percent":12.0,"window_minutes":300,"resets_at":1780534461},'
+    '"secondary":{"used_percent":8.0,"window_minutes":10080,"resets_at":1780864628},'
+    '"credits":null,"plan_type":"plus","rate_limit_reached_type":null}}}'
+)
+
+
+def test_parse_rate_limit_extracts_both_windows():
+    snap = normalize.parse_rate_limit(_TOKEN_COUNT_LINE)
+    assert snap is not None
+    assert snap.plan_type == "plus"
+    assert snap.rate_limit_reached_type is None
+    assert snap.primary.used_percent == 12.0
+    assert snap.primary.window_minutes == 300
+    assert snap.primary.resets_at == 1780534461
+    assert snap.secondary.used_percent == 8.0
+    assert snap.secondary.window_minutes == 10080
+
+
+def test_parse_rate_limit_absent_returns_none():
+    no_limits = '{"type":"event_msg","payload":{"type":"agent_message"}}'
+    assert normalize.parse_rate_limit(no_limits) is None
+
+
+def test_parse_rate_limit_last_event_wins():
+    second = _TOKEN_COUNT_LINE.replace('"used_percent":12.0', '"used_percent":40.0')
+    snap = normalize.parse_rate_limit(_TOKEN_COUNT_LINE + "\n" + second)
+    assert snap.primary.used_percent == 40.0
+
+
+def test_parse_rate_limit_tolerates_malformed_lines():
+    assert normalize.parse_rate_limit("not json\n{bad\n" + _TOKEN_COUNT_LINE) is not None

@@ -125,6 +125,26 @@ class Usage(BaseModel):
     total_tokens: int | None = None
 
 
+class RateLimitWindowSnapshot(BaseModel):
+    """Raw per-window quota as emitted by codex's token_count event (one of the
+    primary/secondary windows). Parsed tolerantly; unknown fields ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+    used_percent: float | None = None
+    window_minutes: int | None = None
+    resets_at: int | None = None  # epoch seconds
+
+
+class RateLimitSnapshot(BaseModel):
+    """Raw rate_limits block from a token_count event; what we persist/replay."""
+
+    model_config = ConfigDict(extra="ignore")
+    plan_type: str | None = None
+    rate_limit_reached_type: str | None = None
+    primary: RateLimitWindowSnapshot | None = None  # 5-hour window
+    secondary: RateLimitWindowSnapshot | None = None  # weekly window
+
+
 class Finding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Severity

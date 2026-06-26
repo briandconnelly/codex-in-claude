@@ -9,7 +9,78 @@ from __future__ import annotations
 import json
 
 from codex_in_claude import cli_contract
-from codex_in_claude.schemas import Finding, Usage
+from codex_in_claude.schemas import (
+    Finding,
+    RateLimitSnapshot,
+    RateLimitWindowSnapshot,
+    Usage,
+)
+
+
+def parse_rate_limit(events: str) -> RateLimitSnapshot | None:
+    """Tolerantly scan JSONL events for the latest rate_limits block. Never raises;
+    malformed lines are skipped. Last event carrying the block wins."""
+    snapshot: RateLimitSnapshot | None = None
+    for raw_line in events.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        found = _find_rate_limit(event)
+        if found is not None:
+            snapshot = found
+    return snapshot
+
+
+def _find_rate_limit(event: dict) -> RateLimitSnapshot | None:
+    blob = event.get(cli_contract.RATE_LIMIT_EVENT_KEY)
+    if isinstance(blob, dict):
+        snap = _snapshot_from(blob)
+        if snap is not None:
+            return snap
+    for nest in ("msg", "payload", "data"):
+        inner = event.get(nest)
+        if isinstance(inner, dict):
+            found = _find_rate_limit(inner)
+            if found is not None:
+                return found
+    return None
+
+
+def _snapshot_from(blob: dict) -> RateLimitSnapshot | None:
+    primary = _window_from(blob.get("primary"))
+    secondary = _window_from(blob.get("secondary"))
+    if primary is None and secondary is None:
+        return None
+    plan = blob.get("plan_type")
+    reached = blob.get("rate_limit_reached_type")
+    return RateLimitSnapshot(
+        plan_type=plan if isinstance(plan, str) else None,
+        rate_limit_reached_type=reached if isinstance(reached, str) else None,
+        primary=primary,
+        secondary=secondary,
+    )
+
+
+def _window_from(blob: object) -> RateLimitWindowSnapshot | None:
+    if not isinstance(blob, dict):
+        return None
+    used = blob.get("used_percent")
+    window = blob.get("window_minutes")
+    resets = blob.get("resets_at")
+    used_f = float(used) if isinstance(used, (int, float)) and not isinstance(used, bool) else None
+    window_i = window if isinstance(window, int) and not isinstance(window, bool) else None
+    resets_i = (
+        int(resets) if isinstance(resets, (int, float)) and not isinstance(resets, bool) else None
+    )
+    if used_f is None and resets_i is None:
+        return None
+    return RateLimitWindowSnapshot(used_percent=used_f, window_minutes=window_i, resets_at=resets_i)
 
 
 def parse_event_metadata(events: str) -> tuple[Usage | None, str | None]:
