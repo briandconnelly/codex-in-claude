@@ -35,6 +35,7 @@ from codex_in_claude import (
     orchestration,
     preflight,
     prompts,
+    rate_limit,
 )
 from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.codex_models import read_model_catalog
@@ -94,7 +95,9 @@ CAPABILITY_SUMMARY = (
     "(+ codex_job_status/result/consume_result/cancel/list) — run any of the above as "
     "a background job you poll. "
     "Run codex_status first (free) to confirm the codex CLI is installed and "
-    "authenticated; use codex_capabilities for the full inventory, codex_models (or "
+    "authenticated and to see how much Codex rate-limit quota remains (its rate_limit "
+    "block: status available|limited|exhausted|unknown, where unknown means no fresh "
+    "reading yet, not a problem); use codex_capabilities for the full inventory, codex_models (or "
     "the codex://models resource) to discover valid model slugs before overriding the "
     "model, and, to preview a call without spending, codex_dry_run (for a review) or "
     "codex_delegate_dry_run (for a delegate's worktree baseline). "
@@ -505,7 +508,15 @@ def _guard(
 def codex_status() -> dict:
     """Check that the `codex` CLI is installed, authenticated, and a supported
     version, and report the resolved defaults. Free — no model call. Call this
-    first when a run fails with a setup error."""
+    first when a run fails with a setup error.
+    Also reports a `rate_limit` block — how much of the Codex 5-hour (`primary`) and
+    weekly (`secondary`) quota windows remains, captured from your last paid Codex call
+    (a cached snapshot, not a live query). Use it to decide whether to spend: `available`
+    is deliberately conservative (only when both windows are observed and healthy);
+    `limited`/`exhausted` are reasons to defer non-urgent Codex calls; `unknown` means no
+    fresh/usable reading (run any **paid** Codex call to populate it), not that anything is wrong.
+    `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
+    CODEX_HOME."""
     d = config.defaults()
     version = codex.codex_version()
     found = version is not None
@@ -563,6 +574,7 @@ def codex_status() -> dict:
             timeout_seconds=timeout,
             timeout_bounds=[config.MIN_TIMEOUT_SECONDS, config.MAX_TIMEOUT_SECONDS],
         ),
+        rate_limit=rate_limit.current(),
         caveat="The active tools send your content to OpenAI via the codex CLI: "
         "codex_consult sends your question and context (plus files Codex reads from "
         "the resolved working dir — workspace_root, your MCP roots, or the server cwd); "

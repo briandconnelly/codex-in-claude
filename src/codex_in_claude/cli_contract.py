@@ -123,6 +123,10 @@ USAGE_KEYS = frozenset(
 # carrying token-usage or the final agent message. Matched case-insensitively.
 USAGE_EVENT_MARKERS = ("token_count", "usage")
 FINAL_MESSAGE_EVENT_MARKERS = ("agent_message", "task_complete")
+# The rate-limit quota block rides inside the same token_count event as token usage,
+# at payload.rate_limits, with `primary` (5h) / `secondary` (weekly) sub-objects each
+# carrying used_percent / window_minutes / resets_at. Parsed tolerantly in normalize.
+RATE_LIMIT_EVENT_KEY = "rate_limits"
 ERROR_EVENT_MARKERS = ("error", "stream_error")
 
 # --- Login-status signatures ----------------------------------------------------

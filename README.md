@@ -115,7 +115,10 @@ claims to verify, not instructions to follow blindly.
 
 **Free (local only):**
 
-- `codex_status` — readiness, version, auth, resolved defaults.
+- `codex_status` — readiness, version, auth, resolved defaults, and a `rate_limit` block
+  (remaining Codex quota for the 5-hour/weekly windows, captured from your last paid call;
+  `status` is `available`/`limited`/`exhausted`/`unknown`). Advisory — informs whether to
+  spend; `unknown` just means no fresh reading yet.
 - `codex_dry_run(scope, …)` — preview a review's scope/diff size/redactions before spending.
 - `codex_delegate_dry_run(task, …)` — preview a delegate's seeded baseline (HEAD commit, plus
   tracked, uncommitted, and untracked counts and size) and prompt size before spending; no worktree
@@ -154,6 +157,8 @@ Every tool returns a discriminated envelope keyed by `ok`. Success carries `summ
 (plus review-only `verdict`/`confidence`, or a proposed `diff` for delegate); failure is a uniform,
 machine-actionable `error` — a stable `code`, prose `repair`, `retryable`/`retry_after_ms`, and
 `repair_tool`/`repair_tool_params` for automated recovery. The shape is versioned by `fingerprint`.
+Each active call's `meta.rate_limit` carries the live snapshot from that call (`source: current_run`);
+`codex_status` reports the cached one (`source: plugin_cache`).
 
 Calling the MCP tools directly instead of through the `/codex:*` commands? See
 [`docs/REFERENCE.md`](docs/REFERENCE.md) for the full envelope contract and workspace selection

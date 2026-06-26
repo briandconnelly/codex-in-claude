@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-11"
+FINGERPRINT = "codex-in-claude/0.1/schema-12"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -125,6 +126,109 @@ class Usage(BaseModel):
     total_tokens: int | None = None
 
 
+class RateLimitWindowSnapshot(BaseModel):
+    """Raw per-window quota as emitted by codex's token_count event (one of the
+    primary/secondary windows). Parsed tolerantly; unknown fields ignored.
+
+    Field validators (mode="before") enforce numeric bounds on all three fields so
+    both the live-parse path (normalize._window_from) and the cache-read path
+    (RateLimitSnapshot.model_validate) are covered in one place:
+    - used_percent: must be a finite float in [0, 100]; out-of-range or non-finite
+      → None (treated as absent — never clamped to a valid-looking value).
+    - resets_at / window_minutes: must be a finite numeric; non-finite → None.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    used_percent: float | None = None
+    window_minutes: int | None = None
+    resets_at: int | None = None  # epoch seconds
+
+    @field_validator("used_percent", mode="before")
+    @classmethod
+    def _validate_used_percent(cls, v: object) -> float | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+        fv = float(v)
+        if fv < 0.0 or fv > 100.0:
+            return None
+        return fv
+
+    @field_validator("resets_at", mode="before")
+    @classmethod
+    def _validate_resets_at(cls, v: object) -> int | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+        return int(v)
+
+    @field_validator("window_minutes", mode="before")
+    @classmethod
+    def _validate_window_minutes(cls, v: object) -> int | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(float(v)):
+            return None
+        return int(v)
+
+
+class RateLimitSnapshot(BaseModel):
+    """Raw rate_limits block from a token_count event; what we persist/replay."""
+
+    model_config = ConfigDict(extra="ignore")
+    plan_type: str | None = None
+    rate_limit_reached_type: str | None = None
+    primary: RateLimitWindowSnapshot | None = None  # 5-hour window
+    secondary: RateLimitWindowSnapshot | None = None  # weekly window
+
+
+RateLimitStatus = Literal["available", "limited", "exhausted", "unknown"]
+
+
+class RateLimitWindow(BaseModel):
+    """One quota window, interpreted for an agent. used_percent/remaining_percent are
+    current-ish (as of `as_of`) for an open window and are NULLED when reset_passed is
+    true (the window rolled over since capture, so its captured usage is obsolete and
+    its post-reset usage is unobserved). One source of truth: a present percentage
+    always means current-ish, never stale."""
+
+    model_config = ConfigDict(extra="forbid")
+    used_percent: float | None = None
+    remaining_percent: float | None = None  # max(0, 100 - used_percent); None if reset_passed
+    window_minutes: int | None = None
+    resets_at: int | None = None  # epoch seconds
+    seconds_until_reset: int | None = None  # clamped ≥ 0; 0 when reset_passed; None if no resets_at
+    reset_passed: bool = False
+
+
+class RateLimit(BaseModel):
+    """Agent-facing rate-limit quota. A snapshot captured opportunistically from a
+    paid call, interpreted against each window's reset clock. NOT a live query.
+
+    Asymmetric by design: `available` is reported only when every binding window is
+    observed and healthy; an unobserved window (reset-passed, missing, or lacking
+    resets_at) never yields `available` — it degrades to `unknown`. `limited`/
+    `exhausted` come only from still-open windows, so they stay conservative even when
+    the snapshot is stale (captured usage is a lower bound on current usage).
+    `unknown` means no fresh/usable reading yet — run any paid Codex call to populate
+    it — not that anything is wrong."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: RateLimitStatus
+    source: Literal["current_run", "plugin_cache"] = "plugin_cache"
+    as_of: str | None = None  # ISO-8601 capture time; None when no snapshot
+    age_seconds: int | None = None
+    is_stale: bool = False  # older than the configured warn threshold (advisory)
+    plan_type: str | None = None  # captured metadata, NOT a verified current plan
+    home_unverified: bool = False  # cached CODEX_HOME differs from the current environment
+    limiting_window: Literal["primary", "secondary"] | None = None
+    primary: RateLimitWindow | None = None  # 5-hour window
+    secondary: RateLimitWindow | None = None  # weekly window
+    note: str | None = None
+
+
 class Finding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Severity
@@ -193,6 +297,9 @@ class Meta(BaseModel):
     security_warnings: list[str] = Field(default_factory=list)
     redacted_paths: list[str] = Field(default_factory=list)
     usage: Usage | None = None
+    # Live rate-limit quota snapshot captured from this call's event stream (the same
+    # data codex_status reports from cache). None when codex emitted no rate_limits block.
+    rate_limit: RateLimit | None = None
     context_summary: ContextSummary | None = None
     job_id: str | None = None  # set on background-job results; None for sync calls
     request_id: str = Field(default_factory=lambda: uuid4().hex)
@@ -304,6 +411,9 @@ class StatusResult(BaseModel):
     raw_defaults: RawDefaults
     resolved_defaults: ResolvedDefaults
     default_errors: list[ErrorInfo] = Field(default_factory=list)
+    rate_limit: RateLimit = Field(  # always present; status 'unknown' when no cache
+        default_factory=lambda: RateLimit(status="unknown")
+    )
     caveat: str
     fingerprint: str = FINGERPRINT
 

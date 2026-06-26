@@ -5,6 +5,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_status` now reports Codex rate-limit quota.** A new `rate_limit` block reports how much of
+  the 5-hour (`primary`) and weekly (`secondary`) windows remains, with `status`
+  (`available`/`limited`/`exhausted`/`unknown`), per-window `remaining_percent`,
+  `resets_at`/`seconds_until_reset`, `is_stale`, and `home_unverified` (provenance) flags. The
+  snapshot is captured opportunistically from paid
+  `codex_consult`/`codex_review_changes`/`codex_delegate` calls (zero extra spend) and cached
+  locally; the live snapshot is also attached to each active call's `meta.rate_limit` (`source`
+  distinguishes `current_run` from `plugin_cache`). Staleness is interpreted against each window's own
+  reset clock with an asymmetric rule — an unobserved (reset-passed or missing) window degrades to
+  `unknown` rather than reporting as available — so an old snapshot can't mislead. Configurable via
+  `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` and `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS`.
+
+### Changed
+
+- The result `fingerprint` changes (`codex-in-claude/0.1/schema-11` → `codex-in-claude/0.1/schema-12`)
+  because the agent-visible surface gained the `rate_limit` block on `codex_status` and `meta`.
+
 ## [0.4.1] - 2026-06-24
 
 ### Changed

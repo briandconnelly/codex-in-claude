@@ -17,6 +17,10 @@ installed, authenticated (`codex login`), and a supported version. If it says no
 ready, surface the `readiness_detail`/repair to the user — do not retry the paid
 tools in a loop.
 
+`codex_status` also reports a `rate_limit` block — how much of the Codex 5-hour and weekly quota windows remains, captured from your last paid call (a cached snapshot, not a live query).
+Let it inform *whether* to spend: prefer to defer non-urgent Codex calls when `status` is `limited`/`exhausted`; `available` is deliberately conservative; `unknown` just means there is no fresh reading yet (any paid call refreshes it) — it is not an error.
+Treat it as advisory, and check `is_stale`/`as_of` for freshness.
+
 ## Choosing a tool
 
 | You want… | Tool | Cost |
