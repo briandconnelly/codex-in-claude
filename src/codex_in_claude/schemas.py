@@ -145,6 +145,49 @@ class RateLimitSnapshot(BaseModel):
     secondary: RateLimitWindowSnapshot | None = None  # weekly window
 
 
+RateLimitStatus = Literal["available", "limited", "exhausted", "unknown"]
+
+
+class RateLimitWindow(BaseModel):
+    """One quota window, interpreted for an agent. used_percent/remaining_percent are
+    current-ish (as of `as_of`) for an open window and are NULLED when reset_passed is
+    true (the window rolled over since capture, so its captured usage is obsolete and
+    its post-reset usage is unobserved). One source of truth: a present percentage
+    always means current-ish, never stale."""
+
+    model_config = ConfigDict(extra="forbid")
+    used_percent: float | None = None
+    remaining_percent: float | None = None  # max(0, 100 - used_percent); None if reset_passed
+    window_minutes: int | None = None
+    resets_at: int | None = None  # epoch seconds
+    seconds_until_reset: int | None = None  # clamped ≥ 0; 0 when reset_passed; None if no resets_at
+    reset_passed: bool = False
+
+
+class RateLimit(BaseModel):
+    """Agent-facing rate-limit quota. A snapshot captured opportunistically from a
+    paid call, interpreted against each window's reset clock. NOT a live query.
+
+    Asymmetric by design: `available` is reported only when every binding window is
+    observed and healthy; an unobserved window (reset-passed, missing, or lacking
+    resets_at) never yields `available` — it degrades to `unknown`. `limited`/
+    `exhausted` come only from still-open windows, so they stay conservative even when
+    the snapshot is stale (captured usage is a lower bound on current usage)."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: RateLimitStatus
+    source: Literal["current_run", "plugin_cache"] = "plugin_cache"
+    as_of: str | None = None  # ISO-8601 capture time; None when no snapshot
+    age_seconds: int | None = None
+    is_stale: bool = False  # older than the configured warn threshold (advisory)
+    plan_type: str | None = None  # captured metadata, NOT a verified current plan
+    home_unverified: bool = False  # cached CODEX_HOME differs from the current environment
+    limiting_window: Literal["primary", "secondary"] | None = None
+    primary: RateLimitWindow | None = None  # 5-hour window
+    secondary: RateLimitWindow | None = None  # weekly window
+    note: str | None = None
+
+
 class Finding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Severity
