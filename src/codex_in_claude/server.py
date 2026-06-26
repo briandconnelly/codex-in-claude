@@ -35,6 +35,7 @@ from codex_in_claude import (
     orchestration,
     preflight,
     prompts,
+    rate_limit,
 )
 from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.codex_models import read_model_catalog
@@ -563,6 +564,7 @@ def codex_status() -> dict:
             timeout_seconds=timeout,
             timeout_bounds=[config.MIN_TIMEOUT_SECONDS, config.MAX_TIMEOUT_SECONDS],
         ),
+        rate_limit=rate_limit.current(),
         caveat="The active tools send your content to OpenAI via the codex CLI: "
         "codex_consult sends your question and context (plus files Codex reads from "
         "the resolved working dir — workspace_root, your MCP roots, or the server cwd); "

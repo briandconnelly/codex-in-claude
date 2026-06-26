@@ -2460,3 +2460,68 @@ async def test_codex_models_resource_matches_tool_payload():
     result = await server.mcp.read_resource("codex://models")
     payload = json.loads(result.contents[0].content)
     assert payload == server.codex_models()
+
+
+# --- rate_limit field on codex_status ----------------------------------------
+
+
+def test_codex_status_includes_rate_limit_unknown_without_cache(monkeypatch):
+    from codex_in_claude import rate_limit, server
+
+    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: None)
+    result = server.codex_status()
+    assert result["rate_limit"]["status"] == "unknown"
+    assert result["rate_limit"]["note"]
+
+
+def test_codex_status_reports_cached_snapshot(monkeypatch):
+    from codex_in_claude import rate_limit, server
+    from codex_in_claude.config import codex_home as _codex_home
+
+    monkeypatch.setattr(
+        rate_limit,
+        "_load_raw",
+        lambda path=None: {
+            "version": rate_limit.CACHE_VERSION,
+            "captured_at": 1,
+            "codex_home": str(_codex_home()),
+            "snapshot": {
+                "plan_type": "plus",
+                "primary": {
+                    "used_percent": 10.0,
+                    "window_minutes": 300,
+                    "resets_at": 1_900_000_000,
+                },
+                "secondary": {
+                    "used_percent": 5.0,
+                    "window_minutes": 10080,
+                    "resets_at": 1_900_000_000,
+                },
+            },
+        },
+    )
+    result = server.codex_status()
+    assert result["rate_limit"]["status"] == "available"
+    assert result["rate_limit"]["plan_type"] == "plus"
+    assert result["rate_limit"]["source"] == "plugin_cache"
+    assert result["rate_limit"]["home_unverified"] is False
+
+
+def test_codex_status_tolerates_corrupt_cache_envelope(monkeypatch):
+    from codex_in_claude import rate_limit, server
+
+    # captured_at as a string would crash arithmetic if not validated -> must degrade.
+    monkeypatch.setattr(
+        rate_limit,
+        "_load_raw",
+        lambda path=None: {
+            "version": rate_limit.CACHE_VERSION,
+            "captured_at": "not-a-number",
+            "codex_home": ["bad"],
+            "snapshot": {"primary": {"used_percent": 10.0, "resets_at": 1_900_000_000}},
+        },
+    )
+    result = server.codex_status()
+    # captured_at invalid -> as_of/age drop out, but interpretation must not raise.
+    assert result["rate_limit"]["as_of"] is None
+    assert result["rate_limit"]["status"] in {"unknown", "available", "limited", "exhausted"}

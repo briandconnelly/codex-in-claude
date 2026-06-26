@@ -370,6 +370,9 @@ class StatusResult(BaseModel):
     raw_defaults: RawDefaults
     resolved_defaults: ResolvedDefaults
     default_errors: list[ErrorInfo] = Field(default_factory=list)
+    rate_limit: RateLimit = Field(  # always present; status 'unknown' when no cache
+        default_factory=lambda: RateLimit(status="unknown")
+    )
     caveat: str
     fingerprint: str = FINGERPRINT
 
