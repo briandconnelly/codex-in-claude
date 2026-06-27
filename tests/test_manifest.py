@@ -1,6 +1,13 @@
 """Guard: the manifest snapshot covers the full agent-visible surface (issue #140)."""
 
+from pathlib import Path
+
 from codex_in_claude import manifest, server
+
+_FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
+
+# Pinned in Step 3 below, after generating the fixture.
+EXPECTED_MANIFEST_HASH = "36e769a2326814d52315273e7f7bc12daf29b9667b27378e57f260fbd4115553"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -72,3 +79,17 @@ def test_render_returns_canonical_json():
     result = manifest.render()
     assert result.endswith("\n")
     assert result.startswith("{")
+
+
+async def test_manifest_matches_golden():
+    current = manifest.manifest_json(await manifest.build_manifest())
+    assert current == _FIXTURE.read_text(encoding="utf-8"), (
+        "agent-visible surface changed — review the snapshot diff, then in the SAME "
+        "commit: bump FINGERPRINT (schema-N) in schemas.py, regenerate the fixture "
+        "(`uv run python -m codex_in_claude.manifest > tests/fixtures/manifest_snapshot.json`), "
+        "and add a CHANGELOG entry under [Unreleased]."
+    )
+
+
+async def test_manifest_hash_is_pinned():
+    assert await manifest.manifest_hash() == EXPECTED_MANIFEST_HASH
