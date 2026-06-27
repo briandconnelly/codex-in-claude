@@ -56,7 +56,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `retry_after_ms` is always present. (#135)
 - **BREAKING:** Per-tool `outputSchema`s now publish the success shape plus one compact opaque
   error branch; the full error schema moves to the `codex://error-envelope` resource. Cuts the
-  preloaded `tools/list` catalog ~50%. (#137)
+  preloaded `tools/list` catalog ~44% (≈180 KB → ≈101 KB). (#137)
 - **BREAKING:** Removed unused `StatusResult.default_errors`.
 - Background-job results written by a pre-upgrade server are treated as expired/corrupt
   (invalidate-on-upgrade migration).
