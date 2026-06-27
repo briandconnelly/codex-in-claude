@@ -1417,7 +1417,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_schema_14():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-14"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-15"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -1905,10 +1905,200 @@ async def test_dialect_middleware_overwrites_existing_schema():
 
 
 async def test_unknown_tool_argument_is_rejected():
-    """An unknown argument fails validation rather than being silently ignored."""
+    """An unknown argument fails validation rather than being silently ignored.
+
+    This pins the raw Tool-level boundary: `Tool.run` still raises a Pydantic
+    `ValidationError`. The MCP call-tool boundary re-emits that as the structured
+    `invalid_arguments` envelope — see the tests below (#136)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     with pytest.raises(ValidationError):
         await tools["codex_status"].run({"definitely_not_a_param": 1})
+
+
+# --- invalid-argument envelope at the MCP call-tool boundary (#136) -----------
+async def test_unknown_argument_returns_structured_envelope():
+    """An unknown argument at the call_tool boundary becomes the documented error
+    envelope (isError + invalid_arguments code) instead of raw Pydantic prose."""
+    res = await server.mcp.call_tool("codex_status", {"definitely_not_a_param": 1})
+    assert res.is_error is True
+    sc = res.structured_content
+    assert sc["ok"] is False
+    err = sc["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["offending_param"] == "definitely_not_a_param"
+    assert err["retryable"] is False
+    # the symbolic, machine-actionable detail list is present
+    items = err["invalid_arguments"]
+    assert items[0]["field"] == "definitely_not_a_param"
+    assert items[0]["reason"]
+    # envelope carries the contract identifiers that raw Pydantic errors lack
+    assert sc["meta"]["fingerprint"] == FINGERPRINT
+    assert sc["meta"]["request_id"]
+
+
+async def test_bad_enum_argument_lists_allowed_values_at_boundary():
+    """An out-of-enum Literal value surfaces invalid_arguments with the enum's
+    allowed_values derived from the tool's input schema (not parsed prose)."""
+    res = await server.mcp.call_tool("codex_review_changes", {"scope": "nope"})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["offending_param"] == "scope"
+    assert err["allowed_values"] == list(get_args(ReviewScope))
+    assert err["invalid_arguments"][0]["allowed_values"] == list(get_args(ReviewScope))
+
+
+async def test_bad_isolation_enum_lists_allowed_values_from_anyof():
+    """allowed_values are extracted even when the enum lives under an anyOf branch
+    (Optional Literal params like `isolation`)."""
+    res = await server.mcp.call_tool("codex_consult", {"question": "hi", "isolation": "bogus"})
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["allowed_values"] == list(server.config.VALID_ISOLATIONS)
+
+
+async def test_rejected_argument_value_is_never_echoed():
+    """No rejected input value is copied into the result — not for an unknown key, a
+    wrong-typed free-form param, or even an out-of-enum value (a Literal param accepts
+    arbitrary input that could be a secret the pattern redactor can't catch) (#136).
+    The detail carries field/reason/allowed_values only, never `value`."""
+    leak = "correct horse battery staple"
+    for tool, args in (
+        ("codex_status", {"token": leak}),  # unknown key
+        ("codex_consult", {"question": "q", "paths": leak}),  # known param, wrong type
+        ("codex_review_changes", {"scope": leak}),  # out-of-enum Literal value
+    ):
+        res = await server.mcp.call_tool(tool, args)
+        assert res.structured_content["error"]["code"] == "invalid_arguments"
+        for item in res.structured_content["error"]["invalid_arguments"]:
+            assert "value" not in item
+        assert leak not in json.dumps(res.structured_content)
+
+
+def test_format_loc_nested_index_has_no_stray_dot():
+    """A nested list location renders as a valid accessor (paths[0]), not paths.[0]."""
+    assert server._format_loc(("paths", 0)) == "paths[0]"
+    assert server._format_loc(("a", "b")) == "a.b"
+    assert server._format_loc(()) == "<arguments>"
+
+
+def test_format_loc_bounds_oversized_field_name():
+    """A caller-controlled (oversized) location is length-bounded so it can't amplify
+    the envelope or copy a long key verbatim (#136)."""
+    out = server._format_loc(("x" * 100_000,))
+    assert len(out) <= server._MAX_ARG_FIELD_LEN + 1  # +1 for the ellipsis marker
+
+
+async def test_invalid_arguments_meta_reports_called_tool_posture():
+    """meta.tier/sandbox describe the CALLED tool, not the server defaults — a malformed
+    propose-tier call reports propose/workspace-write, a consult call reports
+    consult/read-only (#136)."""
+    res = await server.mcp.call_tool("codex_delegate", {"nope": 1})
+    meta = res.structured_content["meta"]
+    assert (meta["tier"], meta["sandbox"]) == ("propose", "workspace-write")
+    res = await server.mcp.call_tool("codex_consult", {"nope": 1})
+    meta = res.structured_content["meta"]
+    assert (meta["tier"], meta["sandbox"]) == ("consult", "read-only")
+
+
+async def test_oversized_unknown_argument_does_not_amplify_response():
+    """An oversized unknown key produces a bounded envelope, not a megabyte response."""
+    res = await server.mcp.call_tool("codex_status", {"k" * 100_000: 1})
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert len(err["offending_param"]) <= server._MAX_ARG_FIELD_LEN + 1
+    assert len(json.dumps(res.structured_content)) < 5_000
+
+
+async def test_invalid_arguments_count_is_capped():
+    """Many bad arguments are reported but capped, with the total noted, so a
+    request cannot amplify into an unbounded response."""
+    args = {f"bogus_{i}": i for i in range(60)}
+    res = await server.mcp.call_tool("codex_status", args)
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert len(err["invalid_arguments"]) <= 25
+    assert "60" in err["message"]  # the true total is surfaced
+
+
+async def test_missing_required_argument_returns_envelope():
+    """A missing required argument also maps to invalid_arguments."""
+    res = await server.mcp.call_tool("codex_consult", {})
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["offending_param"] == "question"
+    assert err["invalid_arguments"][0]["field"] == "question"
+
+
+async def test_invalid_arguments_on_success_only_tool_conforms_to_schema():
+    """codex_capabilities/status/models advertised success-only output schemas;
+    they now advertise a success|error union so the invalid_arguments envelope
+    they can return conforms to the declared output schema."""
+    for schema in (server.STATUS_SCHEMA, server.CAPABILITIES_SCHEMA, server.MODEL_CATALOG_SCHEMA):
+        branches = json.dumps(schema)
+        assert "ErrorResult" in branches or "invalid_arguments" in branches or "anyOf" in schema
+    res = await server.mcp.call_tool("codex_capabilities", {"nope": 1})
+    assert res.is_error is True
+    assert res.structured_content["error"]["code"] == "invalid_arguments"
+
+
+async def test_invalid_arguments_advertised_for_every_tool():
+    """invalid_arguments is now reachable for all tools, so capabilities lists it."""
+    caps = server.codex_capabilities()
+    for cap in caps["tool_details"]:
+        assert "invalid_arguments" in cap["error_codes"], cap["name"]
+
+
+def test_unrelated_validation_error_is_not_misclassified():
+    """A ValidationError whose locations are not request arguments (e.g. an
+    output-validation failure) must NOT be mapped to invalid_arguments — the
+    helper returns None so the middleware re-raises it as a real error."""
+    out = server._invalid_arguments_envelope(
+        "codex_status",
+        param_names=set(),
+        property_schemas={},
+        errors=[{"type": "model_type", "loc": ("error", "code"), "msg": "x", "input": None}],
+    )
+    assert out is None
+
+
+class _FakeCallCtx:
+    def __init__(self, name):
+        self.message = type("Msg", (), {"name": name})()
+
+
+async def test_middleware_reraises_non_argument_validation_error():
+    """A ValidationError whose locations are not request arguments propagates
+    unchanged (the middleware does not mask it as invalid_arguments) (#136)."""
+    mw = server._ArgumentValidationMiddleware()
+    err = ValidationError.from_exception_data(
+        "X", [{"type": "missing", "loc": ("error", "code"), "input": {}}]
+    )
+
+    async def call_next(_ctx):
+        raise err
+
+    with pytest.raises(ValidationError):
+        await mw.on_call_tool(_FakeCallCtx("codex_status"), call_next)
+
+
+async def test_middleware_reraises_when_tool_introspection_fails(monkeypatch):
+    """If the tool's schema cannot be introspected, the original ValidationError is
+    preserved rather than guessed at (#136)."""
+    mw = server._ArgumentValidationMiddleware()
+    err = ValidationError.from_exception_data(
+        "X", [{"type": "missing", "loc": ("bogus",), "input": {}}]
+    )
+
+    async def call_next(_ctx):
+        raise err
+
+    async def boom(_name):
+        raise RuntimeError("cannot introspect")
+
+    monkeypatch.setattr(server.mcp, "get_tool", boom)
+    with pytest.raises(ValidationError):
+        await mw.on_call_tool(_FakeCallCtx("codex_status"), call_next)
 
 
 async def test_isolation_error_lists_allowed_values(clean_env, tmp_path):
@@ -2376,27 +2566,32 @@ def _is_our_error_envelope(structured_content: object) -> bool:
     )
 
 
-async def test_mcp_bad_enum_value_rejected_without_envelope(clean_env, tmp_path):
-    """A bad Literal value is rejected by MCP input validation: is_error with no
-    ErrorResult envelope of ours — proving the unsupported_*/invalid_scope codes are
-    unreachable over a real call_tool and so are correctly not advertised (#92)."""
+async def test_mcp_bad_enum_value_returns_invalid_arguments(clean_env, tmp_path):
+    """A bad Literal value is rejected by MCP input validation, and that rejection is
+    re-emitted as OUR `invalid_arguments` envelope at the call boundary (#136) — NOT
+    the per-param unsupported_*/invalid_scope codes, which stay unreachable/unadvertised
+    by their own symbolic code (#92)."""
     from fastmcp import Client
 
     async with Client(server.mcp) as client:
-        for args in (
-            {"question": "q", "workspace_root": str(tmp_path), "isolation": "bogus"},
-            {"question": "q", "workspace_root": str(tmp_path), "detail": "verbose"},
+        for args, param in (
+            ({"question": "q", "workspace_root": str(tmp_path), "isolation": "bogus"}, "isolation"),
+            ({"question": "q", "workspace_root": str(tmp_path), "detail": "verbose"}, "detail"),
         ):
             res = await client.call_tool("codex_consult", args, raise_on_error=False)
             assert res.is_error is True
-            assert not _is_our_error_envelope(res.structured_content)
+            assert _is_our_error_envelope(res.structured_content)
+            assert res.structured_content["error"]["code"] == "invalid_arguments"
+            assert res.structured_content["error"]["offending_param"] == param
         res = await client.call_tool(
             "codex_review_changes",
             {"scope": "everything", "workspace_root": str(tmp_path)},
             raise_on_error=False,
         )
         assert res.is_error is True
-        assert not _is_our_error_envelope(res.structured_content)
+        assert res.structured_content["error"]["code"] == "invalid_arguments"
+        # the legacy per-param code is never the one returned over MCP
+        assert res.structured_content["error"]["code"] != "invalid_scope"
 
 
 # --- input schemas describe ambiguous params (#93) ---------------------------

@@ -13,7 +13,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # Bump this whenever the agent-visible surface changes: tool names, input or
 # output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
 # or the capability guarantees. Clients cache by it.
-FINGERPRINT = "codex-in-claude/0.1/schema-14"
+FINGERPRINT = "codex-in-claude/0.1/schema-15"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -89,6 +89,11 @@ ErrorCode = Literal[
     "invalid_base",
     "invalid_commit",
     "invalid_paths",
+    # Tool-argument validation failed at the MCP call-tool boundary (unknown/extra
+    # arg, missing required arg, wrong type, or out-of-enum Literal value). Re-emitted
+    # from the Pydantic ValidationError that FastMCP raises BEFORE the handler runs, so
+    # the failure carries the structured envelope instead of raw validator prose (#136).
+    "invalid_arguments",
     "invalid_workspace_root",
     "workspace_outside_roots",
     "input_too_large",
@@ -344,6 +349,20 @@ class DelegateResult(_SuccessBase):
     diff: str | None = None
 
 
+class InvalidArgument(BaseModel):
+    """One field-level argument-validation failure (#136). Machine-actionable detail
+    behind the `invalid_arguments` error code, one entry per Pydantic error."""
+
+    model_config = ConfigDict(extra="forbid")
+    field: str  # the offending argument name (accessor path for nested locations)
+    reason: str  # the validator's human-readable message (bounded)
+    allowed_values: list[str] | None = None  # enum options when the field is a Literal
+    # The rejected value is deliberately NOT echoed: a Literal/string param accepts
+    # arbitrary input, so a value could be a secret, and best-effort redaction cannot
+    # reliably catch a plain one. The caller already holds what it sent; field + reason +
+    # allowed_values drive the repair without copying input into the result (#136).
+
+
 class ErrorInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: ErrorCode
@@ -351,6 +370,10 @@ class ErrorInfo(BaseModel):
     repair: str  # prose guidance; the structured fields below are the machine-actionable form
     offending_param: str | None = None
     retryable: bool = False
+    # Per-field argument-validation failures, set only for the invalid_arguments code
+    # (#136). The top-level offending_param/allowed_values mirror the first entry so
+    # callers that already branch on those fields keep working.
+    invalid_arguments: list[InvalidArgument] | None = None
     # Machine-actionable repair metadata — set when known so an agent can recover
     # without parsing `repair` prose. All optional/backward-compatible.
     allowed_values: list[str] | None = None  # concrete valid values for an enum-like param
@@ -676,9 +699,13 @@ DELEGATE_RESULT_SCHEMA = _object_union_schema(TypeAdapter(DelegateResult | Error
 JOB_RESULT_SCHEMA = _object_union_schema(
     TypeAdapter(DelegateResult | ConsultResult | ReviewResult | ErrorResult)
 )
-STATUS_SCHEMA = StatusResult.model_json_schema()
-CAPABILITIES_SCHEMA = CapabilitiesResult.model_json_schema()
-MODEL_CATALOG_SCHEMA = ModelCatalogResult.model_json_schema()
+# These three tools return their success model on the happy path, but an invalid
+# argument is re-emitted as an ErrorResult at the call-tool boundary (#136), so each
+# advertises a success|error union — otherwise that envelope would violate the
+# declared output schema for strict MCP clients.
+STATUS_SCHEMA = _object_union_schema(TypeAdapter(StatusResult | ErrorResult))
+CAPABILITIES_SCHEMA = _object_union_schema(TypeAdapter(CapabilitiesResult | ErrorResult))
+MODEL_CATALOG_SCHEMA = _object_union_schema(TypeAdapter(ModelCatalogResult | ErrorResult))
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate
 # result is fetched separately via codex_job_result (DELEGATE_RESULT_SCHEMA).
 JOB_STARTED_SCHEMA = _object_union_schema(TypeAdapter(JobStarted | ErrorResult))

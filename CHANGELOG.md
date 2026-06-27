@@ -7,6 +7,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Invalid-argument tool calls now return the structured error envelope.** An unknown/extra
+  argument, a missing required argument, a wrong type, or an out-of-enum value for a `Literal`-typed
+  param (e.g. `scope`, `isolation`, `detail`) is rejected by FastMCP/Pydantic *before* the handler
+  runs — previously surfacing as `isError: true` with `structured_content: null` and raw validator
+  prose, bypassing the documented contract (no symbolic `code`, `repair`, `request_id`, or
+  `fingerprint`). This is the statistically most common first-repair case. A new call-tool middleware
+  catches that `ValidationError` and re-emits it as the normal `ok: false` envelope with a new
+  `invalid_arguments` error code: an `invalid_arguments[]` list of `{field, reason, allowed_values}`
+  (enum `allowed_values` are read from the tool's input schema, not parsed prose; the rejected value
+  is deliberately not echoed, since a param can accept arbitrary input that may be a secret), with
+  the top-level `offending_param`/`allowed_values` mirroring the first entry and a `repair` pointing
+  at the tool's inputSchema and `codex_capabilities`. Only genuine argument-validation failures are
+  mapped;
+  unrelated validation errors propagate untouched. `codex_status`, `codex_capabilities`, and
+  `codex_models` now advertise a success|error output-schema union so the envelope they can now
+  return conforms to their declared schema, and every tool advertises `invalid_arguments` in
+  `codex_capabilities`. (#136)
 - **Async consult/review launchers no longer advertise `readOnlyHint: true`.** `codex_consult_async`
   and `codex_review_changes_async` create an observable (`codex_job_list`), mutable
   (`codex_job_cancel`/`codex_job_consume_result`), spend-committing job record that outlives the
@@ -26,10 +43,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
-- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-14`)
-  for the agent-visible annotation corrections above (the async `readOnlyHint` fix #138 advanced it to
-  `schema-13`; the `codex_job_cancel` `idempotentHint` fix #141 advanced it to `schema-14`). Pre-1.0,
-  these changes make the next release a minor; clients that cache by `fingerprint` re-fetch the contract.
+- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-15`)
+  for the agent-visible changes above (the async `readOnlyHint` fix #138 advanced it to `schema-13`;
+  the `codex_job_cancel` `idempotentHint` fix #141 advanced it to `schema-14`; the `invalid_arguments`
+  envelope #136 advanced it to `schema-15`). Pre-1.0, these changes make the next release a minor;
+  clients that cache by `fingerprint` re-fetch the contract.
 
 ## [0.5.0] - 2026-06-26
 

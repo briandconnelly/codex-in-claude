@@ -14,13 +14,20 @@ but the review-only `verdict`/`confidence` appear solely on `codex_review_change
 return their own documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading
 fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
 
-- `code` — a stable error code from a fixed set (e.g. `unsupported_isolation`, `invalid_scope`,
-  `job_running`, `job_not_found`).
+- `code` — a stable error code from a fixed set (e.g. `invalid_arguments`, `job_running`,
+  `job_not_found`).
 - `message` / `repair` — human-readable detail and prose guidance.
 - `offending_param` — the parameter at fault, when one applies.
 - `retryable` + `retry_after_ms` — whether retrying can succeed and how long to back off first.
-- `allowed_values` — the concrete valid values for an enum-like param (e.g. `invalid_scope` lists
-  `working_tree`, `branch`, `commit`), so you can repair without parsing prose.
+- `allowed_values` — the concrete valid values for an enum-like param (e.g. an `invalid_arguments`
+  rejection of `scope` lists `working_tree`, `branch`, `commit`), so you can repair without parsing
+  prose.
+- `invalid_arguments` — set when `code` is `invalid_arguments` (an unknown/extra arg, a missing
+  required arg, a wrong type, or an out-of-enum value for an enum-like param, rejected before the
+  handler runs). It is a list of `{field, reason, allowed_values}` per offending argument; the
+  top-level `offending_param`/`allowed_values` mirror the first entry. The rejected value is
+  deliberately not echoed (a param can accept arbitrary input that may be a secret); `field` +
+  `reason` + `allowed_values` are enough to repair.
 - `repair_tool` + `repair_tool_params` — a tool to call to recover and the args to pass it (e.g.
   `job_running` → `codex_job_status` with `{"job_id": …}`).
 

@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
+from fastmcp.tools import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
@@ -64,6 +65,7 @@ from codex_in_claude.schemas import (
     ErrorCode,
     ErrorInfo,
     ErrorResult,
+    InvalidArgument,
     Isolation,
     JobListResult,
     JobStarted,
@@ -210,6 +212,182 @@ class _SemanticErrorMiddleware(Middleware):
 
 
 mcp.add_middleware(_SemanticErrorMiddleware())
+
+# Argument-validation envelope (#136) ---------------------------------------- #
+# Largest, most generous bound: a request with many bad keys is reported but cannot
+# amplify into an unbounded response.
+_MAX_INVALID_ARGS = 25
+_MAX_ARG_REASON_LEN = 300  # bound on the validator message
+# An unknown-key location is fully caller-controlled, so bound it: without this the
+# field name (copied into both `field` and `offending_param`) could inflate the envelope
+# or carry a secret supplied as the key name itself.
+_MAX_ARG_FIELD_LEN = 128
+
+# Each guarded tool's fixed (tier, sandbox) posture, recorded by `_guard` so an
+# argument-validation error can report the called tool's real posture in `meta` — not
+# the server defaults — matching every other error path (#136). Free/unguarded tools
+# fall back to the defaults (consult/read-only), which is their posture anyway.
+_TOOL_POSTURE: dict[str, tuple[str, str]] = {}
+
+
+def _format_loc(loc: tuple[object, ...]) -> str:
+    """Render a Pydantic error location as a stable field path. An integer index is
+    appended as ``[i]`` directly onto the preceding component (``paths[0]``, not
+    ``paths.[0]``) so the path is a valid accessor and never breaks on a non-string
+    location component (#136)."""
+    out = ""
+    for component in loc:
+        if isinstance(component, int):
+            out += f"[{component}]"
+        elif out:
+            out += f".{component}"
+        else:
+            out = str(component)
+    # Bound the caller-controlled path so an oversized unknown key can't amplify the
+    # envelope (the field also feeds offending_param).
+    if len(out) > _MAX_ARG_FIELD_LEN:
+        out = out[:_MAX_ARG_FIELD_LEN] + "…"
+    return out or "<arguments>"
+
+
+def _enum_for_property(prop_schema: dict | None) -> list[str] | None:
+    """Pull a Literal/enum's allowed values from a tool's input-schema property —
+    authoritatively, not by parsing validator prose (#136). The enum sits at the top
+    level for a required Literal (``scope``) or inside an ``anyOf`` branch for an
+    Optional one (``isolation``); returns None when the property has no enum."""
+    if not isinstance(prop_schema, dict):
+        return None
+    enum = prop_schema.get("enum")
+    if isinstance(enum, list):
+        return [str(v) for v in enum]
+    for branch in prop_schema.get("anyOf", []):
+        if isinstance(branch, dict) and isinstance(branch.get("enum"), list):
+            return [str(v) for v in branch["enum"]]
+    return None
+
+
+def _invalid_arguments_envelope(
+    tool_name: str,
+    *,
+    param_names: set[str],
+    property_schemas: dict,
+    errors: list[Any],  # Pydantic ErrorDetails dicts (or test fixtures)
+) -> dict | None:
+    """Build an ``invalid_arguments`` error envelope from a Pydantic argument
+    ValidationError, or return None when the errors are NOT request-argument failures.
+
+    The None guard prevents misclassifying an unrelated ValidationError (e.g. an
+    output-schema validation failure raised after the handler) as a bad-argument
+    error: every reported error must reference a declared parameter or be an
+    ``unexpected_keyword_argument`` (whose location is the unknown key itself)."""
+    missing_types = {"missing", "missing_argument"}
+    for err in errors:
+        loc = err.get("loc") or ()
+        is_extra = err.get("type") == "unexpected_keyword_argument"
+        if not is_extra and not (loc and str(loc[0]) in param_names):
+            return None
+
+    total = len(errors)
+    items: list[InvalidArgument] = []
+    for err in errors[:_MAX_INVALID_ARGS]:
+        loc = err.get("loc") or ()
+        field = _format_loc(tuple(loc))
+        # The rejected value is never echoed (see InvalidArgument): a string/Literal param
+        # accepts arbitrary input that could be a secret, and best-effort redaction can't
+        # reliably catch a plain one. reason + allowed_values guide the fix (#136).
+        allowed = _enum_for_property(property_schemas.get(str(loc[0]))) if loc else None
+        items.append(
+            InvalidArgument(
+                field=field,
+                reason=str(err.get("msg", ""))[:_MAX_ARG_REASON_LEN],
+                allowed_values=allowed,
+            )
+        )
+
+    first = items[0]
+    shown = f" (showing {len(items)} of {total})" if total > len(items) else ""
+    message = f"{tool_name}: {total} invalid argument(s){shown}: {first.field} — {first.reason}"
+    # Type-aware repair: name the dominant fix, then point at the authoritative schema.
+    types = {err.get("type") for err in errors}
+    hints: list[str] = []
+    if "unexpected_keyword_argument" in types:
+        hints.append("remove the unknown argument(s)")
+    if types & missing_types:
+        hints.append("provide the required argument(s)")
+    if any(t == "literal_error" for t in types):
+        hints.append("use one of the field's allowed_values")
+    lead = ("; ".join(hints) + ". ") if hints else ""
+    repair = (
+        f"{lead}Check each tool's inputSchema (tools/list) or call codex_capabilities "
+        "for the parameters and accepted values, then retry."
+    )
+    d = config.defaults()
+    # Report the called tool's real posture, not the server defaults, so meta.tier/
+    # sandbox stay honest for a malformed propose-tier call (e.g. codex_delegate) (#136).
+    tier, sandbox = _TOOL_POSTURE.get(tool_name, (d.tier, d.sandbox))
+    meta = _base_meta(
+        workspace.server_cwd(),
+        None,
+        tier=tier,
+        sandbox=sandbox,
+        isolation=d.isolation,
+        model=d.model,
+        timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+    )
+    return ErrorResult(
+        error=ErrorInfo(
+            code="invalid_arguments",
+            message=message[:300],
+            repair=repair,
+            offending_param=first.field,
+            allowed_values=first.allowed_values,
+            retryable=False,
+            invalid_arguments=items,
+        ),
+        meta=meta,
+    ).model_dump(mode="json")
+
+
+class _ArgumentValidationMiddleware(Middleware):
+    """Re-emit a tool-argument ``ValidationError`` as the documented error envelope.
+
+    FastMCP validates a call's arguments with Pydantic and raises a ``ValidationError``
+    BEFORE the handler runs (an unknown/extra arg, a missing required arg, a wrong type,
+    or an out-of-enum Literal value). Left alone, the caller gets ``isError: true`` with
+    ``structured_content=None`` and raw validator prose — no symbolic ``code``,
+    ``repair``, ``request_id``, or ``fingerprint`` — bypassing the result contract (#136).
+    We catch it here at the call boundary and return the normal ``invalid_arguments``
+    envelope with ``is_error=True`` set directly (no reliance on _SemanticErrorMiddleware).
+
+    Only argument-validation failures are mapped: ``_invalid_arguments_envelope`` returns
+    None for a ValidationError whose locations are not request arguments (e.g. an
+    output-schema failure raised inside ``call_next``), and we re-raise that untouched."""
+
+    async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
+        try:
+            return await call_next(context)
+        except ValidationError as exc:
+            name = context.message.name
+            try:
+                tool = await mcp.get_tool(name)
+                params = tool.parameters if tool is not None else None
+                props = params.get("properties", {}) if params else {}
+            except Exception:
+                # Can't introspect the tool's schema → can't safely classify; preserve
+                # the original failure rather than guess.
+                raise exc from None
+            envelope = _invalid_arguments_envelope(
+                name,
+                param_names=set(props),
+                property_schemas=props,
+                errors=exc.errors(),
+            )
+            if envelope is None:
+                raise
+            return ToolResult(structured_content=envelope, is_error=True)
+
+
+mcp.add_middleware(_ArgumentValidationMiddleware())
 
 # The propose orchestration lives in delegate.py; re-exported here for test access.
 _diffstat = delegate._diffstat
@@ -484,6 +662,8 @@ def _guard(
 
     def decorator(fn: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
         name = getattr(fn, "__name__", "tool")
+        # Record this tool's fixed posture so an argument-validation error can report it.
+        _TOOL_POSTURE[name] = (tier, sandbox)
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> dict:
@@ -612,7 +792,8 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
 _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
     # invalid_scope is intentionally omitted: `scope` is a Literal param, so FastMCP
     # rejects an out-of-enum value before the handler can reach the gitdiff guard that
-    # produces it — it is MCP-unreachable (#92). See _SCHEMA_GATED_CODES.
+    # produces it. Over MCP that rejection now surfaces as invalid_arguments (#136), not
+    # this code, so invalid_scope stays unadvertised. See _SCHEMA_GATED_CODES.
     "invalid_base",
     "invalid_commit",
     "invalid_paths",
@@ -622,7 +803,8 @@ _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
 _JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
 _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
-    # unsupported_detail omitted: `detail` is a Literal param, MCP-unreachable (#92).
+    # unsupported_detail omitted: `detail` is a Literal param; over MCP a bad value
+    # surfaces as invalid_arguments (#136), not this code. See _SCHEMA_GATED_CODES.
     "job_running",
     "job_cancelled",
     "job_timeout",
@@ -642,13 +824,15 @@ def _err_codes(*groups: tuple[ErrorCode, ...]) -> list[ErrorCode]:
 
 # Error codes whose only production path is an out-of-enum value on a Literal-typed
 # tool param (isolation -> unsupported_isolation, detail -> unsupported_detail,
-# scope -> invalid_scope). FastMCP rejects such input with a generic validation error
-# (isError, no result envelope) BEFORE the handler runs, so a real MCP call_tool caller
-# can never receive these envelopes — advertising them would be a false contract (#92).
-# They stay in ErrorCode and the in-handler _resolve_*/gitdiff guards (which still fire
-# on direct Python calls, as defense-in-depth) but are never advertised per-tool. The
-# capabilities injector strips them defensively so a future re-add to a group can't leak
-# one back into the advertised surface; tests/test_server.py pins the invariant.
+# scope -> invalid_scope). FastMCP rejects such input BEFORE the handler runs, and that
+# rejection is now re-emitted as the `invalid_arguments` envelope at the call boundary
+# (#136) — so a real MCP call_tool caller receives invalid_arguments, never these
+# per-param codes. They remain MCP-unreachable by their own symbolic code; advertising
+# them would be a false contract (#92). They stay in ErrorCode and the in-handler
+# _resolve_*/gitdiff guards (which still fire on direct Python calls, as defense-in-depth)
+# but are never advertised per-tool. The capabilities injector strips them defensively so
+# a future re-add to a group can't leak one back into the advertised surface;
+# tests/test_server.py pins the invariant.
 _SCHEMA_GATED_CODES: frozenset[ErrorCode] = frozenset(
     {"unsupported_isolation", "unsupported_detail", "invalid_scope"}
 )
@@ -1024,9 +1208,13 @@ def codex_capabilities() -> dict:
     # Inject per-tool error codes from the single source of truth; KeyError here
     # means a newly advertised tool is missing from _TOOL_ERROR_CODES. Strip any
     # schema-gated code defensively so a Literal-param rejection code can never be
-    # advertised as an MCP-returnable envelope (#92).
+    # advertised as an MCP-returnable envelope (#92). Every tool can receive
+    # invalid_arguments at the call boundary (#136), so it is advertised universally.
     for cap in caps.tool_details:
-        cap.error_codes = [c for c in _TOOL_ERROR_CODES[cap.name] if c not in _SCHEMA_GATED_CODES]
+        codes = [c for c in _TOOL_ERROR_CODES[cap.name] if c not in _SCHEMA_GATED_CODES]
+        if "invalid_arguments" not in codes:
+            codes.append("invalid_arguments")
+        cap.error_codes = codes
         if cap.name in _ASYNC_TOOLS:
             cap.async_lifecycle = _ASYNC_LIFECYCLE
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
