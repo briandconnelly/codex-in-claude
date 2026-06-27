@@ -138,8 +138,12 @@ _ACTIVE_ASYNC = _ACTIVE_PROPOSE
 # Job lifecycle annotations, split by observable behavior. None call the model and
 # all are closed-world and non-destructive (they touch only this server's job state,
 # never the user's files/repo). Inspection tools (status/result/list) are read-only
-# and idempotent; consume (deletes the retained record) and cancel (stops a running
-# process) mutate state, so they are non-read-only and non-idempotent.
+# and idempotent. consume and cancel both mutate state, so neither is read-only —
+# but they differ in idempotency: consume deletes the retained record (a repeat
+# consume returns not-found, a different response), so it is non-idempotent; cancel
+# is idempotent — a terminal job is returned unchanged and cancellation re-validates
+# concurrent completion, so a retry after a lost response has no additional effect
+# (#141).
 _JOB_READ = {
     "readOnlyHint": True,
     "openWorldHint": False,
@@ -152,6 +156,7 @@ _JOB_MUTATE = {
     "destructiveHint": False,
     "idempotentHint": False,
 }
+_JOB_CANCEL = {**_JOB_MUTATE, "idempotentHint": True}
 
 mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=__version__)
 
@@ -2313,7 +2318,7 @@ async def codex_job_consume_result(
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 
 
-@mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_STATUS_SCHEMA)
+@mcp.tool(annotations=_JOB_CANCEL, output_schema=JOB_STATUS_SCHEMA)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_job_cancel(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
@@ -2323,8 +2328,8 @@ async def codex_job_cancel(
     Asks the worker to shut down gracefully so it tears down its throwaway worktree,
     then force-kills it if it overstays, and marks the job cancelled (cancelled jobs
     cannot be resumed). If the worktree could not be removed, `cleanup_warnings`
-    names the leftover path. Already-terminal jobs are returned unchanged. Free —
-    no model call."""
+    names the leftover path. Already-terminal jobs are returned unchanged, so cancel
+    is idempotent — a retry after a lost response is safe. Free — no model call."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err

@@ -16,12 +16,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `codex_delegate_async`. The synchronous `codex_consult`/`codex_review_changes` stay `readOnlyHint:
   true` (network egress and spend alone are not shared-state mutation, and they retain no handle).
   (#138)
+- **`codex_job_cancel` now advertises `idempotentHint: true`.** Cancel is effectively idempotent: an
+  already-terminal job is returned unchanged and cancellation re-validates concurrent completion, so a
+  retry after a lost response is safe and has no additional effect. It previously inherited the
+  `_JOB_MUTATE` preset's `idempotentHint: false`, which could deter agents from that safe retry. It
+  keeps `readOnlyHint: false` (it mutates job state). `codex_job_consume_result` stays non-idempotent —
+  a repeat consume returns not-found, a different response, since the first call deletes the record.
+  (#141)
 
 ### Changed
 
-- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-13`)
-  for the async annotation correction above. Pre-1.0, this agent-visible change makes the next release
-  a minor; clients that cache by `fingerprint` re-fetch the contract.
+- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-14`)
+  for the agent-visible annotation corrections above (the async `readOnlyHint` fix #138 advanced it to
+  `schema-13`; the `codex_job_cancel` `idempotentHint` fix #141 advanced it to `schema-14`). Pre-1.0,
+  these changes make the next release a minor; clients that cache by `fingerprint` re-fetch the contract.
 
 ## [0.5.0] - 2026-06-26
 

@@ -1416,8 +1416,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_13():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-13"
+def test_fingerprint_is_schema_14():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-14"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2014,17 +2014,35 @@ async def test_capabilities_list_error_codes_per_tool():
         ("codex_job_result", True, True),
         ("codex_job_list", True, True),
         ("codex_job_consume_result", False, False),
-        ("codex_job_cancel", False, False),
+        ("codex_job_cancel", False, True),
     ],
 )
 async def test_job_lifecycle_annotations_split_read_from_mutation(tool_name, read_only, idempotent):
-    """Read/inspect job tools are read-only+idempotent; consume/cancel are mutating (issue #9)."""
+    """Read/inspect job tools are read-only+idempotent; consume/cancel mutate state (issue #9).
+
+    cancel mutates (not read-only) but is idempotent: terminal jobs are returned
+    unchanged, so a retry after a lost response has no additional effect (#141).
+    consume stays non-idempotent — a repeat consume returns not-found, a different
+    response, since the first call deleted the record."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
     assert ann.readOnlyHint is read_only
     assert ann.idempotentHint is idempotent
     # Every job tool is local (closed-world) and touches only this server's job
     # state, never the user's files/repo, so it's non-destructive.
+    assert ann.openWorldHint is False
+    assert ann.destructiveHint is False
+
+
+async def test_job_cancel_is_idempotent_but_not_read_only():
+    """codex_job_cancel mutates job state (not read-only) yet is idempotent: a
+    terminal job is returned unchanged and cancellation re-validates concurrent
+    completion, so a retry after a lost response is safe and has no additional
+    effect. The earlier idempotentHint:false deterred that safe retry (#141)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools["codex_job_cancel"].annotations
+    assert ann.readOnlyHint is False
+    assert ann.idempotentHint is True
     assert ann.openWorldHint is False
     assert ann.destructiveHint is False
 
