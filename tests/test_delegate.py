@@ -94,3 +94,4 @@ async def test_run_delegate_not_a_git_repo(tmp_path, monkeypatch):
     assert result["error"]["code"] == "not_a_git_repo"
     assert result["error"]["repair"]["next_step"] == "init_git_repo"
     assert result["error"]["temporary"] is False
+    assert result["error"]["details"]["field"] == "workspace_root"

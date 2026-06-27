@@ -222,8 +222,8 @@ mcp.add_middleware(_SemanticErrorMiddleware())
 _MAX_INVALID_ARGS = 25
 _MAX_ARG_REASON_LEN = 300  # bound on the validator message
 # An unknown-key location is fully caller-controlled, so bound it: without this the
-# field name (copied into both `field` and `offending_param`) could inflate the envelope
-# or carry a secret supplied as the key name itself.
+# field name (copied into `details.field` and `invalid_arguments[].field`) could inflate
+# the envelope or carry a secret supplied as the key name itself.
 _MAX_ARG_FIELD_LEN = 128
 
 # Each guarded tool's fixed (tier, sandbox) posture, recorded by `_guard` so an
@@ -247,7 +247,7 @@ def _format_loc(loc: tuple[object, ...]) -> str:
         else:
             out = str(component)
     # Bound the caller-controlled path so an oversized unknown key can't amplify the
-    # envelope (the field also feeds offending_param).
+    # envelope (the field feeds details.field and invalid_arguments[].field).
     if len(out) > _MAX_ARG_FIELD_LEN:
         out = out[:_MAX_ARG_FIELD_LEN] + "…"
     return out or "<arguments>"

@@ -24,7 +24,7 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "install_codex",
         None,
         False,
-        "Install the codex CLI, then rerun codex_status.",
+        "Install the codex CLI (https://developers.openai.com/codex/cli), then rerun codex_status.",
     ),
     "codex_auth_required": (
         "authenticate",
@@ -106,7 +106,7 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "inspect_and_retry",
         None,
         False,
-        "Retry; if it persists, inspect the repository state.",
+        "Inspect the repository state; retry only after correcting it.",
     ),
     "context_too_large": (
         "reduce_input",
@@ -143,7 +143,8 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "update_plugin",
         None,
         False,
-        "Update codex-in-claude (the installed codex CLI changed its contract).",
+        "Update codex-in-claude (the installed codex CLI changed its contract);"
+        " or pin codex to a supported version, and run codex_status to check the version.",
     ),
     "codex_rate_limited": (
         "retry_after_delay",

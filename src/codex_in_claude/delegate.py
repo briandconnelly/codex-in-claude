@@ -18,6 +18,7 @@ from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     ContextSummary,
     DelegateResult,
+    ErrorDetail,
     ErrorResult,
     Meta,
     RawResponse,
@@ -94,7 +95,11 @@ async def run_delegate(
     except worktree.NotAGitRepoError as exc:
         return serialize_error(
             ErrorResult(
-                error=make_error("not_a_git_repo", str(exc)),
+                error=make_error(
+                    "not_a_git_repo",
+                    str(exc),
+                    details=ErrorDetail(field="workspace_root"),
+                ),
                 meta=meta,
             )
         )
