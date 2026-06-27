@@ -6,7 +6,7 @@ import math
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 
@@ -363,33 +363,69 @@ class InvalidArgument(BaseModel):
     # allowed_values drive the repair without copying input into the result (#136).
 
 
+RepairStep = Literal[
+    "retry_after_delay",
+    "correct_arguments",
+    "use_allowed_value",
+    "reduce_input",
+    "use_workspace_in_roots",
+    "poll_job_status",
+    "list_jobs",
+    "start_new_job",
+    "authenticate",
+    "install_codex",
+    "install_git",
+    "init_git_repo",
+    "update_plugin",
+    "inspect_and_retry",
+    "retry_then_report",
+]
+
+
+class Repair(BaseModel):
+    """Machine-actionable recovery guidance (agent-friendly-mcp §6). `next_step` is a
+    STABLE SYMBOLIC label an agent branches on (not prose); `alternative` carries the
+    human-readable fallback. `tool`/`arguments` name a tool to call to recover."""
+
+    model_config = ConfigDict(extra="forbid")
+    next_step: RepairStep
+    tool: str | None = None
+    arguments: dict[str, Any] | None = None
+    alternative: str | None = None
+
+
+class ErrorDetail(BaseModel):
+    """§6 details{field, value, reason}. `value` is deliberately omitted: a Literal/string
+    param accepts arbitrary input that could be a secret, and best-effort redaction cannot
+    reliably catch a plain one; the caller already holds what it sent. Documented divergence."""
+
+    model_config = ConfigDict(extra="forbid")
+    field: str | None = None
+    reason: str | None = None
+    allowed_values: list[str] | None = None
+
+
 class ErrorInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: ErrorCode
     message: str
-    repair: str  # prose guidance; the structured fields below are the machine-actionable form
-    offending_param: str | None = None
-    retryable: bool = False
-    # Per-field argument-validation failures, set only for the invalid_arguments code
-    # (#136). The top-level offending_param/allowed_values mirror the first entry so
-    # callers that already branch on those fields keep working.
+    # §6: both always present in the canonical schema. `temporary` was `retryable`.
+    temporary: bool = Field(...)
+    retry_after_ms: int | None = Field(..., ge=0)
+    repair: Repair | None = None  # omitted only when no corrective path exists
+    details: ErrorDetail | None = None
+    # Multi-field validation carrier (#136); details mirrors the first entry.
     invalid_arguments: list[InvalidArgument] | None = None
-    # Machine-actionable repair metadata — set when known so an agent can recover
-    # without parsing `repair` prose. All optional/backward-compatible.
-    allowed_values: list[str] | None = None  # concrete valid values for an enum-like param
-    repair_tool: str | None = None  # a tool to call to recover (e.g. codex_job_status)
-    # args for repair_tool, e.g. {"job_id": ...}; values are arbitrary JSON since tool
-    # arguments aren't all strings.
-    repair_tool_params: dict[str, Any] | None = None
-    retry_after_ms: int | None = None  # suggested backoff before retrying a retryable error
-    # Size context for input_too_large, so an agent can trim by an exact amount without
-    # parsing the message prose (#95).
-    limit_bytes: int | None = None  # the byte limit that was exceeded
-    actual_bytes: int | None = None  # the offending input's actual byte size
-    # For workspace_outside_roots: the client-supplied MCP roots a valid workspace_root
-    # must sit inside. Populated ONLY from roots the client already provided — never
-    # arbitrary local filesystem paths — so it leaks no extra path context (#95).
+    # Documented top-level extensions (unchanged):
+    limit_bytes: int | None = None
+    actual_bytes: int | None = None
     candidate_roots: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _retry_after_only_when_temporary(self) -> ErrorInfo:
+        if not self.temporary and self.retry_after_ms is not None:
+            raise ValueError("retry_after_ms must be None when temporary is False")
+        return self
 
 
 class ErrorResult(BaseModel):
