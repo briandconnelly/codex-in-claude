@@ -127,12 +127,14 @@ _ACTIVE_PROPOSE = {
     "destructiveHint": False,
     "idempotentHint": False,
 }
-# Async delegate spawns a background job (commits to spend) but, like propose,
-# only ever writes inside a throwaway worktree — the live tree is untouched.
+# Async launchers (consult/review/delegate) all spawn a background job that commits
+# to spend and reaches the API. The job record is observable (codex_job_list) and
+# mutable (codex_job_cancel/consume) — shared state that outlives the response — so
+# none may advertise readOnlyHint, even consult/review whose underlying run is
+# read-only (issue #138). They share the propose-tier values: any file writes stay
+# inside a throwaway worktree, so the caller's live tree is never touched and
+# destructiveHint stays False.
 _ACTIVE_ASYNC = _ACTIVE_PROPOSE
-# Async consult/review spawn a background job (commits to spend, reaches the API)
-# but the underlying run is read-only — Codex never writes the workspace.
-_ACTIVE_ASYNC_READONLY = _ACTIVE_READONLY
 # Job lifecycle annotations, split by observable behavior. None call the model and
 # all are closed-world and non-destructive (they touch only this server's job state,
 # never the user's files/repo). Inspection tools (status/result/list) are read-only
@@ -1563,7 +1565,7 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
     ).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
+@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult_async(
     question: QuestionParam,
@@ -1652,7 +1654,7 @@ async def codex_consult_async(
     return _start_job(meta, cwd, kind="codex_consult", spec=spec, deadline=deadline)
 
 
-@mcp.tool(annotations=_ACTIVE_ASYNC_READONLY, output_schema=JOB_STARTED_SCHEMA)
+@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes_async(
     scope: ScopeParam = "working_tree",

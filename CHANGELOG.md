@@ -5,6 +5,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Async consult/review launchers no longer advertise `readOnlyHint: true`.** `codex_consult_async`
+  and `codex_review_changes_async` create an observable (`codex_job_list`), mutable
+  (`codex_job_cancel`/`codex_job_consume_result`), spend-committing job record that outlives the
+  response, so annotating them read-only was a safety-relevant honesty bug that could lead clients to
+  auto-approve. Both now carry the async-spawn annotation (`readOnlyHint: false`,
+  `idempotentHint: false`, `openWorldHint: true`, `destructiveHint: false`), matching
+  `codex_delegate_async`. The synchronous `codex_consult`/`codex_review_changes` stay `readOnlyHint:
+  true` (network egress and spend alone are not shared-state mutation, and they retain no handle).
+  (#138)
+
+### Changed
+
+- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-13`)
+  for the async annotation correction above. Pre-1.0, this agent-visible change makes the next release
+  a minor; clients that cache by `fingerprint` re-fetch the contract.
+
 ## [0.5.0] - 2026-06-26
 
 The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/schema-11` →

@@ -1416,8 +1416,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_12():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-12"
+def test_fingerprint_is_schema_13():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-13"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2026,6 +2026,22 @@ async def test_job_lifecycle_annotations_split_read_from_mutation(tool_name, rea
     # Every job tool is local (closed-world) and touches only this server's job
     # state, never the user's files/repo, so it's non-destructive.
     assert ann.openWorldHint is False
+    assert ann.destructiveHint is False
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["codex_consult_async", "codex_review_changes_async", "codex_delegate_async"],
+)
+async def test_async_launchers_are_not_read_only(tool_name):
+    """Every *_async launcher creates an observable, mutable, spend-committing job
+    record that outlives the response, so none may advertise readOnlyHint — even
+    consult/review whose underlying run is read-only (issue #138)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is False
+    assert ann.idempotentHint is False
+    assert ann.openWorldHint is True
     assert ann.destructiveHint is False
 
 
