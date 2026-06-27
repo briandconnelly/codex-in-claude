@@ -2,7 +2,7 @@
 
 **Issue:** #140 — `test(schemas): enforce FINGERPRINT coverage over the full agent-visible surface`
 **Date:** 2026-06-27
-**Status:** Approved (brainstorming)
+**Status:** Implemented (PR #147)
 
 ## Problem
 
@@ -65,7 +65,11 @@ not already expose:
 > only a small, documented set of proven-dynamic/noise paths (see Normalization). Projecting a hand-
 > picked subset would silently miss future agent- or UI-visible fields (`title`, `icons`, prompt
 > `arguments`); default-include + explicit, tested exclusions is the safer contract.
-4. **Server `instructions`** — the initialize-result instructions string (= `CAPABILITY_SUMMARY`).
+4. **The initialize response** — the whole client-visible initialize result: `serverInfo.name`,
+   `protocolVersion`, advertised `capabilities`, and `instructions` (= `CAPABILITY_SUMMARY`). The
+   release-variable `serverInfo.version` is excluded. (Originally only `instructions` was captured;
+   broadened per PR #147 review so `serverInfo`/`protocolVersion`/`capabilities` changes also move
+   the snapshot.)
 5. **Error envelope** — the *static* content of the `codex://error-envelope` resource. This is where
    the `ErrorCode` enum lives; it is **not** present in any success `outputSchema`, so it needs
    explicit coverage. The `codex://models` resource **content** is excluded — it is

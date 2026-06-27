@@ -1,6 +1,5 @@
 """Guard: the manifest snapshot covers the full agent-visible surface (issue #140)."""
 
-import json
 from pathlib import Path
 
 from codex_in_claude import manifest, server
@@ -8,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "36e769a2326814d52315273e7f7bc12daf29b9667b27378e57f260fbd4115553"
+EXPECTED_MANIFEST_HASH = "30df1511370427cd7eb4f15451a10b68e2b14be13262fc3b368cf96df8a5bf20"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -46,12 +45,24 @@ async def test_build_manifest_covers_full_surface():
         "resources",
         "resource_templates",
         "prompts",
-        "instructions",
+        "initialize",
         "error_envelope",
         "capabilities",
     }
-    for section in ("resources", "instructions", "error_envelope", "capabilities"):
+    for section in ("resources", "initialize", "error_envelope", "capabilities"):
         assert m[section], f"manifest section {section} is empty"
+
+
+def _iter_enums(obj):
+    """Yield every JSON-Schema ``enum`` array found anywhere in ``obj``."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "enum" and isinstance(value, list):
+                yield value
+            yield from _iter_enums(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _iter_enums(item)
 
 
 async def test_build_manifest_excludes_dynamic_fields():
@@ -62,9 +73,32 @@ async def test_build_manifest_excludes_dynamic_fields():
     # Resource METADATA for codex://models is present; its dynamic CONTENT is not read.
     uris = {r["uri"] for r in m["resources"]}
     assert "codex://models" in uris
-    # The static error-envelope section (where ErrorCode lives) IS captured;
-    # assert specifically against it so the check proves error_envelope is non-empty.
-    assert "invalid_workspace_root" in json.dumps(m["error_envelope"])  # an ErrorCode literal
+
+
+async def test_build_manifest_captures_error_envelope_schema():
+    """The error-envelope schema (where ErrorCode lives) is captured AND parsed,
+    so its embedded code enum is normalized rather than left as an opaque string.
+    Asserted structurally — not against a specific ErrorCode literal — so a
+    legitimate ErrorCode change is flagged by the golden snapshot, not here."""
+    m = await manifest.build_manifest()
+    assert m["error_envelope"], "error_envelope section is empty"
+    # C2: each block's content was parsed from its `text` string into JSON, so
+    # _canonicalize reaches the embedded set-like arrays.
+    parsed = [b["text"] for b in m["error_envelope"] if isinstance(b.get("text"), dict)]
+    assert parsed, "error-envelope content was not parsed into JSON"
+    # The schema carries at least one non-empty enum (the ErrorCode set among them).
+    assert any(enum for block in parsed for enum in _iter_enums(block))
+
+
+async def test_build_manifest_captures_initialize_without_version():
+    """The full initialize response is guarded (serverInfo, protocolVersion,
+    advertised capabilities), minus only the release-variable server version."""
+    m = await manifest.build_manifest()
+    init = m["initialize"]
+    assert init.get("serverInfo", {}).get("name") == "codex-in-claude"
+    assert "version" not in init.get("serverInfo", {})
+    assert init.get("protocolVersion")
+    assert "capabilities" in init
 
 
 async def test_build_manifest_strips_fastmcp_meta_from_tools():

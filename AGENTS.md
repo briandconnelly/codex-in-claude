@@ -36,12 +36,14 @@ changes, update that one file; see `COMPATIBILITY.md`.
 
 All tools return the envelope in `src/codex_in_claude/schemas.py`. Bump `FINGERPRINT` whenever the
 agent-visible surface changes (tool names, params/schemas, descriptions, annotations, error codes,
-value enums, server instructions, resource metadata, or the `codex_capabilities` payload). A
+value enums, the initialize response, resource metadata, or the `codex_capabilities` payload). A
 committed manifest snapshot (`tests/fixtures/manifest_snapshot.json`, guarded by
-`tests/test_manifest.py`) fails CI on any covered change, so a surface change cannot ship without a
-deliberate bump: regenerate the fixture
+`tests/test_manifest.py`) fails CI on any covered change, so the change can't land unreviewed: the
+failure directs you to regenerate the fixture
 (`uv run python -m codex_in_claude.manifest > tests/fixtures/manifest_snapshot.json`) and bump
-`FINGERPRINT` in the same commit. Keep the change in `CHANGELOG.md`.
+`FINGERPRINT` in the same commit. The snapshot is an **acknowledgment guard** — it surfaces the
+drift for review; it does not mechanically force the bump (the snapshot and `FINGERPRINT` are
+independently editable, so bumping remains review policy). Keep the change in `CHANGELOG.md`.
 
 ## Versioning
 

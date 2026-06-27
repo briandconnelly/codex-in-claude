@@ -1,16 +1,21 @@
 """Canonical manifest of the full agent-visible MCP surface (issue #140).
 
 Snapshotting this manifest guards ``FINGERPRINT``: any change to the
-client-visible surface — tool/resource/template/prompt wire shapes, the server
-``instructions``, the ``codex://error-envelope`` content, or the
-``codex_capabilities`` payload — moves the snapshot, forcing a conscious
-``FINGERPRINT`` bump. See
+client-visible surface — tool/resource/template/prompt wire shapes, the
+initialize response (serverInfo, protocolVersion, advertised capabilities,
+instructions), the ``codex://error-envelope`` content, or the
+``codex_capabilities`` payload — moves the snapshot. This is an *acknowledgment*
+guard: the snapshot test fails on any covered change so it cannot ship
+unreviewed, and its message directs the author to bump ``FINGERPRINT``; it does
+not mechanically force the integer bump (the snapshot and ``FINGERPRINT`` are
+independently editable). See
 ``docs/superpowers/specs/2026-06-27-fingerprint-manifest-guard-design.md``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import sys
@@ -65,6 +70,21 @@ def _dump(model: Any) -> dict[str, Any]:
     return model.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+def _envelope_block(content: Any) -> dict[str, Any]:
+    """Canonicalize one error-envelope content block.
+
+    The block's ``text`` carries the envelope JSON Schema as a serialized string.
+    Parse it so its embedded set-like arrays (``enum``/``required``/multi-``type``,
+    e.g. the ErrorCode enum) are normalized by ``_canonicalize`` like the rest of
+    the manifest, rather than left order-dependent inside an opaque string."""
+    block = _canonicalize(_dump(content))
+    text = block.get("text")
+    if isinstance(text, str):
+        with contextlib.suppress(json.JSONDecodeError):
+            block["text"] = _canonicalize(json.loads(text))
+    return block
+
+
 async def build_manifest() -> dict[str, Any]:
     """Assemble the normalized, canonical agent-visible surface manifest."""
     async with Client(mcp) as client:
@@ -72,13 +92,15 @@ async def build_manifest() -> dict[str, Any]:
         resources = [_canonicalize(_dump(r)) for r in await client.list_resources()]
         templates = [_canonicalize(_dump(t)) for t in await client.list_resource_templates()]
         prompts = [_canonicalize(_dump(p)) for p in await client.list_prompts()]
-        instructions = client.initialize_result.instructions
-        # Envelope content is captured as an opaque serialized JSON string; its
-        # internal determinism (ErrorCode enum order, field ordering) relies on
-        # the ``ErrorCode = Literal[...]`` definition order and pydantic's stable
-        # field ordering, not on ``_canonicalize``.
+        # Capture the whole client-visible initialize response (serverInfo name,
+        # protocolVersion, advertised capabilities, instructions) — not just
+        # instructions — minus the release-variable server version.
+        initialize = _canonicalize(_dump(client.initialize_result))
+        server_info = initialize.get("serverInfo")
+        if isinstance(server_info, dict):
+            server_info.pop("version", None)
         envelope = [
-            _canonicalize(_dump(c)) for c in await client.read_resource("codex://error-envelope")
+            _envelope_block(c) for c in await client.read_resource("codex://error-envelope")
         ]
 
     caps = {k: v for k, v in codex_capabilities().items() if k not in _CAPABILITIES_EXCLUDE}
@@ -88,7 +110,7 @@ async def build_manifest() -> dict[str, Any]:
         "resources": sorted(resources, key=lambda r: r["uri"]),
         "resource_templates": sorted(templates, key=lambda t: t["uriTemplate"]),
         "prompts": sorted(prompts, key=lambda p: p["name"]),
-        "instructions": instructions,
+        "initialize": initialize,
         "error_envelope": envelope,
         "capabilities": _canonicalize(caps),
     }
@@ -113,7 +135,6 @@ def render() -> str:
 
 
 def main() -> None:  # pragma: no cover - thin CLI wrapper
-
     sys.stdout.write(render())
 
 
