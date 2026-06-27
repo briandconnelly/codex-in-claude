@@ -97,6 +97,8 @@ def test_worker_crash_writes_error(tmp_path, monkeypatch):
     assert out["ok"] is False
     assert out["error"]["code"] == "internal_error"
     assert "kaboom" in out["error"]["message"]
+    assert out["error"]["repair"]["next_step"] == "retry_then_report"
+    assert out["error"]["temporary"] is True
 
 
 def test_worker_no_args_returns_error_code():
@@ -225,3 +227,4 @@ def test_worker_unknown_kind_writes_error(tmp_path):
     out = json.loads((jd / "result.json").read_text())
     assert out["ok"] is False
     assert out["error"]["code"] == "internal_error"
+    assert out["error"]["repair"]["next_step"] == "retry_then_report"

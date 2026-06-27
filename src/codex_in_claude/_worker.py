@@ -22,9 +22,8 @@ from pathlib import Path
 from typing import cast
 
 from codex_in_claude import delegate, orchestration
+from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
-    ErrorCode,
-    ErrorInfo,
     ErrorResult,
     Meta,
     Sandbox,
@@ -161,15 +160,15 @@ def main(argv: list[str] | None = None) -> int:
         # result.json behind.
         return 0
     except Exception as exc:
-        payload = ErrorResult(
-            error=ErrorInfo(
-                code=cast("ErrorCode", "internal_error"),
-                message=f"background worker crashed: {exc}"[:300],
-                repair="Retry the job; if it persists, run codex_status and inspect the repo.",
-                retryable=True,
-            ),
-            meta=_meta_from_spec(spec),
-        ).model_dump(mode="json")
+        payload = serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "internal_error",
+                    f"background worker crashed: {exc}"[:300],
+                ),
+                meta=_meta_from_spec(spec),
+            )
+        )
     _atomic_write(job_dir / "result.json", payload)
     return 0
 

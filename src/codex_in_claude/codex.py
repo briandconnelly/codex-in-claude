@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING
 from codex_in_claude import cli_contract, normalize, preflight
 from codex_in_claude._core import runtime
 from codex_in_claude.config import isolation_flags
-from codex_in_claude.schemas import ErrorInfo
+from codex_in_claude.errors import make_error
 
 if TYPE_CHECKING:
     from codex_in_claude._core.runtime import CommandRun
     from codex_in_claude.preflight import FlagSupport
+    from codex_in_claude.schemas import ErrorInfo
 
 
 @dataclass
@@ -185,33 +186,22 @@ def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:
 
 
 def _auth_error() -> ErrorInfo:
-    return ErrorInfo(
-        code="codex_auth_required",
-        message="codex is not authenticated.",
-        repair="Run `codex login` (ChatGPT or API key), then rerun codex_status.",
-    )
+    return make_error("codex_auth_required", "codex is not authenticated.")
 
 
 def _rate_limit_error(retry_after_ms: int) -> ErrorInfo:
-    return ErrorInfo(
-        code="codex_rate_limited",
-        message="codex hit a usage/rate limit.",
-        repair="Wait retry_after_ms before retrying; reduce concurrent codex calls "
-        "or task frequency if this recurs.",
-        retryable=True,
-        retry_after_ms=retry_after_ms,
+    return make_error(
+        "codex_rate_limited", "codex hit a usage/rate limit.", retry_after_ms=retry_after_ms
     )
 
 
 def contract_changed_error() -> ErrorInfo:
     """Shared cli_contract_changed error, reused across every failure path so a
     drift is reported identically wherever `codex` surfaces it."""
-    return ErrorInfo(
-        code="cli_contract_changed",
-        message="codex rejected a flag or value this plugin sent — its CLI "
+    return make_error(
+        "cli_contract_changed",
+        "codex rejected a flag or value this plugin sent — its CLI "
         "contract likely changed for your installed version.",
-        repair="Update codex-in-claude (or pin codex to a supported version); "
-        "run codex_status to check the version.",
     )
 
 
@@ -224,19 +214,9 @@ def classify_failure(
     stdout, so we extract that message (when present) for both classification and
     the surfaced text — it is cleaner than the truncated raw stream."""
     if run.binary_missing:
-        return ErrorInfo(
-            code="codex_not_found",
-            message="The `codex` CLI was not found on PATH.",
-            repair="Install the Codex CLI and ensure `codex` is on PATH "
-            "(https://developers.openai.com/codex/cli).",
-        )
+        return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
-        return ErrorInfo(
-            code="timeout",
-            message="codex exceeded the timeout.",
-            repair="Narrow the task or raise timeout_seconds.",
-            retryable=True,
-        )
+        return make_error("timeout", "codex exceeded the timeout.")
     event_error = normalize.extract_error_message(events) if events else None
     if cli_contract.is_auth_failure(run.stderr, run.stdout, last_message, event_error):
         return _auth_error()
@@ -254,8 +234,4 @@ def classify_failure(
             retry_after = cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
         return _rate_limit_error(retry_after)
     detail = (event_error or run.stderr or run.stdout).strip()[:300]
-    return ErrorInfo(
-        code="nonzero_exit",
-        message=f"codex exited {run.exit_code}: {detail}",
-        repair="Inspect the error; retry with a smaller or corrected task.",
-    )
+    return make_error("nonzero_exit", f"codex exited {run.exit_code}: {detail}")

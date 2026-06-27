@@ -70,3 +70,6 @@ def test_stamp_meta_captures_rate_limit_even_on_failure(monkeypatch):
     assert err is not None  # failure path returned an error
     assert meta.rate_limit is not None
     assert meta.rate_limit.source == "current_run"
+    # error envelope uses new shape: symbolic next_step, temporary flag
+    assert err["error"]["repair"]["next_step"] == "inspect_and_retry"
+    assert err["error"]["temporary"] is False

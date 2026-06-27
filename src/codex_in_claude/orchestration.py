@@ -14,13 +14,14 @@ from typing import Any, cast, get_args
 
 from codex_in_claude import codex, normalize, prompts, rate_limit
 from codex_in_claude._core import gitdiff, redaction
+from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     CONSULT_OUTPUT_SCHEMA,
     FINDINGS_OUTPUT_SCHEMA,
     ConsultResult,
     ContextSummary,
     ErrorCode,
-    ErrorInfo,
+    ErrorDetail,
     ErrorResult,
     Meta,
     RawResponse,
@@ -47,7 +48,7 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
         err = codex.classify_failure(
             result.run, last_message=result.last_message, events=result.events
         )
-        return ErrorResult(error=err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=err, meta=meta))
     return None
 
 
@@ -146,15 +147,6 @@ _GITDIFF_ERRORS: dict[type, tuple[str, str | None]] = {
     gitdiff.GitUnavailableError: ("git_unavailable", None),
 }
 
-_GITDIFF_REPAIR: dict[str, str] = {
-    "invalid_scope": "Use scope=working_tree|branch|commit.",
-    "invalid_base": "Pass a valid base branch/ref for scope=branch.",
-    "invalid_commit": "Pass a valid commit SHA for scope=commit.",
-    "invalid_paths": "Use repo-relative paths with '/' separators, no '..'.",
-    "not_a_git_repo": "Point workspace_root at a git repository.",
-    "git_unavailable": "Ensure git is installed and the repo is healthy.",
-}
-
 # The gitdiff exceptions run_review/dry_run catch and map to error envelopes.
 GITDIFF_EXCEPTIONS = (
     gitdiff.InvalidScopeError,
@@ -171,16 +163,15 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
     code, offending = _GITDIFF_ERRORS.get(type(exc), ("git_unavailable", None))
     # Only invalid_scope is enum-like; the rest take free-form refs/paths.
     allowed = list(get_args(ReviewScope)) if code == "invalid_scope" else None
-    return ErrorResult(
-        error=ErrorInfo(
-            code=cast("ErrorCode", code),
-            message=str(exc)[:300],
-            repair=_GITDIFF_REPAIR[code],
-            offending_param=offending,
-            allowed_values=allowed,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    details = (
+        ErrorDetail(field=offending, allowed_values=allowed) if (offending or allowed) else None
+    )
+    return serialize_error(
+        ErrorResult(
+            error=make_error(cast("ErrorCode", code), str(exc)[:300], details=details),
+            meta=meta,
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -246,17 +237,21 @@ async def run_review(
     as the diff and appended to the prompt as untrusted data."""
     extra_context_bytes = len(extra_context.encode("utf-8"))
     if extra_context_bytes > max_bytes:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"extra_context exceeds {max_bytes} bytes.",
-                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
-                offending_param="extra_context",
-                limit_bytes=max_bytes,
-                actual_bytes=extra_context_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"extra_context exceeds {max_bytes} bytes.",
+                    limit_bytes=max_bytes,
+                    actual_bytes=extra_context_bytes,
+                    details=ErrorDetail(field="extra_context"),
+                    repair_alternative=(
+                        "Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES."
+                    ),
+                ),
+                meta=meta,
+            )
+        )
     try:
         diff = gitdiff.gather_diff(
             cwd,

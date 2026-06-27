@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING
 
 from codex_in_claude import codex, config, normalize, prompts, rate_limit
 from codex_in_claude._core import redaction, worktree
+from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     ContextSummary,
     DelegateResult,
-    ErrorInfo,
     ErrorResult,
     Meta,
     RawResponse,
@@ -92,24 +92,25 @@ async def run_delegate(
     try:
         wt = worktree.create(cwd, timeout=git_timeout, on_parent=on_worktree_parent)
     except worktree.NotAGitRepoError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="not_a_git_repo",
-                message=str(exc),
-                repair="Point workspace_root at a git repository (propose needs one).",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error("not_a_git_repo", str(exc)),
+                meta=meta,
+            )
+        )
     except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="worktree_error",
-                message=str(exc)[:300],
-                repair="Ensure the repo has at least one commit and a clean git state.",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "worktree_error",
+                    str(exc)[:300],
+                    repair_alternative=(
+                        "Ensure the repo has at least one commit and a clean git state."
+                    ),
+                ),
+                meta=meta,
+            )
+        )
 
     if wt.baseline_warning:
         meta.security_warnings = [wt.baseline_warning]
@@ -127,17 +128,15 @@ async def run_delegate(
             err = codex.classify_failure(
                 result.run, last_message=result.last_message, events=result.events
             )
-            return ErrorResult(error=err, meta=meta).model_dump(mode="json")
+            return serialize_error(ErrorResult(error=err, meta=meta))
         diff = worktree.capture_diff(wt.path, timeout=git_timeout)
     except worktree.WorktreeError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="worktree_error",
-                message=str(exc)[:300],
-                repair="Retry; if it persists, inspect the repository state.",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error("worktree_error", str(exc)[:300]),
+                meta=meta,
+            )
+        )
     finally:
         worktree.remove(cwd, wt, timeout=git_timeout)
 

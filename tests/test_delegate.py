@@ -57,3 +57,40 @@ def test_apply_run_meta_no_rate_limits_block_leaves_none(monkeypatch):
     result = _make_exec_result(events="", exit_code=0, last_message="done")
     delegate._apply_run_meta(meta, result)
     assert meta.rate_limit is None
+
+
+async def test_run_delegate_not_a_git_repo(tmp_path, monkeypatch):
+    """not_a_git_repo error uses new envelope shape with symbolic next_step."""
+    from codex_in_claude import delegate
+    from codex_in_claude._core import worktree
+    from codex_in_claude.schemas import Meta
+
+    meta = Meta(
+        cwd=str(tmp_path),
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=60,
+        elapsed_ms=0,
+    )
+
+    def fake_create(*a, **k):
+        raise worktree.NotAGitRepoError("not a git repo")
+
+    monkeypatch.setattr(worktree, "create", fake_create)
+
+    result = await delegate.run_delegate(
+        "task",
+        str(tmp_path),
+        meta,
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=60,
+        model=None,
+        git_timeout=30,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "not_a_git_repo"
+    assert result["error"]["repair"]["next_step"] == "init_git_repo"
+    assert result["error"]["temporary"] is False

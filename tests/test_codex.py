@@ -99,12 +99,13 @@ def test_classify_not_found():
 def test_classify_timeout():
     err = codex.classify_failure(CommandRun("", codex.runtime.TIMED_OUT, -9, 1, True))
     assert err.code == "timeout"
-    assert err.retryable
+    assert err.temporary
 
 
 def test_classify_auth():
     err = codex.classify_failure(CommandRun("", "Not logged in. Run `codex login`", 1, 1, False))
     assert err.code == "codex_auth_required"
+    assert err.repair.next_step == "authenticate"
 
 
 def test_classify_contract_drift():
@@ -144,7 +145,7 @@ def test_classify_rate_limited_with_retry_after():
         CommandRun("", "Error: 429 Too Many Requests. Retry-After: 30", 1, 1, False)
     )
     assert err.code == "codex_rate_limited"
-    assert err.retryable
+    assert err.temporary
     assert err.retry_after_ms == 30_000
 
 
@@ -159,7 +160,7 @@ def test_classify_rate_limited_preserves_zero_retry_after():
 def test_classify_rate_limited_default_backoff():
     err = codex.classify_failure(CommandRun("", "you have hit your usage limit", 1, 1, False))
     assert err.code == "codex_rate_limited"
-    assert err.retryable
+    assert err.temporary
     assert err.retry_after_ms == cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
 
 
