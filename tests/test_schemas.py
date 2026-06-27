@@ -162,3 +162,34 @@ def test_no_raw_errorresult_model_dump_outside_serializer():
             offenders.append(p.name)
         # also flag the multiline form via a simple heuristic
     assert not offenders, f"raw ErrorResult.model_dump outside errors.py: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: CI catalog-size gate
+# ---------------------------------------------------------------------------
+
+
+def _wire_catalog_bytes() -> int:
+    import asyncio
+
+    from codex_in_claude.server import mcp
+
+    tools = asyncio.run(mcp.list_tools())  # list[Tool], 16 tools
+    catalog = []
+    for t in tools:
+        entry = {"name": t.name, "description": t.description or ""}
+        if t.parameters:
+            entry["inputSchema"] = t.parameters
+        if t.output_schema:
+            entry["outputSchema"] = t.output_schema
+        catalog.append(entry)
+    return len(json.dumps(catalog, separators=(",", ":")))
+
+
+# Cap = measured post-shrink size (~101,109) + ~15% headroom; was ~180,266 pre-shrink.
+CATALOG_BYTE_CAP = 116_000
+
+
+def test_wire_catalog_under_cap():
+    size = _wire_catalog_bytes()
+    assert size <= CATALOG_BYTE_CAP, f"catalog grew to {size} bytes (cap {CATALOG_BYTE_CAP})"
