@@ -16,20 +16,21 @@ fields). Failure is uniform: an `error` object built for machine-driven recovery
 
 - `code` — a stable error code from a fixed set (e.g. `invalid_arguments`, `job_running`,
   `job_not_found`).
-- `message` / `repair` — human-readable detail and prose guidance.
-- `offending_param` — the parameter at fault, when one applies.
-- `retryable` + `retry_after_ms` — whether retrying can succeed and how long to back off first.
-- `allowed_values` — the concrete valid values for an enum-like param (e.g. an `invalid_arguments`
-  rejection of `scope` lists `working_tree`, `branch`, `commit`), so you can repair without parsing
-  prose.
-- `invalid_arguments` — set when `code` is `invalid_arguments` (an unknown/extra arg, a missing
-  required arg, a wrong type, or an out-of-enum value for an enum-like param, rejected before the
-  handler runs). It is a list of `{field, reason, allowed_values}` per offending argument; the
-  top-level `offending_param`/`allowed_values` mirror the first entry. The rejected value is
-  deliberately not echoed (a param can accept arbitrary input that may be a secret); `field` +
-  `reason` + `allowed_values` are enough to repair.
-- `repair_tool` + `repair_tool_params` — a tool to call to recover and the args to pass it (e.g.
-  `job_running` → `codex_job_status` with `{"job_id": …}`).
+- `message` — human-readable detail.
+- `temporary` + `retry_after_ms` — whether retrying can succeed and how long to back off
+  (`retry_after_ms` is always present; `null` unless `temporary` is true).
+- `repair` — `{next_step, tool, arguments, alternative}`: `next_step` is a stable SYMBOLIC
+  label you branch on (e.g. `poll_job_status`, `correct_arguments`); `tool`/`arguments` name a
+  tool to call to recover; `alternative` is prose fallback. Omitted only when no corrective
+  path exists.
+- `details` — `{field, reason, allowed_values}` for a single offending field. The rejected
+  `value` is deliberately never echoed (it may be a secret).
+- `invalid_arguments` — set when `code` is `invalid_arguments`: a list of
+  `{field, reason, allowed_values}` per offending argument; `details` mirrors the first.
+- `limit_bytes`/`actual_bytes`/`candidate_roots` — size/roots context for the relevant codes.
+
+Absent optional fields are omitted from the payload (no placeholder nulls), except
+`retry_after_ms`. The full schema is published at the `codex://error-envelope` resource.
 
 `codex_capabilities` lists the error codes each tool may return (`error_codes`) as an advisory guide
 — useful for planning recovery, but not a closed contract. The envelope shape is versioned by

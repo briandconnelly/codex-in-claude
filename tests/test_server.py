@@ -1417,7 +1417,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_schema_14():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-15"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-16"
 
 
 def test_capabilities_mark_m4_surface_experimental():

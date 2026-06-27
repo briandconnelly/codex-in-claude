@@ -155,8 +155,9 @@ The plugin ships two Claude Code skills (auto-discovered from `skills/`):
 
 Every tool returns a discriminated envelope keyed by `ok`. Success carries `summary`/`findings`/`meta`
 (plus review-only `verdict`/`confidence`, or a proposed `diff` for delegate); failure is a uniform,
-machine-actionable `error` — a stable `code`, prose `repair`, `retryable`/`retry_after_ms`, and
-`repair_tool`/`repair_tool_params` for automated recovery. The shape is versioned by `fingerprint`.
+machine-actionable `error` — a stable `code`, `temporary`/`retry_after_ms`, a symbolic
+`repair{next_step,tool,arguments,alternative}`, and `details{field,reason,allowed_values}`
+for automated recovery (full schema at the `codex://error-envelope` resource). The shape is versioned by `fingerprint`.
 Each active call's `meta.rate_limit` carries the live snapshot from that call (`source: current_run`);
 `codex_status` reports the cached one (`source: plugin_cache`).
 

@@ -66,7 +66,7 @@ a generic one:
    rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
 3. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
    `retry-after`, plus `429` matched with word boundaries so an incidental digit run can't fire it)
-   → `codex_rate_limited`, `retryable=True` with `retry_after_ms` set from a parsed
+   → `codex_rate_limited`, `temporary=True` with `retry_after_ms` set from a parsed
    `Retry-After`/"retry after Ns" value **when it is seconds-valued** (a non-second unit or HTTP-date
    is ignored), else `RATE_LIMIT_DEFAULT_BACKOFF_MS` (60s). Lets a caller back off deterministically
    instead of retry-storming a transient limit.
@@ -80,6 +80,36 @@ phrasings, so update `cli_contract.py` (one place) when upstream wording changes
 `--output-schema` uses OpenAI strict structured outputs: every property must appear in `required`
 and every object must set `additionalProperties: false`. The findings schema in `schemas.py`
 follows this (optional fields are nullable but still required).
+
+## Canonical error envelope
+
+Every `ok: false` response carries a uniform `error` object. The full schema is published at the
+`codex://error-envelope` resource (fetch it once and cache by `fingerprint`); clients should
+read that resource rather than hard-code the shape.
+
+**Key contract points:**
+
+- `temporary` (bool) signals whether retrying can succeed; `retry_after_ms` is always present
+  (`null` unless `temporary` is true). Callers must read `temporary` — not `retry_after_ms`
+  presence — as the retry signal.
+- `repair{next_step,tool,arguments,alternative}` provides a stable SYMBOLIC `next_step` label
+  (e.g. `poll_job_status`, `correct_arguments`) that callers branch on in code; `tool`/`arguments`
+  name a recovery tool call; `alternative` is prose fallback. The `repair` field is omitted only
+  when no corrective path exists.
+- `details{field,reason,allowed_values}` describes a single offending field. The rejected `value`
+  is deliberately never echoed — a parameter can accept arbitrary input that may be a secret.
+  `field` + `reason` + `allowed_values` are sufficient to repair the call.
+- Absent optional fields are **omitted** from the payload (no placeholder nulls), except
+  `retry_after_ms` which is always present.
+
+**Opaque wire branch:** tools that publish `outputSchema` include a compact opaque error branch
+(a discriminated `ok: false` object) rather than the full error schema inline. Callers must branch
+on `ok` first; the full envelope shape lives solely at `codex://error-envelope`. This keeps the
+preloaded `tools/list` catalog compact.
+
+**Invalidate-on-upgrade:** background-job results written by a pre-upgrade server instance are
+treated as expired or corrupt by the post-upgrade server and are not returned. Callers that cache
+`job_id` values across a server restart must expect `job_not_found` and re-run the job.
 
 ## When `codex` changes
 
