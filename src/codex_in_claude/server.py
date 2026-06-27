@@ -40,6 +40,7 @@ from codex_in_claude import (
 )
 from codex_in_claude._core import gitdiff, workspace, worktree
 from codex_in_claude.codex_models import read_model_catalog
+from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     CONSULT_RESULT_SCHEMA,
@@ -63,6 +64,7 @@ from codex_in_claude.schemas import (
     Detail,
     DryRunResult,
     ErrorCode,
+    ErrorDetail,
     ErrorInfo,
     ErrorResult,
     InvalidArgument,
@@ -334,18 +336,18 @@ def _invalid_arguments_envelope(
         model=d.model,
         timeout_seconds=config.clamp_timeout(d.timeout_seconds),
     )
-    return ErrorResult(
-        error=ErrorInfo(
-            code="invalid_arguments",
-            message=message[:300],
-            repair=repair,
-            offending_param=first.field,
-            allowed_values=first.allowed_values,
-            retryable=False,
-            invalid_arguments=items,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "invalid_arguments",
+                message[:300],
+                repair_alternative=repair,
+                details=ErrorDetail(field=first.field, allowed_values=first.allowed_values),
+                invalid_arguments=items,
+            ),
+            meta=meta,
+        )
+    )
 
 
 class _ArgumentValidationMiddleware(Middleware):
@@ -540,12 +542,10 @@ async def _roots_from_ctx(ctx: Context | None) -> list[str]:
 def _resolve_isolation(value: str | None) -> tuple[str | None, ErrorInfo | None]:
     isolation = value or config.defaults().isolation
     if isolation not in config.VALID_ISOLATIONS:
-        return None, ErrorInfo(
-            code="unsupported_isolation",
-            message=f"unsupported isolation: {isolation}",
-            repair=f"Use one of: {', '.join(config.VALID_ISOLATIONS)}.",
-            offending_param="isolation",
-            allowed_values=list(config.VALID_ISOLATIONS),
+        return None, make_error(
+            "unsupported_isolation",
+            f"unsupported isolation: {isolation}",
+            details=ErrorDetail(field="isolation", allowed_values=list(config.VALID_ISOLATIONS)),
         )
     return isolation, None
 
@@ -555,12 +555,10 @@ def _resolve_detail(value: str | None) -> tuple[str | None, ErrorInfo | None]:
     detail = value or "summary"
     valid = get_args(Detail)
     if detail not in valid:
-        return None, ErrorInfo(
-            code="unsupported_detail",
-            message=f"unsupported detail: {detail}",
-            repair=f"Use one of: {', '.join(valid)}.",
-            offending_param="detail",
-            allowed_values=list(valid),
+        return None, make_error(
+            "unsupported_detail",
+            f"unsupported detail: {detail}",
+            details=ErrorDetail(field="detail", allowed_values=list(valid)),
         )
     return detail, None
 
@@ -571,29 +569,34 @@ def _workspace_error_result(
     """Build a workspace-resolution error envelope. For `workspace_outside_roots`, attach
     the client-supplied MCP roots as `candidate_roots` so an agent can pick a valid
     `workspace_root` without parsing prose — never arbitrary local paths (#95)."""
-    info = ErrorInfo(
-        code=cast("ErrorCode", error_code),
-        message=error_detail or "invalid workspace",
-        repair="Pass an absolute workspace_root inside the client's MCP roots.",
-        offending_param="workspace_root",
+    candidate_roots = list(roots) if error_code == "workspace_outside_roots" and roots else None
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                cast("ErrorCode", error_code),
+                error_detail or "invalid workspace",
+                details=ErrorDetail(field="workspace_root"),
+                candidate_roots=candidate_roots,
+            ),
+            meta=meta,
+        )
     )
-    if error_code == "workspace_outside_roots" and roots:
-        info.candidate_roots = list(roots)
-    return ErrorResult(error=info, meta=meta).model_dump(mode="json")
 
 
 def _placeholder_error(meta: Meta) -> dict | None:
     placeholders = config.placeholder_env_vars()
     if not placeholders:
         return None
-    return ErrorResult(
-        error=ErrorInfo(
-            code="unexpanded_env_placeholder",
-            message=f"Unexpanded ${{...}} env placeholders: {', '.join(placeholders)}.",
-            repair=config.ENV_PLACEHOLDER_REPAIR,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "unexpanded_env_placeholder",
+                f"Unexpanded ${{...}} env placeholders: {', '.join(placeholders)}.",
+                repair_alternative=config.ENV_PLACEHOLDER_REPAIR,
+            ),
+            meta=meta,
+        )
+    )
 
 
 def _base_meta(
@@ -640,16 +643,19 @@ def _internal_error_result(
         timeout_seconds=config.clamp_timeout(d.timeout_seconds),
     )
     meta.elapsed_ms = elapsed_ms
-    return ErrorResult(
-        error=ErrorInfo(
-            code="internal_error",
-            message=f"{tool_name} failed unexpectedly: {type(exc).__name__}: {exc}"[:300],
-            repair="Server-side error; retry. If it persists, run codex_status and inspect "
-            "the server's stderr log (set CODEX_IN_CLAUDE_LOG_LEVEL=DEBUG for detail).",
-            retryable=True,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "internal_error",
+                f"{tool_name} failed unexpectedly: {type(exc).__name__}: {exc}"[:300],
+                repair_alternative=(
+                    "Server-side error; retry. If it persists, run codex_status and inspect "
+                    "the server's stderr log (set CODEX_IN_CLAUDE_LOG_LEVEL=DEBUG for detail)."
+                ),
+            ),
+            meta=meta,
+        )
+    )
 
 
 def _guard(
@@ -1301,7 +1307,7 @@ async def codex_consult(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None  # narrowed: iso_err was None
 
     detail_v, detail_err = _resolve_detail(detail)
@@ -1315,7 +1321,7 @@ async def codex_consult(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(error=detail_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=detail_err, meta=meta))
     assert detail_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -1351,17 +1357,18 @@ async def codex_consult(
     combined = (question or "") + (extra_context or "")
     combined_bytes = len(combined.encode("utf-8"))
     if combined_bytes > limit:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"question + extra_context exceeds {limit} bytes.",
-                repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
-                offending_param="extra_context",
-                limit_bytes=limit,
-                actual_bytes=combined_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"question + extra_context exceeds {limit} bytes.",
+                    details=ErrorDetail(field="extra_context"),
+                    limit_bytes=limit,
+                    actual_bytes=combined_bytes,
+                ),
+                meta=meta,
+            )
+        )
 
     return apply_detail(
         await orchestration.run_consult(
@@ -1438,7 +1445,7 @@ async def codex_review_changes(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
     detail_v, detail_err = _resolve_detail(detail)
@@ -1452,7 +1459,7 @@ async def codex_review_changes(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(error=detail_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=detail_err, meta=meta))
     assert detail_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -1546,7 +1553,7 @@ async def codex_delegate(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -1571,21 +1578,22 @@ async def codex_delegate(
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))
     if task_bytes > limit:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"task exceeds {limit} bytes.",
-                repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
-                offending_param="task",
-                limit_bytes=limit,
-                actual_bytes=task_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"task exceeds {limit} bytes.",
+                    details=ErrorDetail(field="task"),
+                    limit_bytes=limit,
+                    actual_bytes=task_bytes,
+                ),
+                meta=meta,
+            )
+        )
 
     detail_v, detail_err = _resolve_detail(detail)
     if detail_err is not None:
-        return ErrorResult(error=detail_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=detail_err, meta=meta))
     assert detail_v is not None
 
     return apply_detail(
@@ -1646,7 +1654,7 @@ async def codex_delegate_async(
             model=model or d.model,
             timeout_seconds=deadline,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -1671,41 +1679,41 @@ async def codex_delegate_async(
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))
     if task_bytes > limit:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"task exceeds {limit} bytes.",
-                repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
-                offending_param="task",
-                limit_bytes=limit,
-                actual_bytes=task_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"task exceeds {limit} bytes.",
+                    details=ErrorDetail(field="task"),
+                    limit_bytes=limit,
+                    actual_bytes=task_bytes,
+                ),
+                meta=meta,
+            )
+        )
 
     # Fail fast (no spend) if this is not a git repo with a commit to base on.
     git_timeout = config.git_timeout_seconds()
     try:
         worktree.ensure_repo_with_head(cwd, timeout=git_timeout)
     except worktree.NotAGitRepoError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="not_a_git_repo",
-                message=str(exc),
-                repair="Point workspace_root at a git repository (propose needs one).",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "not_a_git_repo",
+                    str(exc),
+                    details=ErrorDetail(field="workspace_root"),
+                ),
+                meta=meta,
+            )
+        )
     except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="worktree_error",
-                message=str(exc)[:300],
-                repair="Ensure the repo has at least one commit and a clean git state.",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error("worktree_error", str(exc)[:300]),
+                meta=meta,
+            )
+        )
 
     spec = {
         "kind": "codex_delegate",
@@ -1735,15 +1743,18 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
     try:
         job_id, started_at = store.start(_worker_cmd, cwd, kind=kind, write_spec=spec)
     except OSError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="internal_error",
-                message=f"failed to start background job: {exc}"[:300],
-                repair="Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry.",
-                retryable=True,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "internal_error",
+                    f"failed to start background job: {exc}"[:300],
+                    repair_alternative=(
+                        "Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry."
+                    ),
+                ),
+                meta=meta,
+            )
+        )
 
     meta.job_id = job_id
     return JobStarted(
@@ -1794,7 +1805,7 @@ async def codex_consult_async(
             model=model or d.model,
             timeout_seconds=deadline,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -1820,17 +1831,18 @@ async def codex_consult_async(
     combined = (question or "") + (extra_context or "")
     combined_bytes = len(combined.encode("utf-8"))
     if combined_bytes > limit:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"question + extra_context exceeds {limit} bytes.",
-                repair="Trim the question/context or set CODEX_IN_CLAUDE_MAX_INPUT_BYTES higher.",
-                offending_param="extra_context",
-                limit_bytes=limit,
-                actual_bytes=combined_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"question + extra_context exceeds {limit} bytes.",
+                    details=ErrorDetail(field="extra_context"),
+                    limit_bytes=limit,
+                    actual_bytes=combined_bytes,
+                ),
+                meta=meta,
+            )
+        )
 
     spec = {
         "kind": "codex_consult",
@@ -1888,7 +1900,7 @@ async def codex_review_changes_async(
             model=model or d.model,
             timeout_seconds=deadline,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -1965,7 +1977,7 @@ async def codex_dry_run(
             model=d.model,
             timeout_seconds=config.clamp_timeout(d.timeout_seconds),
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None  # narrowed: iso_err was None
     roots = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
@@ -2019,17 +2031,18 @@ async def codex_dry_run(
             base=base,
             commit=commit,
         )
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"extra_context exceeds {max_bytes} bytes.",
-                repair="Trim extra_context or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
-                offending_param="extra_context",
-                limit_bytes=max_bytes,
-                actual_bytes=extra_context_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"extra_context exceeds {max_bytes} bytes.",
+                    details=ErrorDetail(field="extra_context"),
+                    limit_bytes=max_bytes,
+                    actual_bytes=extra_context_bytes,
+                ),
+                meta=meta,
+            )
+        )
     try:
         diff = gitdiff.gather_diff(
             cwd,
@@ -2132,7 +2145,7 @@ async def codex_delegate_dry_run(
             model=model or d.model,
             timeout_seconds=timeout,
         )
-        return ErrorResult(error=iso_err, meta=meta).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
     roots = await _roots_from_ctx(ctx)
@@ -2157,43 +2170,49 @@ async def codex_delegate_dry_run(
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))
     if task_bytes > limit:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="input_too_large",
-                message=f"task exceeds {limit} bytes.",
-                repair="Trim the task or raise CODEX_IN_CLAUDE_MAX_INPUT_BYTES.",
-                offending_param="task",
-                limit_bytes=limit,
-                actual_bytes=task_bytes,
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"task exceeds {limit} bytes.",
+                    details=ErrorDetail(field="task"),
+                    limit_bytes=limit,
+                    actual_bytes=task_bytes,
+                ),
+                meta=meta,
+            )
+        )
 
     try:
         plan = worktree.plan(cwd, timeout=config.git_timeout_seconds())
     except worktree.NotAGitRepoError as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="not_a_git_repo",
-                message=str(exc),
-                repair="Point workspace_root at a git repository (propose needs one).",
-                offending_param="workspace_root",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "not_a_git_repo",
+                    str(exc),
+                    details=ErrorDetail(field="workspace_root"),
+                ),
+                meta=meta,
+            )
+        )
     except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
-        return ErrorResult(
-            error=ErrorInfo(
-                code="worktree_error",
-                message=str(exc)[:300],
-                # The preview is read-only (no worktree is created), so a dirty tree is
-                # fine; this fires only when the repo has no commit to base on or a git
-                # command failed.
-                repair="Ensure the repo has at least one commit and that git commands "
-                "succeed (e.g. finish any in-progress merge/rebase).",
-            ),
-            meta=meta,
-        ).model_dump(mode="json")
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "worktree_error",
+                    str(exc)[:300],
+                    # The preview is read-only (no worktree is created), so a dirty tree is
+                    # fine; this fires only when the repo has no commit to base on or a git
+                    # command failed.
+                    repair_alternative=(
+                        "Ensure the repo has at least one commit and that git commands "
+                        "succeed (e.g. finish any in-progress merge/rebase)."
+                    ),
+                ),
+                meta=meta,
+            )
+        )
 
     prompt = prompts.build_delegate_prompt(task)
     return DelegateDryRunResult(
@@ -2219,27 +2238,14 @@ async def codex_delegate_dry_run(
 # Background-job lifecycle (free — local job state only, no model call)
 # --------------------------------------------------------------------------- #
 # Non-done job states mapped to the result-envelope error contract.
-_STATE_TO_ERROR: dict[str, tuple[str, str, str]] = {
-    "running": (
-        "job_running",
-        "The job is still running.",
-        "Poll codex_job_status; call codex_job_result once status=done.",
-    ),
-    "cancelled": (
-        "job_cancelled",
-        "The job was cancelled.",
-        "Start a new job; a cancelled run cannot be resumed.",
-    ),
+_STATE_TO_ERROR: dict[str, tuple[str, str]] = {
+    "running": ("job_running", "The job is still running."),
+    "cancelled": ("job_cancelled", "The job was cancelled."),
     "timeout": (
         "job_timeout",
         "The job exceeded its wall-clock deadline and was stopped.",
-        "Narrow the task or raise CODEX_IN_CLAUDE_JOB_MAX_SECONDS, then start a new job.",
     ),
-    "failed": (
-        "job_failed",
-        "The job failed without producing a result.",
-        "Run codex_status to check codex is installed and authenticated, then retry.",
-    ),
+    "failed": ("job_failed", "The job failed without producing a result."),
 }
 
 
@@ -2284,17 +2290,17 @@ def _job_not_found(job_id: str, meta: Meta, workspace_root: str | None = None) -
     # codex_job_list takes only workspace_root (not job_id); echo the caller's value
     # so the repair targets the same workspace the lookup used.
     list_params: dict[str, Any] = {"workspace_root": workspace_root} if workspace_root else {}
-    return ErrorResult(
-        error=ErrorInfo(
-            code="job_not_found",
-            message=f"No job '{job_id}' in this workspace.",
-            repair="Check the job_id, or start a new job; records expire after the TTL.",
-            offending_param="job_id",
-            repair_tool="codex_job_list",
-            repair_tool_params=list_params or None,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "job_not_found",
+                f"No job '{job_id}' in this workspace.",
+                details=ErrorDetail(field="job_id"),
+                repair_arguments=list_params or None,
+            ),
+            meta=meta,
+        )
+    )
 
 
 async def _resolve_job_workspace(
@@ -2387,15 +2393,18 @@ def _validate_job_success(payload: dict, kind: str, meta: Meta) -> dict:
 
 
 def _job_result_corrupt(detail: str, meta: Meta) -> dict:
-    return ErrorResult(
-        error=ErrorInfo(
-            code="internal_error",
-            message=f"job result could not be returned: {detail}"[:300],
-            repair="Start a new job; if this persists, run codex_status and check the server logs.",
-            retryable=True,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "internal_error",
+                f"job result could not be returned: {detail}"[:300],
+                repair_alternative=(
+                    "Start a new job; if this persists, run codex_status and check the server logs."
+                ),
+            ),
+            meta=meta,
+        )
+    )
 
 
 async def _job_result_impl(
@@ -2411,7 +2420,7 @@ async def _job_result_impl(
         return err
     detail_v, detail_err = _resolve_detail(detail)
     if detail_err is not None:
-        return ErrorResult(error=detail_err, meta=_job_meta(cwd, source)).model_dump(mode="json")
+        return serialize_error(ErrorResult(error=detail_err, meta=_job_meta(cwd, source)))
     assert detail_v is not None
     store = config.job_store()
     rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=consume)
@@ -2435,13 +2444,11 @@ async def _job_result_impl(
         # An error payload (ok: false) should be an ErrorResult; validate it too, since
         # a disk-backed result.json could be partially written or corrupted.
         try:
-            ErrorResult.model_validate(payload)
+            validated = ErrorResult.model_validate(payload)
         except ValidationError as exc:
             return _job_result_corrupt(f"stored error result was malformed: {exc}", meta)
-        return payload
-    code, message, repair = _STATE_TO_ERROR.get(
-        state, ("job_failed", "The job did not complete.", "Start a new job.")
-    )
+        return serialize_error(validated)
+    code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))
     # A still-running job is the one recoverable case: point at the poll tool with
     # the concrete job_id and a backoff so the agent can act without parsing prose.
     # Echo the caller's workspace_root so the poll targets the same workspace.
@@ -2453,18 +2460,17 @@ async def _job_result_impl(
     # codex_job_status returns) as the retry hint, so polling via job_result on a long
     # run backs off the same way without recomputing the backoff in two places.
     retry_after = rec.get("poll_after_ms") if running else None
-    return ErrorResult(
-        error=ErrorInfo(
-            code=cast("ErrorCode", code),
-            message=message,
-            repair=repair,
-            retryable=running,
-            repair_tool="codex_job_status" if running else None,
-            repair_tool_params=poll_params if running else None,
-            retry_after_ms=retry_after,
-        ),
-        meta=meta,
-    ).model_dump(mode="json")
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                cast("ErrorCode", code),
+                message,
+                repair_arguments=poll_params if running else None,
+                retry_after_ms=retry_after,
+            ),
+            meta=meta,
+        )
+    )
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)

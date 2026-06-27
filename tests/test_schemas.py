@@ -145,3 +145,20 @@ def test_error_envelope_schema_validates_runtime_error():
     payload = serialize_error(env)
     TypeAdapter(ErrorResult).validate_python(payload)  # round-trips against the model
     assert s.ERROR_ENVELOPE_SCHEMA["$defs"]  # full schema is published with defs
+
+
+def test_no_raw_errorresult_model_dump_outside_serializer():
+    import pathlib
+    import re
+
+    src = pathlib.Path("src/codex_in_claude")
+    offenders = []
+    for p in src.rglob("*.py"):
+        if p.name == "errors.py":
+            continue
+        text = p.read_text()
+        # flag ErrorResult(...).model_dump( on one logical line/expression
+        if re.search(r"ErrorResult\([^\n]*\)\s*\.model_dump\(", text):
+            offenders.append(p.name)
+        # also flag the multiline form via a simple heuristic
+    assert not offenders, f"raw ErrorResult.model_dump outside errors.py: {offenders}"

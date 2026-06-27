@@ -221,7 +221,7 @@ async def test_consult_bad_isolation(clean_env, tmp_path):
     res = await server.codex_consult("q", workspace_root=str(tmp_path), isolation="bogus")
     assert res["ok"] is False
     assert res["error"]["code"] == "unsupported_isolation"
-    assert res["error"]["offending_param"] == "isolation"
+    assert res["error"]["details"]["field"] == "isolation"
 
 
 async def test_consult_invalid_workspace(clean_env):
@@ -316,7 +316,7 @@ async def test_review_extra_context_too_large(monkeypatch, clean_env, tmp_path):
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
-    assert res["error"]["offending_param"] == "extra_context"
+    assert res["error"]["details"]["field"] == "extra_context"
     # The review path (run_review) also carries the structured size fields (#95).
     assert res["error"]["limit_bytes"] == 1000
     assert res["error"]["actual_bytes"] == 2000
@@ -341,7 +341,7 @@ async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path)
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
-    assert res["error"]["offending_param"] == "extra_context"
+    assert res["error"]["details"]["field"] == "extra_context"
     assert res["error"]["limit_bytes"] == 1000
     assert res["error"]["actual_bytes"] == 2000
 
@@ -447,7 +447,7 @@ async def test_review_invalid_base(monkeypatch, clean_env, tmp_path):
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_base"
-    assert res["error"]["offending_param"] == "base"
+    assert res["error"]["details"]["field"] == "base"
 
 
 async def test_review_bad_isolation(clean_env, tmp_path):
@@ -948,7 +948,7 @@ async def test_dry_run_bad_isolation(clean_env, tmp_path):
     res = await server.codex_dry_run(workspace_root=str(tmp_path), isolation="nope")
     assert res["ok"] is False
     assert res["error"]["code"] == "unsupported_isolation"
-    assert res["error"]["offending_param"] == "isolation"
+    assert res["error"]["details"]["field"] == "isolation"
 
 
 async def test_dry_run_placeholder_env(monkeypatch, clean_env, tmp_path):
@@ -1303,7 +1303,7 @@ async def test_job_result_running_maps_error(monkeypatch, clean_env, tmp_path):
     res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "job_running"
-    assert res["error"]["retryable"] is True
+    assert res["error"]["temporary"] is True
 
 
 async def test_job_result_timeout_maps_error(monkeypatch, clean_env, tmp_path):
@@ -1496,7 +1496,7 @@ async def test_consult_bad_detail(clean_env, tmp_path):
     res = await server.codex_consult("q", workspace_root=str(tmp_path), detail="bogus")
     assert res["ok"] is False
     assert res["error"]["code"] == "unsupported_detail"
-    assert res["error"]["allowed_values"] == ["summary", "full"]
+    assert res["error"]["details"]["allowed_values"] == ["summary", "full"]
 
 
 async def test_review_bad_detail(clean_env, tmp_path):
@@ -1646,7 +1646,7 @@ async def test_consult_async_input_too_large(monkeypatch, clean_env, tmp_path):
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
-    assert res["error"]["offending_param"] == "extra_context"
+    assert res["error"]["details"]["field"] == "extra_context"
     assert res["error"]["limit_bytes"] == 1000
     # actual_bytes covers question + extra_context: len("q") + 2000.
     assert res["error"]["actual_bytes"] == 2001
@@ -1925,8 +1925,8 @@ async def test_unknown_argument_returns_structured_envelope():
     assert sc["ok"] is False
     err = sc["error"]
     assert err["code"] == "invalid_arguments"
-    assert err["offending_param"] == "definitely_not_a_param"
-    assert err["retryable"] is False
+    assert err["details"]["field"] == "definitely_not_a_param"
+    assert err["temporary"] is False
     # the symbolic, machine-actionable detail list is present
     items = err["invalid_arguments"]
     assert items[0]["field"] == "definitely_not_a_param"
@@ -1943,8 +1943,8 @@ async def test_bad_enum_argument_lists_allowed_values_at_boundary():
     assert res.is_error is True
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
-    assert err["offending_param"] == "scope"
-    assert err["allowed_values"] == list(get_args(ReviewScope))
+    assert err["details"]["field"] == "scope"
+    assert err["details"]["allowed_values"] == list(get_args(ReviewScope))
     assert err["invalid_arguments"][0]["allowed_values"] == list(get_args(ReviewScope))
 
 
@@ -1954,7 +1954,7 @@ async def test_bad_isolation_enum_lists_allowed_values_from_anyof():
     res = await server.mcp.call_tool("codex_consult", {"question": "hi", "isolation": "bogus"})
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
-    assert err["allowed_values"] == list(server.config.VALID_ISOLATIONS)
+    assert err["details"]["allowed_values"] == list(server.config.VALID_ISOLATIONS)
 
 
 async def test_rejected_argument_value_is_never_echoed():
@@ -2006,7 +2006,7 @@ async def test_oversized_unknown_argument_does_not_amplify_response():
     res = await server.mcp.call_tool("codex_status", {"k" * 100_000: 1})
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
-    assert len(err["offending_param"]) <= server._MAX_ARG_FIELD_LEN + 1
+    assert len(err["details"]["field"]) <= server._MAX_ARG_FIELD_LEN + 1
     assert len(json.dumps(res.structured_content)) < 5_000
 
 
@@ -2026,19 +2026,22 @@ async def test_missing_required_argument_returns_envelope():
     res = await server.mcp.call_tool("codex_consult", {})
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
-    assert err["offending_param"] == "question"
+    assert err["details"]["field"] == "question"
     assert err["invalid_arguments"][0]["field"] == "question"
 
 
 async def test_invalid_arguments_on_success_only_tool_conforms_to_schema():
     """codex_capabilities/status/models advertised success-only output schemas;
     they now advertise a success|error union so the invalid_arguments envelope
-    they can return conforms to the declared output schema. The assertion checks the
-    union's top-level anyOf actually references the ErrorResult branch — so it fails if
-    that branch is ever dropped (Copilot review, PR #145)."""
+    they can return conforms to the declared output schema. The assertion checks that
+    exactly one opaque error branch (ok:false) is present — so it fails if that branch
+    is ever dropped (Copilot review, PR #145)."""
     for schema in (server.STATUS_SCHEMA, server.CAPABILITIES_SCHEMA, server.MODEL_CATALOG_SCHEMA):
-        refs = {branch.get("$ref") for branch in schema.get("anyOf", [])}
-        assert "#/$defs/ErrorResult" in refs, refs
+        branches = schema.get("anyOf", [])
+        err_branches = [
+            b for b in branches if b.get("properties", {}).get("ok", {}).get("const") is False
+        ]
+        assert len(err_branches) == 1, f"expected 1 opaque error branch, got {err_branches}"
     res = await server.mcp.call_tool("codex_capabilities", {"nope": 1})
     assert res.is_error is True
     assert res.structured_content["error"]["code"] == "invalid_arguments"
@@ -2107,7 +2110,7 @@ async def test_isolation_error_lists_allowed_values(clean_env, tmp_path):
     """unsupported_isolation surfaces the valid set as machine-readable allowed_values."""
     res = await server.codex_consult("q", workspace_root=str(tmp_path), isolation="bogus")
     assert res["error"]["code"] == "unsupported_isolation"
-    assert res["error"]["allowed_values"] == list(get_args(Isolation))
+    assert res["error"]["details"]["allowed_values"] == list(get_args(Isolation))
 
 
 async def test_scope_error_lists_allowed_values(monkeypatch, clean_env, tmp_path):
@@ -2119,8 +2122,8 @@ async def test_scope_error_lists_allowed_values(monkeypatch, clean_env, tmp_path
     monkeypatch.setattr(gitdiff, "gather_diff", raise_scope)
     res = await server.codex_review_changes(scope="nope", workspace_root=str(tmp_path))
     assert res["error"]["code"] == "invalid_scope"
-    assert res["error"]["offending_param"] == "scope"
-    assert res["error"]["allowed_values"] == list(get_args(ReviewScope))
+    assert res["error"]["details"]["field"] == "scope"
+    assert res["error"]["details"]["allowed_values"] == list(get_args(ReviewScope))
 
 
 async def test_job_running_error_is_actionable(monkeypatch, clean_env, tmp_path):
@@ -2130,11 +2133,12 @@ async def test_job_running_error_is_actionable(monkeypatch, clean_env, tmp_path)
     res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
     err = res["error"]
     assert err["code"] == "job_running"
-    assert err["retryable"] is True
-    assert err["repair_tool"] == "codex_job_status"
+    assert err["temporary"] is True
+    assert err["repair"]["next_step"] == "poll_job_status"
+    assert err["repair"]["tool"] == "codex_job_status"
     # repair params carry both the job_id AND the caller's workspace_root, so the
     # poll targets the same workspace rather than risking a wrong-workspace miss.
-    assert err["repair_tool_params"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
+    assert err["repair"]["arguments"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
     assert err["retry_after_ms"] == JOB_POLL_AFTER_MS
 
 
@@ -2156,7 +2160,7 @@ async def test_job_running_repair_omits_workspace_when_not_given(monkeypatch, cl
     monkeypatch.setattr(server.config, "job_store", lambda: store)
     monkeypatch.setattr(server.workspace, "server_cwd", lambda: str(tmp_path))
     res = await server.codex_job_result("job-abc")
-    assert res["error"]["repair_tool_params"] == {"job_id": "job-abc"}
+    assert res["error"]["repair"]["arguments"] == {"job_id": "job-abc"}
 
 
 async def test_job_not_found_points_at_list(monkeypatch, clean_env, tmp_path):
@@ -2165,11 +2169,12 @@ async def test_job_not_found_points_at_list(monkeypatch, clean_env, tmp_path):
     monkeypatch.setattr(server.config, "job_store", lambda: store)
     res = await server.codex_job_result("missing", workspace_root=str(tmp_path))
     assert res["error"]["code"] == "job_not_found"
-    assert res["error"]["offending_param"] == "job_id"
-    assert res["error"]["repair_tool"] == "codex_job_list"
+    assert res["error"]["details"]["field"] == "job_id"
+    assert res["error"]["repair"]["next_step"] == "list_jobs"
+    assert res["error"]["repair"]["tool"] == "codex_job_list"
     # codex_job_list takes only workspace_root (not job_id) — echo it so the
     # recovery lists jobs in the same workspace the lookup used.
-    assert res["error"]["repair_tool_params"] == {"workspace_root": str(tmp_path)}
+    assert res["error"]["repair"]["arguments"] == {"workspace_root": str(tmp_path)}
 
 
 def test_job_poll_interval_has_single_source():
@@ -2288,7 +2293,7 @@ async def test_consult_unexpected_exception_returns_internal_error(
     res = await server.codex_consult("q", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "internal_error"
-    assert res["error"]["retryable"] is True
+    assert res["error"]["temporary"] is True
     # The documented envelope still holds: meta is present and tier reflects the tool.
     assert res["meta"]["tier"] == "consult"
     assert res["meta"]["sandbox"] == "read-only"
@@ -2364,7 +2369,7 @@ async def test_input_too_large_carries_size_fields_delegate(monkeypatch, clean_e
     res = await server.codex_delegate("x" * 50, workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
-    assert res["error"]["offending_param"] == "task"
+    assert res["error"]["details"]["field"] == "task"
     assert res["error"]["limit_bytes"] == 10
     assert res["error"]["actual_bytes"] == 50
 
@@ -2399,7 +2404,7 @@ async def test_invalid_workspace_root_omits_candidate_roots(monkeypatch, clean_e
     monkeypatch.setattr(server, "_roots_from_ctx", fake_roots)
     res = await server.codex_consult("q", workspace_root="relative/not/abs")
     assert res["error"]["code"] == "invalid_workspace_root"
-    assert res["error"]["candidate_roots"] is None
+    assert res["error"].get("candidate_roots") is None
 
 
 async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
@@ -2584,7 +2589,7 @@ async def test_mcp_bad_enum_value_returns_invalid_arguments(clean_env, tmp_path)
             assert res.is_error is True
             assert _is_our_error_envelope(res.structured_content)
             assert res.structured_content["error"]["code"] == "invalid_arguments"
-            assert res.structured_content["error"]["offending_param"] == param
+            assert res.structured_content["error"]["details"]["field"] == param
         res = await client.call_tool(
             "codex_review_changes",
             {"scope": "everything", "workspace_root": str(tmp_path)},
