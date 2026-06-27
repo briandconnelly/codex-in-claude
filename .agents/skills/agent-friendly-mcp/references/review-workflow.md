@@ -7,7 +7,7 @@ A review is grounded when its findings cite evidence from the schema, the respon
 ## Severity Scale
 
 - **Critical** — agent will reliably fail to use the server correctly, or there is a security or data-integrity risk. Examples: a tool that mutates shared or persistent state advertised `readOnlyHint: true` (§3), `idempotentHint: true` on a tool that creates duplicates on retry, undocumented destructive side effects, secrets leaked in error payloads, a `stdio` server logging to stdout, an auth model collapsed to "credential failure" with no distinction between missing / wrong / insufficient scope. Blocks merge.
-- **Major** — agent will frequently choose the wrong primitive, waste tokens, or hit avoidable errors. Examples: overlapping tool descriptions, no progressive-disclosure mechanism on a 50-tool server, unstructured error strings with no symbolic codes, no capability fingerprint, resource lists that inline bodies.
+- **Major** — agent will frequently choose the wrong primitive, waste tokens, or hit avoidable errors. Examples: overlapping tool descriptions, bloated definitions or a 50-tool catalog with no client-independent surface reduction (and no progressive-disclosure mechanism matched to the target clients), unstructured error strings with no symbolic codes, no capability fingerprint, resource lists that inline bodies.
 - **Minor** — degrades agent experience but recoverable. Examples: verbose default responses with no detail toggle, missing `request_id` correlation, ambiguous parameter names whose schema types still constrain shape, summaries longer than three sentences.
 - **Nit** — style, naming, or doc improvement. Examples: inconsistent verb usage across tools, capitalization drift, a prompt that could be one sentence shorter.
 
@@ -35,7 +35,7 @@ Nine questions to ask while reading code and transcripts. Each should be answera
 - **Cold start.** What does an agent see when it first connects? Can it learn what the server does, what it does NOT do, and what prerequisites affect use in one read? Trace the first few definition loads from a transcript or simulate them from the schema. *(maps to §1, §2)*
 - **Tool selection.** Given two adjacent tools (same verb, overlapping nouns, or similar surface), can an agent pick the right one without invoking both? Are descriptions narrow enough that the schema alone disambiguates? Look for tools whose descriptions you cannot tell apart at a glance. *(maps to §3; see `examples.md` §10 for the failure-mode shape)*
 - **First repair.** When the agent makes an invalid call, does the error response tell it specifically how to retry — which field, which allowed values, which tool to call instead? Force one invalid call per error code documented for the tool and read the payload, not just the message. *(maps to §6; see `examples.md` §6 for the target payload shape)*
-- **Discovery cost.** How many tokens does the agent spend learning the server's surface before its first useful call? Does discovery paginate, filter, and offer summaries before full definitions? Count, do not estimate — a 50-tool server with no progressive disclosure typically costs an order of magnitude more than one with `search_tools` / `describe_tool`. *(maps to §2, §8; see `examples.md` §8 for one valid progressive-disclosure shape)*
+- **Discovery cost.** How many tokens does the agent spend learning the server's surface before its first useful call? Count, do not estimate — and measure serialized definition tokens, not tool count. The dominant lever is compact definitions, since the least-capable realistic client preloads the whole catalog regardless of any discovery tool. Credit `search_tools` / `describe_tool` only against the clients that actually withhold native definitions; on a preloading client they add cost. A bloated definition or an inflated catalog with no client-independent reduction (consolidation, a compact dispatcher, authorization-scoped catalogs) is the finding. *(maps to §2, §8; see `examples.md` §8 for one host-managed-disclosure shape)*
 - **Capability gating.** Which optional MCP capabilities does the server rely on after initialization?
   Verify that roots, completions, resource subscriptions, elicitation, tasks, and list-change notifications are advertised before use, and that weaker clients get a structured fallback instead of a mysterious method failure.
   *(maps to §1, §2, §4, §6, §7, §9)*
@@ -70,7 +70,7 @@ After the findings list, include a **checklist coverage table**. One row per sec
 | Section | Status | Notes |
 | --- | --- | --- |
 | §1 Server-Level | finding F1 | name collides with `data` server in multiplexed client |
-| §2 Discovery | OK | `search_tools` paginates; capability summary at `server/summary.md` |
+| §2 Discovery | OK | compact definitions; `search_tools` paginates (host-managed disclosure); capability summary at `server/summary.md` |
 | §3 Tools | findings F2, F3 | overlapping descriptions; one mutating tool with `readOnlyHint: true` |
 | §4 Resources | not-checked | server defines no resources |
 | §5 Prompts | OK | three prompts, all advisory; tool schemas remain authoritative |

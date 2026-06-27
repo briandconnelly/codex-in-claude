@@ -63,13 +63,14 @@ Checkpoint: §3, §4. See `examples.md` §1 for a worked tool schema and §5 for
 
 ## Step 5: Design the discovery surface
 
-Decide how an agent finds the right primitive without loading every definition.
+Decide how an agent finds the right primitive at the lowest cost its clients allow — remembering that the least-capable realistic client preloads every definition from `tools/list`.
 
 - Write the server capability summary: what it does, what it does NOT do, and any prerequisites that affect whether or how an agent should use it.
 - Expose the summary through a resource, discovery tool, or instructions field, whichever the client honors.
   Treat `instructions` as supplemental because some clients do not surface it to the model.
-- Pick a progressive-disclosure mechanism: `search_tools` / `describe_tool`, resource catalog, namespaced filters — at least one.
-- Make discovery selective: filter by name, namespace, or topic. A flat list of 80 tools is undiscoverable.
+- Make compact definitions your baseline: tight schemas and concise-but-sufficient descriptions lower cost on every client, including the ones that preload the whole catalog.
+- Then, if you need progressive disclosure, pick a mechanism by cost axis (§2): host-managed context disclosure (`search_tools` / `describe_tool`, resource catalog — client-dependent), server-managed catalog disclosure (`listChanged` with a fallback — client-dependent), or client-independent surface reduction (consolidation, a compact dispatcher, narrowly-scoped servers, authorization-scoped catalogs). Only the last helps a client that preloads and never lazy-loads.
+- Make discovery selective, but through a discovery tool, resource catalog, or authorization-scoped catalog — native `tools/list` takes only a pagination cursor and has no filter parameters. A flat list of 80 tools is undiscoverable.
 - Index resources; do not inline bodies. Catalog entries carry triage metadata only.
 - Publish `resources/templates/list` for URI-shaped resources that cannot or should not be fully enumerated.
 - Implement `completion/complete` for prompt arguments and resource-template variables with dynamic value sets when `server.capabilities.completions` is negotiated.

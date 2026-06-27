@@ -12,7 +12,7 @@ Typed tool schemas with descriptions and annotations, semantic discoverability a
 
 **Decision hinge.** The agent benefits from typed args and semantic discovery in the chat UI itself. If the UI never surfaces tool metadata to the model — or if there's only one obvious entry point — the typed schema isn't earning its weight.
 
-**Cost.** Token-heavy at scale. Loading hundreds of tool definitions upfront wastes context before the agent does any work, and a server with no filter on its catalog is functionally undiscoverable. You must provide good discovery primitives — capability summary, progressive disclosure, resource indexes — to keep the surface workable. See [contract-checklist.md §2](contract-checklist.md).
+**Cost.** Token-heavy at scale. The least-capable realistic client preloads every tool definition from `tools/list`, so hundreds of definitions waste context before the agent does any work, and a server with no way to narrow its catalog is functionally undiscoverable. Keep definitions compact (the universal baseline), reduce the catalog itself where you can (consolidation, a compact dispatcher, authorization-scoped catalogs), and add progressive disclosure matched to your clients' cost axis. See [contract-checklist.md §2](contract-checklist.md).
 
 ### Code-execution with MCP
 

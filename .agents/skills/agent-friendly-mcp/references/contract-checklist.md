@@ -58,14 +58,38 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
 
 - **State negative scope explicitly.** What the server does NOT do is as important as what it does. Negative scope prevents wasted exploration and wrong-tool selection.
 
-- **Provide at least one progressive-disclosure mechanism.** `search_tools` / `describe_tool` and resource-catalog endpoints are valid patterns. The requirement is that clients can load definitions on demand rather than receiving everything upfront.
+- **Compact definitions are the universal baseline.** Every entry `tools/list` returns is a complete `Tool` record — the protocol has no summary-only or filtered mode — so the one discovery cost you can lower regardless of client is the serialized size of each definition.
+  Use a tight `inputSchema`, no redundant prose, and descriptions precise enough to select and repair but no longer.
+  Measure serialized tokens, not tool count — and do not compress away the selection or safety information an agent needs.
+  Whether a client fetches every page and exposes all of it to the model is client-dependent; compact definitions pay off either way, which is what makes them the baseline.
 
-- **Make discovery selective.** Clients can filter by name, namespace, or topic. A server with 80 tools and no filter is functionally undiscoverable.
+- **Paginate large or unbounded catalogs, but treat it as scalability, not token savings.** Native `tools/list` cursor pagination caps peak response size, improves time-to-first-page, and lets a client stop early.
+  A client that walks every page still pays for every definition plus cursor overhead, so pagination lowers token cost only when a client intentionally declines to fetch or expose later pages.
+  Keep `nextCursor` semantics native (omission = done, see §8) and ordering deterministic so a catalog change mid-walk cannot strand or duplicate tools (see §9).
+
+- **Progressive disclosure of tool definitions is a client-dependent optimization, not a universal guarantee.** The least-capable realistic client preloads the whole catalog and exposes it to the model, and adding discovery tools cannot shrink that for it.
+  Design for that client, then choose a mechanism by which cost axis you can actually move on the clients you target:
+  - **Host/client-managed context disclosure** — `search_tools` / `describe_tool`, or a resource catalog of operation metadata.
+    The agent loads summaries, then pulls the few full definitions it needs.
+    This lowers *model-visible context* only when the host withholds native definitions and injects selected schemas on demand (or routes execution through a stable generic call tool).
+    On a host that still preloads `tools/list`, these are extra tools and round trips with no disclosure benefit, so document the host integration it assumes.
+  - **Server-managed catalog disclosure** — expose a small initial catalog and reveal more as *declared* state changes (authorization, configuration, workspace, or external state), emitting `notifications/tools/list_changed`.
+    `listChanged` is cache *invalidation*, not discovery: it tells a client to refetch, communicates no relevance, and strands tools on clients that ignore it.
+    Tie every reveal to such a declared change rather than to unrelated calls, so the surface still satisfies the stability rule below; a catalog that mutates as a hidden side effect of ordinary calls violates it.
+    Requires verified host refresh behavior, a stable fallback catalog for non-refreshing clients, and deterministic snapshot semantics so a change mid-pagination cannot drop or duplicate tools (see §9).
+  - **Client-independent surface reduction** — shrink the catalog *every* client sees.
+    Options: task-oriented consolidation (fewer, task-completing tools — see §3); a compact dispatcher tool (`{operation, arguments}` plus an on-demand `describe`/catalog operation — **not** a fat union that re-embeds every operation schema, which is consolidation at best and costs the same tokens); narrowly-scoped servers; deployment profiles; or stable authorization-scoped catalogs (§9).
+    This is the only axis that helps a client that preloads and never lazy-loads.
+    Trade-off: a dispatcher collapses per-operation descriptions, annotations, validation, and client approval into one tool, so enforce operation-level validation and policy server-side, and document that native annotations and approval apply to the dispatcher as a whole.
+
+- **Make discovery selective — through the right surface.** A server with 80 tools and no way to narrow them is functionally undiscoverable.
+  But native `tools/list` accepts only an opaque pagination cursor: it has no query, namespace, detail, or summary parameter.
+  Provide filtering and summary/detail modes through a discovery tool, a resource catalog, configuration, or authorization-scoped catalogs, and label them as such — never as a portable `tools/list` capability.
 
 - **Use native completion for hard-to-guess prompt and resource-template arguments.** If the server has prompt arguments or resource-template variables with large, dynamic, or enum-like value sets, advertise `server.capabilities.completions` and implement `completion/complete`.
   Use it proactively to reduce invalid IDs, paths, project keys, channel names, and URI components; keep tool-argument repair in normal tool errors because MCP completion does not complete arbitrary tool arguments.
 
-- **Discovery obeys token-efficiency rules.** Definitions paginate, support filtering, and return concise summaries by default with an opt-in detailed mode (see §8).
+- **Discovery obeys token-efficiency rules.** Keep each definition compact (the baseline above); where a discovery tool or resource catalog returns its own list-shaped payload, paginate it, support filtering, and return concise summaries by default with an opt-in detailed mode (see §8).
 
 - **Design for client variance.** Some clients preload tools, paginate discovery, ignore annotations, or expose resources poorly; keep discovery usable for the least-capable realistic client.
 
@@ -79,7 +103,7 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
 
 - **Discovery may vary by authorization context, but never by hidden side effects.** The tool and resource lists an agent sees may legitimately differ across auth scopes — an unauthorized scope simply does not see a capability. They MUST NOT drift as a side effect of unrelated calls within a connection: the same authorized client gets the same surface in the same order (see §9), so a cached client can trust it. Make differences auth-scoped, declared, and stable, not per-request surprises.
 
-Audit prompt: Can an agent find the right tool or resource for a task without loading every definition the server exposes?
+Audit prompt: On the clients this server actually targets, what must an agent load before its first useful call — and is that the smallest surface those clients allow, given that the least-capable realistic client preloads every tool definition?
 
 ---
 
@@ -132,7 +156,7 @@ Audit prompt: Can an agent find the right tool or resource for a task without lo
   A transient artifact written purely as response delivery — for example, a CSV or Parquet result file with a declared TTL, scoped to this call, and no shared visibility — is treated as part of the response, not a side effect, so the tool stays `readOnlyHint: true`.
   This is a judgment call, not settled spec: a reviewer who reads "environment" literally may disagree, so document the choice rather than asserting it.
   Prefer returning large results as resources or resource links with TTL metadata where you can, and reserve the response-delivery-artifact pattern for cases where an inline or linked resource does not fit.
-  Disclose the artifact through a structured response field (e.g., `result_artifact: {path, ttl_hours, mimeType}`) and the tool description, not by flipping the annotation.
+  Disclose the artifact through a structured response field (e.g., `result_artifact: {path, ttl_hours, mime_type}` — a house convention object, so its sub-fields use `snake_case`, not the native `Resource.mimeType`) and the tool description, not by flipping the annotation.
   See `examples.md` §12 for a worked response-delivery artifact.
 
 - **Annotations are hints, not security.** Declare them so agents can plan; do not rely on them for access control.
@@ -210,7 +234,7 @@ Audit prompt: For each tool, can an agent decide to use it, call it correctly, a
 
 - **Resources share the failure-recovery contract.** Missing-credential, not-found, gone, and rate-limit signals must be machine-readable (see §6).
 
-- **Resource failures use JSON-RPC errors.** Put the repair contract in structured `error.data` fields such as `human_message`, `machine_code`, `repair_hints`, and `recoverable`.
+- **Resource failures use JSON-RPC errors.** Put the repair contract in structured `error.data` using the same unified error envelope as tool results (§6) — `machine_code`, `human_message`, `details`, `temporary`, `retry_after_ms`, and a single `repair` object — not a separate vocabulary.
 
 - **Some clients do not expose resources well.** If discoverability matters for a read-oriented capability, provide a tool fallback that reaches the same indexed content.
 
@@ -262,6 +286,7 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 - **Include the offending value when safe.** The agent's repair attempt depends on knowing what it sent. Redact when sensitive; never omit silently.
 
 - **Signal retryability and rate limits explicitly.** Use `retry_after_ms`, `temporary: true|false`, and `rate_limit_remaining` where applicable. Agents need to distinguish "wait and retry" from "stop and reconsider."
+  Define the invariants so servers don't emit incompatible combinations: `temporary: true` means *the same operation, unchanged, may succeed later* (transient condition); `temporary: false` means it will not — repair or escalate instead. `retry_after_ms` is a non-negative integer only when a delay is known, and `null` otherwise; it must be `null` when `temporary: false`. Retryability is independent of repairability: a `temporary: false` error can still carry a `repair` (a *different* corrective call), and a `temporary: true` one may carry none.
 
 - **Include "what to do next" repair hints.** The corrective call, parameter, or filter. The first repair attempt is as important as the first call.
 
@@ -277,11 +302,32 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
   JSON-RPC errors are reserved for transport, protocol, and non-tool RPC methods (such as `resources/read` and `resources/list`); raising a JSON-RPC error from `tools/call` strips the structured-response contract from the failure path.
   See `examples.md` §6 for an actionable tool-result error payload.
 
-- **Resource semantic errors return as JSON-RPC errors.** `resources/read` and `resources/list` are non-tool RPC methods, so failures surface through the JSON-RPC envelope; carry the repair fields agents need (`human_message`, `machine_code`, `repair_hints`, and `recoverable`) in structured `error.data`.
+- **Resource semantic errors return as JSON-RPC errors.** `resources/read` and `resources/list` are non-tool RPC methods, so failures surface through the JSON-RPC envelope; carry the same unified error envelope (below) in structured `error.data`, renaming only `code`→`machine_code` and `message`→`human_message`.
 
 - **Errors include correlation context.** A `request_id`, the offending parameter, and (where applicable) the resource URI. Agents need to correlate failures with the requests that caused them.
 
-Audit prompt: For each failure mode, does the agent receive enough structured signal to either retry, repair, or escalate — without parsing the message field?
+### One error envelope, two carriers
+
+The failure-recovery contract is **one envelope** with identical field semantics regardless of where it surfaces. Tool-result errors carry it in `structuredContent` (alongside `isError: true`); resource and other non-tool RPC failures carry it in JSON-RPC `error.data`. The *only* permitted divergence is renaming `code`/`message` on the JSON-RPC side, because the native `code`/`message` already occupy those keys — every other field is the same name, shape, and cardinality on both surfaces. Do not invent surface-specific aliases (e.g. `repair_hints`) or surface-specific flags (e.g. `recoverable`).
+
+| Field | Tool result (`structuredContent`) | JSON-RPC (`error.data`) | Required? | Notes |
+| --- | --- | --- | --- | --- |
+| symbolic code | `code` | `machine_code` | yes | Stable symbolic string; the authoritative branch key. Renamed on JSON-RPC only to avoid shadowing native `code`. |
+| human text | `message` | `human_message` | yes | Short human-readable summary. Renamed on JSON-RPC only to avoid shadowing native `message`. |
+| field detail | `details` | `details` | where applicable | `{field, value, reason}`; redact `value` when sensitive, never omit silently. |
+| transient? | `temporary` | `temporary` | yes | See retryability invariants above. |
+| retry delay | `retry_after_ms` | `retry_after_ms` | yes (nullable) | Always present alongside `temporary`; a non-negative integer when a delay is known, else `null` (and always `null` when `temporary: false`). Always emit the key so agents distinguish `null` from a number without special-casing a missing field. |
+| rate budget | `rate_limit_remaining` | `rate_limit_remaining` | on rate-limit errors | Non-negative integer of remaining calls in the current window, where the surface exposes one. |
+| repair | `repair` | `repair` | where a corrective path exists | A single object `{next_step, tool, arguments, alternative}` — see below. Omit the field entirely when no repair exists (never emit `null` or an empty array). |
+| correlation | `request_id`, `resource_uri`, `fingerprint` | `request_id`, `resource_uri`, `fingerprint` | where applicable | `resource_uri` where the failure is tied to a resource. |
+
+- **Presence convention.** Fields marked *yes* are always emitted on both surfaces — `retry_after_ms` is the one nullable required field (it is bound to the always-present `temporary`, and `null` meaningfully signals "no known delay"). Every other field is omitted entirely when it does not apply; do not send a placeholder `null` or empty array for an absent optional field.
+
+- **`repair` is one object, not an array, on both surfaces.** Its shape is `{next_step, tool, arguments, alternative}`: `next_step` a stable symbolic label, `tool` and `arguments` the single primary corrective call (a real, callable surface), and `alternative` an *optional human-readable* fallback sentence for when the primary call doesn't fit. A single deterministic next action beats a ranked list the agent must choose from; if no corrective call exists, omit `repair` entirely rather than emitting `null` or an empty array. `alternative` is the one prose field in the envelope — it is fallback guidance for a human/agent to interpret, not a second machine-actionable hint (contrast the "real, callable surfaces" rule, which governs `tool`/`arguments`).
+
+- **There is no `recoverable` flag.** Whether the *same* resource or operation can succeed again is already carried by the symbolic `code`/`machine_code` (e.g. `resource_gone`) plus `temporary`; whether recovery is possible by *another* path is carried by the presence of a `repair`. A separate `recoverable` boolean is redundant and was prone to contradicting an accompanying repair.
+
+Audit prompt: For each failure mode, does the agent receive enough structured signal to either retry, repair, or escalate — without parsing the message field? And does the same failure carry the identical envelope whether it surfaces as a tool-result or a JSON-RPC error?
 
 ---
 
@@ -329,7 +375,9 @@ Audit prompt: Can an agent monitor, cancel, and recover a long-running operation
 
 - **Use cursor-based pagination by default.** Offset-based pagination is acceptable only when ordering is stable and the result set is small enough that pages don't shift between calls.
 
-- **Pagination responses include `has_more`.** If `has_more` is true, include a navigation token (`next_cursor`) and, where available, `estimated_total`.
+- **Native list methods use the protocol pagination shape, not a house convention.** `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` accept an optional opaque `cursor` request param and return an optional `nextCursor` in the result; **absence of `nextCursor` signals completion**. There is no native `has_more`, `next_cursor`, `estimated_total`, or `limit` on these methods, and page size is server-selected — do not rename `nextCursor` to snake_case or bolt a house convention onto a native list. See [native-wire-shapes.md](native-wire-shapes.md).
+
+- **A tool's own result payload MAY carry a documented house pagination convention.** When a `tools/call` result paginates domain data (not a native list method), `has_more` is acceptable: if `has_more` is true, include a navigation token (`next_cursor`) and, where available, `estimated_total`. These are declared domain output and belong in `structuredContent` under the tool's `outputSchema` so the agent can observe them — not under `_meta`, which clients may not surface to the model. Label them as convention, never as protocol fields.
 
 - **Provide filters that meaningfully reduce response size.** `since=`, `query=`, `category=`, `field=`. Filters that don't change wire size are noise.
 

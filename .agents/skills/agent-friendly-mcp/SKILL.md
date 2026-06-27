@@ -4,7 +4,7 @@ metadata:
     github-path: agent-friendly-mcp
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: f0c103dd15860b4e91aac731db3cd545218d9c9c
+    github-tree-sha: 7cbe114835f9d75940f0961e249c3b0dbd0ceb58
 name: agent-friendly-mcp
 ---
 # Agent-Friendly MCP
@@ -31,7 +31,7 @@ Revisit this skill when 2026-07-28 finalizes.
 - Design around user/agent tasks, not the underlying API's endpoint surface.
 - Make side effects, idempotency, rate limits, and agent-actionable prerequisites visible.
 - Default to compact, deterministic, structured output; structured data is authoritative and text or markdown is supplemental rendering for human-facing clients.
-- Provide explicit discovery primitives so agents can load capabilities selectively.
+- Provide explicit discovery primitives, but keep every definition compact: the least-capable realistic client preloads the whole catalog from `tools/list`, so compact schemas and concise descriptions are the universal baseline, and selective on-demand loading is a client-dependent optimization layered on top.
 - Design for the least-capable realistic client: some preload tools, paginate discovery, ignore annotations, or expose resources poorly.
 
 ## Native Fields vs Convention Extensions
@@ -39,7 +39,8 @@ Revisit this skill when 2026-07-28 finalizes.
 This skill is deliberately opinionated: native MCP fields alone are often insufficient for agent-friendliness, so well-designed servers add convention extensions such as structured `errors`, `repair` hints, a capability `fingerprint`, prompt prerequisites, and detail toggles.
 Keep them — but never let them masquerade as protocol.
 
-- Use native fields with their exact spec names and casing.
+- **Preserve native MCP field names and casing exactly; prefer `snake_case` for house/domain fields.**
+  A field's provenance is determined by the MCP type that contains it, **not** by its casing — native `_meta` carries an underscore, `name`/`code`/`repair` are lowercase on both sides, and a convention object may hold a `mimeType`-style name. So casing is a preference for house fields, never a test for whether a field is protocol.
   Tool: `name`, `title`, `description`, `icons`, `inputSchema`, `outputSchema`, `annotations`, `execution`, `_meta`.
   Resource: `uri`, `name`, `title`, `description`, `mimeType`, `size`, `icons`, `annotations`, `_meta`.
   Resource template: `uriTemplate`, `name`, `title`, `description`, `mimeType`, `icons`, `annotations`, `_meta`.
@@ -48,6 +49,7 @@ Keep them — but never let them masquerade as protocol.
 - Put convention metadata under a namespaced `_meta` key (e.g., `com.example/chunks`) — the spec-sanctioned extension point — so it cannot collide with future MCP fields.
 - Label every convention extension as such where it appears, so a reader can tell protocol from house style.
 - The examples in this skill keep some conventions inline at the top level for readability; production servers SHOULD namespace convention metadata under `_meta`. See `examples.md` §3/§4 for the worked `_meta` pattern.
+- For the exact native request/response envelopes, field names, and casing of the methods most often confused with house conventions — list pagination, completion, the `tools/call` result, and the task lifecycle — see [native-wire-shapes.md](references/native-wire-shapes.md).
 
 ## When To Use
 
@@ -79,13 +81,13 @@ Notation: bare `§N` always means a contract-checklist section; `ex§N` means se
 | § | Section | One-line rule | Worked examples |
 | --- | --- | --- | --- |
 | §1 | Server-Level | Identity, transport, auth modes, agent-actionable prerequisites, negotiated capabilities, and roots — learnable in one read. State handles are declared here: opaque IDs, lifetime, expiry, auth on every use. | ex§7, ex§8a |
-| §2 | Discovery | A capability summary plus at least one progressive-disclosure mechanism, so agents load definitions on demand rather than all upfront. | ex§7, ex§8 |
+| §2 | Discovery | A capability summary plus compact definitions as the universal baseline; progressive disclosure is a client-dependent optimization — pick a mechanism by cost axis (host-managed context, server-managed catalog, or client-independent surface reduction). | ex§7, ex§8 |
 | §3 | Tools | Task-completing tools over endpoint mirrors; strict closed schemas; honest annotations; failure paths are contract, not prose. | ex§1, ex§2, ex§10, ex§12, ex§13 |
 | §4 | Resources | Stable hierarchical URIs; index before body; stable chunk ids; templates + completion; subscriptions for mutable resources. | ex§3, ex§4, ex§5a, ex§5b |
 | §5 | Prompts | Advisory orchestration scaffolding only — reference tools by name, never redefine their contract. | ex§5 |
 | §6 | Failure Recovery | Stable symbolic codes, field-level feedback, explicit retryability, repair hints naming real callable surfaces. | ex§6 |
 | §7 | Long-Running Operations | Choose blocking / progress / task-augmented deliberately; declare duration and timeout; recover via the native task lifecycle with a labeled fallback. | ex§11 |
-| §8 | Token Efficiency | Concise default with a `detail` toggle; cursor pagination with `has_more`; explicit truncation with a repair hint; identifiers chosen by role. | ex§2 |
+| §8 | Token Efficiency | Concise default with a `detail` toggle; native list methods paginate with `nextCursor` (omission = done), while a tool's own result payload may use a documented `has_more` convention; explicit truncation with a repair hint; identifiers chosen by role. | ex§2 |
 | §9 | Versioning | Publish a capability fingerprint; deterministic list ordering; native list-changed notifications; discoverable deprecation. | ex§9 |
 
 ## Workflow
