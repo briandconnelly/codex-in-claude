@@ -2033,10 +2033,12 @@ async def test_missing_required_argument_returns_envelope():
 async def test_invalid_arguments_on_success_only_tool_conforms_to_schema():
     """codex_capabilities/status/models advertised success-only output schemas;
     they now advertise a success|error union so the invalid_arguments envelope
-    they can return conforms to the declared output schema."""
+    they can return conforms to the declared output schema. The assertion checks the
+    union's top-level anyOf actually references the ErrorResult branch — so it fails if
+    that branch is ever dropped (Copilot review, PR #145)."""
     for schema in (server.STATUS_SCHEMA, server.CAPABILITIES_SCHEMA, server.MODEL_CATALOG_SCHEMA):
-        branches = json.dumps(schema)
-        assert "ErrorResult" in branches or "invalid_arguments" in branches or "anyOf" in schema
+        refs = {branch.get("$ref") for branch in schema.get("anyOf", [])}
+        assert "#/$defs/ErrorResult" in refs, refs
     res = await server.mcp.call_tool("codex_capabilities", {"nope": 1})
     assert res.is_error is True
     assert res.structured_content["error"]["code"] == "invalid_arguments"
