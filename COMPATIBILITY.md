@@ -107,9 +107,15 @@ read that resource rather than hard-code the shape.
 on `ok` first; the full envelope shape lives solely at `codex://error-envelope`. This keeps the
 preloaded `tools/list` catalog compact.
 
-**Invalidate-on-upgrade:** background-job results written by a pre-upgrade server instance are
-treated as expired or corrupt by the post-upgrade server and are not returned. Callers that cache
-`job_id` values across a server restart must expect `job_not_found` and re-run the job.
+**Pre-upgrade job results:** a background-job *success* result written by a pre-upgrade server
+instance is still returned (its `meta.fingerprint` is re-stamped to the current surface).
+A stored *error* result whose shape predates this release no longer matches the schema-16 error
+envelope; it is treated as corrupt and returned as an `internal_error` result (message
+`"job result could not be returned: …"`, with guidance to start a new job), rather than the stale
+shape.
+Pre-upgrade *error* results are therefore effectively invalidated; compatible success results are
+not.
+(Records that have actually expired past their TTL still return `job_not_found`.)
 
 ## When `codex` changes
 

@@ -58,8 +58,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   error branch; the full error schema moves to the `codex://error-envelope` resource. Cuts the
   preloaded `tools/list` catalog ~44% (≈180 KB → ≈101 KB). (#137)
 - **BREAKING:** Removed unused `StatusResult.default_errors`.
-- Background-job results written by a pre-upgrade server are treated as expired/corrupt
-  (invalidate-on-upgrade migration).
+- Background-job *error* results written by a pre-upgrade server that no longer match the
+  schema-16 error envelope are returned as a corrupt `internal_error` result; compatible *success*
+  results are still returned (with `fingerprint` re-stamped).
+  (Migration: invalidate stale error results.)
 - The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-16`)
   for the agent-visible changes above (the async `readOnlyHint` fix #138 advanced it to `schema-13`;
   the `codex_job_cancel` `idempotentHint` fix #141 advanced it to `schema-14`; the `invalid_arguments`
