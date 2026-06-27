@@ -721,9 +721,23 @@ _OPAQUE_ERROR_BRANCH = {
 _ERROR_POINTER_DESC = _OPAQUE_ERROR_BRANCH["properties"]["error"]["description"]
 
 
+# Keys whose VALUES are sub-schema maps (property name → sub-schema).
+# The keys of these maps are NAMES (e.g. a field called "title"), NOT JSON-Schema
+# annotation keywords, so they must never be stripped.
+_SUBSCHEMA_MAPS = frozenset(
+    ("properties", "$defs", "definitions", "patternProperties", "dependentSchemas")
+)
+
+
 def _strip_schema_noise(node: object) -> object:
     """Recursively drop generated `title`/`description`/`default`, keeping only the one
-    intentional error-pointer description."""
+    intentional error-pointer description.
+
+    Context-aware: keys that appear inside a *subschema map* (``properties``,
+    ``$defs``, etc.) are property/definition NAMES, not JSON-Schema annotation
+    keywords.  A Pydantic model field named ``title`` or ``default`` must not be
+    removed from the map — only the object-level annotations should be stripped.
+    """
     if isinstance(node, dict):
         out = {}
         for k, v in node.items():
@@ -731,7 +745,12 @@ def _strip_schema_noise(node: object) -> object:
                 continue
             if k == "description" and v != _ERROR_POINTER_DESC:
                 continue
-            out[k] = _strip_schema_noise(v)
+            if k in _SUBSCHEMA_MAPS and isinstance(v, dict):
+                # Preserve the map keys (they are names, not annotations);
+                # recurse only into each sub-schema value.
+                out[k] = {name: _strip_schema_noise(sub) for name, sub in v.items()}
+            else:
+                out[k] = _strip_schema_noise(v)
         return out
     if isinstance(node, list):
         return [_strip_schema_noise(v) for v in node]

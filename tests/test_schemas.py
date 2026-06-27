@@ -93,14 +93,53 @@ def test_no_errorinfo_def_embedded(name, sch):
     assert "ErrorInfo" not in sch.get("$defs", {}), f"{name} still embeds ErrorInfo"
 
 
+def _annotation_title_present(node: object) -> bool:
+    """Return True if any schema OBJECT has a top-level ``title`` annotation key.
+
+    Distinguishes annotation ``title`` (a key directly in a schema dict alongside
+    ``type``/``properties``/etc.) from a property NAME that happens to be ``title``
+    (a key inside a ``properties`` or ``$defs`` mapping).  The latter is legitimate
+    and must not be flagged.
+    """
+    if isinstance(node, dict):
+        # Keys inside these maps are property/def names, not annotations.
+        _SUBSCHEMA_MAP_KEYS = frozenset(
+            ("properties", "$defs", "definitions", "patternProperties", "dependentSchemas")
+        )
+        if "title" in node:
+            return True
+        for k, v in node.items():
+            if k in _SUBSCHEMA_MAP_KEYS and isinstance(v, dict):
+                # Recurse into sub-schema values only, not into the map keys.
+                if any(_annotation_title_present(sub) for sub in v.values()):
+                    return True
+            elif _annotation_title_present(v):
+                return True
+    elif isinstance(node, list):
+        return any(_annotation_title_present(v) for v in node)
+    return False
+
+
 @pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
 def test_noise_stripped_except_error_pointer(name, sch):
-    assert not _has_key(sch, "title"), f"{name} has a title"
+    # No schema-object-level ``title`` annotations (generated Pydantic noise).
+    assert not _annotation_title_present(sch), f"{name} has a title annotation"
+    # No ``default`` annotations anywhere (a field named ``default`` is fine but
+    # Pydantic models here do not use that name, so _has_key is safe for defaults).
     assert not _has_key(sch, "default"), f"{name} has a default"
     # exactly one description survives: the opaque-error pointer
     text = json.dumps(sch)
     assert text.count('"description"') == 1
     assert "codex://error-envelope" in text
+    # Finding.title property is preserved in schemas that carry findings.
+    if "Finding" in sch.get("$defs", {}):
+        finding_def = sch["$defs"]["Finding"]
+        assert "title" not in finding_def, (
+            "Finding $def must not have an object-level title annotation"
+        )
+        assert "title" in finding_def.get("properties", {}), (
+            "Finding.title property must be present"
+        )
 
 
 @pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
@@ -301,3 +340,103 @@ CATALOG_BYTE_CAP = 116_000
 def test_wire_catalog_under_cap():
     size = _wire_catalog_bytes()
     assert size <= CATALOG_BYTE_CAP, f"catalog grew to {size} bytes (cap {CATALOG_BYTE_CAP})"
+
+
+# ---------------------------------------------------------------------------
+# Success-schema validation with non-empty findings (Finding.title regression)
+# Verifies that _strip_schema_noise preserves the Finding.title property so
+# jsonschema.validate does not reject a real payload as an additional property.
+# ---------------------------------------------------------------------------
+
+
+def _make_meta() -> s.Meta:
+    return s.Meta(
+        cwd="/repo",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=180,
+        elapsed_ms=42,
+    )
+
+
+def _make_finding() -> s.Finding:
+    return s.Finding(
+        severity="high",
+        title="Example finding title",
+        file="src/foo.py",
+        line=10,
+        evidence="some evidence",
+        risk="breaks strict MCP clients",
+        recommendation="fix the stripper",
+    )
+
+
+def test_consult_result_with_findings_validates_against_schema():
+    """CONSULT_RESULT_SCHEMA must accept a ConsultResult that has a non-empty findings list."""
+    import jsonschema
+
+    result = s.ConsultResult(
+        summary="All good",
+        findings=[_make_finding()],
+        meta=_make_meta(),
+    )
+    payload = result.model_dump(mode="json")
+    jsonschema.validate(payload, s.CONSULT_RESULT_SCHEMA)
+
+
+def test_review_result_with_findings_validates_against_schema():
+    """REVIEW_RESULT_SCHEMA must accept a ReviewResult with verdict/confidence and findings."""
+    import jsonschema
+
+    result = s.ReviewResult(
+        summary="Review done",
+        verdict="concerns",
+        confidence="high",
+        findings=[_make_finding()],
+        meta=_make_meta(),
+    )
+    payload = result.model_dump(mode="json")
+    jsonschema.validate(payload, s.REVIEW_RESULT_SCHEMA)
+
+
+def test_delegate_result_with_findings_validates_against_schema():
+    """DELEGATE_RESULT_SCHEMA must accept a DelegateResult with a diff and findings."""
+    import jsonschema
+
+    result = s.DelegateResult(
+        summary="Delegate done",
+        diff="--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n",
+        findings=[_make_finding()],
+        meta=_make_meta(),
+    )
+    payload = result.model_dump(mode="json")
+    jsonschema.validate(payload, s.DELEGATE_RESULT_SCHEMA)
+
+
+def test_job_result_consult_variant_with_findings_validates_against_schema():
+    """JOB_RESULT_SCHEMA must accept a ConsultResult variant with findings."""
+    import jsonschema
+
+    result = s.ConsultResult(
+        summary="Job consult done",
+        findings=[_make_finding()],
+        meta=_make_meta(),
+    )
+    payload = result.model_dump(mode="json")
+    jsonschema.validate(payload, s.JOB_RESULT_SCHEMA)
+
+
+def test_job_result_review_variant_with_findings_validates_against_schema():
+    """JOB_RESULT_SCHEMA must accept a ReviewResult variant with findings."""
+    import jsonschema
+
+    result = s.ReviewResult(
+        summary="Job review done",
+        verdict="fail",
+        confidence="low",
+        findings=[_make_finding()],
+        meta=_make_meta(),
+    )
+    payload = result.model_dump(mode="json")
+    jsonschema.validate(payload, s.JOB_RESULT_SCHEMA)

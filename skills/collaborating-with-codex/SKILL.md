@@ -100,7 +100,8 @@ jobs are read-only.
 Every tool returns an envelope:
 
 - Branch on `ok`. On `ok: false`, read `error.code` and follow `error.repair`;
-  `error.offending_param` names the bad input. Do not blindly retry.
+  `error.details.field` names the bad input, `error.repair.next_step` gives the symbolic recovery action, and `error.temporary` signals whether the condition is transient.
+  Do not blindly retry.
 - On `ok: true`: `summary` is Codex's headline and `findings[]` carry the detail
   (each tied to evidence — `file`/`line`). Only `codex_review_changes` adds a
   `verdict` (pass/concerns/fail/unknown) and `confidence`; `codex_consult` (Q&A) and
