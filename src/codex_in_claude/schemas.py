@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any, Literal
 from uuid import uuid4
@@ -793,9 +794,37 @@ DRY_RUN_SCHEMA = published_schema(DryRunResult)
 DELEGATE_DRY_RUN_SCHEMA = published_schema(DelegateDryRunResult)
 JOB_LIST_SCHEMA = published_schema(JobListResult)
 
+
+def _harden_error_envelope_schema(schema: dict) -> dict:  # type: ignore[type-arg]
+    """Post-process the raw Pydantic-generated ErrorResult schema to encode invariants
+    that Pydantic models enforce at runtime but that JSON Schema cannot express without
+    explicit work.
+
+    1. Ensures top-level ``required`` includes ``"ok"`` — Pydantic omits it because
+       ``ok`` carries a ``default`` of ``False``.
+    2. Encodes the model invariant ``temporary == False ⇒ retry_after_ms is None``
+       inside the ``ErrorInfo`` $def via a JSON Schema ``if/then`` conditional.
+
+    Operates on a deep copy to avoid mutating Pydantic's cached output in place.
+    """
+
+    s = copy.deepcopy(schema)
+    # 1. Require ok at the root.
+    required = s.setdefault("required", [])
+    if "ok" not in required:
+        required.append("ok")
+    # 2. Encode the temporary=False ⇒ retry_after_ms=null invariant in ErrorInfo.
+    error_def = s["$defs"]["ErrorInfo"]
+    error_def["if"] = {"properties": {"temporary": {"const": False}}, "required": ["temporary"]}
+    error_def["then"] = {"properties": {"retry_after_ms": {"const": None}}}
+    return s
+
+
 # The full error envelope, published once (resource codex://error-envelope). Root is the
 # outer ErrorResult (ok/error/meta) with all $defs — the canonical, discoverable contract.
-ERROR_ENVELOPE_SCHEMA = TypeAdapter(ErrorResult).json_schema(ref_template="#/$defs/{model}")
+ERROR_ENVELOPE_SCHEMA = _harden_error_envelope_schema(
+    TypeAdapter(ErrorResult).json_schema(ref_template="#/$defs/{model}")
+)
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via
 # `codex exec --output-schema FILE`). It mirrors the agent-visible result fields we

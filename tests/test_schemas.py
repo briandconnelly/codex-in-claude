@@ -148,20 +148,128 @@ def test_error_envelope_schema_validates_runtime_error():
 
 
 def test_no_raw_errorresult_model_dump_outside_serializer():
+    import ast
     import pathlib
-    import re
 
     src = pathlib.Path("src/codex_in_claude")
     offenders = []
     for p in src.rglob("*.py"):
         if p.name == "errors.py":
             continue
-        text = p.read_text()
-        # flag ErrorResult(...).model_dump( on one logical line/expression
-        if re.search(r"ErrorResult\([^\n]*\)\s*\.model_dump\(", text):
-            offenders.append(p.name)
-        # also flag the multiline form via a simple heuristic
+        tree = ast.parse(p.read_text(), filename=str(p))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "model_dump"
+                and isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Name)
+                and node.func.value.func.id == "ErrorResult"
+            ):
+                offenders.append(f"{p}:{node.lineno}")
     assert not offenders, f"raw ErrorResult.model_dump outside errors.py: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# ERROR_ENVELOPE_SCHEMA hardening tests (jsonschema)
+# ---------------------------------------------------------------------------
+
+
+def test_error_envelope_validates_temporary_error():
+    """A valid rate-limited (temporary=True, retry_after_ms set) envelope validates."""
+    import jsonschema
+
+    from codex_in_claude.errors import make_error, serialize_error
+    from codex_in_claude.schemas import ERROR_ENVELOPE_SCHEMA, ErrorResult, Meta
+
+    env = ErrorResult(
+        error=make_error("codex_rate_limited", "rate limited", retry_after_ms=5000),
+        meta=Meta(
+            cwd="/x",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=180,
+            elapsed_ms=1,
+        ),
+    )
+    payload = serialize_error(env)
+    jsonschema.validate(payload, ERROR_ENVELOPE_SCHEMA)  # must not raise
+
+
+def test_error_envelope_validates_non_temporary_error():
+    """A valid non-temporary error (invalid_arguments, retry_after_ms=null) validates."""
+    import jsonschema
+
+    from codex_in_claude.errors import make_error, serialize_error
+    from codex_in_claude.schemas import ERROR_ENVELOPE_SCHEMA, ErrorResult, Meta
+
+    env = ErrorResult(
+        error=make_error("invalid_arguments", "bad args"),
+        meta=Meta(
+            cwd="/x",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=180,
+            elapsed_ms=1,
+        ),
+    )
+    payload = serialize_error(env)
+    jsonschema.validate(payload, ERROR_ENVELOPE_SCHEMA)  # must not raise
+
+
+def test_error_envelope_rejects_missing_ok():
+    """An envelope missing the required 'ok' field is rejected by the schema."""
+    import jsonschema
+
+    from codex_in_claude.schemas import ERROR_ENVELOPE_SCHEMA
+
+    bad = {
+        "error": {
+            "code": "internal_error",
+            "message": "x",
+            "temporary": False,
+            "retry_after_ms": None,
+        },
+        "meta": {
+            "cwd": "/x",
+            "tier": "consult",
+            "sandbox": "read-only",
+            "isolation": "inherit",
+            "timeout_seconds": 180,
+            "elapsed_ms": 1,
+        },
+    }
+    with pytest.raises(jsonschema.exceptions.ValidationError):
+        jsonschema.validate(bad, ERROR_ENVELOPE_SCHEMA)
+
+
+def test_error_envelope_rejects_invariant_violation():
+    """An envelope with temporary=False and retry_after_ms=5 violates the model invariant."""
+    import jsonschema
+
+    from codex_in_claude.schemas import ERROR_ENVELOPE_SCHEMA
+
+    bad = {
+        "ok": False,
+        "error": {
+            "code": "internal_error",
+            "message": "x",
+            "temporary": False,
+            "retry_after_ms": 5,
+        },
+        "meta": {
+            "cwd": "/x",
+            "tier": "consult",
+            "sandbox": "read-only",
+            "isolation": "inherit",
+            "timeout_seconds": 180,
+            "elapsed_ms": 1,
+        },
+    }
+    with pytest.raises(jsonschema.exceptions.ValidationError):
+        jsonschema.validate(bad, ERROR_ENVELOPE_SCHEMA)
 
 
 # ---------------------------------------------------------------------------
