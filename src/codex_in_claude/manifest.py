@@ -73,6 +73,10 @@ async def build_manifest() -> dict[str, Any]:
         templates = [_canonicalize(_dump(t)) for t in await client.list_resource_templates()]
         prompts = [_canonicalize(_dump(p)) for p in await client.list_prompts()]
         instructions = client.initialize_result.instructions
+        # Envelope content is captured as an opaque serialized JSON string; its
+        # internal determinism (ErrorCode enum order, field ordering) relies on
+        # the ``ErrorCode = Literal[...]`` definition order and pydantic's stable
+        # field ordering, not on ``_canonicalize``.
         envelope = [
             _canonicalize(_dump(c)) for c in await client.read_resource("codex://error-envelope")
         ]

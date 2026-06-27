@@ -1,5 +1,6 @@
 """Guard: the manifest snapshot covers the full agent-visible surface (issue #140)."""
 
+import json
 from pathlib import Path
 
 from codex_in_claude import manifest, server
@@ -39,6 +40,16 @@ async def test_build_manifest_covers_full_surface():
     caps = server.codex_capabilities()
     expected_tools = set(caps["active_tools"]) | set(caps["free_tools"])
     assert {t["name"] for t in m["tools"]} == expected_tools
+    # All seven manifest sections must be present as keys.
+    assert set(m) >= {
+        "tools",
+        "resources",
+        "resource_templates",
+        "prompts",
+        "instructions",
+        "error_envelope",
+        "capabilities",
+    }
     for section in ("resources", "instructions", "error_envelope", "capabilities"):
         assert m[section], f"manifest section {section} is empty"
 
@@ -51,9 +62,9 @@ async def test_build_manifest_excludes_dynamic_fields():
     # Resource METADATA for codex://models is present; its dynamic CONTENT is not read.
     uris = {r["uri"] for r in m["resources"]}
     assert "codex://models" in uris
-    # The static error-envelope content (where ErrorCode lives) IS captured.
-    blob = manifest.manifest_json(m)
-    assert "invalid_workspace_root" in blob  # an ErrorCode literal
+    # The static error-envelope section (where ErrorCode lives) IS captured;
+    # assert specifically against it so the check proves error_envelope is non-empty.
+    assert "invalid_workspace_root" in json.dumps(m["error_envelope"])  # an ErrorCode literal
 
 
 async def test_build_manifest_strips_fastmcp_meta_from_tools():
