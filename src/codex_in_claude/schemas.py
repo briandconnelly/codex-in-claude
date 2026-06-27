@@ -828,6 +828,7 @@ def _harden_error_envelope_schema(schema: dict) -> dict:  # type: ignore[type-ar
     """
 
     s = copy.deepcopy(schema)
+    s["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     # 1. Require ok at the root.
     required = s.setdefault("required", [])
     if "ok" not in required:

@@ -233,7 +233,7 @@ def test_error_envelope_validates_temporary_error():
         ),
     )
     payload = serialize_error(env)
-    jsonschema.validate(payload, ERROR_ENVELOPE_SCHEMA)  # must not raise
+    jsonschema.Draft202012Validator(ERROR_ENVELOPE_SCHEMA).validate(payload)  # must not raise
 
 
 def test_error_envelope_validates_non_temporary_error():
@@ -255,7 +255,7 @@ def test_error_envelope_validates_non_temporary_error():
         ),
     )
     payload = serialize_error(env)
-    jsonschema.validate(payload, ERROR_ENVELOPE_SCHEMA)  # must not raise
+    jsonschema.Draft202012Validator(ERROR_ENVELOPE_SCHEMA).validate(payload)  # must not raise
 
 
 def test_error_envelope_rejects_missing_ok():
@@ -281,7 +281,7 @@ def test_error_envelope_rejects_missing_ok():
         },
     }
     with pytest.raises(jsonschema.exceptions.ValidationError):
-        jsonschema.validate(bad, ERROR_ENVELOPE_SCHEMA)
+        jsonschema.Draft202012Validator(ERROR_ENVELOPE_SCHEMA).validate(bad)
 
 
 def test_error_envelope_rejects_invariant_violation():
@@ -308,7 +308,17 @@ def test_error_envelope_rejects_invariant_violation():
         },
     }
     with pytest.raises(jsonschema.exceptions.ValidationError):
-        jsonschema.validate(bad, ERROR_ENVELOPE_SCHEMA)
+        jsonschema.Draft202012Validator(ERROR_ENVELOPE_SCHEMA).validate(bad)
+
+
+def test_error_envelope_schema_has_dialect():
+    """ERROR_ENVELOPE_SCHEMA declares the 2020-12 dialect.
+
+    Pydantic v2 emits $defs → 2020-12-style references.
+    """
+    from codex_in_claude.schemas import ERROR_ENVELOPE_SCHEMA
+
+    assert ERROR_ENVELOPE_SCHEMA["$schema"] == "https://json-schema.org/draft/2020-12/schema"
 
 
 # ---------------------------------------------------------------------------
@@ -321,19 +331,15 @@ def _wire_catalog_bytes() -> int:
 
     from codex_in_claude.server import mcp
 
-    tools = asyncio.run(mcp.list_tools())  # list[Tool], 16 tools
-    catalog = []
-    for t in tools:
-        entry = {"name": t.name, "description": t.description or ""}
-        if t.parameters:
-            entry["inputSchema"] = t.parameters
-        if t.output_schema:
-            entry["outputSchema"] = t.output_schema
-        catalog.append(entry)
-    return len(json.dumps(catalog, separators=(",", ":")))
+    tools = asyncio.run(mcp.list_tools())
+    catalog = [
+        t.to_mcp_tool().model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools
+    ]
+    return len(json.dumps(catalog, separators=(",", ":")).encode("utf-8"))
 
 
-# Cap = measured post-shrink size (~101,109) + ~15% headroom; was ~180,266 pre-shrink.
+# Cap = real MCP wire catalog (~103,526 bytes, incl. annotations/_meta) + ~12% headroom.
+# Was ~180,266 pre-shrink.
 CATALOG_BYTE_CAP = 116_000
 
 

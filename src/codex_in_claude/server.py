@@ -343,7 +343,11 @@ def _invalid_arguments_envelope(
                 "invalid_arguments",
                 message[:300],
                 repair_alternative=repair,
-                details=ErrorDetail(field=first.field, allowed_values=first.allowed_values),
+                details=ErrorDetail(
+                    field=first.field,
+                    reason=first.reason,
+                    allowed_values=first.allowed_values,
+                ),
                 invalid_arguments=items,
             ),
             meta=meta,

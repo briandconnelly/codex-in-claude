@@ -1931,6 +1931,7 @@ async def test_unknown_argument_returns_structured_envelope():
     items = err["invalid_arguments"]
     assert items[0]["field"] == "definitely_not_a_param"
     assert items[0]["reason"]
+    assert err["details"]["reason"] == items[0]["reason"]
     # envelope carries the contract identifiers that raw Pydantic errors lack
     assert sc["meta"]["fingerprint"] == FINGERPRINT
     assert sc["meta"]["request_id"]
@@ -2027,6 +2028,8 @@ async def test_missing_required_argument_returns_envelope():
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
     assert err["details"]["field"] == "question"
+    assert err["details"]["reason"]  # mirrored from first invalid_arguments entry
+    assert err["details"]["reason"] == err["invalid_arguments"][0]["reason"]
     assert err["invalid_arguments"][0]["field"] == "question"
 
 
