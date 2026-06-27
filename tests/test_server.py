@@ -2761,3 +2761,23 @@ def test_codex_status_tolerates_corrupt_cache_envelope(monkeypatch):
     # captured_at invalid -> as_of/age drop out, but interpretation must not raise.
     assert result["rate_limit"]["as_of"] is None
     assert result["rate_limit"]["status"] in {"unknown", "available", "limited", "exhausted"}
+
+
+# --------------------------------------------------------------------------- #
+# codex://error-envelope resource and capabilities pointer (Task 7)
+# --------------------------------------------------------------------------- #
+
+
+def test_error_envelope_resource_returns_full_schema():
+    from codex_in_claude.server import error_envelope_resource
+
+    schema = error_envelope_resource()
+    assert schema["$defs"], "schema must carry $defs"
+    assert "ErrorInfo" in schema["$defs"], "full ErrorInfo shape must live in $defs"
+
+
+def test_capabilities_advertises_error_envelope_pointer():
+    from codex_in_claude.server import codex_capabilities
+
+    caps = codex_capabilities()
+    assert caps["error_envelope_resource"] == "codex://error-envelope"

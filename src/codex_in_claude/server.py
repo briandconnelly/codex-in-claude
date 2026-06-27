@@ -47,6 +47,7 @@ from codex_in_claude.schemas import (
     DELEGATE_DRY_RUN_SCHEMA,
     DELEGATE_RESULT_SCHEMA,
     DRY_RUN_SCHEMA,
+    ERROR_ENVELOPE_SCHEMA,
     FINGERPRINT,
     JOB_LIST_SCHEMA,
     JOB_RESULT_SCHEMA,
@@ -1250,6 +1251,13 @@ def codex_models() -> dict:
 def codex_models_resource() -> dict:
     """Advisory Codex model catalog (same payload as the codex_models tool)."""
     return _model_catalog_payload()
+
+
+@mcp.resource("codex://error-envelope", mime_type="application/schema+json")
+def error_envelope_resource() -> dict:
+    """The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry
+    only a compact opaque error branch; this is the discoverable full shape."""
+    return ERROR_ENVELOPE_SCHEMA
 
 
 # --------------------------------------------------------------------------- #
