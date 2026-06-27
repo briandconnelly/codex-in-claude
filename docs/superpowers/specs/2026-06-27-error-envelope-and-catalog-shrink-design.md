@@ -4,54 +4,53 @@
 and #137 (`perf(schemas): shrink preloaded tool catalog dominated by output-schema unions`).
 
 **Delivery:** one PR (squash-merge), one `FINGERPRINT` bump (`schema-15` → `schema-16`),
-breaking-change label, `CHANGELOG.md` `## [Unreleased]` entry. Closes #135 and #137.
+breaking-change label, breaking commit marker (`!`), `CHANGELOG.md` `## [Unreleased]` entry.
+Closes #135 and #137.
 
-This design was developed collaboratively with Codex (a second model) and refined against its
-critique; the refinements are called out inline as **(Codex R1–R5)**.
+Developed collaboratively with Codex (a second model) across two review rounds. Round-1 refinements
+are marked **(Codex R#)**; round-2 review of this spec drove the revisions marked **(Codex²)**.
 
 ## Why these two together
 
 Both touch how output/error schemas are published from `src/codex_in_claude/schemas.py`. #137's real
-fix — publish a success-only output schema plus *one* compact, shared error envelope — is the natural
-moment to also reshape `ErrorInfo` for #135. The shared compact error envelope is the seam that joins
-them: splitting into two PRs would publish a compact error schema based on the *old* `ErrorInfo`, then
+fix — a success-only output schema plus *one* compact shared error envelope — is the natural moment
+to also reshape `ErrorInfo` for #135. The shared compact error envelope is the seam joining them:
+splitting into two PRs would publish a compact error schema based on the *old* `ErrorInfo`, then
 immediately reshape it — two fingerprint bumps and a dangerous intermediate contract. One atomic PR
-keeps the reshape, the central serializer, the published schema, and the resource pointer synchronized
-**(Codex R4)**.
+keeps the reshape, the central serializer, the published schema, and the resource pointer
+synchronized **(Codex R4)**.
 
 ## Background (verified against code)
 
-- Every tool's advertised `outputSchema` is built by `_object_union_schema()`
-  (`schemas.py:672`), which wraps a Pydantic `ok: true | false` union (a success model
-  `| ErrorResult`) in a top-level `type: object`. FastMCP embeds each tool's full, self-contained
-  JSON Schema document into `tools/list`.
-- The real 16-tool wire catalog is ~180 KB (~45 K tokens). A client that preloads `tools/list`
-  spends that before its first useful call.
-- Measured levers on the representative `codex_consult` tool (10,909 bytes, JSON-minified):
-  - success-only (drop the error branch): **−3,055**
-  - strip generated `title`/`description`/`default`: **−4,202**
-  - **both combined: −6,354 (58%)** → 4,555 bytes
+- Every tool's `outputSchema` is built by `_object_union_schema()` (`schemas.py:672`), wrapping a
+  Pydantic `ok: true | false` union (success model `| ErrorResult`) in a top-level `type: object`.
+  FastMCP embeds each tool's full self-contained JSON Schema document into `tools/list`.
+- The real 16-tool wire catalog is ~180 KB (~45 K tokens) — a cold-start cost for clients that
+  preload `tools/list`.
+- Measured levers on the representative `codex_consult` tool (10,909 bytes, JSON-min):
+  success-only **−3,055**; strip generated `title`/`description`/`default` **−4,202**;
+  **both −6,354 (58%)** → 4,555 bytes.
 - Largest repeated `$defs` per tool: `Meta` 2,389, `ErrorInfo` 1,951, `RateLimit` 1,822,
-  `RateLimitWindow` 1,062. `Meta`/`RateLimit` cannot be dropped — success branches carry
-  `meta` (and `meta.rate_limit`). The removable repeated cost is `ErrorInfo` (+ its repair
-  sub-objects), which only the error branch needs.
-- The error branch exists deliberately: the comment at `schemas.py:702` records that a returned
-  `ErrorResult` must validate against the declared `outputSchema` for strict MCP clients. Codex
-  confirmed MCP structured output must conform to `outputSchema` and strict clients may validate
-  independently — so a true success-only schema would be **incorrect**, not merely risky. The error
-  branch stays; we make it *opaque* and small.
-- Error envelopes are built inline at ~15 call sites as `ErrorResult(...).model_dump(mode="json")`
-  (`server.py` and others), which serializes every optional field as `null` on every error.
+  `RateLimitWindow` 1,062.
+- **`Meta` presence is not uniform (Codex²).** Only these success models carry a `meta: Meta` field:
+  `ConsultResult`/`ReviewResult`/`DelegateResult` (via `_SuccessBase`) and `JobStarted`. The other
+  success models — `StatusResult`, `CapabilitiesResult`, `ModelCatalogResult`, `JobStatus`,
+  `DryRunResult`, `DelegateDryRunResult`, `JobListResult` — have **no `Meta`**; `Meta` appears in
+  their published `$defs` today only because the error branch (`ErrorResult.meta`) pulls it in. This
+  invalidates the round-1 plan to `$ref` `Meta` from the error branch (it would dangle). See A1.
+- The error branch must stay: a returned `ErrorResult` must validate against the declared
+  `outputSchema` for strict MCP clients (`schemas.py:702`); Codex confirmed MCP structured output
+  must conform and strict clients may validate. We keep it but make it **fully opaque**.
+- Error envelopes are constructed at **~38** sites (`server.py` 30, `delegate.py` 4,
+  `orchestration.py` 3, `_worker.py` 1, `schemas.py` 1), most as
+  `ErrorResult(...).model_dump(mode="json")`, serializing every optional as `null` **(Codex²)**.
 
 ## Part A — #137 catalog shrink
 
-### A1. Compact opaque error branch
+### A1. Fully-opaque compact error branch
 
-Replace `_object_union_schema()` with a builder that produces, per tool:
-
-- the **success branch(es)** unchanged in structure (full success schema, so `summary`,
-  `findings`, `verdict`, `diff`, `meta`, … stay fully described), `anyOf`'d with
-- a **compact opaque error branch**:
+Replace `_object_union_schema()` with a builder that emits, per tool, the success branch(es)
+`anyOf`'d with a **fully opaque** error branch — `error` *and* `meta` opaque:
 
 ```json
 {
@@ -63,181 +62,261 @@ Replace `_object_union_schema()` with a builder that produces, per tool:
       "type": "object",
       "description": "Populated error envelope; full schema at resource codex://error-envelope"
     },
-    "meta": {"$ref": "#/$defs/Meta"}
+    "meta": {"type": "object"}
   }
 }
 ```
 
-- `error` is **opaque** (`type: object`) — this is what drops the ~1,951-byte `ErrorInfo` `$def`
-  (and its new `Repair`/`details` sub-objects) from all 12 published schemas. The runtime error
-  *value* is still fully populated and self-describing; only its *schema* moves to the resource.
-- `meta` is a `$ref` to the `Meta` `$def` that the success branch already pulls into the document,
-  so the ref costs only the reference string, not a second copy **(Codex R1)**. It accurately
-  reflects that error envelopes do carry a full `Meta`.
-- The one-line `description` on `error` is an **intentional discovery pointer**, exempt from the
-  stripping in A2, so a client that never fetches resources still learns where the error shape lives
-  **(Codex R3)**.
+- `error` opaque drops the ~1,951-byte `ErrorInfo` `$def` (and its `Repair`/`ErrorDetail`
+  sub-objects) from every published schema.
+- `meta` opaque (not `$ref`) is the **(Codex²)** fix for the dangling-ref bug: the 7 success models
+  without `Meta` would otherwise reference a `$def` nothing in the success closure provides. It also
+  *removes* `Meta`/`RateLimit`/`RateLimitWindow` from those 7 tools' published `$defs` entirely
+  (extra shrink). The 5 tools whose success carries `Meta` keep it in `$defs` for the success
+  branch, where it is genuinely described.
+- The one-line `description` on `error` is an **intentional discovery pointer**, exempt from A2
+  stripping, so a client that never fetches resources still learns where the full error shape lives
+  **(Codex R3 / Codex²)**.
 
-The top-level `ok` discriminator stays visible (current behavior). The `anyOf` ordering and the
-`ok` const in each branch let a client select the branch deterministically.
+### A2. Builder algorithm (explicit) (Codex²)
 
-### A2. Strip generated schema noise
+Round-1 left "the `ErrorInfo` defs disappear" unspecified; the old builder copies the *whole* union
+`$defs`. Specify it precisely:
 
-A recursive helper strips `title`, `description`, and `default` from each published `outputSchema`
-(including nested `$defs`), with one exception: the intentional `error` pointer description in A1.
-Output schemas become pure validation/shape contracts; field semantics live in `codex_capabilities`
-(`use_when`, `returns`, per-field docstrings) and in the self-describing result envelope.
+```
+def published_schema(*success_models):                # 1 or 3 models
+    # success-only union → its $defs are EXACTLY the success closure (no error defs)
+    adapter = TypeAdapter(Union[success_models]) if len(success_models) > 1 else TypeAdapter(success_models[0])
+    s = adapter.json_schema()                          # minimal $defs already
+    branches = s["anyOf"] if "anyOf" in s else [{k: s[k] for k in (...)}]   # success branch(es)
+    doc = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean", "description": "...discriminator..."}},
+        "required": ["ok"],
+        "anyOf": [*branches, OPAQUE_ERROR_BRANCH],     # success branch(es) + ONE opaque error
+        "$defs": s.get("$defs", {}),                   # success closure only
+    }
+    return strip_noise(doc)                            # A2 stripping; keep error-pointer description
+```
 
-Codex flagged blanket description removal as a modest regression and `codex_capabilities` as an
-imperfect substitute (a client may never call it) **(Codex R2)**. Decision: accept the trade-off for
-the success-schema field descriptions (the result envelope field names are self-explanatory and the
-58% win is large), but preserve discoverability of the one thing that genuinely disappears from the
-wire — the **error** shape — via the A1 pointer description + the A3 resource + `COMPATIBILITY.md`.
+- Because the opaque error branch references **no** `$def`, `$defs` is exactly the success closure —
+  no manual pruning, no unreachable defs, no dangling refs.
+- `JOB_RESULT_SCHEMA` passes **all three** success models
+  (`DelegateResult, ConsultResult, ReviewResult`) → 3 success branches + 1 opaque error = **4
+  discriminated branches** (a test asserts exactly four).
 
-### A3. Publish the full error schema once
+### A3. Strip generated schema noise
 
-The full reshaped `ErrorResult`/`ErrorInfo` JSON Schema (post-#135 shape) is published in exactly
-one canonical place and referenced elsewhere:
+A recursive helper strips `title`, `description`, `default` from each published `outputSchema`
+(including nested `$defs`), with the single exception of the A1 `error` pointer description. Field
+semantics live in `codex_capabilities` (`use_when`, `returns`, per-field docstrings) and the
+self-describing result envelope. Codex flagged blanket description removal as a modest regression
+and `codex_capabilities` as an imperfect substitute (a client may never call it) **(Codex R2)**;
+the accepted trade-off preserves discoverability of the one thing that truly leaves the wire — the
+error shape — via the A1 pointer + the A4 resource + `COMPATIBILITY.md`.
 
-- a new MCP **resource** `codex://error-envelope` returning the full schema;
-- a **pointer** in `codex_capabilities` (a stable string field, e.g.
+### A4. Publish the full error schema once
+
+Canonical, single source of truth, referenced elsewhere:
+
+- a new MCP **resource** `codex://error-envelope` whose document root is the **full `ErrorResult`**
+  (outer `ok`/`error`/`meta`, `$defs` included), served as `application/schema+json` with an
+  explicit `$schema` dialect **(Codex² — resolves the root-ambiguity finding)**;
+- a **pointer** in `codex_capabilities` (a stable string field
   `error_envelope_resource: "codex://error-envelope"`) — a pointer, not the embedded schema, so the
   fingerprint-cacheable capabilities payload stays small;
-- prose in `COMPATIBILITY.md` documenting the envelope as the canonical error contract and noting
-  the deliberate omissions (opaque wire branch; `details.value` never echoed).
+- prose in `COMPATIBILITY.md`, `README.md`, and `docs/REFERENCE.md` documenting the canonical error
+  contract and the deliberate divergences (opaque wire branch; `details.value` never echoed).
 
-### A4. CI catalog-size gate
+### A5. CI catalog-size gate (Codex R5)
 
 A test builds the real 16-tool wire catalog (mcp-shaped, compact, `mode="json"`) and asserts its
-total **serialized byte size** stays under a cap. Bytes are the primary, deterministic gate; token
-count is reported advisorily using a pinned tokenizer, not asserted, since token counts drift with
-tokenizer/toolchain changes **(Codex R5)**. The cap is set from the measured post-change size plus
-~15% headroom (target: well under half the current ~180 KB). The exact number is fixed during
-implementation after measuring the assembled catalog.
+total **serialized byte size** stays under a cap — bytes are the primary deterministic gate. Token
+count is reported advisorily with a pinned tokenizer, not asserted. The cap is set from the measured
+post-change catalog plus ~15% headroom (the exact number fixed during implementation after
+assembling the catalog).
 
 ## Part B — #135 error-envelope reshape
 
-Target shape (agent-friendly-mcp §6 unified repair contract), path (a) full consolidation:
+Target (agent-friendly-mcp §6, path (a) consolidation):
 
 ```python
-class Repair(BaseModel):
-    next_step: str                 # was: repair (prose)
-    tool: str | None = None        # was: repair_tool
-    arguments: dict[str, Any] | None = None   # was: repair_tool_params
-    alternative: str | None = None # new: a fallback recovery path when present
+RepairStep = Literal[                  # symbolic, branchable — NOT prose (Codex²)
+    "retry_after_delay", "correct_arguments", "use_allowed_value", "reduce_input",
+    "use_workspace_in_roots", "poll_job_status", "list_jobs", "start_new_job",
+    "authenticate", "install_codex", "install_git", "init_git_repo",
+    "update_plugin", "inspect_and_retry", "retry_then_report",
+]
 
-class ErrorDetail(BaseModel):      # §6 details{field, value, reason}, value omitted by policy
-    field: str | None = None       # was: offending_param
+class Repair(BaseModel):
+    next_step: RepairStep              # stable symbolic label
+    tool: str | None = None           # was: repair_tool
+    arguments: dict[str, Any] | None = None   # was: repair_tool_params
+    alternative: str | None = None    # human-readable prose fallback (was: the prose `repair`)
+
+class ErrorDetail(BaseModel):         # §6 details{field,value,reason}; value omitted by policy
+    field: str | None = None          # was: offending_param
     reason: str | None = None
     allowed_values: list[str] | None = None   # was: top-level allowed_values
-    # NOTE: no `value` key. The rejected value is deliberately never echoed — a Literal/string
-    # param can carry a secret and best-effort redaction cannot reliably catch a plain one. The
-    # caller already holds what it sent. Documented divergence from §6's details{field,value,reason}.
+    # No `value` key: a Literal/string param can carry a secret and best-effort redaction cannot
+    # reliably catch a plain one; the caller already holds what it sent. Documented §6 divergence.
 
 class ErrorInfo(BaseModel):
     code: ErrorCode
     message: str
-    temporary: bool = False         # was: retryable
-    retry_after_ms: int | None = None    # key kept present even when null (§6); see invariant
-    repair: Repair
+    temporary: bool                   # was: retryable — schema-REQUIRED (no default) (Codex²)
+    retry_after_ms: int | None = Field(...)   # required-nullable, ge=0; always present (§6) (Codex²)
+    repair: Repair | None = None      # omitted only when no corrective path exists (§6)
     details: ErrorDetail | None = None
-    invalid_arguments: list[InvalidArgument] | None = None   # KEPT (see B2)
-    # Documented top-level extensions (out of scope of the "fold the four repair siblings" change):
+    invalid_arguments: list[InvalidArgument] | None = None   # KEPT — multi-field carrier (B2)
+    # Documented top-level extensions (unchanged; out of scope of the four-sibling fold):
     limit_bytes: int | None = None
     actual_bytes: int | None = None
     candidate_roots: list[str] | None = None
 ```
 
-### B1. Field renames / folds
+### B1. Renames / folds + symbolic next_step (Codex²)
 
-- `retryable` → `temporary`.
-- The four flat siblings fold into `Repair`: `repair` (prose) → `repair.next_step`;
-  `repair_tool` → `repair.tool`; `repair_tool_params` → `repair.arguments`; `offending_param`
-  and `allowed_values` move into `details` (`details.field`, `details.allowed_values`).
-- `repair` becomes a required object (every error carries at least a `next_step`).
+`retryable`→`temporary`. The four flat siblings fold into `Repair`: `repair_tool`→`repair.tool`;
+`repair_tool_params`→`repair.arguments`; the prose `repair`→`repair.alternative`; `offending_param`
+and `allowed_values`→`details`. **Crucially, `next_step` is a symbolic label, not the old prose** —
+§6 examples (`"unarchive_then_retry"`, `"lookup_then_retry"`) show agents branch on it. A per-error-code
+mapping table (implementer fills exact `tool`/`alternative` text from the existing prose):
 
-### B2. `details` vs `invalid_arguments` (Codex R2)
+| ErrorCode | next_step | tool / arguments |
+|---|---|---|
+| `codex_rate_limited` | `retry_after_delay` | — (uses `retry_after_ms`) |
+| `job_running` | `poll_job_status` | `codex_job_status{job_id}` |
+| `job_not_found` | `list_jobs` | `codex_job_list` |
+| `job_cancelled`, `job_timeout` | `start_new_job` | — |
+| `job_failed`, `nonzero_exit`, `worktree_error` | `inspect_and_retry` | — |
+| `invalid_arguments`, `invalid_scope`/`invalid_base`/`invalid_commit`/`invalid_paths`, `invalid_workspace_root` | `correct_arguments` | — |
+| `unsupported_tier`/`unsupported_sandbox`/`unsupported_isolation`/`unsupported_detail` | `use_allowed_value` | — (uses `details.allowed_values`) |
+| `workspace_outside_roots` | `use_workspace_in_roots` | — (uses `candidate_roots`) |
+| `input_too_large`, `context_too_large` | `reduce_input` | — (uses `limit_bytes`/`actual_bytes`) |
+| `codex_auth_required` | `authenticate` | — |
+| `codex_not_found` | `install_codex` | — |
+| `git_unavailable` | `install_git` | — |
+| `not_a_git_repo` | `init_git_repo` | — |
+| `cli_contract_changed`, `unexpanded_env_placeholder` | `update_plugin` | — |
+| `internal_error`, `invalid_json`, `schema_violation` | `retry_then_report` | — |
 
-Codex correctly warned that a singular `details` would lose information for multi-field validation
-failures. Resolution: **keep** `invalid_arguments: list[InvalidArgument]` as the complete
-per-field carrier for the `invalid_arguments` error code. `details` is the §6 singular object and,
-for an `invalid_arguments` error, **deterministically mirrors the first entry** (first by Pydantic
-error order — the same mirroring rule the current code uses for `offending_param`/`allowed_values`).
-For non-argument errors that have a single offending field, `details` carries it directly. No
-information is lost; clients that want every field read `invalid_arguments`, clients that want the
-§6 single-detail read `details`.
+### B2. `details` vs `invalid_arguments` (Codex R2 / Codex²)
 
-### B3. Invariant in the model (Codex R4)
+`invalid_arguments: list[InvalidArgument]` is **kept** as the complete per-field carrier for the
+`invalid_arguments` code (avoids losing multi-field failures). `details` is the §6 singular object;
+for an `invalid_arguments` error it **deterministically mirrors the first entry** (first by Pydantic
+error order). For other single-field errors `details` carries that field directly. Clients wanting
+every field read `invalid_arguments`; clients wanting the §6 single-detail read `details`.
 
-`temporary == False ⇒ retry_after_ms is None` is enforced by a Pydantic `model_validator` on
-`ErrorInfo`, **not** by the serializer. Constructing an `ErrorInfo(temporary=False, retry_after_ms=5)`
-raises. The serializer is a thin policy layer on top. Both layers are tested independently.
+### B3. Invariants in the model (Codex R4 / Codex²)
 
-### B4. Central error serializer + null stripping
+Enforced by Pydantic on `ErrorInfo`, not the serializer:
+- `temporary == False ⇒ retry_after_ms is None` (a `model_validator`);
+- `retry_after_ms` is `ge=0`;
+- `temporary` and `retry_after_ms` are **schema-required** (required-nullable for `retry_after_ms`)
+  so the canonical resource schema (A4) matches emitted payloads — not optional-with-default, which
+  would publish them as absent-capable.
 
-A single helper — e.g. `serialize_error(result: ErrorResult) -> dict` — replaces every inline
-`ErrorResult(...).model_dump(mode="json")`. It:
+### B4. Central error builder + serializer (Codex²)
 
-- does `model_dump(mode="json", exclude_none=True)` to drop absent optionals (§8 "strip
-  null/placeholder fields"), then
-- **force-restores `error.retry_after_ms = null`** when absent, because §6 wants that key always
-  present (it is the one intentional retained null).
+A single module owns error construction and serialization — e.g. `make_error(code, message, *, repair=..., details=..., temporary=..., retry_after_ms=...) -> ErrorInfo` and
+`serialize_error(ErrorResult) -> dict`. `serialize_error`:
+- `model_dump(mode="json", exclude_none=True)` to strip absent optionals (§8), then
+- **force-restores `error.retry_after_ms = null`** when absent (§6 keeps that key).
 
-All ~15 call sites in `server.py` (and any in `orchestration.py`/`_worker.py`/`delegate.py`) route
-through this helper. Success envelopes are out of scope for this change (the issue scopes null
-stripping to the error envelope); they keep their current serialization.
+All ~38 construction sites route through it (`server.py`, `delegate.py`, `orchestration.py`,
+`_worker.py`). A **mechanical test** asserts no `ErrorResult(...).model_dump(` call exists outside
+the serializer module, preventing regressions.
 
-## Security: secret non-reflection (Codex R4 / next-steps)
+### B5. Persisted-job error paths (Codex²)
 
-A dedicated test asserts a rejected value cannot leak through **any** error field: `message`,
-`repair.arguments`, `details`, `invalid_arguments[].reason`, or CLI-derived text. This guards the
-deliberate `details.value` omission against regressions elsewhere.
+- `_job_result_impl` currently returns a stored error payload **unchanged**. Change it to return
+  `serialize_error(ErrorResult.model_validate(payload))` after validation, so stored errors get the
+  new shape + null stripping.
+- **Migration policy (user-approved): invalidate, documented.** A pre-upgrade (schema-15)
+  `result.json` that fails the new `ErrorResult` validation is treated as corrupt via the existing
+  `_job_result_corrupt` path (points at start-a-new-job). Jobs are TTL-bounded and short-lived, so a
+  job spanning an upgrade is rare; documented in `CHANGELOG.md`/`COMPATIBILITY.md`. No translation
+  shim.
+- `_worker.py`'s disk-written crash error uses the new shape via `make_error`/`serialize_error`. A
+  long-lived worker that writes an old-format result after a new server starts falls under the same
+  invalidate-documented policy.
 
-## Testing (TDD — failing test first for each unit)
+## §6 conformance — honest divergence list (Codex²)
 
-1. **Schema builder** — every tool's published `outputSchema`:
-   - validates a representative success payload and a representative error payload (the opaque
-     branch accepts the full runtime error object);
-   - every internal `$ref` resolves (no dangling refs after strip/assembly) **(Codex R1/R5)**;
-   - `ok` selects the intended branch (`true` → success shape, `false` → error branch);
-   - contains no `title`/`default` and no `description` except the A1 error pointer.
-2. **Catalog size** — assembled 16-tool wire catalog under the byte cap (A4).
-3. **`ErrorInfo` model** — rename surface; `Repair`/`ErrorDetail` shape; the `temporary`/
-   `retry_after_ms` invariant raises on violation (construction-level).
-4. **Serializer** — absent optionals stripped; `retry_after_ms: null` retained; round-trips for a
-   retryable error (with backoff) and a non-retryable error.
-5. **`invalid_arguments`** — a multi-field validation error preserves every entry in
-   `invalid_arguments` and `details` mirrors the first deterministically (B2).
-6. **Secret non-reflection** — rejected value absent from all error fields.
-7. **Resource + capabilities** — `codex://error-envelope` returns the full schema; capabilities
-   exposes the pointer.
-8. **Regression** — every existing error-path test updated to the new field names; existing
-   strict-client output-schema validation still passes.
+Document these as deliberate house divergences; do **not** claim "full §6 alignment":
+- envelope nests as `ok`/`error`/`meta` (correlation `request_id`/`fingerprint` live under `meta`,
+  not in `error`);
+- `details.value` is never echoed (security; §6 says include-when-safe / redact-when-sensitive);
+- `invalid_arguments` is a house extension to §6 for multi-field validation;
+- `repair` is omitted only when no corrective path exists (§6-faithful), but in practice every
+  current `ErrorCode` maps to a `next_step` (table B1).
 
-Coverage stays ≥ 95% (CI floor). `ruff check`, `ruff format --check`, and `ty check` must pass.
+## Security: bounded secret non-reflection (Codex²)
+
+Replace the single broad guarantee with bounded tests stating what is and isn't guaranteed:
+1. an invalid-argument **value** never appears anywhere in the envelope (`message`, `details`,
+   `repair.arguments`, `invalid_arguments[].reason`);
+2. unknown-key **names** are bounded/handled per the existing `invalid_arguments` policy;
+3. CLI failure text becoming `error.message` (`codex.py:256` embeds stderr/stdout) passes through
+   the **existing redaction policy** first — message reflection is bounded by redaction, not an
+   absolute guarantee;
+4. `repair.arguments` contains only explicitly-mapped values (table B1), never raw user input.
+
+## Testing (TDD — failing test first per unit)
+
+1. **Builder/schema** — for **all 12** schema constants: representative success and error payloads
+   validate; **every `$ref` resolves** (no dangling refs); `ok` selects the intended branch; no
+   `title`/`default` and no `description` except the A1 error pointer.
+2. **JOB_RESULT_SCHEMA** — exactly 4 discriminated branches; all three success types validate (B/A2).
+3. **Catalog size** — assembled 16-tool wire catalog under the byte cap (A5).
+4. **`ErrorInfo` model** — renames; `Repair`/`ErrorDetail` shape; `temporary`/`retry_after_ms`
+   required + `ge=0`; invariant raises on `temporary=False, retry_after_ms=set` (construction-level).
+5. **Serializer** — absent optionals stripped; `retry_after_ms: null` retained; round-trips for a
+   retryable (backoff) and non-retryable error. Mechanical no-raw-`model_dump` test (B4).
+6. **`invalid_arguments`** — multi-field error preserves every entry; `details` mirrors first
+   deterministically (B2).
+7. **Secret non-reflection** — the four bounded tests above.
+8. **Persisted jobs** — old-format `result.json` → corrupt path; new-format error round-trips
+   through `serialize_error` with `job_id`/`fingerprint` patched (B5).
+9. **Resource + capabilities** — `codex://error-envelope` returns the full `ErrorResult` schema and
+   validates against a real runtime error value; capabilities exposes the pointer.
+10. **Regression** — every existing error-path test migrated to new field names; existing
+    strict-client output-schema validation still passes; `default_errors` removal reflected.
+
+Coverage ≥ 95% (CI floor). `ruff check`, `ruff format --check`, `ty check` must pass.
 
 ## Lockstep / surface bookkeeping
 
-- `FINGERPRINT`: `codex-in-claude/0.1/schema-15` → `schema-16` (agent-visible surface changes:
-  error field names, output-schema shapes, a new resource).
-- `CHANGELOG.md`: entry under `## [Unreleased]` (Changed — breaking; Added — `codex://error-envelope`
-  resource + CI catalog cap).
-- **No** version-literal bumps (`pyproject.toml`, `.claude-plugin/plugin.json`, `.mcp.json` pin
-  stay at the released version — those move only in the dedicated `chore: release` PR).
-- `COMPATIBILITY.md`: document the canonical error envelope and the two deliberate divergences
-  (opaque wire branch; `details.value` never echoed).
-- PR: Conventional Commit title, `breaking-change` label, `Closes #135` + `Closes #137`.
+- `FINGERPRINT`: `schema-15` → `schema-16`.
+- `CHANGELOG.md` `## [Unreleased]`: Changed (breaking — error field renames, output-schema shapes,
+  `default_errors` removal, job-migration policy); Added (`codex://error-envelope` resource, CI
+  catalog cap).
+- **No** version-literal bumps (`pyproject.toml`, `.claude-plugin/plugin.json`, `.mcp.json` pin stay
+  at the released version — moved only in the dedicated `chore: release` PR).
+- Update **`COMPATIBILITY.md`, `README.md` (lines ~158-159), `docs/REFERENCE.md` (lines ~18-31)** to
+  the new field names; include an old→new migration table **(Codex²)**.
+- PR title: a **breaking** Conventional Commit (e.g. `refactor(schemas)!: …` or with a
+  `BREAKING CHANGE:` footer); `breaking-change` label; `Closes #135` + `Closes #137` **(Codex²)**.
+
+## Decisions resolved
+
+- **`StatusResult.default_errors`: removed** (unused; un-embeds `ErrorInfo` from the status success
+  schema). User-approved.
+- **Job migration: invalidate, documented.** User-approved.
+- **`codex://error-envelope` root: full `ErrorResult`** (outer envelope, `$defs` included).
 
 ## Out of scope (YAGNI)
 
 - Stripping nulls from *success* envelopes (issue scopes it to errors).
-- Cross-document `$ref` to share `Meta`/`RateLimit` across tools — infeasible (each `tools/list`
-  entry is a self-contained document; cross-document refs aren't portable). Stated in #137.
-- Reducing the 16-tool count — the count is justified by distinct tasks; the lever is per-definition
-  size.
+- Cross-document `$ref` to share `Meta`/`RateLimit` across tools — infeasible (self-contained
+  documents); the opaque-`meta` branch already removes `Meta` from the 7 Meta-less tools.
+- Reducing the 16-tool count — justified by distinct tasks; the lever is per-definition size.
 
-## Open implementation detail (decide while coding, not blocking)
+## Open implementation details (decide while coding, not blocking)
 
-- Exact byte cap number (A4) — set from the measured assembled catalog + ~15% headroom.
-- Whether `serialize_error` lives in `schemas.py` or a small `errors.py` — pick by where the call
-  sites read most naturally; `_core` must not import from its parent package.
+- Exact byte cap number (A5) — measured assembled catalog + ~15% headroom.
+- Module home for `make_error`/`serialize_error` — `schemas.py` vs a small `errors.py`; pick by call-site
+  readability; `_core` must not import from its parent package.
+- Exact `tool`/`alternative` prose per row in table B1 — lifted from the existing repair strings.
