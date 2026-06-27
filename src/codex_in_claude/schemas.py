@@ -12,8 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 
 # Bump this whenever the agent-visible surface changes: tool names, input or
-# output schemas, the ErrorCode set, the tier/sandbox/isolation/scope value sets,
-# or the capability guarantees. Clients cache by it.
+# output schemas, descriptions, annotations, the ErrorCode set, the
+# tier/sandbox/isolation/scope value sets, the capability guarantees, the server
+# instructions (CAPABILITY_SUMMARY), resource metadata, or the
+# codex_capabilities payload. Clients cache by it. The committed manifest
+# snapshot (tests/fixtures/manifest_snapshot.json, guarded by
+# tests/test_manifest.py) fails CI on any covered change so the bump is never
+# silently skipped — regenerate that fixture in the same commit as the bump.
 FINGERPRINT = "codex-in-claude/0.1/schema-16"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running

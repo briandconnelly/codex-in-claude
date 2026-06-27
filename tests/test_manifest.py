@@ -6,7 +6,7 @@ from codex_in_claude import manifest, server
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
-# Pinned in Step 3 below, after generating the fixture.
+# sha256 of the canonical manifest JSON; regenerate per the test failure message.
 EXPECTED_MANIFEST_HASH = "36e769a2326814d52315273e7f7bc12daf29b9667b27378e57f260fbd4115553"
 
 

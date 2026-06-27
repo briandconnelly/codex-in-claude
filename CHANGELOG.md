@@ -43,6 +43,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- Manifest-snapshot guard (`tests/test_manifest.py` + `tests/fixtures/manifest_snapshot.json`)
+  that fails CI whenever the full agent-visible surface — tool/resource wire shapes, descriptions,
+  annotations, server instructions, the error envelope, and the `codex_capabilities` payload —
+  changes, forcing a conscious `FINGERPRINT` bump (#140).
 - `codex://error-envelope` resource publishing the full error schema; a pointer to it in
   `codex_capabilities`.
 - CI gate capping the serialized `tools/list` catalog size.
