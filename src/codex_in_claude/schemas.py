@@ -469,7 +469,6 @@ class StatusResult(BaseModel):
     readiness_detail: str
     raw_defaults: RawDefaults
     resolved_defaults: ResolvedDefaults
-    default_errors: list[ErrorInfo] = Field(default_factory=list)
     rate_limit: RateLimit = Field(  # always present; status 'unknown' when no cache
         default_factory=lambda: RateLimit(status="unknown")
     )
@@ -541,6 +540,7 @@ class CapabilitiesResult(BaseModel):
     negative_scope: list[str]  # what it deliberately does NOT do
     prerequisites: list[str]
     deprecation_policy: str
+    error_envelope_resource: str = "codex://error-envelope"
 
 
 ModelCatalogSource = Literal["cache", "static", "none"]
@@ -705,50 +705,97 @@ class JobListResult(BaseModel):
     fingerprint: str = FINGERPRINT
 
 
-def _object_union_schema(adapter: TypeAdapter) -> dict:
-    """Wrap a model union's anyOf in a top-level object schema.
+_OPAQUE_ERROR_BRANCH = {
+    "type": "object",
+    "required": ["ok", "error", "meta"],
+    "properties": {
+        "ok": {"const": False},
+        "error": {
+            "type": "object",
+            "description": "Populated error envelope; full schema at resource codex://error-envelope",
+        },
+        "meta": {"type": "object"},
+    },
+}
+_ERROR_POINTER_DESC = _OPAQUE_ERROR_BRANCH["properties"]["error"]["description"]
 
-    MCP/FastMCP require an output schema whose top level is ``type: object``;
-    a bare ``anyOf`` is rejected. We keep the discriminating ``ok`` key visible
-    at the top and carry the full branch schemas (and their $defs) underneath.
-    """
-    union = adapter.json_schema()
-    return {
+
+def _strip_schema_noise(node: object) -> object:
+    """Recursively drop generated `title`/`description`/`default`, keeping only the one
+    intentional error-pointer description."""
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if k in ("title", "default"):
+                continue
+            if k == "description" and v != _ERROR_POINTER_DESC:
+                continue
+            out[k] = _strip_schema_noise(v)
+        return out
+    if isinstance(node, list):
+        return [_strip_schema_noise(v) for v in node]
+    return node
+
+
+def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[type-arg]
+    """Build a tool's advertised outputSchema: the success branch(es) plus ONE fully
+    opaque error branch. The opaque branch references no $def, so $defs is exactly the
+    success closure (no ErrorInfo, no dangling refs). Generated noise is stripped."""
+    if len(success_models) == 1:
+        adapter: TypeAdapter = TypeAdapter(success_models[0])  # type: ignore[type-arg]
+    else:
+        union = success_models[0]
+        for m in success_models[1:]:
+            union = union | m  # type: ignore[operator]
+        adapter = TypeAdapter(union)  # type: ignore[type-arg]
+    raw = adapter.json_schema(ref_template="#/$defs/{model}")
+    if "anyOf" in raw:
+        branches = list(raw["anyOf"])
+    else:
+        branches = [{k: v for k, v in raw.items() if k != "$defs"}]
+    doc = {
         "type": "object",
         "properties": {
             "ok": {"type": "boolean", "description": "true = success result, false = error result"},
         },
         "required": ["ok"],
-        "anyOf": union["anyOf"],
-        "$defs": union.get("$defs", {}),
+        "anyOf": [*branches, _OPAQUE_ERROR_BRANCH],
+        "$defs": raw.get("$defs", {}),
     }
+    result = _strip_schema_noise(doc)
+    assert isinstance(result, dict)
+    return result
 
 
 # Advertised output schemas (convention: a discriminated ok:true|false union). Each
 # active tool advertises its own success shape so verdict/confidence appear only where
 # they are meaningful (review), not as perpetually-null fields on consult/delegate (#31).
-CONSULT_RESULT_SCHEMA = _object_union_schema(TypeAdapter(ConsultResult | ErrorResult))
-REVIEW_RESULT_SCHEMA = _object_union_schema(TypeAdapter(ReviewResult | ErrorResult))
-DELEGATE_RESULT_SCHEMA = _object_union_schema(TypeAdapter(DelegateResult | ErrorResult))
+# The error branch is a single fully-opaque branch (no $defs pollution, no dangling
+# refs); the full error contract lives at resource codex://error-envelope.
+CONSULT_RESULT_SCHEMA = published_schema(ConsultResult)
+REVIEW_RESULT_SCHEMA = published_schema(ReviewResult)
+DELEGATE_RESULT_SCHEMA = published_schema(DelegateResult)
 # codex_job_result / codex_job_consume_result serve every async kind, so their result
 # may be any of the three success envelopes (or an error). Branch on `ok`, then `tool`.
-JOB_RESULT_SCHEMA = _object_union_schema(
-    TypeAdapter(DelegateResult | ConsultResult | ReviewResult | ErrorResult)
-)
+JOB_RESULT_SCHEMA = published_schema(DelegateResult, ConsultResult, ReviewResult)
 # These three tools return their success model on the happy path, but an invalid
 # argument is re-emitted as an ErrorResult at the call-tool boundary (#136), so each
 # advertises a success|error union — otherwise that envelope would violate the
 # declared output schema for strict MCP clients.
-STATUS_SCHEMA = _object_union_schema(TypeAdapter(StatusResult | ErrorResult))
-CAPABILITIES_SCHEMA = _object_union_schema(TypeAdapter(CapabilitiesResult | ErrorResult))
-MODEL_CATALOG_SCHEMA = _object_union_schema(TypeAdapter(ModelCatalogResult | ErrorResult))
+STATUS_SCHEMA = published_schema(StatusResult)
+CAPABILITIES_SCHEMA = published_schema(CapabilitiesResult)
+MODEL_CATALOG_SCHEMA = published_schema(ModelCatalogResult)
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate
 # result is fetched separately via codex_job_result (DELEGATE_RESULT_SCHEMA).
-JOB_STARTED_SCHEMA = _object_union_schema(TypeAdapter(JobStarted | ErrorResult))
-JOB_STATUS_SCHEMA = _object_union_schema(TypeAdapter(JobStatus | ErrorResult))
-DRY_RUN_SCHEMA = _object_union_schema(TypeAdapter(DryRunResult | ErrorResult))
-DELEGATE_DRY_RUN_SCHEMA = _object_union_schema(TypeAdapter(DelegateDryRunResult | ErrorResult))
-JOB_LIST_SCHEMA = _object_union_schema(TypeAdapter(JobListResult | ErrorResult))
+JOB_STARTED_SCHEMA = published_schema(JobStarted)
+JOB_STATUS_SCHEMA = published_schema(JobStatus)
+DRY_RUN_SCHEMA = published_schema(DryRunResult)
+DELEGATE_DRY_RUN_SCHEMA = published_schema(DelegateDryRunResult)
+JOB_LIST_SCHEMA = published_schema(JobListResult)
+
+# The full error envelope, published once (resource codex://error-envelope). Root is the
+# outer ErrorResult (ok/error/meta) with all $defs — the canonical, discoverable contract.
+ERROR_ENVELOPE_SCHEMA = TypeAdapter(ErrorResult).json_schema(ref_template="#/$defs/{model}")
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via
 # `codex exec --output-schema FILE`). It mirrors the agent-visible result fields we

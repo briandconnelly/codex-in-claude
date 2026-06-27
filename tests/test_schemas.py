@@ -1,6 +1,9 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
+from codex_in_claude import schemas as s
 from codex_in_claude.schemas import ErrorDetail, ErrorInfo, Repair
 
 
@@ -33,3 +36,112 @@ def test_errorinfo_temporary_with_backoff_ok():
 
 def test_errordetail_has_no_value_field():
     assert "value" not in ErrorDetail.model_fields
+
+
+# ---------------------------------------------------------------------------
+# Task 3: published_schema / opaque-error branch tests
+# ---------------------------------------------------------------------------
+
+_ALL_SCHEMAS = {
+    "CONSULT_RESULT_SCHEMA": s.CONSULT_RESULT_SCHEMA,
+    "REVIEW_RESULT_SCHEMA": s.REVIEW_RESULT_SCHEMA,
+    "DELEGATE_RESULT_SCHEMA": s.DELEGATE_RESULT_SCHEMA,
+    "JOB_RESULT_SCHEMA": s.JOB_RESULT_SCHEMA,
+    "STATUS_SCHEMA": s.STATUS_SCHEMA,
+    "CAPABILITIES_SCHEMA": s.CAPABILITIES_SCHEMA,
+    "MODEL_CATALOG_SCHEMA": s.MODEL_CATALOG_SCHEMA,
+    "JOB_STARTED_SCHEMA": s.JOB_STARTED_SCHEMA,
+    "JOB_STATUS_SCHEMA": s.JOB_STATUS_SCHEMA,
+    "DRY_RUN_SCHEMA": s.DRY_RUN_SCHEMA,
+    "DELEGATE_DRY_RUN_SCHEMA": s.DELEGATE_DRY_RUN_SCHEMA,
+    "JOB_LIST_SCHEMA": s.JOB_LIST_SCHEMA,
+}
+
+
+def _all_refs(node):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "$ref" and isinstance(v, str):
+                yield v
+            else:
+                yield from _all_refs(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _all_refs(v)
+
+
+def _has_key(node, key):
+    if isinstance(node, dict):
+        if key in node:
+            return True
+        return any(_has_key(v, key) for v in node.values())
+    if isinstance(node, list):
+        return any(_has_key(v, key) for v in node)
+    return False
+
+
+@pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
+def test_all_refs_resolve(name, sch):
+    defs = set(sch.get("$defs", {}))
+    for ref in _all_refs(sch):
+        assert ref.startswith("#/$defs/"), f"{name}: non-local ref {ref}"
+        assert ref.split("/")[-1] in defs, f"{name}: dangling ref {ref}"
+
+
+@pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
+def test_no_errorinfo_def_embedded(name, sch):
+    assert "ErrorInfo" not in sch.get("$defs", {}), f"{name} still embeds ErrorInfo"
+
+
+@pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
+def test_noise_stripped_except_error_pointer(name, sch):
+    assert not _has_key(sch, "title"), f"{name} has a title"
+    assert not _has_key(sch, "default"), f"{name} has a default"
+    # exactly one description survives: the opaque-error pointer
+    text = json.dumps(sch)
+    assert text.count('"description"') == 1
+    assert "codex://error-envelope" in text
+
+
+@pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
+def test_opaque_error_branch_present(name, sch):
+    branches = sch["anyOf"]
+    err = [b for b in branches if b.get("properties", {}).get("ok", {}).get("const") is False]
+    assert len(err) == 1, f"{name}: expected exactly one error branch"
+    eb = err[0]
+    assert eb["properties"]["error"] == {
+        "type": "object",
+        "description": "Populated error envelope; full schema at resource codex://error-envelope",
+    }
+    assert eb["properties"]["meta"] == {"type": "object"}
+    assert set(eb["required"]) == {"ok", "error", "meta"}
+
+
+def test_job_result_schema_has_four_branches():
+    assert len(s.JOB_RESULT_SCHEMA["anyOf"]) == 4
+
+
+def test_status_result_has_no_default_errors():
+    assert "default_errors" not in s.StatusResult.model_fields
+
+
+def test_error_envelope_schema_validates_runtime_error():
+    from pydantic import TypeAdapter
+
+    from codex_in_claude.errors import make_error, serialize_error
+    from codex_in_claude.schemas import ErrorResult, Meta
+
+    env = ErrorResult(
+        error=make_error("job_running", "x", retry_after_ms=2000, repair_arguments={"job_id": "j"}),
+        meta=Meta(
+            cwd="/x",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=180,
+            elapsed_ms=1,
+        ),
+    )
+    payload = serialize_error(env)
+    TypeAdapter(ErrorResult).validate_python(payload)  # round-trips against the model
+    assert s.ERROR_ENVELOPE_SCHEMA["$defs"]  # full schema is published with defs
