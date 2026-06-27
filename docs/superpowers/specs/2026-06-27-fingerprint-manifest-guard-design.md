@@ -77,9 +77,10 @@ not already expose:
    classification, `tool_details` (`use_when`, `returns`, `required_params`, `key_optional_params`,
    per-tool `cost`/`stability`/`error_codes`), `negative_scope`, `prerequisites`, and `stability`.
    These can change without altering any tool's wire `inputSchema`/`description`, so they must be
-   hashed too. **Exclude only the release-variable `version`** (and any field proven
-   environment-dependent), so a bare version bump does not move the snapshot; everything else is
-   included. Construct it by calling `codex_capabilities()` and canonicalizing the result.
+   hashed too. **Exclude the release-variable `version` and the `fingerprint` field itself** (the
+   payload echoes `FINGERPRINT`; including it would churn the snapshot on every bump and create a
+   self-referential loop), plus any field proven environment-dependent. Everything else is included.
+   Construct it by calling `codex_capabilities()` and canonicalizing the result.
 
 ### Source of truth: in-process `Client`, not server-side `list_tools()`
 
