@@ -60,3 +60,15 @@ async def test_manifest_json_is_deterministic():
     b = manifest.manifest_json(await manifest.build_manifest())
     assert a == b
     assert a.endswith("\n")
+
+
+async def test_manifest_hash_returns_sha256_hex():
+    h = await manifest.manifest_hash()
+    assert len(h) == 64
+    assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_render_returns_canonical_json():
+    result = manifest.render()
+    assert result.endswith("\n")
+    assert result.startswith("{")
