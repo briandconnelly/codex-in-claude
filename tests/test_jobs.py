@@ -430,6 +430,39 @@ def test_start_reaps_worker_if_meta_write_fails(tmp_path, monkeypatch):
     assert job_dirs == []
 
 
+def test_start_cleans_external_paths_if_meta_write_fails(tmp_path, monkeypatch):
+    # The worker registers an external worktree before metadata persistence fails; the
+    # transactional unwind must remove that declared path, not just the job dir.
+    root = tmp_path / "wt-root"
+    root.mkdir()
+    store = _store(tmp_path, cleanup_root=root, cleanup_prefix="wt-")
+    cwd = str(tmp_path)
+    declared: dict = {}
+
+    def failing_write(self, jd, meta):
+        # Wait until the worker has registered its external path, then fail persistence —
+        # so the unwind runs with a manifest present (the case the fix must handle).
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            paths = self._read_cleanup_manifest(jd)
+            if paths:
+                declared["path"] = paths[0]
+                break
+            time.sleep(0.02)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(JobStore, "_write_meta", failing_write)
+
+    with pytest.raises(OSError):
+        store.start(_declare_factory(str(root)), cwd, kind="codex_delegate")
+
+    assert declared.get("path")
+    assert not Path(declared["path"]).exists()  # declared external worktree was cleaned
+    ws = store._ws_dir(cwd)
+    job_dirs = [p for p in ws.iterdir() if p.is_dir()] if ws.exists() else []
+    assert job_dirs == []
+
+
 def test_pid_alive_none_and_dead():
     assert jobs._pid_alive(None) is False
     # An almost-certainly-unused PID raises ProcessLookupError -> False.
