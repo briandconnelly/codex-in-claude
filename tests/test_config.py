@@ -177,3 +177,23 @@ def test_job_knobs_env_override(clean_env):
     assert config.job_ttl_seconds() == 3600
     assert config.job_max_seconds() == 600
     assert config.job_max_count() == 10
+
+
+def test_max_output_bytes_default(monkeypatch):
+    monkeypatch.delenv("CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES", raising=False)
+    assert config.max_output_bytes() == 10 * 1024 * 1024
+
+
+def test_max_output_bytes_env_override(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES", "500000")
+    assert config.max_output_bytes() == 500_000
+
+
+def test_max_output_bytes_floor(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES", "10")
+    assert config.max_output_bytes() == 64 * 1024
+
+
+def test_max_output_bytes_bad_value(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES", "notanint")
+    assert config.max_output_bytes() == 10 * 1024 * 1024

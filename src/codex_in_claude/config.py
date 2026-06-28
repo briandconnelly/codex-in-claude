@@ -17,6 +17,12 @@ ENV_PREFIX = "CODEX_IN_CLAUDE_"
 MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 10, 600
 DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_INPUT_BYTES = 200_000
+# Byte ceiling for a subprocess's captured output (stdout+stderr aggregate), a
+# robustness guard against OOM of the long-lived stdio server (#155). Separate
+# from MAX_INPUT_BYTES (the diff/input budget) and deliberately generous: the
+# JSONL event stream of a long codex run is large but bounded. Output past the
+# cap is dropped (head+tail window kept); the run is NOT killed.
+DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 # Byte cap for the diff a delegate run returns inline. Oversized diffs are
 # truncated with meta.truncated/meta.truncation_hint so agent token cost stays
 # bounded; the diffstat still reflects the full diff.
@@ -118,6 +124,13 @@ def clamp_timeout(value: int) -> int:
 
 def max_input_bytes() -> int:
     return max(1_000, _env_int(f"{ENV_PREFIX}MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES))
+
+
+def max_output_bytes() -> int:
+    return max(
+        64 * 1024,
+        _env_int(f"{ENV_PREFIX}MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
+    )
 
 
 def max_delegate_diff_bytes() -> int:
