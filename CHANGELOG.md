@@ -20,7 +20,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   persisting `meta.json`; if persistence failed after a successful spawn (disk full, fs error), a
   paid worker kept running with no discoverable record — invisible to status/list/cancel and (for
   delegate) its worktree was never reaped. Post-spawn persistence is now guarded so a failure reaps
-  the worker's process group and removes the job dir before re-raising. (#154)
+  the worker's process group, runs the guarded cleanup of any external paths the worker already
+  declared (e.g. a worktree), and removes the job dir before re-raising. (#154)
 - **A corrupt `activity.json` with an out-of-range epoch no longer crashes job status/list.**
   `_read_activity` accepted any *finite* `last_event_epoch`, but a finite value still out of range
   for `datetime.fromtimestamp()` (e.g. `1e308`) raised `OverflowError`/`OSError`/`ValueError`,
