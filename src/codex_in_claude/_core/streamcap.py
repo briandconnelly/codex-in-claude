@@ -75,8 +75,11 @@ def iter_bounded_lines(
 
 class BoundedCapture:
     """Accumulate text lines under ``max_bytes`` keeping a head window and a bounded
-    tail. ``result()`` returns ``head + marker + tail`` (marker omitted when not
-    truncated). Complete lines only."""
+    tail.  ``result()`` returns ``head + tail`` when nothing was dropped, or
+    ``head + marker + tail`` when at least one line was evicted because the total
+    exceeded ``max_bytes``.  Truncation (and the marker) occur only when output
+    actually exceeds the cap and a line is dropped; retained bytes never exceed
+    ``max_bytes`` plus the marker.  Complete lines only."""
 
     def __init__(self, max_bytes: int) -> None:
         self._max_bytes = max_bytes
@@ -89,17 +92,25 @@ class BoundedCapture:
 
     def add(self, line: str) -> None:
         n = _nbytes(line)
-        if not self._truncated and self._head_bytes + n <= self._head_budget:
+        # Fill the head window first.  Once any line has gone to the tail, all
+        # subsequent lines follow so ordering is preserved (head=earliest,
+        # tail=most-recent with no gap when not truncated).
+        if not self._tail and self._head_bytes + n <= self._head_budget:
             self._head.append(line)
             self._head_bytes += n
             return
-        self._truncated = True
         self._tail.append((line, n))
         self._tail_bytes += n
-        tail_budget = self._max_bytes - self._head_bytes
-        while self._tail_bytes > tail_budget and len(self._tail) > 1:
+        # Drop oldest tail lines only when the TOTAL retained exceeds the cap.
+        # Nothing is dropped (and no marker is shown) until the full cap — not
+        # merely the head half — is exceeded, so any output that fits within
+        # max_bytes is returned verbatim.  The len(self._tail) > 1 guard is
+        # intentionally absent so even a single oversized tail line is evicted,
+        # making max_bytes a hard ceiling.
+        while self._head_bytes + self._tail_bytes > self._max_bytes and self._tail:
             _, dropped = self._tail.popleft()
             self._tail_bytes -= dropped
+            self._truncated = True
 
     @property
     def truncated(self) -> bool:
@@ -107,7 +118,7 @@ class BoundedCapture:
 
     def result(self) -> str:
         head = "".join(self._head)
-        if not self._truncated:
-            return head
         tail = "".join(line for line, _ in self._tail)
+        if not self._truncated:
+            return head + tail
         return head + _OUTPUT_TRUNC_MARKER + tail

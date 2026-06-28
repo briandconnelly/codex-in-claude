@@ -43,3 +43,34 @@ def test_bounded_capture_keeps_head_and_tail():
     assert result.startswith("line0\n")  # head preserved
     assert result.rstrip().endswith("line99")  # tail preserved (newest survives)
     assert len(result.encode("utf-8")) <= 40 + len(b"[output truncated]\n")
+
+
+def test_bounded_capture_no_false_truncation_between_half_and_full():
+    # Bug A: output between 50% and 100% of cap must NOT be reported truncated.
+    # Single 60-byte line with cap=100: head budget is 50, so 60 > 50 spills to
+    # tail — but 60 < 100 so nothing is dropped; result must be verbatim.
+    cap = streamcap.BoundedCapture(max_bytes=100)
+    line = "x" * 59 + "\n"  # 60 bytes
+    cap.add(line)
+    assert not cap.truncated, "60-byte line with cap=100 must not be truncated"
+    assert "[output truncated]" not in cap.result()
+    assert cap.result() == line
+
+    # Also verify with multiple lines summing to ~90 bytes (between half and full).
+    cap2 = streamcap.BoundedCapture(max_bytes=100)
+    lines = ["a" * 29 + "\n"] * 3  # 3 x 30 bytes = 90 bytes total
+    for ln in lines:
+        cap2.add(ln)
+    assert not cap2.truncated, "90 bytes with cap=100 must not be truncated"
+    assert cap2.result() == "".join(lines)
+
+
+def test_bounded_capture_hard_ceiling_on_oversized_tail_line():
+    # Bug B: a single oversized tail line must be evicted so the cap is a hard ceiling.
+    # head: 50-byte line; tail: 100-byte line -- old code kept ~169 bytes (1.5x cap).
+    cap = streamcap.BoundedCapture(max_bytes=100)
+    cap.add("h" * 49 + "\n")  # 50 bytes → fills head budget (50)
+    cap.add("t" * 99 + "\n")  # 100 bytes → tail, exceeds remaining budget; must evict
+    assert cap.truncated, "oversized tail must force truncation"
+    marker = b"[output truncated]\n"
+    assert len(cap.result().encode("utf-8", "replace")) <= 100 + len(marker)
