@@ -18,10 +18,12 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from codex_in_claude import delegate, orchestration
+from codex_in_claude._core.jobs import ActivityRecorder
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     ErrorResult,
@@ -30,6 +32,9 @@ from codex_in_claude.schemas import (
     Tier,
     workspace_warning_for,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Open fds whose flock keeps each per-job lock held for this process's whole life;
 # the OS releases them on exit. A list (not a `global` rebind) so the JobStore can
@@ -90,6 +95,23 @@ def _write_cleanup_manifest(job_dir: Path, parent: str) -> None:
     _atomic_write(job_dir / "cleanup.json", {"paths": [parent]})
 
 
+def _activity_observer(
+    job_dir: Path,
+) -> tuple[Callable[[str], None], ActivityRecorder]:
+    """An observer for Codex's --json stdout stream that records event ACTIVITY only.
+
+    A line counts as an event when it is a JSONL object (cheap structural check — no
+    dependence on a specific event shape). Raw lines are never persisted; the
+    recorder writes counts/timestamps to <job_dir>/activity.json."""
+    recorder = ActivityRecorder(job_dir)
+
+    def _observe(line: str) -> None:
+        if line.strip().startswith("{"):
+            recorder.record(time.time())
+
+    return _observe, recorder
+
+
 async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
     """Dispatch the job by kind, cancelling cleanly on SIGTERM so an in-flight
     `codex exec` (and, for delegate, the worktree teardown) is torn down. The
@@ -100,48 +122,55 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
     with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
         loop.add_signal_handler(signal.SIGTERM, task.cancel)
 
-    kind = spec.get("kind")
-    if kind == "codex_delegate":
-        return await delegate.run_delegate(
-            spec["task"],
-            spec["cwd"],
-            meta,
-            sandbox=spec["sandbox"],
-            isolation=spec["isolation"],
-            timeout_seconds=spec["timeout_seconds"],
-            model=spec.get("model"),
-            git_timeout=spec["git_timeout"],
-            max_diff_bytes=spec.get("max_diff_bytes"),
-            on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
-        )
-    if kind == "codex_consult":
-        return await orchestration.run_consult(
-            spec["question"],
-            spec["cwd"],
-            meta,
-            sandbox=spec["sandbox"],
-            isolation=spec["isolation"],
-            timeout_seconds=spec["timeout_seconds"],
-            model=spec.get("model"),
-            extra_context=spec.get("extra_context", ""),
-        )
-    if kind == "codex_review_changes":
-        return await orchestration.run_review(
-            spec["cwd"],
-            meta,
-            scope=spec["scope"],
-            base=spec.get("base"),
-            commit=spec.get("commit"),
-            paths=spec.get("paths"),
-            sandbox=spec["sandbox"],
-            isolation=spec["isolation"],
-            timeout_seconds=spec["timeout_seconds"],
-            model=spec.get("model"),
-            git_timeout=spec["git_timeout"],
-            max_bytes=spec["max_bytes"],
-            extra_context=spec.get("extra_context", ""),
-        )
-    raise ValueError(f"unknown job kind: {kind!r}")
+    on_event, recorder = _activity_observer(job_dir)
+    try:
+        kind = spec.get("kind")
+        if kind == "codex_delegate":
+            return await delegate.run_delegate(
+                spec["task"],
+                spec["cwd"],
+                meta,
+                sandbox=spec["sandbox"],
+                isolation=spec["isolation"],
+                timeout_seconds=spec["timeout_seconds"],
+                model=spec.get("model"),
+                git_timeout=spec["git_timeout"],
+                max_diff_bytes=spec.get("max_diff_bytes"),
+                on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
+                on_event=on_event,
+            )
+        if kind == "codex_consult":
+            return await orchestration.run_consult(
+                spec["question"],
+                spec["cwd"],
+                meta,
+                sandbox=spec["sandbox"],
+                isolation=spec["isolation"],
+                timeout_seconds=spec["timeout_seconds"],
+                model=spec.get("model"),
+                extra_context=spec.get("extra_context", ""),
+                on_event=on_event,
+            )
+        if kind == "codex_review_changes":
+            return await orchestration.run_review(
+                spec["cwd"],
+                meta,
+                scope=spec["scope"],
+                base=spec.get("base"),
+                commit=spec.get("commit"),
+                paths=spec.get("paths"),
+                sandbox=spec["sandbox"],
+                isolation=spec["isolation"],
+                timeout_seconds=spec["timeout_seconds"],
+                model=spec.get("model"),
+                git_timeout=spec["git_timeout"],
+                max_bytes=spec["max_bytes"],
+                extra_context=spec.get("extra_context", ""),
+                on_event=on_event,
+            )
+        raise ValueError(f"unknown job kind: {kind!r}")
+    finally:
+        recorder.flush()
 
 
 def main(argv: list[str] | None = None) -> int:

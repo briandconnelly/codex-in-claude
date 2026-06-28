@@ -228,3 +228,15 @@ def test_worker_unknown_kind_writes_error(tmp_path):
     assert out["ok"] is False
     assert out["error"]["code"] == "internal_error"
     assert out["error"]["repair"]["next_step"] == "retry_then_report"
+
+
+def test_worker_makes_observer_that_counts_jsonl_event_lines(tmp_path):
+    rec_dir = tmp_path
+    observer, recorder = _worker._activity_observer(rec_dir)
+    observer('{"type":"token_count"}\n')  # counts (JSONL object)
+    observer("\n")  # blank — ignored
+    observer("not-json line\n")  # non-object — ignored
+    observer('{"type":"agent_message"}\n')  # counts
+    recorder.flush()
+    data = json.loads((rec_dir / "activity.json").read_text())
+    assert data["events_seen"] == 2
