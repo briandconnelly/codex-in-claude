@@ -404,17 +404,13 @@ from codex_in_claude._core import jobs  # noqa: E402
 def test_start_reaps_worker_if_meta_write_fails(tmp_path, monkeypatch):
     # If metadata persistence fails after a successful spawn, the paid worker must be
     # reaped and its job dir removed — no orphaned worker, no untracked record.
-    import contextlib
-    import signal
-
     store = _store(tmp_path)
     cwd = str(tmp_path)
     reaped: list[int] = []
 
     def fake_terminate(pid, grace, **kwargs):
         reaped.append(pid)
-        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        jobs._kill_pid_tree(pid)  # library's portable kill+reap (win-safe, no zombie)
 
     monkeypatch.setattr(jobs, "_terminate_pid_tree", fake_terminate)
     monkeypatch.setattr(
