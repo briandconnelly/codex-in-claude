@@ -89,14 +89,18 @@ def _wait_streaming(  # noqa: PLR0915
     timeout_seconds: int,
     max_output_bytes: int,
 ) -> tuple[str, str, bool, bool]:
-    """Drain stdout/stderr concurrently under a byte cap, optionally calling
-    ``on_stdout_line`` per stdout line. Returns ``(stdout, stderr, timed_out,
-    output_truncated)``. Capture is bounded (head+tail window) so a flooding
-    process cannot exhaust memory; the process is NOT killed for exceeding the cap
-    — only for timeout. The observer queue is bounded and drops under flood (it
-    needs counts/timestamps only)."""
-    stderr_cap = min(_STDERR_RESERVE, max_output_bytes // 2)
-    stdout_cap = max(1, max_output_bytes - stderr_cap)
+    """Drain stdout/stderr concurrently under independent byte caps, optionally
+    calling ``on_stdout_line`` per stdout line. Returns ``(stdout, stderr,
+    timed_out, output_truncated)``. Stdout is captured up to ``max_output_bytes``
+    bytes; stderr is captured up to a separate ``_STDERR_RESERVE`` (~1 MiB) —
+    worst-case retained is ``max_output_bytes + _STDERR_RESERVE``. Both use
+    head+tail windows so a flooding process cannot exhaust memory. A watchdog
+    timer kills the process GROUP after ``timeout_seconds``; this closes any
+    pipes held by descendants so the pump threads reach EOF and the joins
+    complete within the deadline. The observer queue is bounded and drops under
+    flood (it needs counts/timestamps only)."""
+    stdout_cap = max_output_bytes
+    stderr_cap = _STDERR_RESERVE
     out = streamcap.BoundedCapture(stdout_cap)
     err = streamcap.BoundedCapture(stderr_cap)
     observe = on_stdout_line is not None
@@ -164,21 +168,46 @@ def _wait_streaming(  # noqa: PLR0915
     threads = list(readers)
     if observe:
         threads.append(threading.Thread(target=_observe, daemon=True))
-    for t in threads:
-        t.start()
-    try:
-        proc.wait(timeout=timeout_seconds)
-        timed_out = False
-    except subprocess.TimeoutExpired:
+    # F1 watchdog: a threading.Timer fires after timeout_seconds and kills the
+    # process GROUP (closing any pipes held by descendants), so the pump threads
+    # reach EOF and the joins complete within the deadline.  Using a Timer rather
+    # than proc.wait(timeout=…) means the deadline covers the full drain+join
+    # lifecycle — not just the direct child's exit — so a descendant holding an
+    # inherited pipe cannot bypass the configured timeout.
+    _timed_out_event = threading.Event()
+
+    def _on_timeout() -> None:
+        _timed_out_event.set()
         logger.warning(
             "subprocess pid=%s exceeded %ss; killing process group", proc.pid, timeout_seconds
         )
-        kill_process_tree(proc)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=5)
-        timed_out = True
+        # Kill the process GROUP unconditionally, using proc.pid directly as the
+        # pgid. Because proc was spawned with start_new_session=True, it is its
+        # own process-group leader, so pgid == proc.pid. Descendants that did not
+        # start a new session inherit that pgid. Critically, proc.pid is used
+        # instead of os.getpgid(proc.pid) because on macOS (and possibly other
+        # platforms) getpgid raises ESRCH on a zombie, whereas the process group
+        # itself is still live as long as any member survives — including a
+        # descendant holding an inherited pipe. kill_process_tree is intentionally
+        # NOT used here: its proc.poll() guard short-circuits when the direct child
+        # has already exited, leaving pipe-holding descendants alive.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:  # pragma: no cover - non-POSIX fallback
+                proc.kill()
+
     for t in threads:
-        t.join()
+        t.start()
+    timer = threading.Timer(timeout_seconds, _on_timeout)
+    try:
+        timer.start()
+        for t in threads:
+            t.join()
+        proc.wait()  # reap the direct child; pipes closed so this is instant
+    finally:
+        timer.cancel()
+    timed_out = _timed_out_event.is_set()
     truncated = out.truncated or err.truncated
     if truncated:
         logger.warning(

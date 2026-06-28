@@ -8,11 +8,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Fixed
 
 - Bound subprocess output and git-diff capture in memory to prevent OOM of the long-lived stdio
-  server (#155). Subprocess stdout/stderr is now captured under an aggregate byte cap
-  (`CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES`, default 10 MiB) with a head+tail window that preserves the
-  trailing usage/rate-limit events; the diff is streamed through the redactor so it never
+  server (#155). Subprocess stdout is captured under `CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES` (default
+  10 MiB); stderr is bounded to a separate ~1 MiB reserve — each with a head+tail window that
+  preserves trailing usage/rate-limit events. The diff is streamed through the redactor so it never
   materializes whole. Exceeding the cap marks capture truncated and does not kill the run; the
   process tree is still torn down on timeout or cancellation.
+- **Timeout now covers the full output-drain lifecycle** (#155). A subprocess that exits immediately
+  but leaves a descendant holding an inherited stdout/stderr pipe could previously block
+  `_wait_streaming` indefinitely (the configured timeout only fired on the direct child's exit, not
+  on the subsequent thread joins). A `threading.Timer` watchdog now kills the process GROUP at the
+  deadline, closing descendant-held pipes and allowing pump threads to reach EOF within
+  `timeout_seconds`.
 - **Subprocess/exception text is now redacted on failure paths.** A secret that `codex` or `git`
   echoes before failing could reach `error.message` (and the caller's logs/context) verbatim: the
   `nonzero_exit` detail in `classify_failure`, the `WorktreeError` messages and `plan()` detail in

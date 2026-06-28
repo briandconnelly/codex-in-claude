@@ -282,7 +282,81 @@ async def test_run_async_caps_stderr(tmp_path):
         timeout_seconds=30,
         max_output_bytes=50_000,
     )
-    assert len(run.stderr.encode("utf-8")) <= 50_000
+    # stderr is bounded by _STDERR_RESERVE (~1 MiB), not by max_output_bytes.
+    assert len(run.stderr.encode("utf-8")) <= runtime._STDERR_RESERVE + 100
+
+
+async def test_run_async_stdout_cap_is_full_max_output_bytes(tmp_path):
+    """F2 regression: stdout-only output just under max_output_bytes must NOT be
+    truncated. Under the old partition, stdout_cap was reduced by stderr's share,
+    so stdout output under the full cap was falsely truncated."""
+    # Old code: stderr_cap = min(1MB, 40000//2) = 20000; stdout_cap = 20000.
+    # A 30000-byte stdout write exceeded the 20000 stdout_cap → falsely truncated.
+    # New code: stdout_cap = max_output_bytes = 40000; 30000 bytes fits.
+    code = "import sys; sys.stdout.write('o' * 30_000)"
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=10,
+        max_output_bytes=40_000,
+    )
+    assert run.exit_code == 0
+    assert not run.output_truncated, "stdout under the cap should not be truncated"
+    assert len(run.stdout.encode("utf-8")) == 30_000
+
+
+async def test_run_async_stderr_cap_is_independent_reserve(tmp_path):
+    """F2 regression: stderr-only output up to the reserve must NOT be falsely
+    truncated when max_output_bytes is small. Under the old partition,
+    stderr_cap = min(1MB, max_output_bytes//2), so a small max_output_bytes
+    imposed a tiny stderr cap below the advertised reserve."""
+    # Old code: stderr_cap = min(1MB, 40000//2) = 20000.
+    # 30000 bytes of stderr exceeded the 20000 cap → falsely truncated.
+    # New code: stderr_cap = _STDERR_RESERVE (1MB); 30000 bytes fits.
+    code = "import sys; sys.stderr.write('e' * 30_000)"
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=10,
+        max_output_bytes=40_000,
+    )
+    assert run.exit_code == 0
+    assert not run.output_truncated, "stderr under the reserve should not be truncated"
+    assert len(run.stderr.encode("utf-8")) == 30_000
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process-group kill is POSIX-only")
+async def test_run_async_timeout_descendant_holds_pipe(tmp_path):
+    """F1 regression: a parent that exits immediately but leaves a descendant
+    holding the stdout pipe open must still time out promptly and return
+    timed_out=True. Under the old code, proc.wait() returned immediately (parent
+    exited), but t.join() blocked on the pump thread which blocked on the pipe
+    held by the descendant — bypassing the configured timeout entirely."""
+    import time
+
+    # The parent spawns a grandchild (inherits stdout pipe fd 1) then exits at once.
+    # The grandchild sleeps for 10s, holding the write end of our stdout pipe open.
+    # Without the fix: proc.wait(timeout=2) returns immediately (parent exited),
+    # then t.join() hangs ~10s until the grandchild exits, returning timed_out=False.
+    # With the fix: the watchdog fires after 2s, kills the process group (including
+    # the grandchild), closing the pipe so the pump thread reaches EOF.
+    cmd = _py(
+        "import subprocess,sys,time;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)']);"
+        "sys.exit(0)"
+    )
+    start = time.monotonic()
+    run = await runtime.run_async(cmd, cwd=str(tmp_path), timeout_seconds=2)
+    elapsed = time.monotonic() - start
+
+    assert run.timed_out is True, (
+        f"expected timed_out=True (descendant held pipe); got timed_out={run.timed_out}, "
+        f"elapsed={elapsed:.1f}s"
+    )
+    # Should return within a few seconds of the timeout, not 10s later.
+    assert elapsed < 7, (
+        f"expected return well before descendant's 10s lifetime; elapsed={elapsed:.1f}s"
+    )
 
 
 async def test_f2_observer_queue_byte_bounded(tmp_path, monkeypatch):
