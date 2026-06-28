@@ -28,9 +28,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TextIO
 
-# Sentinel enqueued after the stdout pump hits EOF, telling the observer thread to stop.
-_STREAM_DONE = object()
-
 # Default cap for captured stdout; the caller (config-aware layer) normally
 # overrides this with CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES.
 DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
@@ -105,7 +102,11 @@ def _wait_streaming(  # noqa: PLR0915
     out = streamcap.BoundedCapture(stdout_cap)
     err = streamcap.BoundedCapture(stderr_cap)
     observe = on_stdout_line is not None
-    line_queue: queue.Queue = queue.Queue(maxsize=10_000)
+    line_queue: queue.Queue[str] = queue.Queue(maxsize=10_000)
+    # Non-blocking signal: set by _pump_stdout's finally once stdout is fully drained.
+    # The observer uses this (with timed get()) instead of a queued sentinel so that
+    # the pump's finally never blocks waiting for the observer to drain the queue.
+    _pump_done = threading.Event()
     # F2: byte budget for the observer queue — a slow callback can cause queue entries
     # to pile up; this limits the total bytes queued at any time. Uses a list so the
     # nested closures can mutate it without a `nonlocal` declaration.
@@ -130,7 +131,7 @@ def _wait_streaming(  # noqa: PLR0915
                                     pass  # count guard: drop silently
         finally:
             if observe:
-                line_queue.put(_STREAM_DONE)  # observer keeps draining, so this lands
+                _pump_done.set()  # non-blocking: pump never waits on the observer
 
     # Capture a narrowed local so _observe is type-safe: _observe is only started
     # when observe=True, which means on_stdout_line is not None here.
@@ -138,10 +139,15 @@ def _wait_streaming(  # noqa: PLR0915
 
     def _observe() -> None:
         while True:
-            item = line_queue.get()
-            if item is _STREAM_DONE:
-                return
-            # F2: decrement byte budget after consuming a real line (not the sentinel).
+            try:
+                item = line_queue.get(timeout=0.1)
+            except queue.Empty:
+                # No item available: if the pump is done and the queue is empty, we
+                # have seen everything — exit.  Otherwise keep polling.
+                if _pump_done.is_set():
+                    return
+                continue
+            # F2: decrement byte budget after consuming a line.
             with _qb_lock:
                 _queued_bytes[0] -= len(item.encode("utf-8", "replace"))
             with contextlib.suppress(Exception):
@@ -215,8 +221,8 @@ def _wait_streaming(  # noqa: PLR0915
         proc.wait()  # already exited; reap (instant)
     # Observer is in-process and daemon: drain it within the remaining budget, but
     # never let a slow activity callback delay the result unboundedly or mark the
-    # run timed out.  The _STREAM_DONE sentinel is put by _pump_stdout's finally, so
-    # _observe will terminate naturally once stdout drains (including after a group kill).
+    # run timed out.  _pump_done is set by _pump_stdout's finally (non-blocking), and
+    # _observe exits once the event is set and the queue is empty.
     if observer is not None:
         observer.join(timeout=max(0.0, deadline - time.monotonic()))
     truncated = out.truncated or err.truncated

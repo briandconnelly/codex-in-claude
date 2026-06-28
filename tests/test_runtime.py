@@ -468,3 +468,62 @@ def test_run_async_slow_observer_does_not_cause_false_timeout():
         "slow observer caused timed_out=True (false positive); Fix 1 not applied"
     )
     assert run.stderr != runtime.TIMED_OUT
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: full observer queue must NOT block _pump_stdout and cause false timeout
+# ---------------------------------------------------------------------------
+
+
+def test_run_async_full_queue_does_not_block_pump_and_cause_false_timeout():
+    """Fix 3 regression: when the observer queue is full and the callback is mid-sleep,
+    _pump_stdout's finally must NOT block on inserting the completion sentinel — which
+    would keep _pump_stdout alive past the deadline and trigger a false timed_out=True.
+
+    Root cause: ``line_queue.put(_STREAM_DONE)`` in _pump_stdout's finally is blocking.
+    If the observer is in the middle of a slow callback (not yet back at ``get()``),
+    the queue stays full and the blocking put keeps _pump_stdout alive.  _pump_stdout IS
+    in the kill decision, so a successful, already-exited child gets reported timed_out.
+
+    Setup: child writes 1 line first and flushes (observer grabs it and starts a 3 s
+    callback), then after a brief pause writes 10,001 more lines (fills the queue while
+    the observer is sleeping), then exits.  The pump then tries to put the sentinel into
+    a full queue, blocks because the observer is mid-callback, and the 2 s timeout fires.
+
+    RED (pre-fix): pump blocks on ``put(_STREAM_DONE)``; at the 2 s deadline it is still
+    alive → timed_out=True, exit_code=-9 for a child that exited 0.
+    GREEN (post-fix): pump uses ``_pump_done.set()`` (non-blocking); pump exits
+    immediately after stdout EOF; timed_out=False, exit_code=0.
+    """
+    import time
+
+    seen: list[str] = []
+
+    def slow_callback(line: str) -> None:
+        time.sleep(3)  # mid-callback: observer is not at get() for 3 s
+        seen.append(line)
+
+    # Write 1 line and flush so the observer grabs it and starts its 3 s callback.
+    # Then sleep briefly to let the callback begin, then flood 10,001 more lines to
+    # fill the 10,000-entry queue while the observer is sleeping.
+    code = (
+        "import sys, time\n"
+        "print('line0', flush=True)\n"
+        "time.sleep(0.3)\n"  # give observer time to enter its 3 s callback
+        "for i in range(1, 10002):\n"
+        "    sys.stdout.write(f'line{i}\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+    run = anyio.run(
+        lambda: runtime.run_async(
+            _py(code), cwd=".", timeout_seconds=2, on_stdout_line=slow_callback
+        )
+    )
+    assert run.exit_code == 0, (
+        f"expected exit_code=0, got {run.exit_code}; blocking sentinel put likely caused false kill"
+    )
+    assert run.timed_out is False, (
+        "full queue blocked _pump_stdout past the deadline → false timed_out=True "
+        "(observer-decouple Fix 3 not applied)"
+    )
+    assert run.stderr != runtime.TIMED_OUT
