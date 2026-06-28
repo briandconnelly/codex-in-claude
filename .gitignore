@@ -28,3 +28,5 @@ htmlcov/
 
 # OS
 .DS_Store
+
+docs/superpowers/
