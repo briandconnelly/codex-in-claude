@@ -421,6 +421,54 @@ def test_stream_timeout_watchdog_kills_stalled_process(tmp_path, monkeypatch):
         gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=1, acc=acc)  # type: ignore[attr-defined]
 
 
+def test_stream_timeout_watchdog_kills_descendant_holding_pipe(tmp_path, monkeypatch):
+    """F1 descendant-hang regression: a fake git parent that exits immediately
+    after spawning a grandchild which inherits and holds the stdout pipe open
+    must still time out promptly.
+
+    RED (pre-fix, getpgid): os.getpgid(proc.pid) raises ESRCH on a zombie
+    (macOS behaviour) → suppressed → no kill → the grandchild keeps holding the
+    pipe → the iter_bounded_lines loop never reaches EOF → the function hangs
+    for ~10 s (the grandchild's sleep duration).
+
+    GREEN (post-fix): os.killpg(proc.pid, SIGKILL) uses proc.pid directly as
+    the pgid (valid because start_new_session=True makes the process its own
+    group leader).  This kills the still-live grandchild even after the leader
+    is a zombie, closing the pipe and unblocking the drain loop within the
+    configured timeout.
+    """
+    import time
+
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd, **kwargs):
+        # Parent exits immediately; grandchild (inheriting fd 1 = the pipe
+        # write-end) sleeps 10 s, simulating a git helper that outlives git.
+        parent_cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import subprocess, sys, time; "
+                "subprocess.Popen(["
+                "sys.executable, '-c', 'import time; time.sleep(10)'"
+                "]); "
+                "sys.exit(0)"
+            ),
+        ]
+        return real_popen(parent_cmd, **kwargs)
+
+    monkeypatch.setattr(gitdiff.subprocess, "Popen", fake_popen)
+
+    acc = gitdiff._BoundedDiffAccumulator(1000)  # type: ignore[attr-defined]
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=2, acc=acc)  # type: ignore[attr-defined]
+    elapsed = time.monotonic() - start
+    assert elapsed < 7, (
+        f"expected return well before grandchild's 10 s lifetime; elapsed={elapsed:.1f}s"
+    )
+
+
 # ---------------------------------------------------------------------------
 # F3: long single line breaks diff_bytes + boundary redaction
 # ---------------------------------------------------------------------------

@@ -385,11 +385,25 @@ def _stream_redacted_diff(
         raise GitUnavailableError("git executable not found") from exc
     timed_out = threading.Event()
     stderr_buf: list[str] = []
+    # Fix 2: guard kill and reap with a lock + flag so the Timer callback
+    # cannot signal a reaped (potentially reused) PID.  A list is used instead
+    # of nonlocal to match the surrounding style (e.g. _queued_bytes in runtime).
+    _kill_lock = threading.Lock()
+    _finished = [False]  # set by main thread before proc.wait(); callback no-ops after
 
     def _kill() -> None:
-        timed_out.set()
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        with _kill_lock:
+            if _finished[0]:
+                return
+            timed_out.set()
+            # Fix 1: use proc.pid directly as the pgid.  Because proc was spawned
+            # with start_new_session=True, it is its own process-group leader, so
+            # pgid == proc.pid.  Critically, proc.pid is used instead of
+            # os.getpgid(proc.pid) because on macOS getpgid raises ESRCH on a zombie,
+            # whereas the process group is still live as long as any member (e.g. a
+            # grandchild holding an inherited pipe) survives.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
 
     def _drain_stderr() -> None:
         # F1a: keep draining to EOF (avoids the >64 KB pipe-buffer deadlock
@@ -413,11 +427,18 @@ def _stream_redacted_diff(
         ):
             for logical in physical.splitlines() or [""]:
                 acc.feed(logical)
-        # Process is done writing; reap it (watchdog bounds total wall time).
-        proc.wait()
+        # Stop the pending fire; no-op if the callback is already running.
+        timer.cancel()
+        # Tell any in-flight callback to no-op, then reap safely.  The lock
+        # ensures the callback either already killed the group (and has released
+        # the lock) or will see _finished=True and skip the killpg call — so
+        # the reap below can never race with a killpg on our PID.
+        with _kill_lock:
+            _finished[0] = True
+        proc.wait()  # pipes closed; instant
         stderr_thread.join()
     finally:
-        timer.cancel()
+        timer.cancel()  # idempotent: cleans up on exception paths
         for pipe in (proc.stdout, proc.stderr):
             if pipe is not None:
                 with contextlib.suppress(OSError):
