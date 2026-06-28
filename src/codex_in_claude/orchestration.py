@@ -105,6 +105,11 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
             raw_response=raw,
             meta=meta,
         ).model_dump(mode="json")
+    # Deliberate prose-passthrough exception (#159): consult is Q&A, so a plain-language
+    # answer is itself a valid result. Unlike review (whose value is the structured
+    # verdict/findings), there is nothing to mislead here — the prose maps onto `summary`
+    # — so exit-0 non-JSON is surfaced as the answer rather than the
+    # invalid_json/schema_violation error the strict review path now raises.
     return ConsultResult(
         summary=(raw.text or "").strip() or "(codex returned no message)",
         raw_response=raw,
@@ -112,28 +117,52 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
     ).model_dump(mode="json")
 
 
+def _review_invalid_response_error(code: str, last_message: str | None, meta: Meta) -> dict:
+    """Build the explicit error for an exit-0 review whose output ignored the schema
+    (#159). Unlike consult's prose-passthrough, review's value is the structured
+    verdict/findings, so a missing/non-object payload is surfaced rather than silently
+    downgraded to verdict="unknown". The raw text is preserved as a bounded, secret-
+    redacted preview for debugging (ErrorResult carries no raw_response field)."""
+    preview = (redaction.redact_text(last_message) or "").strip()[:300]
+    tail = f" Raw output preview: {preview}" if preview else ""
+    message = (
+        "codex exited 0 but did not return a schema-valid JSON object for the review "
+        f"(--output-schema appears to have been ignored).{tail}"
+    )
+    return serialize_error(
+        ErrorResult(error=make_error(cast("ErrorCode", code), message), meta=meta)
+    )
+
+
 def finalize_review(result: codex.CodexExecResult, *, meta: Meta) -> dict:
-    """Build a ReviewResult/ErrorResult dict — the only verdict-bearing result."""
+    """Build a ReviewResult/ErrorResult dict — the only verdict-bearing result.
+
+    Strict on exit-0 unparseable output (#159): the structured verdict/findings *are*
+    the product here, so a successful run whose last message is not a JSON object is an
+    explicit invalid_json/schema_violation error rather than a prose downgrade. (consult
+    deliberately keeps the prose-passthrough — see ``finalize_consult``.)"""
     err = _stamp_meta(result, meta)
     if err is not None:
         return err
-    structured, raw = _success_common(result, meta)
-    if structured is not None:
-        return ReviewResult(
-            summary=_summary_of(structured),
-            verdict=_enum(
-                structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"
-            ),
-            confidence=_enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
-            findings=normalize.coerce_findings(structured.get("findings")),
-            questions=_str_list(structured.get("questions")),
-            assumptions=_str_list(structured.get("assumptions")),
-            next_steps=_str_list(structured.get("next_steps")),
-            raw_response=raw,
-            meta=meta,
-        ).model_dump(mode="json")
+    status, parsed = normalize.classify_structured(result.last_message)
+    if status != "ok":
+        return _review_invalid_response_error(status, result.last_message, meta)
+    structured = cast("dict[str, Any]", redaction.redact_tree(cast("dict", parsed)))
+    raw = RawResponse(
+        text=redaction.redact_text(result.last_message),
+        session_id=meta.session_id,
+        model=meta.model,
+    )
     return ReviewResult(
-        summary=(raw.text or "").strip() or "(codex returned no message)",
+        summary=_summary_of(structured),
+        verdict=_enum(
+            structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"
+        ),
+        confidence=_enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
+        findings=normalize.coerce_findings(structured.get("findings")),
+        questions=_str_list(structured.get("questions")),
+        assumptions=_str_list(structured.get("assumptions")),
+        next_steps=_str_list(structured.get("next_steps")),
         raw_response=raw,
         meta=meta,
     ).model_dump(mode="json")

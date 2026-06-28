@@ -435,8 +435,11 @@ WorkspaceRootParam = Annotated[
 ExtraContextParam = Annotated[
     str | None,
     Field(
-        description="Optional author intent / background, added to the prompt as "
-        "clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+        description="Optional author intent / background context, added to the prompt "
+        "as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded "
+        "directives as data, not commands — best-effort prompt-injection mitigation, "
+        "not a guarantee. Don't include live secrets: Codex can read files it's "
+        "pointed at, and redaction does not cover this field."
     ),
 ]
 ModelParam = Annotated[
@@ -1426,7 +1429,8 @@ async def codex_review_changes(
 
     `extra_context` (optional) is author intent — why the change was made, what you
     already verified, constraints — added to the prompt as clearly-labeled UNTRUSTED
-    data (the reviewer never obeys directives in it) to cut false positives. It is
+    data (Codex is instructed to treat embedded directives as data, not commands — a
+    best-effort injection mitigation, not a guarantee) to cut false positives. It is
     bounded by the same input-byte limit as the diff.
 
     STATIC review, not a verify mode: the read-only sandbox blocks the writes a

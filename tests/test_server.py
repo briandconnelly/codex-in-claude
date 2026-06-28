@@ -398,9 +398,10 @@ async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path
     assert called["n"] == 0  # no model call for an empty diff
 
 
-async def test_review_plain_text_defaults_to_unknown_verdict(monkeypatch, clean_env, tmp_path):
-    # When Codex returns a non-JSON message, review still carries verdict/confidence
-    # (defaults) — verdict is the review tool's contract, unlike consult (#31).
+async def test_review_exit0_non_json_returns_invalid_json_error(monkeypatch, clean_env, tmp_path):
+    # When Codex exits 0 but returns a non-JSON message, review no longer silently
+    # downgrades to prose with verdict="unknown" — it surfaces an explicit error because
+    # the structured verdict/findings are the review's product, not a prose answer (#159).
     monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
 
     async def fake(*a, **k):
@@ -408,11 +409,10 @@ async def test_review_plain_text_defaults_to_unknown_verdict(monkeypatch, clean_
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
     res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
-    assert res["ok"] is True
-    assert res["tool"] == "codex_review_changes"
-    assert res["verdict"] == "unknown"
-    assert res["confidence"] == "medium"
-    assert "plain prose" in res["summary"]
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_json"
+    # raw output preserved (bounded, redacted) in the message for debugging
+    assert "plain prose" in res["error"]["message"]
 
 
 async def test_review_codex_error(monkeypatch, clean_env, tmp_path):
@@ -1416,8 +1416,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_17():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-17"
+def test_fingerprint_is_schema_18():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-18"
 
 
 def test_capabilities_mark_m4_surface_experimental():

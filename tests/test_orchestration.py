@@ -124,6 +124,94 @@ def test_stamp_meta_captures_rate_limit_even_on_failure(monkeypatch):
     assert err["error"]["temporary"] is False
 
 
+def test_finalize_review_rejects_exit0_unparseable_prose(monkeypatch):
+    """exit-0 with non-JSON prose under the schema review path is an explicit
+    invalid_json error, not a silently-downgraded success (#159)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    result = _make_exec_result(exit_code=0, last_message="Here is my review in prose.")
+    out = orchestration.finalize_review(result, meta=meta)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "invalid_json"
+    # raw text preserved (redacted, bounded) for debugging
+    assert "prose" in out["error"]["message"]
+
+
+def test_finalize_review_rejects_exit0_empty_message(monkeypatch):
+    """Missing/empty last message on exit 0 is invalid_json, not a phantom success."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    result = _make_exec_result(exit_code=0, last_message="")
+    out = orchestration.finalize_review(result, meta=meta)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "invalid_json"
+
+
+def test_finalize_review_rejects_exit0_non_object_json(monkeypatch):
+    """Valid JSON that isn't the required object → schema_violation (#159)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    result = _make_exec_result(exit_code=0, last_message="[1, 2, 3]")
+    out = orchestration.finalize_review(result, meta=meta)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "schema_violation"
+
+
+def test_finalize_review_redacts_secret_in_raw_preview(monkeypatch):
+    """The raw-output preview embedded in the error message is secret-redacted."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    secret = "sk-" + "d" * 32
+    meta = _make_meta()
+    result = _make_exec_result(exit_code=0, last_message=f"prose with token={secret}")
+    out = orchestration.finalize_review(result, meta=meta)
+    assert out["ok"] is False
+    assert secret not in str(out)
+
+
+def test_finalize_review_bounds_raw_preview(monkeypatch):
+    """The raw-output preview embedded in the error message is bounded (~300 chars),
+    so an unparseable multi-KB response can't bloat the error envelope (#159)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    result = _make_exec_result(exit_code=0, last_message="z" * 5000)
+    out = orchestration.finalize_review(result, meta=meta)
+    assert out["ok"] is False
+    # The full 5000-char body must not appear verbatim; the preview is truncated.
+    assert "z" * 5000 not in out["error"]["message"]
+    assert out["error"]["message"].count("z") <= 300
+
+
+def test_finalize_review_accepts_valid_structured_object(monkeypatch):
+    """The happy path is unchanged: a schema-valid object still succeeds (#159)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    result = _make_exec_result(
+        exit_code=0,
+        last_message='{"summary":"looks good","verdict":"pass","confidence":"high"}',
+    )
+    out = orchestration.finalize_review(result, meta=meta)
+    assert out["ok"] is True
+    assert out["verdict"] == "pass"
+    assert out["summary"] == "looks good"
+
+
+def test_finalize_consult_keeps_prose_passthrough(monkeypatch):
+    """consult stays lenient: exit-0 prose is a valid Q&A answer, not an error (#159)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    result = _make_exec_result(exit_code=0, last_message="A plain-language answer.")
+    out = orchestration.finalize_consult(result, meta=meta)
+    assert out["ok"] is True
+    assert out["summary"] == "A plain-language answer."
+
+
 def test_run_consult_forwards_on_event(monkeypatch):
     captured: dict = {}
 

@@ -81,6 +81,39 @@ def test_parse_structured_non_object():
     assert normalize.parse_structured(None) is None
 
 
+def test_classify_structured_ok():
+    status, parsed = normalize.classify_structured('{"summary":"ok","verdict":"pass"}')
+    assert status == "ok"
+    assert parsed == {"summary": "ok", "verdict": "pass"}
+
+
+def test_classify_structured_ok_code_fence():
+    status, parsed = normalize.classify_structured('```json\n{"summary":"ok"}\n```')
+    assert status == "ok"
+    assert parsed == {"summary": "ok"}
+
+
+def test_classify_structured_invalid_json_when_absent_or_empty():
+    assert normalize.classify_structured(None) == ("invalid_json", None)
+    assert normalize.classify_structured("") == ("invalid_json", None)
+    assert normalize.classify_structured("   \n  ") == ("invalid_json", None)
+
+
+def test_classify_structured_invalid_json_when_not_parseable():
+    assert normalize.classify_structured("not json at all") == ("invalid_json", None)
+
+
+def test_classify_structured_schema_violation_when_not_object():
+    # Valid JSON, but not the object the schema requires.
+    assert normalize.classify_structured('"just a string"') == ("schema_violation", None)
+    assert normalize.classify_structured("[1, 2, 3]") == ("schema_violation", None)
+    assert normalize.classify_structured("42") == ("schema_violation", None)
+    # JSON null and booleans are valid JSON scalars, not objects → schema_violation.
+    assert normalize.classify_structured("null") == ("schema_violation", None)
+    assert normalize.classify_structured("true") == ("schema_violation", None)
+    assert normalize.classify_structured("false") == ("schema_violation", None)
+
+
 def test_coerce_findings_valid_and_invalid():
     raw = [
         {
