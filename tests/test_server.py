@@ -398,7 +398,7 @@ async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path
     assert called["n"] == 0  # no model call for an empty diff
 
 
-async def test_review_exit0_non_json_is_invalid_response_error(monkeypatch, clean_env, tmp_path):
+async def test_review_exit0_non_json_returns_invalid_json_error(monkeypatch, clean_env, tmp_path):
     # When Codex exits 0 but returns a non-JSON message, review no longer silently
     # downgrades to prose with verdict="unknown" — it surfaces an explicit error because
     # the structured verdict/findings are the review's product, not a prose answer (#159).

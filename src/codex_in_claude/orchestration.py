@@ -108,7 +108,8 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
     # Deliberate prose-passthrough exception (#159): consult is Q&A, so a plain-language
     # answer is itself a valid result. Unlike review (whose value is the structured
     # verdict/findings), there is nothing to mislead here — the prose maps onto `summary`
-    # — so exit-0 non-JSON is surfaced as the answer rather than an invalid_response error.
+    # — so exit-0 non-JSON is surfaced as the answer rather than the
+    # invalid_json/schema_violation error the strict review path now raises.
     return ConsultResult(
         summary=(raw.text or "").strip() or "(codex returned no message)",
         raw_response=raw,
