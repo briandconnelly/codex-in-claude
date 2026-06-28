@@ -100,7 +100,7 @@ def build_exec_command(
     if output_schema_path:
         tokens += ["--output-schema", output_schema_path]
     if model:
-        tokens += ["--model", model]
+        tokens += [cli_contract.MODEL_FLAG, model]
     cmd, dropped = _gate_optional(tokens, fs)
     # Prompt comes from stdin; the trailing sentinel tells codex exec to read it.
     cmd += [cli_contract.STDIN_PROMPT]
