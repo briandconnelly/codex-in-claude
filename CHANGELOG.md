@@ -114,6 +114,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **BREAKING: `codex_review_changes` now rejects an exit-0 run whose output ignored `--output-schema`**
+  (#159). When `codex` exits 0 but the last message is missing/blank or not parseable as a JSON
+  object, the review no longer silently downgrades to a prose `summary` with `verdict="unknown"` —
+  it returns an explicit error: `invalid_json` (absent/blank or unparseable) or `schema_violation`
+  (valid JSON but not an object), with the raw output kept as a bounded, secret-redacted preview in
+  `error.message`. The structured verdict/findings *are* the product for a review, so a schema-less
+  response is surfaced rather than masked. `codex_consult` deliberately keeps its prose-passthrough
+  (a plain Q&A answer is itself a valid result). No new error codes (both already existed); bumps
+  `FINGERPRINT` because review's exit-0 behavior is agent-visible.
+- **Softened over-promising prompt-injection wording in agent-visible tool descriptions** (#157).
+  `extra_context` and the `codex_review_changes` description claimed embedded directives "are never
+  obeyed" / "the reviewer never obeys" them — an absolute guarantee about LLM behavior the
+  implementation cannot make. Reworded to best-effort: Codex is *instructed* to treat embedded
+  directives as data, not commands — a prompt-injection mitigation, not a guarantee — and the
+  `extra_context` caveat now travels with the surface (don't include live secrets; Codex can read
+  files it's pointed at and redaction does not cover that field). Wording only; bumps `FINGERPRINT`.
 - **BREAKING:** Error envelope reshaped to the agent-friendly-mcp §6 contract: `retryable` →
   `temporary`; flat `repair`/`repair_tool`/`repair_tool_params`/`offending_param`/`allowed_values`
   fold into `repair{next_step,tool,arguments,alternative}` (symbolic `next_step`) and

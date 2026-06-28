@@ -256,6 +256,32 @@ def parse_structured(last_message: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def classify_structured(last_message: str | None) -> tuple[str, dict | None]:
+    """Classify a structured-output last message for the strict review path (#159).
+
+    The lenient ``parse_structured`` collapses "no usable JSON" into a single ``None``;
+    the strict review path needs to tell apart *why* it failed, so it returns one of:
+
+    - ``("ok", <dict>)`` — a JSON object (the shape the schema requires) is present.
+    - ``("invalid_json", None)`` — the message is absent/blank or does not parse as JSON.
+    - ``("schema_violation", None)`` — it parses as JSON but is not an object (a list,
+      string, or number), so it cannot satisfy the output schema.
+
+    This is a structural check (object vs not), not full field/enum validation: a
+    partial-but-object payload still degrades gracefully through ``finalize_review``
+    (verdict defaults to "unknown"), which is honest, so it is intentionally accepted."""
+    if not last_message or not last_message.strip():
+        return ("invalid_json", None)
+    candidate = _strip_code_fence(last_message)
+    try:
+        parsed = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return ("invalid_json", None)
+    if not isinstance(parsed, dict):
+        return ("schema_violation", None)
+    return ("ok", parsed)
+
+
 def coerce_findings(raw: object) -> list[Finding]:
     """Build validated Findings from the structured payload, dropping malformed
     entries rather than failing the whole result."""

@@ -851,7 +851,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-17",
+                "default": "codex-in-claude/0.1/schema-18",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1773,7 +1773,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background, added to the prompt as clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
           "isolation": {
             "anyOf": [
@@ -2524,7 +2524,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background, added to the prompt as clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
           "isolation": {
             "anyOf": [
@@ -4827,7 +4827,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background, added to the prompt as clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
           "isolation": {
             "anyOf": [
@@ -9783,7 +9783,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (the reviewer never obeys directives in it) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files. Redaction is not a guarantee — do\nnot point a review at a tree full of live credentials and assume it protects them.\n\nProgress: this is a blocking call that returns only when Codex finishes; it does\nnot stream incremental `notifications/progress`. Typical runs take tens of seconds;\nthe configured default timeout is normally 180s, clamped to 10-600s, overridable\nper call via `timeout_seconds` (`codex_status` reports the resolved default and\nbounds). If you need live status or recoverability for a long run, use\n`codex_review_changes_async` for a `job_id` and poll `codex_job_status`.",
+      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (Codex is instructed to treat embedded directives as data, not commands — a\nbest-effort injection mitigation, not a guarantee) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files. Redaction is not a guarantee — do\nnot point a review at a tree full of live credentials and assume it protects them.\n\nProgress: this is a blocking call that returns only when Codex finishes; it does\nnot stream incremental `notifications/progress`. Typical runs take tens of seconds;\nthe configured default timeout is normally 180s, clamped to 10-600s, overridable\nper call via `timeout_seconds` (`codex_status` reports the resolved default and\nbounds). If you need live status or recoverability for a long run, use\n`codex_review_changes_async` for a `job_id` and poll `codex_job_status`.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -9831,7 +9831,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background, added to the prompt as clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
           "isolation": {
             "anyOf": [
@@ -10641,7 +10641,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background, added to the prompt as clearly-labeled UNTRUSTED context (directives inside it are never obeyed)."
+            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
           "isolation": {
             "anyOf": [
