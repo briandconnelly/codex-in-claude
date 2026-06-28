@@ -37,6 +37,23 @@ def test_git_ok_redacts_secret_in_error(repo, monkeypatch):
     assert "[redacted: secret value]" in str(ei.value)
 
 
+def test_create_cleans_parent_on_worktree_add_timeout(repo, monkeypatch):
+    # A git hang during `worktree add` raises TimeoutExpired (not WorktreeError); the
+    # cleanup must still fire so the temp parent dir does not leak.
+    real_git_ok = worktree._git_ok
+
+    def fake_git_ok(repo_arg, args, timeout):
+        if args[:2] == ["worktree", "add"]:
+            raise subprocess.TimeoutExpired(cmd="git worktree add", timeout=timeout)
+        return real_git_ok(repo_arg, args, timeout)
+
+    monkeypatch.setattr(worktree, "_git_ok", fake_git_ok)
+    seen: list[str] = []
+    with pytest.raises(subprocess.TimeoutExpired):
+        worktree.create(str(repo), timeout=30, on_parent=seen.append)
+    assert seen and not Path(seen[0]).exists()
+
+
 def test_create_and_remove(repo):
     wt = worktree.create(str(repo), timeout=30)
     assert Path(wt.path).is_dir()

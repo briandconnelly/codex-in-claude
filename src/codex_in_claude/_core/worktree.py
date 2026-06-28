@@ -120,8 +120,11 @@ def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None =
     wt = str(Path(parent) / "tree")
     try:
         _git_ok(repo, ["worktree", "add", "--detach", "--quiet", wt, "HEAD"], timeout)
-    except WorktreeError:
-        shutil.rmtree(parent, ignore_errors=True)
+    except BaseException:
+        # A git hang (TimeoutExpired) or spawn failure (OSError) is not a WorktreeError,
+        # so catch broadly and match the sibling _seed_uncommitted block: best-effort
+        # teardown of any partial registration + the temp parent, then re-raise. No leak.
+        remove(repo, Worktree(path=wt, parent=parent), timeout=timeout)
         raise
 
     try:
