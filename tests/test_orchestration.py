@@ -38,6 +38,13 @@ def _make_exec_result(
     )
 
 
+def test_gitdiff_error_redacts_secret():
+    secret = "sk-" + "c" * 32
+    out = orchestration.gitdiff_error(RuntimeError(f"git failed token={secret}"), _make_meta())
+    assert secret not in str(out)
+    assert "[redacted: secret value]" in str(out)
+
+
 def test_stamp_meta_attaches_rate_limit(monkeypatch):
 
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)

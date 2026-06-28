@@ -25,6 +25,18 @@ def repo(tmp_path):
     return tmp_path
 
 
+def test_git_ok_redacts_secret_in_error(repo, monkeypatch):
+    secret = "sk-" + "b" * 32
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr=f"fatal: token={secret}"
+    )
+    monkeypatch.setattr(worktree, "_git", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree._git_ok(str(repo), ["status"], 30)
+    assert secret not in str(ei.value)
+    assert "[redacted: secret value]" in str(ei.value)
+
+
 def test_create_and_remove(repo):
     wt = worktree.create(str(repo), timeout=30)
     assert Path(wt.path).is_dir()

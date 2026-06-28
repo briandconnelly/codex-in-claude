@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codex_in_claude._core.redaction import redact_text
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -73,7 +75,9 @@ def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProces
 def _git_ok(repo: str, args: list[str], timeout: int) -> str:
     proc = _git(repo, args, timeout)
     if proc.returncode != 0:
-        raise WorktreeError(f"git {' '.join(args)} failed: {proc.stderr.strip()[:200]}")
+        raise WorktreeError(
+            f"git {' '.join(args)} failed: {redact_text(proc.stderr.strip()[:200])}"
+        )
     return proc.stdout
 
 
@@ -186,7 +190,9 @@ def plan(repo: str, *, timeout: int) -> WorktreePlanData:
         raise  # domain errors pass through unchanged
     except (subprocess.SubprocessError, OSError) as exc:
         # git binary missing (FileNotFoundError) or a subprocess timeout, etc.
-        raise WorktreeError(f"git command failed during plan: {str(exc)[:200]}") from exc
+        raise WorktreeError(
+            f"git command failed during plan: {redact_text(str(exc)[:200])}"
+        ) from exc
     return WorktreePlanData(
         head_commit=head,
         head_subject=head_subject,
@@ -225,7 +231,7 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
         return "uncommitted changes could not be replayed; worktree based on HEAD only"
     add = _git(wt, ["add", "-A"], timeout)
     if add.returncode != 0:
-        raise WorktreeError(f"staging the baseline failed: {add.stderr.strip()[:200]}")
+        raise WorktreeError(f"staging the baseline failed: {redact_text(add.stderr.strip()[:200])}")
     commit = _git(
         wt,
         [
@@ -242,7 +248,9 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
         timeout,
     )
     if commit.returncode != 0:
-        raise WorktreeError(f"committing the baseline failed: {commit.stderr.strip()[:200]}")
+        raise WorktreeError(
+            f"committing the baseline failed: {redact_text(commit.stderr.strip()[:200])}"
+        )
     # The baseline commit must leave the worktree clean; any residue means the live
     # changes were not fully captured and would leak into the agent's diff.
     status = _git(wt, ["status", "--porcelain=v1", "--untracked-files=all"], timeout)
@@ -275,12 +283,16 @@ def capture_diff(wt: str, *, timeout: int) -> str:
     pathspec = [".", *_ARTIFACT_EXCLUDES]
     add = _git(wt, ["add", "-A", "--", *pathspec], timeout)
     if add.returncode != 0:
-        raise WorktreeError(f"staging the worktree diff failed: {add.stderr.strip()[:200]}")
+        raise WorktreeError(
+            f"staging the worktree diff failed: {redact_text(add.stderr.strip()[:200])}"
+        )
     proc = _git(
         wt, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec], timeout
     )
     if proc.returncode != 0:
-        raise WorktreeError(f"capturing the worktree diff failed: {proc.stderr.strip()[:200]}")
+        raise WorktreeError(
+            f"capturing the worktree diff failed: {redact_text(proc.stderr.strip()[:200])}"
+        )
     return proc.stdout
 
 

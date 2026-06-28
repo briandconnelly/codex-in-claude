@@ -171,7 +171,11 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
     )
     return serialize_error(
         ErrorResult(
-            error=make_error(cast("ErrorCode", code), str(exc)[:300], details=details),
+            error=make_error(
+                cast("ErrorCode", code),
+                redaction.redact_text(str(exc)[:300]) or "",
+                details=details,
+            ),
             meta=meta,
         )
     )

@@ -123,6 +123,15 @@ def test_classify_nonzero_generic():
     assert "boom" in err.message
 
 
+def test_classify_failure_redacts_secret_in_detail():
+    # A secret echoed by codex/git before a non-zero exit must not reach error.message.
+    secret = "sk-" + "a" * 32
+    err = codex.classify_failure(CommandRun("", f"auth failed token={secret}", 1, 1, False))
+    assert err.code == "nonzero_exit"
+    assert secret not in err.message
+    assert "[redacted: secret value]" in err.message
+
+
 def test_classify_uses_error_event_message():
     events = '{"type":"turn.failed","error":{"message":"model overloaded"}}'
     err = codex.classify_failure(CommandRun(events, "", 1, 1, False), events=events)
