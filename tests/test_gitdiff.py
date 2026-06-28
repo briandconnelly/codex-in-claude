@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
 from codex_in_claude._core import gitdiff, streamcap
+from codex_in_claude._core.redaction import DiffRedactor
 
 
 def _git(cwd, *args):
@@ -346,3 +348,74 @@ def test_large_diff_is_memory_bounded(repo, monkeypatch):
     assert len(res.text.encode("utf-8")) <= 500  # bounded, line-aligned
     assert res.diff_bytes > 500  # exact full size still reported
     assert seen_chunked["used"]  # went through the bounded reader
+
+
+def test_diff_bytes_exact_count(repo):
+    """diff_bytes must equal len("\n".join(all_redacted_lines).encode("utf-8","replace"))
+    for a small deterministic diff — pinning the exact-count invariant."""
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+
+    # Collect the raw git diff as the function would see it (same flags/env).
+    raw = subprocess.run(
+        ["git", "-c", "core.quotepath=true", "diff"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
+        env={
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PATH": gitdiff._path(),  # type: ignore[attr-defined]
+        },
+        check=True,
+    ).stdout
+
+    # Feed every logical line through DiffRedactor to get the full redacted sequence.
+    redactor = DiffRedactor()
+    all_redacted: list[str] = []
+    for physical in raw.splitlines():
+        for logical in physical.splitlines() or [""]:
+            all_redacted.extend(redactor.feed(logical))
+
+    expected_bytes = len("\n".join(all_redacted).encode("utf-8", "replace"))
+
+    # gather_diff with a huge budget so nothing is truncated.
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert not res.truncated
+    assert res.diff_bytes == expected_bytes
+
+
+def test_stream_timeout_watchdog_kills_stalled_process(tmp_path, monkeypatch):
+    """A process that opens stdout, writes a line, then stalls without closing
+    stdout must be killed by the watchdog so _stream_redacted_diff raises
+    RuntimeError('... timed out ...') promptly — well within the 30-second stall.
+
+    RED (pre-fix): the function blocks indefinitely because proc.wait(timeout=…)
+    only runs AFTER stdout drains to EOF, which never happens.
+    GREEN (post-fix): a threading.Timer fires, kills the process group, which
+    closes the pipe, unblocks the drain loop, and the timed_out flag triggers
+    the RuntimeError.
+    """
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd, **kwargs):
+        # Spawn a real child that writes one line, flushes, then sleeps 30s
+        # without closing stdout — simulating a mid-stream git stall.
+        stall_cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import sys, time; "
+                "sys.stdout.write('partial\\n'); "
+                "sys.stdout.flush(); "
+                "time.sleep(30)"
+            ),
+        ]
+        return real_popen(stall_cmd, **kwargs)
+
+    monkeypatch.setattr(gitdiff.subprocess, "Popen", fake_popen)
+
+    acc = gitdiff._BoundedDiffAccumulator(1000)  # type: ignore[attr-defined]
+    with pytest.raises(RuntimeError, match="timed out"):
+        gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=1, acc=acc)  # type: ignore[attr-defined]

@@ -12,6 +12,7 @@ import re
 import signal
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -347,26 +348,42 @@ def _stream_redacted_diff(
         )
     except FileNotFoundError as exc:
         raise GitUnavailableError("git executable not found") from exc
+    timed_out = threading.Event()
+    stderr_buf: list[str] = []
+
+    def _kill() -> None:
+        timed_out.set()
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+
+    def _drain_stderr() -> None:
+        if proc.stderr is not None:
+            stderr_buf.append(proc.stderr.read())
+
+    timer = threading.Timer(timeout, _kill)
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
     try:
         # proc.stdout is IO[Any] from Popen's generic; cast to TextIO for iter_bounded_lines.
         assert proc.stdout is not None
+        timer.start()
+        stderr_thread.start()
         for physical in streamcap.iter_bounded_lines(
             cast("TextIO", proc.stdout), acc.max_line_bytes
         ):
             for logical in physical.splitlines() or [""]:
                 acc.feed(logical)
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s") from exc
-        stderr = proc.stderr.read() if proc.stderr is not None else ""
+        # Process is done writing; reap it (watchdog bounds total wall time).
+        proc.wait()
+        stderr_thread.join()
     finally:
+        timer.cancel()
         for pipe in (proc.stdout, proc.stderr):
             if pipe is not None:
                 with contextlib.suppress(OSError):
                     pipe.close()
+    if timed_out.is_set():
+        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s")
+    stderr = "".join(stderr_buf)
     if proc.returncode != 0:
         message = stderr.strip() or "git failed"
         if _is_not_git_repo_error(message):
