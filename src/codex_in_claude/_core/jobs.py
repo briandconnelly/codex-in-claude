@@ -62,6 +62,9 @@ DEFAULT_POLL_AFTER_MS = 1000
 # Upper bound for the growing poll backoff (ms). A delegate often runs ~20s, so the
 # hint ramps up to here rather than staying at the flat default and inviting ~20 polls.
 MAX_POLL_AFTER_MS = 10000
+# Min seconds between activity.json disk writes while a job runs; the first event
+# and the final flush always write. Keeps the hot path off the disk on every line.
+ACTIVITY_WRITE_THROTTLE_S = 0.5
 
 CmdFactory = Callable[[Path], list[str]]
 
@@ -80,6 +83,38 @@ def poll_backoff_ms(
     ``cap`` below ``base`` (e.g. a configured base above the default cap), the base
     wins so the result is never below the configured floor."""
     return min(max(base, elapsed_ms), max(base, cap))
+
+
+@dataclass
+class ActivityRecorder:
+    """Persists a job's Codex event activity as counters/timestamps ONLY.
+
+    The worker calls ``record`` per observed event and ``flush`` at the end. Writes
+    are throttled and atomic (temp + replace) so a concurrent JobStore reader sees
+    either the old or new file, never a torn one. Raw events are never written."""
+
+    job_dir: Path
+    _count: int = 0
+    _last_epoch: float = 0.0
+    _last_write: float = 0.0
+
+    def record(self, now_epoch: float) -> None:
+        self._count += 1
+        self._last_epoch = now_epoch
+        if self._count == 1 or (now_epoch - self._last_write) >= ACTIVITY_WRITE_THROTTLE_S:
+            self._write(now_epoch)
+
+    def flush(self) -> None:
+        if self._count:
+            self._write(self._last_epoch or time.time())
+
+    def _write(self, now_epoch: float) -> None:
+        payload = {"events_seen": self._count, "last_event_epoch": self._last_epoch}
+        tmp = self.job_dir / "activity.json.tmp"
+        with contextlib.suppress(OSError):
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(self.job_dir / "activity.json")
+            self._last_write = now_epoch
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -291,6 +326,22 @@ class JobStore:
         paths = data.get("paths") if isinstance(data, dict) else None
         return [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
 
+    @staticmethod
+    def _read_activity(jd: Path) -> tuple[int, float | None]:
+        """(events_seen, last_event_epoch) from activity.json; (0, None) if absent/
+        corrupt. Treated as opaque caller-declared state, like cleanup.json."""
+        try:
+            data = json.loads((jd / "activity.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return 0, None
+        if not isinstance(data, dict):
+            return 0, None
+        count = data.get("events_seen")
+        epoch = data.get("last_event_epoch")
+        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+        epoch = epoch if isinstance(epoch, (int, float)) and not isinstance(epoch, bool) else None
+        return count, epoch
+
     def _within_cleanup_root(self, path: str) -> bool:
         if self.cleanup_root is None:
             return False
@@ -488,6 +539,12 @@ class JobStore:
             if state == "running"
             else self.poll_after_ms
         )
+        events_seen, last_epoch = self._read_activity(jd)
+        end = meta.get("completed_epoch") or time.time()
+        last_event_at = (
+            datetime.fromtimestamp(last_epoch, UTC).isoformat() if last_epoch is not None else None
+        )
+        event_age_ms = max(0, int((end - last_epoch) * 1000)) if last_epoch is not None else None
         return {
             "job_id": meta.get("job_id", jd.name),
             "kind": meta.get("kind", ""),
@@ -503,6 +560,9 @@ class JobStore:
             "ttl_seconds": self.ttl_seconds,
             "cleanup_warnings": meta.get("cleanup_warnings", []),
             "extra": meta.get("extra", {}),
+            "events_seen": events_seen,
+            "last_event_at": last_event_at,
+            "event_age_ms": event_age_ms,
         }
 
     # ----------------------------------------------------------- maintenance

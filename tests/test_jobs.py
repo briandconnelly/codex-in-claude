@@ -7,6 +7,7 @@ worker does.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -59,7 +60,6 @@ def _declare_factory(root: str, prefix: str = "wt-"):
 
 def _declared_path(store: JobStore, cwd: str, job_id: str) -> str:
     """The external path a _DECLARE_AND_SLEEP job recorded in its manifest."""
-    import json
 
     jd = store._job_dir(cwd, job_id)
     deadline = time.monotonic() + 5.0
@@ -346,7 +346,6 @@ def test_write_spec_lands_in_job_dir(tmp_path):
 
     job_id, _ = store.start(factory, cwd, kind="k", write_spec={"task": "x"})
     _wait_terminal(store, cwd, job_id)
-    import json
 
     assert json.loads((seen["jd"] / "spec.json").read_text()) == {"task": "x"}
 
@@ -375,7 +374,6 @@ def test_ttl_eviction(tmp_path):
     # Force the completion far into the past, then a list() reap should drop it.
     store.list_jobs(cwd)
     jd = store._job_dir(cwd, job_id)
-    import json
 
     meta = json.loads((jd / "meta.json").read_text())
     meta["completed_epoch"] = time.time() - 10_000
@@ -682,3 +680,55 @@ def test_reap_and_list_skip_unparseable_meta(tmp_path):
     ids = {j["job_id"] for j in listed}
     assert good_id in ids
     assert "deadbeef" not in ids
+
+
+# --- ActivityRecorder + activity read ----------------------------------------
+
+
+def test_activity_recorder_writes_counts_and_timestamp(tmp_path: Path):
+    rec = jobs.ActivityRecorder(tmp_path)
+    t = time.time()
+    rec.record(t)
+    rec.flush()
+    data = json.loads((tmp_path / "activity.json").read_text())
+    assert data["events_seen"] == 1
+    assert abs(data["last_event_epoch"] - t) < 1.0
+
+
+def test_activity_recorder_counts_monotonically_and_never_writes_raw_events(tmp_path: Path):
+    rec = jobs.ActivityRecorder(tmp_path)
+    for i in range(10):
+        rec.record(1000.0 + i)
+    rec.flush()
+    data = json.loads((tmp_path / "activity.json").read_text())
+    assert data["events_seen"] == 10
+    assert set(data) == {"events_seen", "last_event_epoch"}  # counters/timestamps only
+
+
+def test_status_dict_includes_activity_fields(tmp_path: Path):
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    jd = store._job_dir(str(tmp_path), jid)
+    rec = jobs.ActivityRecorder(jd)
+    rec.record(time.time())
+    rec.flush()
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 1
+    assert status["last_event_at"] is not None
+    assert status["event_age_ms"] is not None and status["event_age_ms"] >= 0
+
+
+def test_status_dict_activity_defaults_when_no_file(tmp_path: Path):
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 0
+    assert status["last_event_at"] is None
+    assert status["event_age_ms"] is None
+
+
+def test_read_activity_tolerates_corrupt_file(tmp_path: Path):
+    (tmp_path / "activity.json").write_text("{not json")
+    assert jobs.JobStore._read_activity(tmp_path) == (0, None)
