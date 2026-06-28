@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import shutil
 import signal
@@ -329,7 +330,12 @@ class JobStore:
     @staticmethod
     def _read_activity(jd: Path) -> tuple[int, float | None]:
         """(events_seen, last_event_epoch) from activity.json; (0, None) if absent/
-        corrupt. Treated as opaque caller-declared state, like cleanup.json."""
+        corrupt. Treated as opaque caller-declared state, like cleanup.json.
+
+        Values are validated, not trusted: a non-int/negative count degrades to 0,
+        and a non-finite epoch (json.loads accepts NaN/Infinity) degrades to None —
+        otherwise the downstream datetime.fromtimestamp()/int() in _status_dict would
+        raise and take the whole job-status API down with a corrupt file."""
         try:
             data = json.loads((jd / "activity.json").read_text())
         except (OSError, json.JSONDecodeError):
@@ -338,8 +344,16 @@ class JobStore:
             return 0, None
         count = data.get("events_seen")
         epoch = data.get("last_event_epoch")
-        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
-        epoch = epoch if isinstance(epoch, (int, float)) and not isinstance(epoch, bool) else None
+        count = (
+            count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else 0
+        )
+        epoch = (
+            epoch
+            if isinstance(epoch, (int, float))
+            and not isinstance(epoch, bool)
+            and math.isfinite(epoch)
+            else None
+        )
         return count, epoch
 
     def _within_cleanup_root(self, path: str) -> bool:

@@ -734,6 +734,32 @@ def test_read_activity_tolerates_corrupt_file(tmp_path: Path):
     assert jobs.JobStore._read_activity(tmp_path) == (0, None)
 
 
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
+def test_read_activity_degrades_nonfinite_epoch(tmp_path: Path, bad: str):
+    # json.loads accepts NaN/Infinity by default; a non-finite epoch must degrade to
+    # None (not crash datetime.fromtimestamp/int downstream). The count stays valid.
+    (tmp_path / "activity.json").write_text(f'{{"events_seen": 1, "last_event_epoch": {bad}}}')
+    assert jobs.JobStore._read_activity(tmp_path) == (1, None)
+
+
+def test_read_activity_degrades_negative_count(tmp_path: Path):
+    (tmp_path / "activity.json").write_text('{"events_seen": -5, "last_event_epoch": 1000.0}')
+    assert jobs.JobStore._read_activity(tmp_path) == (0, 1000.0)
+
+
+def test_status_survives_nonfinite_epoch(tmp_path: Path):
+    # Regression: a corrupt activity.json with a non-finite epoch must not crash status.
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    jd = store._job_dir(str(tmp_path), jid)
+    (jd / "activity.json").write_text('{"events_seen": 1, "last_event_epoch": NaN}')
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 1
+    assert status["last_event_at"] is None
+    assert status["event_age_ms"] is None
+
+
 def test_activity_observer_end_to_end_into_job_store(tmp_path: Path):
     """End-to-end: _worker._activity_observer drives ActivityRecorder → activity.json
     → JobStore.status surfaces events_seen, last_event_at, and event_age_ms."""
