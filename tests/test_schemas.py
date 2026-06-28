@@ -446,3 +446,48 @@ def test_job_result_review_variant_with_findings_validates_against_schema():
     )
     payload = result.model_dump(mode="json")
     jsonschema.validate(payload, s.JOB_RESULT_SCHEMA)
+
+
+# --------------------------------------------------------------------------- #
+# Advisory polled event-activity fields (Task 3 / #139)
+# --------------------------------------------------------------------------- #
+from codex_in_claude.schemas import FINGERPRINT, AsyncLifecycle, JobStatus  # noqa: E402
+
+
+def test_jobstatus_has_advisory_activity_fields_defaulting_safely():
+    s_obj = JobStatus(
+        job_id="j",
+        kind="codex_consult",
+        status="running",
+        started_at="t",
+        elapsed_ms=1,
+        deadline_seconds=60,
+        ttl_seconds=60,
+        workspace={"cwd": "/x", "workspace_source": "param"},
+    )
+    assert s_obj.events_seen == 0
+    assert s_obj.last_event_at is None
+    assert s_obj.event_age_ms is None
+
+
+def test_async_lifecycle_advertises_activity_without_touching_progress_support():
+    lc = AsyncLifecycle(
+        poll_tool="p",
+        result_tool="r",
+        consume_tool="c",
+        cancel_tool="x",
+        list_tool="l",
+        status_field="status",
+        result_ready_field="result_available",
+        poll_after_field="poll_after_ms",
+        activity_support="codex_events",
+        event_count_field="events_seen",
+        last_event_field="last_event_at",
+        event_age_field="event_age_ms",
+    )
+    assert lc.progress_support == "none"  # native progress meaning preserved
+    assert lc.activity_support == "codex_events"
+
+
+def test_fingerprint_bumped_to_schema_17():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-17"

@@ -936,6 +936,10 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
     status_field="status",
     result_ready_field="result_available",
     poll_after_field="poll_after_ms",
+    activity_support="codex_events",
+    event_count_field="events_seen",
+    last_event_field="last_event_at",
+    event_age_field="event_age_ms",
 )
 
 
@@ -2347,6 +2351,9 @@ def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
         result_available=data["result_available"],
         detail=detail,
         cleanup_warnings=data.get("cleanup_warnings", []),
+        events_seen=data.get("events_seen", 0),
+        last_event_at=data.get("last_event_at"),
+        event_age_ms=data.get("event_age_ms"),
         workspace=workspace,
     )
 
