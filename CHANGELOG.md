@@ -7,6 +7,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Subprocess/exception text is now redacted on failure paths.** A secret that `codex` or `git`
+  echoes before failing could reach `error.message` (and the caller's logs/context) verbatim: the
+  `nonzero_exit` detail in `classify_failure`, the `WorktreeError` messages and `plan()` detail in
+  `_core/worktree.py`, and the `gitdiff_error` detail all now route through `redact_text`, matching
+  the success path. Defense-in-depth, internal only — no agent-visible surface change. (#152)
+- **`worktree add` cleanup no longer leaks a temp dir on git timeout/`OSError`.** The cleanup around
+  `git worktree add` caught only `WorktreeError`, so a `subprocess.TimeoutExpired` (git hang) or
+  `OSError` (spawn failure) escaped and orphaned the `mkdtemp` parent dir. It now catches broadly and
+  does a best-effort teardown, symmetric with the following seed block. (#153)
+- **Async job spawn is now transactional.** `JobStore.start()` spawned the detached worker before
+  persisting `meta.json`; if persistence failed after a successful spawn (disk full, fs error), a
+  paid worker kept running with no discoverable record — invisible to status/list/cancel and (for
+  delegate) its worktree was never reaped. Post-spawn persistence is now guarded so a failure reaps
+  the worker's process group and removes the job dir before re-raising. (#154)
 - **A corrupt `activity.json` with an out-of-range epoch no longer crashes job status/list.**
   `_read_activity` accepted any *finite* `last_event_epoch`, but a finite value still out of range
   for `datetime.fromtimestamp()` (e.g. `1e308`) raised `OverflowError`/`OSError`/`ValueError`,
