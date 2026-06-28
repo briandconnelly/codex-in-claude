@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -301,7 +302,6 @@ def test_named_untracked_non_utf8_content_roundtrips(repo):
 def test_named_untracked_inaccessible_file_raises(repo):
     # An unreadable untracked file makes `--no-index` exit 1 with empty stdout; that is
     # a real error and must surface, not be silently dropped.
-    import os
 
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("file permissions are not enforced for root")
@@ -628,3 +628,53 @@ def test_f1b_large_untracked_file_text_bounded(repo):
     assert len(res.text.encode("utf-8")) <= max_bytes
     assert res.diff_bytes > max_bytes
     assert res.summary.files_changed == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: stderr-only descendant holds the pipe past the configured timeout
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process-group kill is POSIX-only")
+def test_stream_timeout_stderr_only_descendant_times_out(tmp_path, monkeypatch):
+    """Fix 2 regression: a fake git parent that exits immediately after spawning a
+    grandchild inheriting ONLY stderr (stdout closed) must raise RuntimeError
+    matching 'timed out' promptly rather than returning success after 5 s.
+
+    RED (pre-fix): stdout drain sees EOF fast; proc.wait() returns immediately (parent
+    exited); stderr_thread.join(timeout=5) waits 5 s but the grandchild still holds
+    stderr; timed_out is never set; function returns normally — wrong.
+    GREEN (post-fix): stderr drain is bounded by the remaining deadline; if
+    stderr_thread is still alive, kill the group, set timed_out, raise RuntimeError.
+    """
+    import time
+
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd, **kwargs):
+        # Parent: spawns grandchild with stderr=2 (write end of our stderr pipe) and
+        # stdout=DEVNULL so it does NOT hold our stdout pipe open.  Parent then closes
+        # its own stdout (releasing the stdout pipe) and exits.  Grandchild sleeps 30 s
+        # holding stderr open, simulating a git descendant that outlives git itself.
+        parent_code = (
+            "import os, subprocess, sys; "
+            "subprocess.Popen("
+            "    [sys.executable, '-c', 'import time; time.sleep(30)'],"
+            "    stdout=subprocess.DEVNULL, stderr=2, close_fds=True"
+            "); "
+            "os.close(1); "
+            "sys.exit(0)"
+        )
+        return real_popen([sys.executable, "-c", parent_code], **kwargs)
+
+    monkeypatch.setattr(gitdiff.subprocess, "Popen", fake_popen)
+
+    acc = gitdiff._BoundedDiffAccumulator(1000)  # type: ignore[attr-defined]
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=2, acc=acc)  # type: ignore[attr-defined]
+    elapsed = time.monotonic() - start
+    # Must return well before the grandchild's 30 s sleep.
+    assert elapsed < 10, (
+        f"expected return well before grandchild's 30 s sleep; elapsed={elapsed:.1f}s"
+    )

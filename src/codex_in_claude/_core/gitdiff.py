@@ -436,21 +436,20 @@ def _stream_redacted_diff(  # noqa: PLR0915
         with _kill_lock:
             _finished[0] = True
         timer.cancel()
-        if not timed_out.is_set():
-            remaining = max(0.0, deadline - time.monotonic())
-            try:
-                proc.wait(timeout=remaining)
-            except subprocess.TimeoutExpired:
-                timed_out.set()
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(proc.pid, signal.SIGKILL)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=5)
-        else:
-            # Timer already killed the group; just reap.
+        # Bound the process exit AND the stderr drain by the remaining deadline. git may
+        # have closed stdout while still running, or a descendant may hold only stderr
+        # open.  If either overruns, kill the group so _drain_stderr reaches EOF and the
+        # timed_out flag is set for the error path below.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        stderr_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        if proc.poll() is None or stderr_thread.is_alive():
+            timed_out.set()
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=5)
-        stderr_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
     finally:
         timer.cancel()  # idempotent: cleans up on exception paths
         for pipe in (proc.stdout, proc.stderr):

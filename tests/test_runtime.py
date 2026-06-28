@@ -426,3 +426,45 @@ async def test_f2_observer_queue_byte_bounded(tmp_path, monkeypatch):
     # With a 500-byte budget and 200-byte lines, the observer should see fewer than
     # all 50 lines (the byte guard drops lines when the budget is exhausted).
     assert len(seen) < 50
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: slow observer must NOT cause a false timed_out on a successful run
+# ---------------------------------------------------------------------------
+
+
+def test_run_async_slow_observer_does_not_cause_false_timeout():
+    """Fix 1 regression: a fast, successful child with a slow on_stdout_line callback
+    must NOT be reported as timed_out because the observer thread is still draining.
+
+    RED (pre-fix): observer is in `threads`; any(t.is_alive() for t in threads) returns
+    True when the callback is slower than the remaining budget → timed_out=True, SIGKILL
+    fired at an already-reaped (possibly-reused) pgid — a successful run reported as
+    timed out.
+    GREEN (post-fix): only subprocess-bound pump threads factor into timed_out; a slow
+    observer never triggers a false kill or a false timeout flag.
+    """
+    import time
+
+    seen: list[str] = []
+
+    def slow_callback(line: str) -> None:
+        time.sleep(0.4)
+        seen.append(line)
+
+    # 4 lines; callback sleeps 0.4 s each → 1.6 s total callback work.
+    # timeout=1 s; the child itself exits in well under 0.1 s.
+    # Pre-fix: observer join budget ≈ 0.9 s; observer finishes only 2 callbacks by
+    # the deadline → still alive → timed_out=True (false positive).
+    # Post-fix: only pump threads are checked → all done → timed_out=False.
+    code = "import sys\nfor i in range(4):\n    print(f'line{i}', flush=True)\n"
+    run = anyio.run(
+        lambda: runtime.run_async(
+            _py(code), cwd=".", timeout_seconds=1, on_stdout_line=slow_callback
+        )
+    )
+    assert run.exit_code == 0, f"expected exit_code=0, got {run.exit_code}"
+    assert run.timed_out is False, (
+        "slow observer caused timed_out=True (false positive); Fix 1 not applied"
+    )
+    assert run.stderr != runtime.TIMED_OUT

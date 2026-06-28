@@ -161,30 +161,34 @@ def _wait_streaming(  # noqa: PLR0915
                 proc.stdin.write(stdin_text)
             proc.stdin.close()
 
-    readers = [
-        threading.Thread(target=_write_stdin, daemon=True),
-        threading.Thread(target=_pump_stdout, daemon=True),
-        threading.Thread(target=_pump_stderr, daemon=True),
-    ]
-    threads = list(readers)
-    if observe:
-        threads.append(threading.Thread(target=_observe, daemon=True))
-    for t in threads:
+    t_stdin = threading.Thread(target=_write_stdin, daemon=True)
+    t_out = threading.Thread(target=_pump_stdout, daemon=True)
+    t_err = threading.Thread(target=_pump_stderr, daemon=True)
+    # subprocess-bound: liveness reflects whether the child/descendants are still
+    # running or holding pipes.  These are the ONLY threads that factor into the
+    # timeout/kill decision.
+    pumps = [t_stdin, t_out, t_err]
+    observer = threading.Thread(target=_observe, daemon=True) if observe else None
+    for t in pumps:
         t.start()
+    if observer is not None:
+        observer.start()
     deadline = time.monotonic() + timeout_seconds
     # 1. Wait for the DIRECT child, bounded by the timeout.
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=timeout_seconds)
-    # 2. Join the reader/observer threads within the remaining budget.  A descendant
-    #    that inherited a pipe can keep a pump blocked past the child's own exit, and
-    #    a child can close its fds yet keep running — both gaps are bounded here.
-    for t in threads:
+    # 2. Join only the subprocess-bound pump threads within the remaining budget.
+    #    A descendant that inherited a pipe can keep a pump blocked past the child's
+    #    own exit, and a child can close its fds yet keep running — both gaps are
+    #    bounded here.  The observer is intentionally excluded: a slow on_stdout_line
+    #    callback must never cause a successful run to be marked timed_out.
+    for t in pumps:
         t.join(timeout=max(0.0, deadline - time.monotonic()))
     # 3. If the child is still running OR a pump is still blocked, the deadline was
     #    exceeded: kill the whole process group and reap.  This runs on the MAIN thread
     #    and proc is still unreaped, so proc.pid is a valid pgid and there is no
     #    killpg-after-reap race.
-    timed_out = proc.poll() is None or any(t.is_alive() for t in threads)
+    timed_out = proc.poll() is None or any(t.is_alive() for t in pumps)
     if timed_out:
         logger.warning(
             "subprocess pid=%s exceeded %ss; killing process group", proc.pid, timeout_seconds
@@ -205,10 +209,16 @@ def _wait_streaming(  # noqa: PLR0915
                 proc.kill()
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=5)
-        for t in threads:
+        for t in pumps:
             t.join(timeout=5)
     else:
         proc.wait()  # already exited; reap (instant)
+    # Observer is in-process and daemon: drain it within the remaining budget, but
+    # never let a slow activity callback delay the result unboundedly or mark the
+    # run timed out.  The _STREAM_DONE sentinel is put by _pump_stdout's finally, so
+    # _observe will terminate naturally once stdout drains (including after a group kill).
+    if observer is not None:
+        observer.join(timeout=max(0.0, deadline - time.monotonic()))
     truncated = out.truncated or err.truncated
     if truncated:
         logger.warning(
