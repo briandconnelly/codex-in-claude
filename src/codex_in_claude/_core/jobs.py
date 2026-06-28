@@ -475,8 +475,17 @@ class JobStore:
                 "terminal_status": None,
                 "extra": extra or {},
             }
-            self._write_meta(jd, meta)
-            self._enforce_count_cap(cwd)
+            try:
+                self._write_meta(jd, meta)
+                self._enforce_count_cap(cwd)
+            except BaseException:
+                # Persistence failed after a successful spawn (disk full, fs error). A paid
+                # worker is already running detached; reap its process group and drop the job
+                # dir so no orphaned worker / untracked record survives — mirrors the
+                # `except OSError` around Popen above.
+                _terminate_pid_tree(proc.pid, self.terminate_grace_seconds)
+                shutil.rmtree(jd, ignore_errors=True)
+                raise
             return job_id, meta["started_at"]
 
     # ------------------------------------------------------------ status calc
