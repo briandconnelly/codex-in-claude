@@ -7,6 +7,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- Bound subprocess output and git-diff capture in memory to prevent OOM of the long-lived stdio
+  server (#155). Subprocess stdout/stderr is now captured under an aggregate byte cap
+  (`CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES`, default 10 MiB) with a head+tail window that preserves the
+  trailing usage/rate-limit events; the diff is streamed through the redactor so it never
+  materializes whole. Exceeding the cap marks capture truncated and does not kill the run; the
+  process tree is still torn down on timeout or cancellation.
 - **Subprocess/exception text is now redacted on failure paths.** A secret that `codex` or `git`
   echoes before failing could reach `error.message` (and the caller's logs/context) verbatim: the
   `nonzero_exit` detail in `classify_failure`, the `WorktreeError` messages and `plan()` detail in

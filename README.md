@@ -192,6 +192,7 @@ Calling the MCP tools directly instead of through the `/codex:*` commands? See
 | `CODEX_IN_CLAUDE_ISOLATION` | `inherit` | `inherit` \| `ignore-config` \| `ignore-rules` |
 | `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` | 200000 | byte cap on author input. The gathered diff is truncated to it; author text above it is rejected with `input_too_large` — `codex_consult` counts `question`+`extra_context` together, while `codex_review_changes`/`codex_delegate` count each input on its own |
 | `CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES` | 200000 | cap on the inline diff a delegate run returns; larger diffs are truncated with `meta.truncated`/`meta.truncation_hint` (min 1000) |
+| `CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES` | 10485760 | aggregate byte cap for a subprocess's captured stdout+stderr; output past it is dropped (head+tail kept), run not killed |
 | `CODEX_IN_CLAUDE_GIT_TIMEOUT_SECONDS` | 60 | git command timeout |
 | `CODEX_IN_CLAUDE_STATE_DIR` | `$XDG_CACHE_HOME/codex-in-claude/jobs` or `~/.cache/codex-in-claude/jobs` | disk-backed background-job records |
 | `CODEX_IN_CLAUDE_JOB_TTL` | 86400 | seconds a finished job record is kept (min 60) |
