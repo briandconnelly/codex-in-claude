@@ -5,6 +5,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-28
+
+A hardening-and-contract release. The agent-visible surface changed (result `fingerprint`
+`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-18`), so pre-1.0 this is a minor
+release; clients that cache by `fingerprint` re-fetch the contract. Several tool contracts tightened
+(see the **Changed** breaking items: the error envelope reshape, the per-tool output-schema split,
+and review's new exit-0 rejection), and a batch of safety and resource-cleanup fixes landed across
+the worktree, subprocess, and background-job paths.
+
 ### Security
 
 - **Worktree git ops no longer run repo-configured hooks, fsmonitor, or signing in the server
@@ -143,11 +152,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   schema-16 error envelope are returned as a corrupt `internal_error` result; compatible *success*
   results are still returned (with `fingerprint` re-stamped).
   (Migration: invalidate stale error results.)
-- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-17`)
+- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-18`)
   for the agent-visible changes above (the async `readOnlyHint` fix #138 advanced it to `schema-13`;
   the `codex_job_cancel` `idempotentHint` fix #141 advanced it to `schema-14`; the `invalid_arguments`
   envelope #136 advanced it to `schema-15`; the error-envelope reshape #135 and catalog shrink #137
-  advanced it to `schema-16`; the polled event-activity feature #139 advanced it to `schema-17`).
+  advanced it to `schema-16`; the polled event-activity feature #139 advanced it to `schema-17`; and
+  the review exit-0 rejection #159 plus the softened prompt-injection wording #157 advanced it to
+  `schema-18`).
   Pre-1.0, these changes make the next release a minor; clients that
   cache by `fingerprint` re-fetch the contract.
 
