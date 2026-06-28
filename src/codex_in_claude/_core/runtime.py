@@ -36,6 +36,10 @@ _STREAM_DONE = object()
 DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 # Share of the aggregate cap reserved for stderr (diagnostic, smaller than stdout).
 _STDERR_RESERVE = 1 * 1024 * 1024
+# F2: byte budget for the observer queue. A slow on_stdout_line callback can cause
+# queue entries to pile up; this cap ensures at most 8 MiB waits in the queue at
+# any time, complementing the existing count limit (maxsize=10_000).
+_OBSERVER_QUEUE_BYTES = 8 * 1024 * 1024
 
 # Generic module: log via the stdlib only (no parent imports). Records propagate
 # to the `codex_in_claude` logger, whose handlers go to stderr — never stdout, the
@@ -97,6 +101,11 @@ def _wait_streaming(  # noqa: PLR0915
     err = streamcap.BoundedCapture(stderr_cap)
     observe = on_stdout_line is not None
     line_queue: queue.Queue = queue.Queue(maxsize=10_000)
+    # F2: byte budget for the observer queue — a slow callback can cause queue entries
+    # to pile up; this limits the total bytes queued at any time. Uses a list so the
+    # nested closures can mutate it without a `nonlocal` declaration.
+    _queued_bytes: list[int] = [0]
+    _qb_lock = threading.Lock()
 
     def _pump_stdout() -> None:
         try:
@@ -104,9 +113,16 @@ def _wait_streaming(  # noqa: PLR0915
                 for line in streamcap.iter_bounded_lines(cast("TextIO", proc.stdout), stdout_cap):
                     out.add(line)
                     if observe:
-                        # Drop silently under flood; never stall draining.
-                        with contextlib.suppress(queue.Full):
-                            line_queue.put_nowait(line)
+                        # F2: byte-bound the queue; drop silently under flood, never
+                        # stall draining. Also keep the count guard (queue.Full).
+                        n = len(line.encode("utf-8", "replace"))
+                        with _qb_lock:
+                            if _queued_bytes[0] + n <= _OBSERVER_QUEUE_BYTES:
+                                try:
+                                    line_queue.put_nowait(line)
+                                    _queued_bytes[0] += n
+                                except queue.Full:
+                                    pass  # count guard: drop silently
         finally:
             if observe:
                 line_queue.put(_STREAM_DONE)  # observer keeps draining, so this lands
@@ -120,6 +136,9 @@ def _wait_streaming(  # noqa: PLR0915
             item = line_queue.get()
             if item is _STREAM_DONE:
                 return
+            # F2: decrement byte budget after consuming a real line (not the sentinel).
+            with _qb_lock:
+                _queued_bytes[0] -= len(item.encode("utf-8", "replace"))
             with contextlib.suppress(Exception):
                 if _callback is not None:  # narrowing guard for the type checker
                     _callback(item)

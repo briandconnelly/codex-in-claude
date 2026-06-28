@@ -283,3 +283,45 @@ async def test_run_async_caps_stderr(tmp_path):
         max_output_bytes=50_000,
     )
     assert len(run.stderr.encode("utf-8")) <= 50_000
+
+
+async def test_f2_observer_queue_byte_bounded(tmp_path, monkeypatch):
+    """F2: the observer queue must be byte-bounded, not just count-bounded. Patching
+    _OBSERVER_QUEUE_BYTES to a tiny value verifies that lines exceeding the byte
+    budget are dropped rather than queued indefinitely.
+    Before fix: _OBSERVER_QUEUE_BYTES does not exist → AttributeError (RED).
+    After fix: the constant exists; patching to 500 bytes allows only ~2 lines of
+    200 bytes; the observer sees fewer than all 50 lines (some dropped)."""
+    import time
+
+    seen: list[str] = []
+
+    def slow(line: str) -> None:
+        time.sleep(0.002)  # deliberately slow: causes queue pressure
+        seen.append(line)
+
+    # Shrink the byte budget to 500 bytes: only 2 lines of 200 bytes fit at once.
+    monkeypatch.setattr(runtime, "_OBSERVER_QUEUE_BYTES", 500)
+
+    # 50 lines of 200 bytes. The subprocess emits all lines fast; with a 500-byte queue
+    # budget and a slow observer, most lines are dropped by the byte guard.
+    code = (
+        "import sys\n"
+        "for i in range(50):\n"
+        "    sys.stdout.write('x' * 200 + '\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=30,
+        on_stdout_line=slow,
+        max_output_bytes=50_000,
+    )
+    assert run.exit_code == 0
+    assert not run.timed_out
+    # The observer must have received some (not necessarily all) events.
+    assert len(seen) > 0
+    # With a 500-byte budget and 200-byte lines, the observer should see fewer than
+    # all 50 lines (the byte guard drops lines when the budget is exhausted).
+    assert len(seen) < 50

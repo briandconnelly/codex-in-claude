@@ -419,3 +419,132 @@ def test_stream_timeout_watchdog_kills_stalled_process(tmp_path, monkeypatch):
     acc = gitdiff._BoundedDiffAccumulator(1000)  # type: ignore[attr-defined]
     with pytest.raises(RuntimeError, match="timed out"):
         gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=1, acc=acc)  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# F3: long single line breaks diff_bytes + boundary redaction
+# ---------------------------------------------------------------------------
+
+
+def test_f3_long_line_diff_bytes_exact(repo, monkeypatch):
+    """F3(a): a single diff line longer than max_bytes must still be counted exactly
+    in diff_bytes. Before fix: max_line_bytes == max_bytes, so iter_bounded_lines
+    truncates the long line before the accumulator sees it; diff_bytes undercounts.
+    After fix: max_line_bytes == 8 MiB, so the full line reaches the accumulator."""
+    # Content line: "+" + "a"*300 = 301 chars > max_bytes=200.
+    (repo / "calc.py").write_text("a" * 300 + "\n")
+    max_bytes = 200
+
+    # Patch iter_bounded_lines with a small chunk_size (90) so the 301-char line spans
+    # multiple chunks and the per-line cap is actually enforced.
+    real_iter = streamcap.iter_bounded_lines
+
+    def small_chunk_iter(stream, max_line_bytes, chunk_size=65536):
+        yield from real_iter(stream, max_line_bytes, chunk_size=90)
+
+    monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", small_chunk_iter)
+
+    # Compute expected diff_bytes by feeding the full git diff through DiffRedactor.
+    import subprocess as _subprocess
+
+    raw = _subprocess.run(
+        ["git", "-c", "core.quotepath=true", "diff", "--end-of-options", "HEAD"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
+        env={"LC_ALL": "C", "LANG": "C", "PATH": gitdiff._path()},  # type: ignore[attr-defined]
+        check=True,
+    ).stdout
+    redactor = DiffRedactor()
+    all_redacted: list[str] = []
+    for physical in raw.splitlines():
+        for logical in physical.splitlines() or [""]:
+            all_redacted.extend(redactor.feed(logical))
+    expected = len("\n".join(all_redacted).encode("utf-8", "replace"))
+
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=max_bytes)
+    assert res.truncated
+    assert len(res.text.encode("utf-8")) <= max_bytes
+    # After fix: exact count even for a line that exceeds max_bytes.
+    assert res.diff_bytes == expected
+
+
+def test_f3_long_line_secret_beyond_per_line_cap_redacted(repo, monkeypatch):
+    """F3(b): a secret that starts beyond the old per-line cap (max_bytes) must be
+    fully redacted. Before fix: iter_bounded_lines truncates the line before the
+    secret's end; the regex needs 20+ chars but only a few are visible, so the secret
+    is not detected and calc.py is NOT in redacted_paths. After fix: the full line
+    reaches the redactor, the secret is matched and calc.py IS in redacted_paths."""
+    max_bytes = 100
+    # Diff line: "+" + "a"*100 + "sk-" + "A"*25 = 129 chars (no newline yet).
+    # With chunk_size=60 and old max_line_bytes=100:
+    #   chunk1 (60 chars, no newline): pending_bytes=60, not overflowing
+    #   chunk2 (60 chars, no newline): pending_bytes=120 > 100 → overflow!
+    #     truncated to 100 chars = "+" + "a"*99 (no "sk-" visible)
+    #   chunk3 (10 chars, has "\n"): overflowing → yield truncated marker
+    # The partial secret "sk-AAAA" (4 A's, needs 20+) never reaches the redactor:
+    # calc.py NOT in redacted_paths (RED before fix).
+    padding = "a" * 100
+    secret = "sk-" + "A" * 25  # needs 20+ A's for sk-[A-Za-z0-9]{20,}
+    (repo / "calc.py").write_text(padding + secret + "\n")
+
+    real_iter = streamcap.iter_bounded_lines
+
+    def small_chunk_iter(stream, max_line_bytes, chunk_size=65536):
+        yield from real_iter(stream, max_line_bytes, chunk_size=60)
+
+    monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", small_chunk_iter)
+
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=max_bytes)
+    assert res.truncated
+    # After fix: full line reaches the redactor; secret is found and fully redacted.
+    assert "calc.py" in res.redacted_paths
+
+
+# ---------------------------------------------------------------------------
+# F1b: explicitly-named untracked file materialized whole (streaming fix)
+# ---------------------------------------------------------------------------
+
+
+def test_f1b_large_untracked_uses_bounded_reader(repo, monkeypatch):
+    """F1b: the untracked diff path must stream through iter_bounded_lines (bounded
+    reader), not materialise the whole diff as a string first. Before fix: only the
+    tracked-diff call uses the bounded reader (1 call); after fix: the untracked path
+    also calls it (2 calls total when tracked diff is empty)."""
+    # No tracked changes, only a large untracked file — so any bounded-reader call
+    # beyond the first (empty tracked diff) must come from the untracked path.
+    big = "x" * 5000  # large content
+    (repo / "large_untracked.py").write_text(big + "\n")
+
+    call_count: dict[str, int] = {"n": 0}
+    real_iter = streamcap.iter_bounded_lines
+
+    def counting_iter(stream, max_line_bytes, chunk_size=65536):
+        call_count["n"] += 1
+        yield from real_iter(stream, max_line_bytes, chunk_size)
+
+    monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", counting_iter)
+
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["large_untracked.py"], timeout=30, max_bytes=500
+    )
+    assert res.truncated
+    assert len(res.text.encode("utf-8")) <= 500
+    # After fix: iter_bounded_lines called at least twice (tracked + untracked paths).
+    assert call_count["n"] >= 2
+
+
+def test_f1b_large_untracked_file_text_bounded(repo):
+    """F1b: a large named untracked file produces bounded text and has diff_bytes > max_bytes.
+    This verifies the accumulator correctly bounds output from the streaming untracked path."""
+    (repo / "big_untracked.txt").write_text("y" * 2000 + "\n")
+    max_bytes = 300
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["big_untracked.txt"], timeout=30, max_bytes=max_bytes
+    )
+    assert res.truncated
+    assert len(res.text.encode("utf-8")) <= max_bytes
+    assert res.diff_bytes > max_bytes
+    assert res.summary.files_changed == 1

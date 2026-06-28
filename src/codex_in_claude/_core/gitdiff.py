@@ -26,6 +26,16 @@ if TYPE_CHECKING:
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
+# F1a: maximum bytes of git stderr retained in memory (keeps draining to avoid
+# the >64 KB pipe-buffer deadlock while bounding how much we hold).
+_STDERR_CAP = 64 * 1024
+
+# F3: per-line memory ceiling for the diff stream reader — distinct from the
+# display/store cap (max_bytes). Ensures lines up to 8 MiB (minified JS/CSS,
+# etc.) are processed whole so diff_bytes stays exact and the redactor sees
+# the full line before it decides what to store.
+_MAX_DIFF_LINE_BYTES = 8 * 1024 * 1024
+
 
 class InvalidScopeError(ValueError):
     """Unrecognized diff scope."""
@@ -192,22 +202,25 @@ def _diff_args(scope: str, base: str | None, commit: str | None) -> list[str]:
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
-def _untracked_new_file_diff(cwd: str, norm_paths: list[str], timeout: int) -> tuple[str, int, int]:
-    """Build new-file patches for the untracked files among ``norm_paths``.
+def _untracked_new_file_diff(
+    cwd: str, norm_paths: list[str], timeout: int, acc: _BoundedDiffAccumulator
+) -> tuple[int, int]:
+    """Build new-file patches for the untracked files among ``norm_paths`` and feed
+    them into ``acc``.
 
-    Returns ``(patch_text, files, added_lines)``. ``git ls-files --others
-    --exclude-standard`` enumerates untracked files under the named paths while
-    skipping gitignored ones (matching `git add`'s default), so an explicitly-named
-    new file is reviewed instead of silently producing an empty review (#74).
-    Untracked files can never appear in ``git diff HEAD``, so there is no
-    double-counting with the tracked diff.
+    Returns ``(files, added_lines)``. ``git ls-files --others --exclude-standard``
+    enumerates untracked files under the named paths while skipping gitignored ones
+    (matching `git add`'s default), so an explicitly-named new file is reviewed
+    instead of silently producing an empty review (#74). Untracked files can never
+    appear in ``git diff HEAD``, so there is no double-counting with the tracked diff.
 
     The patches are produced by ``git`` itself: each discovered path's content is
     hashed into a blob and recorded in a throwaway index (``GIT_INDEX_FILE``, never the
-    repo's real index/working tree), which is then diffed against the empty tree.
-    Letting git format the patch — rather than hand-rolling it — gets correct handling
-    of symlinks (``mode 120000``), binary files, control-character path quoting, and
-    line counts (via ``--numstat``) for free.
+    repo's real index/working tree), which is then streamed through
+    ``_stream_redacted_diff`` into ``acc`` — so the diff is never materialised whole
+    in memory (F1b). Letting git format the patch — rather than hand-rolling it —
+    gets correct handling of symlinks (``mode 120000``), binary files,
+    control-character path quoting, and line counts (via ``--numstat``) for free.
 
     Blobs are created with ``hash-object --no-filters`` and entries with
     ``update-index --cacheinfo`` (not ``git add``) so configured gitattributes clean
@@ -224,7 +237,7 @@ def _untracked_new_file_diff(cwd: str, norm_paths: list[str], timeout: int) -> t
     )
     paths = [p for p in listing.split("\0") if p]
     if not paths:
-        return "", 0, 0
+        return 0, 0
     real_objects = _git(
         cwd, ["rev-parse", "--path-format=absolute", "--git-path", "objects"], timeout
     ).strip()
@@ -251,7 +264,10 @@ def _untracked_new_file_diff(cwd: str, norm_paths: list[str], timeout: int) -> t
             cacheinfo = f"{mode},{blob.strip()},{path}"
             _git(cwd, ["update-index", "--add", "--cacheinfo", cacheinfo], timeout, extra_env=env)
         diff_args = ["diff", "--no-ext-diff", "--no-textconv", "--cached", _EMPTY_TREE]
-        text = _git(cwd, diff_args, timeout, extra_env=env)
+        # F1b: stream through the bounded redactor instead of materialising the whole
+        # patch as a string; extra_env carries GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY.
+        _stream_redacted_diff(cwd, diff_args, timeout, acc, extra_env=env)
+        # numstat is one line per file (bounded, fine as a captured string).
         numstat = _git(cwd, [*diff_args, "--numstat"], timeout, extra_env=env)
     files = added = 0
     for line in numstat.splitlines():
@@ -261,7 +277,7 @@ def _untracked_new_file_diff(cwd: str, norm_paths: list[str], timeout: int) -> t
         files += 1
         if parts[0].isdigit():  # "-" for binary; left out of the line tally
             added += int(parts[0])
-    return text, files, added
+    return files, added
 
 
 def _summary(cwd: str, diff_args: list[str], timeout: int) -> DiffSummary:
@@ -299,8 +315,20 @@ class _BoundedDiffAccumulator:
 
     @property
     def max_line_bytes(self) -> int:
-        """Per-line byte cap passed to the stream reader."""
-        return self._max_bytes
+        """Per-line byte cap passed to the stream reader.
+
+        Two distinct caps:
+        - ``_MAX_DIFF_LINE_BYTES``: per-line memory ceiling — how much of a
+          single line we buffer before processing (redacting + counting).
+          Ensures a realistic long line (e.g. minified JS/CSS) is processed
+          whole so ``diff_bytes`` stays exact and secrets at the boundary
+          are fully seen by the redactor.
+        - ``self._max_bytes``: display/store cap — how much redacted text is
+          stored and returned. Lines that do not fit in ``text()`` are still
+          counted in ``diff_bytes`` but dropped from the stored head.
+        ``max()`` lets a line up to 8 MiB be processed whole even when the
+        display cap is smaller, while still bounding pathological lines."""
+        return max(_MAX_DIFF_LINE_BYTES, self._max_bytes)
 
     def feed(self, logical_line: str) -> None:
         for out in self._redactor.feed(logical_line):
@@ -329,11 +357,18 @@ class _BoundedDiffAccumulator:
 
 
 def _stream_redacted_diff(
-    cwd: str, args: list[str], timeout: int, acc: _BoundedDiffAccumulator
+    cwd: str,
+    args: list[str],
+    timeout: int,
+    acc: _BoundedDiffAccumulator,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> None:
     """Run `git <args>` and feed its stdout, line by line, into `acc` — bounded in
     memory. Raises the same typed errors as `_git` on git failure/timeout."""
     env = {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+    if extra_env:
+        env.update(extra_env)
     try:
         proc = subprocess.Popen(
             ["git", "-c", "core.quotepath=true", *args],
@@ -357,8 +392,14 @@ def _stream_redacted_diff(
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
     def _drain_stderr() -> None:
+        # F1a: keep draining to EOF (avoids the >64 KB pipe-buffer deadlock
+        # the concurrent thread was added to prevent) while retaining at most
+        # _STDERR_CAP bytes so large git diagnostics cannot OOM the server.
         if proc.stderr is not None:
-            stderr_buf.append(proc.stderr.read())
+            cap = streamcap.BoundedCapture(_STDERR_CAP)
+            for line in streamcap.iter_bounded_lines(cast("TextIO", proc.stderr), _STDERR_CAP):
+                cap.add(line)
+            stderr_buf.append(cap.result())
 
     timer = threading.Timer(timeout, _kill)
     stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
@@ -417,12 +458,11 @@ def gather_diff(
     if scope == "working_tree" and norm_paths:
         # `git diff HEAD` only sees tracked files; surface explicitly-named untracked
         # ones too so targeting a brand-new file doesn't yield a silent empty review (#74).
-        untracked, u_files, u_added = _untracked_new_file_diff(cwd, norm_paths, timeout)
-        if untracked:
-            for logical in untracked.splitlines():
-                acc.feed(logical)
-            summary.files_changed += u_files
-            summary.lines_added += u_added
+        # F1b: _untracked_new_file_diff now streams directly into acc rather than
+        # returning the whole patch as a string.
+        u_files, u_added = _untracked_new_file_diff(cwd, norm_paths, timeout, acc)
+        summary.files_changed += u_files
+        summary.lines_added += u_added
     diff_bytes = acc.diff_bytes
     truncated = acc.truncated
     hint = None
