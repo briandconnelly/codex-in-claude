@@ -100,13 +100,21 @@ def _activity_observer(
 ) -> tuple[Callable[[str], None], ActivityRecorder]:
     """An observer for Codex's --json stdout stream that records event ACTIVITY only.
 
-    A line counts as an event when it is a JSONL object (cheap structural check — no
-    dependence on a specific event shape). Raw lines are never persisted; the
-    recorder writes counts/timestamps to <job_dir>/activity.json."""
+    A line counts as an event when it parses as a JSON object — tolerant (no
+    dependence on a specific event *shape*), but a malformed line that merely starts
+    with "{" does not inflate the count. Raw lines are never persisted; the recorder
+    writes counts/timestamps to <job_dir>/activity.json."""
     recorder = ActivityRecorder(job_dir)
 
     def _observe(line: str) -> None:
-        if line.strip().startswith("{"):
+        text = line.strip()
+        if not text or text[0] != "{":
+            return  # cheap pre-filter before the parse
+        try:
+            event = json.loads(text)
+        except ValueError:
+            return  # not valid JSON — don't count it
+        if isinstance(event, dict):
             recorder.record(time.time())
 
     return _observe, recorder

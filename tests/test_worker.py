@@ -236,9 +236,11 @@ def test_worker_unknown_kind_writes_error(tmp_path):
 def test_worker_makes_observer_that_counts_jsonl_event_lines(tmp_path):
     rec_dir = tmp_path
     observer, recorder = _worker._activity_observer(rec_dir)
-    observer('{"type":"token_count"}\n')  # counts (JSONL object)
+    observer('{"type":"token_count"}\n')  # counts (parses as JSON object)
     observer("\n")  # blank — ignored
     observer("not-json line\n")  # non-object — ignored
+    observer("{not json\n")  # starts with { but does NOT parse — ignored
+    observer("[1, 2, 3]\n")  # valid JSON but not an object — ignored
     observer('{"type":"agent_message"}\n')  # counts
     recorder.flush()
     data = json.loads((rec_dir / "activity.json").read_text())
