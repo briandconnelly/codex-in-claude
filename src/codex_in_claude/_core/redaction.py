@@ -105,30 +105,44 @@ def redact_tree(value: object) -> object:
     return value
 
 
-def redact(diff: str) -> tuple[str, list[str]]:
-    """Redact secret-looking files and inline values. Returns (text, paths)."""
-    out_lines: list[str] = []
-    redacted: list[str] = []
-    skipping = False
-    current_path = ""
-    for line in diff.splitlines():
+class DiffRedactor:
+    """Incremental, line-oriented secret redactor for a unified diff. Carries the
+    per-file skip state across calls so it can be driven over a streamed diff (one
+    logical line at a time) without materializing the whole text. ``feed`` returns
+    zero or more output lines for the given input line. Mirrors ``redact`` exactly."""
+
+    def __init__(self) -> None:
+        self.redacted: list[str] = []
+        self._skipping = False
+        self._current_path = ""
+
+    def feed(self, line: str) -> list[str]:
         if line.startswith("diff --git "):
             spec = line[len("diff --git ") :]
-            current_path = _diff_path_from_header(line)
-            skipping = bool(SECRET_PATH_RE.search(spec) or SECRET_PATH_RE.search(current_path))
-            if skipping:
-                redacted.append(current_path or spec)
-                out_lines.append(line)  # keep the real header so reviewers see the file
-                out_lines.append("[redacted: secret-looking file not sent]")
-                continue
-        if not skipping:
-            scan_line = (
-                line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))
-            ) or line.startswith("Authorization:")
-            emit = line
-            if scan_line:
-                emit, changed = _redact_secret_values(line)
-                if changed and current_path and current_path not in redacted:
-                    redacted.append(current_path)
-            out_lines.append(emit)
-    return "\n".join(out_lines), redacted
+            self._current_path = _diff_path_from_header(line)
+            self._skipping = bool(
+                SECRET_PATH_RE.search(spec) or SECRET_PATH_RE.search(self._current_path)
+            )
+            if self._skipping:
+                self.redacted.append(self._current_path or spec)
+                return [line, "[redacted: secret-looking file not sent]"]
+        if self._skipping:
+            return []
+        scan_line = (
+            line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))
+        ) or line.startswith("Authorization:")
+        if scan_line:
+            emit, changed = _redact_secret_values(line)
+            if changed and self._current_path and self._current_path not in self.redacted:
+                self.redacted.append(self._current_path)
+            return [emit]
+        return [line]
+
+
+def redact(diff: str) -> tuple[str, list[str]]:
+    """Redact secret-looking files and inline values. Returns (text, paths)."""
+    redactor = DiffRedactor()
+    out_lines: list[str] = []
+    for line in diff.splitlines():
+        out_lines.extend(redactor.feed(line))
+    return "\n".join(out_lines), redactor.redacted

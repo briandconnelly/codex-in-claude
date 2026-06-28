@@ -136,6 +136,34 @@ def test_redact_text_passes_through_none_and_empty():
     assert redaction.redact_text("") == ""
 
 
+def test_diff_redactor_matches_redact():
+    diff = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+        '+api_key = "AKIAABCDEFGHIJKLMNOP"\n'
+        "diff --git a/.env b/.env\n"
+        "--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n+SECRET=topsecretvalue123456\n"
+    )
+    expected_text, expected_paths = redaction.redact(diff)
+    r = redaction.DiffRedactor()
+    out_lines: list[str] = []
+    for line in diff.splitlines():
+        out_lines.extend(r.feed(line))
+    assert "\n".join(out_lines) == expected_text
+    assert r.redacted == expected_paths
+
+
+def test_diff_redactor_drops_secret_file_hunks():
+    r = redaction.DiffRedactor()
+    out: list[str] = []
+    for line in ["diff --git a/.env b/.env", "--- a/.env", "+++ b/.env", "+TOKEN=abc"]:
+        out.extend(r.feed(line))
+    assert "diff --git a/.env b/.env" in out
+    assert "[redacted: secret-looking file not sent]" in out
+    assert "+TOKEN=abc" not in out  # the hunk body is dropped
+    assert ".env" in r.redacted
+
+
 def test_redact_tree_walks_nested_structures():
     tree = {
         "summary": 'password = "supersecretvalue1234567890"',
