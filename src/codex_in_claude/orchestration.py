@@ -10,7 +10,7 @@ hits a bad scope/base/commit spends nothing.
 
 from __future__ import annotations
 
-from typing import Any, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args
 
 from codex_in_claude import codex, normalize, prompts, rate_limit
 from codex_in_claude._core import gitdiff, redaction
@@ -28,6 +28,9 @@ from codex_in_claude.schemas import (
     ReviewResult,
     ReviewScope,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # --------------------------------------------------------------------------- #
 # Shared finalization (process metadata -> structured envelope)
@@ -187,6 +190,7 @@ async def run_consult(
     timeout_seconds: int,
     model: str | None,
     extra_context: str = "",
+    on_event: Callable[[str], None] | None = None,
 ) -> dict:
     """Run a read-only consult and return the ConsultResult/ErrorResult envelope."""
     prompt = prompts.build_consult_prompt(question, extra_context or "")
@@ -201,6 +205,7 @@ async def run_consult(
         # consult is read-only Q&A; repo membership is irrelevant, so never let a
         # non-repo workspace block the run.
         skip_git_repo_check=True,
+        on_event=on_event,
     )
     return finalize_consult(result, meta=meta)
 
@@ -228,6 +233,7 @@ async def run_review(
     git_timeout: int,
     max_bytes: int,
     extra_context: str = "",
+    on_event: Callable[[str], None] | None = None,
 ) -> dict:
     """Gather + validate the diff, then run a read-only review. The diff is gathered
     BEFORE any model call, so a bad scope/base/commit returns a structured error with
@@ -293,5 +299,6 @@ async def run_review(
         timeout_seconds=timeout_seconds,
         model=model,
         output_schema=FINDINGS_OUTPUT_SCHEMA,
+        on_event=on_event,
     )
     return finalize_review(result, meta=meta)

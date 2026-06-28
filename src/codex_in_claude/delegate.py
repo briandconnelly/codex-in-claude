@@ -81,6 +81,7 @@ async def run_delegate(
     git_timeout: int,
     max_diff_bytes: int | None = None,
     on_worktree_parent: Callable[[str], None] | None = None,
+    on_event: Callable[[str], None] | None = None,
 ) -> dict:
     """Run the propose orchestration and return a DelegateResult|ErrorResult dict.
 
@@ -127,6 +128,7 @@ async def run_delegate(
             isolation=isolation,
             timeout_seconds=timeout_seconds,
             model=model,
+            on_event=on_event,
         )
         _apply_run_meta(meta, result)
         if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
