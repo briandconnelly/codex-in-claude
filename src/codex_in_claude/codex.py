@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import tempfile
-from collections.abc import Callable  # noqa: TC003 — needed at runtime for run_codex_exec param
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +14,8 @@ from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from codex_in_claude._core.runtime import CommandRun
     from codex_in_claude.preflight import FlagSupport
     from codex_in_claude.schemas import ErrorInfo

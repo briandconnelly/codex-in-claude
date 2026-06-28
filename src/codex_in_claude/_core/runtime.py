@@ -16,11 +16,14 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable  # noqa: TC003 — needed at runtime for _wait_streaming param
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import anyio
 from anyio.to_thread import run_sync
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Sentinel enqueued after the stdout pump hits EOF, telling the observer thread to stop.
 _STREAM_DONE = object()
