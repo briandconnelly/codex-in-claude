@@ -89,8 +89,12 @@
       },
       {
         "async_lifecycle": {
+          "activity_support": "codex_events",
           "cancel_tool": "codex_job_cancel",
           "consume_tool": "codex_job_consume_result",
+          "event_age_field": "event_age_ms",
+          "event_count_field": "events_seen",
+          "last_event_field": "last_event_at",
           "lifecycle": "codex_job_*",
           "list_tool": "codex_job_list",
           "native_task_support": false,
@@ -175,8 +179,12 @@
       },
       {
         "async_lifecycle": {
+          "activity_support": "codex_events",
           "cancel_tool": "codex_job_cancel",
           "consume_tool": "codex_job_consume_result",
+          "event_age_field": "event_age_ms",
+          "event_count_field": "events_seen",
+          "last_event_field": "last_event_at",
           "lifecycle": "codex_job_*",
           "list_tool": "codex_job_list",
           "native_task_support": false,
@@ -261,8 +269,12 @@
       },
       {
         "async_lifecycle": {
+          "activity_support": "codex_events",
           "cancel_tool": "codex_job_cancel",
           "consume_tool": "codex_job_consume_result",
+          "event_age_field": "event_age_ms",
+          "event_count_field": "events_seen",
+          "last_event_field": "last_event_at",
           "lifecycle": "codex_job_*",
           "list_tool": "codex_job_list",
           "native_task_support": false,
@@ -839,7 +851,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-16",
+                "default": "codex-in-claude/0.1/schema-17",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1512,10 +1524,23 @@
                         {
                           "additionalProperties": false,
                           "properties": {
+                            "activity_support": {
+                              "const": "codex_events",
+                              "type": "string"
+                            },
                             "cancel_tool": {
                               "type": "string"
                             },
                             "consume_tool": {
+                              "type": "string"
+                            },
+                            "event_age_field": {
+                              "type": "string"
+                            },
+                            "event_count_field": {
+                              "type": "string"
+                            },
+                            "last_event_field": {
                               "type": "string"
                             },
                             "lifecycle": {
@@ -1552,6 +1577,9 @@
                           "required": [
                             "cancel_tool",
                             "consume_tool",
+                            "event_age_field",
+                            "event_count_field",
+                            "last_event_field",
                             "list_tool",
                             "poll_after_field",
                             "poll_tool",
@@ -5119,6 +5147,19 @@
               "elapsed_ms": {
                 "type": "integer"
               },
+              "event_age_ms": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "events_seen": {
+                "type": "integer"
+              },
               "expires_at": {
                 "anyOf": [
                   {
@@ -5137,6 +5178,16 @@
               },
               "kind": {
                 "type": "string"
+              },
+              "last_event_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "ok": {
                 "const": true,
@@ -9448,6 +9499,19 @@
               "elapsed_ms": {
                 "type": "integer"
               },
+              "event_age_ms": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "events_seen": {
+                "type": "integer"
+              },
               "expires_at": {
                 "anyOf": [
                   {
@@ -9466,6 +9530,16 @@
               },
               "kind": {
                 "type": "string"
+              },
+              "last_event_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "ok": {
                 "const": true,

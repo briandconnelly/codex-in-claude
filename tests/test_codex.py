@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import anyio
+
 from codex_in_claude import cli_contract, codex
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.preflight import FlagSupport
@@ -236,7 +238,7 @@ def test_login_status_unknown_when_missing(monkeypatch):
 
 
 async def test_run_codex_exec_reads_last_message(monkeypatch, tmp_path):
-    async def fake_run_async(cmd, *, cwd, timeout_seconds, stdin_text):
+    async def fake_run_async(cmd, *, cwd, timeout_seconds, stdin_text, on_stdout_line=None):
         # Emulate codex writing the final message to --output-last-message.
         out_path = cmd[cmd.index("--output-last-message") + 1]
         from pathlib import Path
@@ -258,3 +260,27 @@ async def test_run_codex_exec_reads_last_message(monkeypatch, tmp_path):
     )
     assert result.run.exit_code == 0
     assert "summary" in (result.last_message or "")
+
+
+def test_run_codex_exec_forwards_on_event(monkeypatch):
+    captured = {}
+
+    async def fake_run_async(cmd, *, cwd, timeout_seconds, stdin_text=None, on_stdout_line=None):
+        captured["on_stdout_line"] = on_stdout_line
+        from codex_in_claude._core.runtime import CommandRun
+
+        return CommandRun("", "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_async", fake_run_async)
+    sentinel = lambda _l: None  # noqa: E731
+    anyio.run(
+        lambda: codex.run_codex_exec(
+            "p",
+            cwd=".",
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            on_event=sentinel,
+        )
+    )
+    assert captured["on_stdout_line"] is sentinel

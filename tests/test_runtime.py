@@ -7,9 +7,14 @@ import os
 import signal
 import sys
 
+import anyio
 import pytest
 
 from codex_in_claude._core import runtime
+
+
+def _py(code: str) -> list[str]:
+    return [sys.executable, "-c", code]
 
 
 async def test_run_async_success(tmp_path):
@@ -132,3 +137,93 @@ async def test_run_async_cancellation_kills_process_group(tmp_path):
         if grandchild_pid is not None and _pid_alive(grandchild_pid):  # pragma: no cover - cleanup
             with contextlib.suppress(ProcessLookupError):
                 os.kill(grandchild_pid, signal.SIGKILL)
+
+
+def test_run_async_observer_receives_each_stdout_line():
+    lines: list[str] = []
+    code = "import sys\nfor i in range(5):\n    print(f'line{i}')\nsys.stdout.flush()"
+    run = anyio.run(
+        lambda: runtime.run_async(
+            _py(code), cwd=".", timeout_seconds=10, on_stdout_line=lines.append
+        )
+    )
+    assert run.exit_code == 0
+    assert [ln.strip() for ln in lines] == [f"line{i}" for i in range(5)]
+    # Full stream is still captured intact.
+    assert run.stdout.splitlines() == [f"line{i}" for i in range(5)]
+
+
+def test_run_async_observer_handles_large_simultaneous_stdout_stderr():
+    # Interleaved heavy output on both pipes must not deadlock.
+    code = (
+        "import sys\n"
+        "for i in range(2000):\n"
+        "    sys.stdout.write('o'*200+'\\n'); sys.stderr.write('e'*200+'\\n')\n"
+    )
+    seen: list[str] = []
+    run = anyio.run(
+        lambda: runtime.run_async(
+            _py(code), cwd=".", timeout_seconds=30, on_stdout_line=seen.append
+        )
+    )
+    assert run.exit_code == 0
+    assert len(seen) == 2000
+    assert run.stdout.count("o" * 200) == 2000
+    assert run.stderr.count("e" * 200) == 2000
+
+
+def test_run_async_observer_path_honors_timeout():
+    code = "import time\nprint('start', flush=True)\ntime.sleep(30)"
+    run = anyio.run(
+        lambda: runtime.run_async(
+            _py(code), cwd=".", timeout_seconds=1, on_stdout_line=lambda _l: None
+        )
+    )
+    assert run.timed_out is True
+
+
+def test_run_async_observer_forwards_stdin():
+    code = "import sys\nsys.stdout.write(sys.stdin.read().upper())"
+    lines: list[str] = []
+    run = anyio.run(
+        lambda: runtime.run_async(
+            _py(code),
+            cwd=".",
+            timeout_seconds=10,
+            stdin_text="hello\n",
+            on_stdout_line=lines.append,
+        )
+    )
+    assert run.stdout.strip() == "HELLO"
+
+
+def test_run_async_without_observer_is_unchanged():
+    code = "print('plain')"
+    run = anyio.run(lambda: runtime.run_async(_py(code), cwd=".", timeout_seconds=10))
+    assert run.stdout.strip() == "plain"
+    assert run.exit_code == 0
+
+
+def test_run_async_slow_observer_does_not_truncate_stdout():
+    # Regression: a slow observer must NOT truncate captured stdout. Pipe draining
+    # is decoupled from observation, so all 10 lines are captured regardless of how
+    # long the callback takes, and the observer eventually sees every line. The
+    # total callback time (~1.5s) exceeds the old fixed 1s join that caused the bug.
+    import time
+
+    seen: list[str] = []
+
+    def slow(line: str) -> None:
+        time.sleep(0.15)
+        seen.append(line)
+
+    code = "import sys\nfor i in range(10):\n    print(f'line{i}')\nsys.stdout.flush()"
+    run = anyio.run(
+        lambda: runtime.run_async(_py(code), cwd=".", timeout_seconds=20, on_stdout_line=slow)
+    )
+    assert run.exit_code == 0
+    assert run.timed_out is False
+    # Complete capture — not truncated by the slow observer.
+    assert run.stdout.splitlines() == [f"line{i}" for i in range(10)]
+    # Observation is decoupled but still complete on a clean exit.
+    assert [ln.strip() for ln in seen] == [f"line{i}" for i in range(10)]

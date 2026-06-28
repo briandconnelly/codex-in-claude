@@ -14,6 +14,8 @@ from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from codex_in_claude._core.runtime import CommandRun
     from codex_in_claude.preflight import FlagSupport
     from codex_in_claude.schemas import ErrorInfo
@@ -105,6 +107,7 @@ async def run_codex_exec(
     skip_git_repo_check: bool = False,
     ephemeral: bool = True,
     flag_support: FlagSupport | None = None,
+    on_event: Callable[[str], None] | None = None,
 ) -> CodexExecResult:
     """Run `codex exec` for the sync path, managing the temp output files.
 
@@ -130,7 +133,11 @@ async def run_codex_exec(
             flag_support=flag_support,
         )
         run = await runtime.run_async(
-            cmd, cwd=cwd, timeout_seconds=timeout_seconds, stdin_text=prompt
+            cmd,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            stdin_text=prompt,
+            on_stdout_line=on_event,
         )
         last_message = _read_last_message(last_msg_path)
     return CodexExecResult(

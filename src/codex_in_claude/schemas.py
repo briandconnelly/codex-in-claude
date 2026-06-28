@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-16"
+FINGERPRINT = "codex-in-claude/0.1/schema-17"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -491,7 +491,12 @@ class AsyncLifecycle(BaseModel):
 
     Lets a client that looks specifically for native MCP tasks or `notifications/progress`
     infer their absence structurally (not just from description prose), and discover the
-    exact poll/result/consume/cancel/list tools and the JobStatus fields to branch on."""
+    exact poll/result/consume/cancel/list tools and the JobStatus fields to branch on.
+
+    Activity signal: the server exposes a polled (disk-persisted, poll-read) event-activity
+    signal via `activity_support`/`event_count_field`/`last_event_field`/`event_age_field`.
+    This is SEPARATE from `progress_support` — progress_support denotes native MCP
+    notifications/progress (which this server does not provide), and stays "none"."""
 
     model_config = ConfigDict(extra="forbid")
     # No native MCP task object and no notifications/progress streaming — the run is
@@ -509,6 +514,13 @@ class AsyncLifecycle(BaseModel):
     status_field: str  # "status" — the lifecycle state
     result_ready_field: str  # "result_available" — true once the result can be fetched
     poll_after_field: str  # "poll_after_ms" — backoff to honor before the next poll
+    # Polled event-activity (#139). SEPARATE from progress_support: this is not
+    # native notifications/progress, it is a disk-persisted, poll-read activity
+    # signal. progress_support stays "none" so the native-progress meaning is intact.
+    activity_support: Literal["codex_events"] = "codex_events"
+    event_count_field: str  # "events_seen"
+    last_event_field: str  # "last_event_at"
+    event_age_field: str  # "event_age_ms"
 
 
 class ToolCapability(BaseModel):
@@ -627,6 +639,12 @@ class JobStatus(BaseModel):
     # Non-empty when a cancelled/timed-out job's throwaway worktree could not be
     # removed; each entry names the leaked path and reason.
     cleanup_warnings: list[str] = Field(default_factory=list)
+    # Advisory polled event-activity (#139). Derived from Codex's --json stream;
+    # silence is NOT proof of a stall and nothing auto-cancels on these. They show
+    # RECENT output, complementing elapsed_ms (total runtime).
+    events_seen: int = 0  # monotonic count of Codex events observed
+    last_event_at: str | None = None  # ISO-8601 of the most recent event, or None
+    event_age_ms: int | None = None  # now - last_event (to completion if terminal)
     workspace: Workspace  # the resolved workspace this status was looked up in (#54)
     fingerprint: str = FINGERPRINT
 

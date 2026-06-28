@@ -59,6 +59,52 @@ def test_apply_run_meta_no_rate_limits_block_leaves_none(monkeypatch):
     assert meta.rate_limit is None
 
 
+def test_run_delegate_forwards_on_event(monkeypatch):
+    from types import SimpleNamespace
+
+    import anyio
+
+    from codex_in_claude import delegate
+    from codex_in_claude._core import worktree
+
+    captured: dict = {}
+
+    def fake_create(*a, **k):
+        return SimpleNamespace(path="/tmp/wt", baseline_warning=None)
+
+    async def fake_exec(prompt, **kwargs):
+        captured["on_event"] = kwargs.get("on_event")
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=None)
+
+    monkeypatch.setattr(worktree, "create", fake_create)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+    sentinel = lambda _l: None  # noqa: E731
+    meta = Meta(
+        cwd="/tmp",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=10,
+        elapsed_ms=0,
+    )
+    anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/tmp",
+            meta,
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+            on_event=sentinel,
+        )
+    )
+    assert captured["on_event"] is sentinel
+
+
 async def test_run_delegate_not_a_git_repo(tmp_path, monkeypatch):
     """not_a_git_repo error uses new envelope shape with symbolic next_step."""
     from codex_in_claude import delegate

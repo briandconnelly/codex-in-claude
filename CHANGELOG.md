@@ -43,6 +43,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- `codex_job_status` now reports advisory polled event-activity for async jobs —
+  `events_seen`, `last_event_at`, `event_age_ms` — so a long-running job can be told
+  apart from a stalled one.
+  Advertised via `AsyncLifecycle.activity_support` (`"codex_events"`); native
+  `progress_support` is unchanged (`"none"`). (#139)
 - Manifest-snapshot acknowledgment guard (`tests/test_manifest.py` +
   `tests/fixtures/manifest_snapshot.json`) that fails CI whenever the full agent-visible surface —
   tool/resource wire shapes, descriptions, annotations, the initialize response, the error envelope,

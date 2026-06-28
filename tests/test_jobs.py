@@ -7,6 +7,7 @@ worker does.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -59,7 +60,6 @@ def _declare_factory(root: str, prefix: str = "wt-"):
 
 def _declared_path(store: JobStore, cwd: str, job_id: str) -> str:
     """The external path a _DECLARE_AND_SLEEP job recorded in its manifest."""
-    import json
 
     jd = store._job_dir(cwd, job_id)
     deadline = time.monotonic() + 5.0
@@ -346,7 +346,6 @@ def test_write_spec_lands_in_job_dir(tmp_path):
 
     job_id, _ = store.start(factory, cwd, kind="k", write_spec={"task": "x"})
     _wait_terminal(store, cwd, job_id)
-    import json
 
     assert json.loads((seen["jd"] / "spec.json").read_text()) == {"task": "x"}
 
@@ -375,7 +374,6 @@ def test_ttl_eviction(tmp_path):
     # Force the completion far into the past, then a list() reap should drop it.
     store.list_jobs(cwd)
     jd = store._job_dir(cwd, job_id)
-    import json
 
     meta = json.loads((jd / "meta.json").read_text())
     meta["completed_epoch"] = time.time() - 10_000
@@ -682,3 +680,109 @@ def test_reap_and_list_skip_unparseable_meta(tmp_path):
     ids = {j["job_id"] for j in listed}
     assert good_id in ids
     assert "deadbeef" not in ids
+
+
+# --- ActivityRecorder + activity read ----------------------------------------
+
+
+def test_activity_recorder_writes_counts_and_timestamp(tmp_path: Path):
+    rec = jobs.ActivityRecorder(tmp_path)
+    t = time.time()
+    rec.record(t)
+    rec.flush()
+    data = json.loads((tmp_path / "activity.json").read_text())
+    assert data["events_seen"] == 1
+    assert abs(data["last_event_epoch"] - t) < 1.0
+
+
+def test_activity_recorder_counts_monotonically_and_never_writes_raw_events(tmp_path: Path):
+    rec = jobs.ActivityRecorder(tmp_path)
+    for i in range(10):
+        rec.record(1000.0 + i)
+    rec.flush()
+    data = json.loads((tmp_path / "activity.json").read_text())
+    assert data["events_seen"] == 10
+    assert set(data) == {"events_seen", "last_event_epoch"}  # counters/timestamps only
+
+
+def test_status_dict_includes_activity_fields(tmp_path: Path):
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    jd = store._job_dir(str(tmp_path), jid)
+    rec = jobs.ActivityRecorder(jd)
+    rec.record(time.time())
+    rec.flush()
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 1
+    assert status["last_event_at"] is not None
+    assert status["event_age_ms"] is not None and status["event_age_ms"] >= 0
+
+
+def test_status_dict_activity_defaults_when_no_file(tmp_path: Path):
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 0
+    assert status["last_event_at"] is None
+    assert status["event_age_ms"] is None
+
+
+def test_read_activity_tolerates_corrupt_file(tmp_path: Path):
+    (tmp_path / "activity.json").write_text("{not json")
+    assert jobs.JobStore._read_activity(tmp_path) == (0, None)
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
+def test_read_activity_degrades_nonfinite_epoch(tmp_path: Path, bad: str):
+    # json.loads accepts NaN/Infinity by default; a non-finite epoch must degrade to
+    # None (not crash datetime.fromtimestamp/int downstream). The count stays valid.
+    (tmp_path / "activity.json").write_text(f'{{"events_seen": 1, "last_event_epoch": {bad}}}')
+    assert jobs.JobStore._read_activity(tmp_path) == (1, None)
+
+
+def test_read_activity_degrades_negative_count(tmp_path: Path):
+    (tmp_path / "activity.json").write_text('{"events_seen": -5, "last_event_epoch": 1000.0}')
+    assert jobs.JobStore._read_activity(tmp_path) == (0, 1000.0)
+
+
+def test_status_survives_nonfinite_epoch(tmp_path: Path):
+    # Regression: a corrupt activity.json with a non-finite epoch must not crash status.
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    jd = store._job_dir(str(tmp_path), jid)
+    (jd / "activity.json").write_text('{"events_seen": 1, "last_event_epoch": NaN}')
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 1
+    assert status["last_event_at"] is None
+    assert status["event_age_ms"] is None
+
+
+def test_activity_observer_end_to_end_into_job_store(tmp_path: Path):
+    """End-to-end: _worker._activity_observer drives ActivityRecorder → activity.json
+    → JobStore.status surfaces events_seen, last_event_at, and event_age_ms."""
+    from codex_in_claude import _worker
+
+    store = jobs.JobStore(root=tmp_path / "jobs", ttl_seconds=3600, max_seconds=60, max_count=10)
+    cwd = str(tmp_path)
+    # Use 'true' (a fast no-op) so the process exits quickly with no result.json;
+    # the worker subprocess is NOT the point — we simulate the activity write directly.
+    job_id, _ = store.start(lambda jd: ["true"], cwd=cwd, kind="codex_delegate")
+    jd = store._job_dir(cwd, job_id)
+
+    observer, recorder = _worker._activity_observer(jd)
+
+    # Three lines: two JSONL objects (count) + one non-object (ignored).
+    observer('{"type":"token_count"}\n')  # counts
+    observer("plain text line\n")  # ignored
+    observer('{"type":"agent_message"}\n')  # counts
+
+    recorder.flush()
+
+    status = store.status(cwd, job_id)
+    assert status is not None
+    assert status["events_seen"] == 2
+    assert status["last_event_at"] is not None
+    assert status["event_age_ms"] is not None and status["event_age_ms"] >= 0

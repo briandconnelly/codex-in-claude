@@ -1416,8 +1416,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_16():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-16"
+def test_fingerprint_is_schema_17():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-17"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2283,6 +2283,31 @@ def test_job_status_model_surfaces_cleanup_warnings():
     model = server._job_status_model(data, server._job_workspace("/repo", "param"))
     assert model.cleanup_warnings == ["could not remove temporary path: /tmp/cic-worktree-x"]
     assert model.workspace.cwd == "/repo"
+
+
+def test_job_status_model_maps_activity_fields():
+    from codex_in_claude.schemas import Workspace
+
+    data = {
+        "job_id": "j",
+        "kind": "codex_consult",
+        "status": "running",
+        "started_at": "t",
+        "elapsed_ms": 5,
+        "deadline_seconds": 60,
+        "poll_after_ms": 1000,
+        "ttl_seconds": 60,
+        "expires_at": None,
+        "result_available": False,
+        "cleanup_warnings": [],
+        "events_seen": 3,
+        "last_event_at": "2026-06-27T00:00:00+00:00",
+        "event_age_ms": 250,
+    }
+    model = server._job_status_model(data, Workspace(cwd="/x", workspace_source="param"))
+    assert model.events_seen == 3
+    assert model.last_event_at == "2026-06-27T00:00:00+00:00"
+    assert model.event_age_ms == 250
 
 
 # --- boundary: unexpected exceptions become a structured internal_error (#39) ---

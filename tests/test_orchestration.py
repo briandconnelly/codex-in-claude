@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from codex_in_claude import codex, rate_limit
+import anyio
+
+from codex_in_claude import codex, orchestration, rate_limit
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Meta
 
@@ -37,7 +39,6 @@ def _make_exec_result(
 
 
 def test_stamp_meta_attaches_rate_limit(monkeypatch):
-    from codex_in_claude import orchestration
 
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
@@ -50,7 +51,6 @@ def test_stamp_meta_attaches_rate_limit(monkeypatch):
 
 
 def test_stamp_meta_no_rate_limits_block_leaves_none(monkeypatch):
-    from codex_in_claude import orchestration
 
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
@@ -61,7 +61,6 @@ def test_stamp_meta_no_rate_limits_block_leaves_none(monkeypatch):
 
 def test_stamp_meta_captures_rate_limit_even_on_failure(monkeypatch):
     """rate_limit is captured before the failure-path return."""
-    from codex_in_claude import orchestration
 
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
@@ -73,3 +72,84 @@ def test_stamp_meta_captures_rate_limit_even_on_failure(monkeypatch):
     # error envelope uses new shape: symbolic next_step, temporary flag
     assert err["error"]["repair"]["next_step"] == "inspect_and_retry"
     assert err["error"]["temporary"] is False
+
+
+def test_run_consult_forwards_on_event(monkeypatch):
+    captured: dict = {}
+
+    async def fake_exec(prompt, **kwargs):
+        captured["on_event"] = kwargs.get("on_event")
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=None)
+
+    monkeypatch.setattr(orchestration.codex, "run_codex_exec", fake_exec)
+    sentinel = lambda _l: None  # noqa: E731
+    meta = Meta(
+        cwd=".",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=10,
+        elapsed_ms=0,
+    )
+    anyio.run(
+        lambda: orchestration.run_consult(
+            "q",
+            ".",
+            meta,
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            on_event=sentinel,
+        )
+    )
+    assert captured["on_event"] is sentinel
+
+
+def test_run_review_forwards_on_event(monkeypatch):
+    captured: dict = {}
+
+    async def fake_exec(prompt, **kwargs):
+        captured["on_event"] = kwargs.get("on_event")
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=None)
+
+    from types import SimpleNamespace
+
+    from codex_in_claude._core import gitdiff
+
+    fake_diff = SimpleNamespace(
+        summary=SimpleNamespace(files_changed=1, lines_added=1, lines_removed=0),
+        redacted_paths=[],
+        truncated=False,
+        truncation_hint=None,
+        text="diff --git a/foo b/foo\n+added",
+    )
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: fake_diff)
+    monkeypatch.setattr(orchestration.codex, "run_codex_exec", fake_exec)
+    sentinel = lambda _l: None  # noqa: E731
+    meta = Meta(
+        cwd=".",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=10,
+        elapsed_ms=0,
+    )
+    anyio.run(
+        lambda: orchestration.run_review(
+            ".",
+            meta,
+            scope="working_tree",
+            base=None,
+            commit=None,
+            paths=None,
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+            max_bytes=1_000_000,
+            on_event=sentinel,
+        )
+    )
+    assert captured["on_event"] is sentinel
