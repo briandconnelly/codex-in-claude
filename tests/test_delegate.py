@@ -27,12 +27,17 @@ def _make_meta() -> Meta:
 
 
 def _make_exec_result(
-    *, events: str = "", exit_code: int = 0, last_message: str = "ok"
+    *,
+    events: str = "",
+    exit_code: int = 0,
+    last_message: str = "ok",
+    dropped_flags: list[str] | None = None,
 ) -> codex.CodexExecResult:
     return codex.CodexExecResult(
         run=CommandRun(events, "", exit_code, 12, exit_code == -9),
         last_message=last_message,
         events=events,
+        dropped_flags=dropped_flags or [],
     )
 
 
@@ -57,6 +62,32 @@ def test_apply_run_meta_no_rate_limits_block_leaves_none(monkeypatch):
     result = _make_exec_result(events="", exit_code=0, last_message="done")
     delegate._apply_run_meta(meta, result)
     assert meta.rate_limit is None
+
+
+def test_apply_run_meta_clears_model_when_model_flag_dropped(monkeypatch):
+    """When --model is dropped by help-gating, meta.model is reconciled to None so
+    the delegate result's provenance matches the default model used (#158)."""
+    from codex_in_claude import delegate
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    meta.model = "gpt-5.5"
+    result = _make_exec_result(exit_code=0, dropped_flags=["--model"])
+    delegate._apply_run_meta(meta, result)
+    assert meta.model is None
+    assert "--model" in meta.compat_warnings
+
+
+def test_apply_run_meta_preserves_model_when_not_dropped(monkeypatch):
+    """A requested model survives when --model was not dropped (#158)."""
+    from codex_in_claude import delegate
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    meta.model = "gpt-5.5"
+    result = _make_exec_result(exit_code=0)
+    delegate._apply_run_meta(meta, result)
+    assert meta.model == "gpt-5.5"
 
 
 def test_run_delegate_forwards_on_event(monkeypatch):

@@ -21,6 +21,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`meta.model` no longer misreports provenance when `--model` is dropped by help-gating** (#158).
+  If the installed `codex` CLI does not advertise `--model` in `exec --help`, the flag is gracefully
+  dropped and the run proceeds on Codex's default model — but `meta.model` (and the
+  `raw_response.model` derived from it) still echoed the *requested* slug, overstating which model
+  ran. Both are now reconciled to `null` whenever `--model` is in `meta.compat_warnings`, so reported
+  provenance matches the model actually used. Runtime behavior only; `meta.model` was already
+  nullable, so no agent-visible surface change and no `fingerprint` bump.
 - Bound subprocess output and git-diff capture in memory to prevent OOM of the long-lived stdio
   server (#155). Subprocess stdout is captured under `CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES` (default
   10 MiB); stderr is bounded to a separate ~1 MiB reserve — each with a head+tail window that

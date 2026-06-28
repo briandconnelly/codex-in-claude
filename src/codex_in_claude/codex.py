@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from codex_in_claude._core.runtime import CommandRun
     from codex_in_claude.preflight import FlagSupport
-    from codex_in_claude.schemas import ErrorInfo
+    from codex_in_claude.schemas import ErrorInfo, Meta
 
 
 @dataclass
@@ -50,6 +50,19 @@ def _gate_optional(tokens: list[str], fs: FlagSupport) -> tuple[list[str], list[
         kept.append(token)
         i += 1
     return kept, dropped
+
+
+def reconcile_dropped_model(result: CodexExecResult, meta: Meta) -> None:
+    """Reconcile meta.model when --model was dropped by help-gating.
+
+    If the installed `codex` did not advertise --model, `_gate_optional` drops the
+    flag and the run proceeds on Codex's default model — not the requested slug. Reset
+    meta.model to None (we cannot know the default the CLI picked) so reported
+    provenance, and the raw_response.model derived from it, match the model actually
+    used rather than the unfulfilled request. The drop is already surfaced in
+    meta.compat_warnings (#158)."""
+    if cli_contract.MODEL_FLAG in result.dropped_flags:
+        meta.model = None
 
 
 def build_exec_command(

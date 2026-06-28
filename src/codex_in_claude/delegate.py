@@ -62,6 +62,7 @@ def _apply_run_meta(meta: Meta, result: codex.CodexExecResult) -> tuple[Usage | 
     meta.elapsed_ms = result.run.elapsed_ms
     meta.command_exit_code = result.run.exit_code
     meta.compat_warnings = result.dropped_flags
+    codex.reconcile_dropped_model(result, meta)
     usage, session_id = normalize.parse_event_metadata(result.events)
     meta.usage = usage
     meta.session_id = session_id

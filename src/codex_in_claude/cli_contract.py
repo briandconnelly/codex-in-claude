@@ -67,8 +67,11 @@ ALWAYS_SEND_FLAGS = frozenset(
 # flag takes an argument (so the gate skips the value token too). These are the ONLY
 # flags gated on `codex exec --help`; a false negative here merely drops a harmless
 # flag.
+# The model-selection flag, named so the help-gating drop and the downstream
+# provenance reconciliation (meta.model) reference one constant, not a literal.
+MODEL_FLAG = "--model"
 HELP_GATED_FLAGS = {
-    "--model": True,  # falls back to the configured/default Codex model
+    MODEL_FLAG: True,  # falls back to the configured/default Codex model
 }
 
 # --- Model catalog (advisory discovery) -----------------------------------------

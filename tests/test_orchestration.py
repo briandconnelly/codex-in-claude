@@ -29,12 +29,17 @@ def _make_meta() -> Meta:
 
 
 def _make_exec_result(
-    *, events: str = "", exit_code: int = 0, last_message: str = "ok"
+    *,
+    events: str = "",
+    exit_code: int = 0,
+    last_message: str = "ok",
+    dropped_flags: list[str] | None = None,
 ) -> codex.CodexExecResult:
     return codex.CodexExecResult(
         run=CommandRun(events, "", exit_code, 12, exit_code == -9),
         last_message=last_message,
         events=events,
+        dropped_flags=dropped_flags or [],
     )
 
 
@@ -64,6 +69,44 @@ def test_stamp_meta_no_rate_limits_block_leaves_none(monkeypatch):
     result = _make_exec_result(events="", exit_code=0, last_message="hi")
     orchestration._stamp_meta(result, meta)
     assert meta.rate_limit is None
+
+
+def test_stamp_meta_clears_model_when_model_flag_dropped(monkeypatch):
+    """When --model is dropped by help-gating, meta.model is reconciled to None so
+    reported provenance matches the default model actually used (#158)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    meta.model = "gpt-5.5"
+    result = _make_exec_result(exit_code=0, dropped_flags=["--model"])
+    orchestration._stamp_meta(result, meta)
+    assert meta.model is None
+    assert "--model" in meta.compat_warnings
+
+
+def test_stamp_meta_preserves_model_when_not_dropped(monkeypatch):
+    """A requested model survives when --model was not dropped (#158)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    meta.model = "gpt-5.5"
+    result = _make_exec_result(exit_code=0)
+    orchestration._stamp_meta(result, meta)
+    assert meta.model == "gpt-5.5"
+
+
+def test_finalize_consult_raw_response_model_reflects_dropped_model(monkeypatch):
+    """raw_response.model (derived from meta.model) is also None when --model was
+    dropped, so the finalized envelope's provenance is consistent (#158)."""
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    meta = _make_meta()
+    meta.model = "gpt-5.5"
+    result = _make_exec_result(exit_code=0, last_message="hello", dropped_flags=["--model"])
+    out = orchestration.finalize_consult(result, meta=meta)
+    assert out["meta"]["model"] is None
+    assert out["raw_response"]["model"] is None
+    assert "--model" in out["meta"]["compat_warnings"]
 
 
 def test_stamp_meta_captures_rate_limit_even_on_failure(monkeypatch):
