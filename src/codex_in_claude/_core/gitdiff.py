@@ -319,16 +319,23 @@ class _BoundedDiffAccumulator:
         """Per-line byte cap passed to the stream reader.
 
         Two distinct caps:
-        - ``_MAX_DIFF_LINE_BYTES``: per-line memory ceiling — how much of a
-          single line we buffer before processing (redacting + counting).
+        - ``_MAX_DIFF_LINE_BYTES``: a base per-line floor (8 MiB) — how much
+          of a single line we buffer before processing (redacting + counting).
           Ensures a realistic long line (e.g. minified JS/CSS) is processed
           whole so ``diff_bytes`` stays exact and secrets at the boundary
           are fully seen by the redactor.
         - ``self._max_bytes``: display/store cap — how much redacted text is
           stored and returned. Lines that do not fit in ``text()`` are still
           counted in ``diff_bytes`` but dropped from the stored head.
-        ``max()`` lets a line up to 8 MiB be processed whole even when the
-        display cap is smaller, while still bounding pathological lines."""
+
+        The effective per-line ceiling is ``max(_MAX_DIFF_LINE_BYTES, max_bytes)``
+        — it SCALES UP with the operator-configured diff display budget
+        (``CODEX_IN_CLAUDE_MAX_INPUT_BYTES``), not a fixed 8 MiB. This means:
+        - A line up to this ceiling is processed whole (exact ``diff_bytes``,
+          full redaction visibility). Transient peak allocation is bounded by
+          the operator budget, not attacker-controlled input size.
+        - A line exceeding the ceiling is truncated by the stream reader, making
+          ``diff_bytes`` a lower bound for that line."""
         return max(_MAX_DIFF_LINE_BYTES, self._max_bytes)
 
     def feed(self, logical_line: str) -> None:

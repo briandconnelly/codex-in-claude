@@ -21,7 +21,9 @@ def test_iter_bounded_lines_truncates_huge_line():
     stream = io.StringIO("x" * 10_000 + "\n" + "tail\n")
     out = list(streamcap.iter_bounded_lines(stream, max_line_bytes=100, chunk_size=64))
     assert out[0].endswith("[line truncated]\n")
-    assert len(out[0].encode("utf-8")) <= 100 + len("…[line truncated]\n".encode())
+    # The marker must fit WITHIN the budget: content + marker <= max_line_bytes.
+    # (Previously asserted <= max_line_bytes + len(marker), allowing overshoot.)
+    assert len(out[0].encode("utf-8")) <= 100
     assert out[-1] == "tail\n"  # recovery after the oversized line
 
 

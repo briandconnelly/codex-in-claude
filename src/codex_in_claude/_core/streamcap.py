@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from typing import TextIO
 
 _LINE_TRUNC_MARKER = "…[line truncated]\n"
+_LINE_TRUNC_MARKER_BYTES = len(_LINE_TRUNC_MARKER.encode("utf-8"))
 _OUTPUT_TRUNC_MARKER = "[output truncated]\n"
 
 
@@ -52,10 +53,12 @@ def iter_bounded_lines(
                     pending_bytes += _nbytes(seg)
                     if pending_bytes > max_line_bytes:
                         overflowing = True
-                        # Truncate pending to max_line_bytes bytes so the
-                        # emitted line (content + marker) stays bounded.
+                        # Reserve space for the marker so content + marker fits
+                        # within max_line_bytes (not just content alone).
+                        # max(0, ...) guards against a pathologically tiny cap.
+                        content_limit = max(0, max_line_bytes - _LINE_TRUNC_MARKER_BYTES)
                         encoded = "".join(pending).encode("utf-8", "replace")
-                        pending = [encoded[:max_line_bytes].decode("utf-8", "ignore")]
+                        pending = [encoded[:content_limit].decode("utf-8", "ignore")]
                         pending_bytes = _nbytes(pending[0])
                 break
             if overflowing:

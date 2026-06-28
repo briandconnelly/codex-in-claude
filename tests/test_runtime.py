@@ -527,3 +527,60 @@ def test_run_async_full_queue_does_not_block_pump_and_cause_false_timeout():
         "(observer-decouple Fix 3 not applied)"
     )
     assert run.stderr != runtime.TIMED_OUT
+
+
+# ---------------------------------------------------------------------------
+# Fix (cancellation): _kill_group kills descendants even after leader exits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process-group kill is POSIX-only")
+def test_kill_group_kills_descendants_after_leader_exits():
+    """_kill_group must kill the whole process group even when the direct child has
+    already exited (proc.poll() is not None). kill_process_tree early-returns in that
+    case, leaving pipe-holding descendants alive; _kill_group does not.
+
+    Setup: the direct child spawns a grandchild that inherits stdout (keeping the write
+    end of our pipe open) then exits immediately. After proc.wait() we confirm the leader
+    is gone. Calling _kill_group(proc) must kill the grandchild so proc.stdout.read()
+    reaches EOF within a short timeout."""
+    import subprocess
+    import threading
+
+    # Child exits immediately; grandchild inherits stdout and sleeps 30 s.
+    child_src = (
+        "import subprocess,sys;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+        "sys.exit(0)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child_src],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    # Wait for the direct child to exit; grandchild still holds the pipe.
+    proc.wait()
+    assert proc.poll() is not None, "direct child should have exited"
+
+    # Confirm kill_process_tree early-returns (does NOT close the pipe):
+    # after it returns, reading stdout should still block.
+    drained: list[bool] = [False]
+
+    def _read() -> None:
+        proc.stdout.read()  # type: ignore[union-attr]
+        drained[0] = True
+
+    probe = threading.Thread(target=_read, daemon=True)
+    probe.start()
+    probe.join(timeout=0.3)
+    assert not drained[0], "pipe should still be open (grandchild alive) before _kill_group"
+
+    # Now call _kill_group — it must send SIGKILL to the whole group despite the leader
+    # having exited, killing the grandchild and closing its copy of the write-end pipe.
+    runtime._kill_group(proc)
+
+    probe.join(timeout=5)
+    assert drained[0], "proc.stdout.read() should have reached EOF after _kill_group"
+    proc.stdout.close()  # type: ignore[union-attr]
+    proc.stderr.close()  # type: ignore[union-attr]

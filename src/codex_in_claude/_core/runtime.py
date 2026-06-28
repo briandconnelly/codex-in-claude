@@ -80,6 +80,19 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Best-effort SIGKILL the whole process group by proc.pid (== pgid because the
+    child is spawned with start_new_session=True). Unlike kill_process_tree, this does
+    NOT early-return when the direct child has exited and does NOT call os.getpgid
+    (which raises ESRCH on a zombie): a descendant that inherited a pipe must still be
+    killed even after the leader becomes a zombie."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:  # pragma: no cover - non-POSIX fallback
+            proc.kill()
+
+
 def _wait_streaming(  # noqa: PLR0915
     proc: subprocess.Popen,
     stdin_text: str | None,
@@ -199,20 +212,10 @@ def _wait_streaming(  # noqa: PLR0915
         logger.warning(
             "subprocess pid=%s exceeded %ss; killing process group", proc.pid, timeout_seconds
         )
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            if hasattr(os, "killpg"):
-                # Kill the process GROUP using proc.pid directly as the pgid.  Because
-                # proc was spawned with start_new_session=True it is its own group
-                # leader (pgid == proc.pid).  Descendants that did not start a new
-                # session inherit that pgid.  proc.pid is used instead of
-                # os.getpgid(proc.pid) because on macOS getpgid raises ESRCH on a
-                # zombie while the group is still live as long as any member survives.
-                # kill_process_tree is intentionally NOT used here: its proc.poll()
-                # guard short-circuits when the direct child has already exited,
-                # leaving pipe-holding descendants alive.
-                os.killpg(proc.pid, signal.SIGKILL)
-            else:  # pragma: no cover - non-POSIX fallback
-                proc.kill()
+        # Use _kill_group: it does NOT early-return when the direct child has already
+        # exited and does NOT call os.getpgid (which raises ESRCH on a zombie), so
+        # pipe-holding descendants are killed even after the leader exits.
+        _kill_group(proc)
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=5)
         for t in pumps:
@@ -277,7 +280,14 @@ async def run_async(
         out, err, timed_out, truncated = await run_sync(_wait, abandon_on_cancel=True)
     except anyio.get_cancelled_exc_class():
         logger.warning("subprocess pid=%s cancelled; killing process group", proc.pid)
-        kill_process_tree(proc)
+        # _kill_group does NOT early-return when the direct child has already exited
+        # (poll() is not None) — a descendant holding an inherited pipe is killed even
+        # after the leader becomes a zombie.  Narrow residual: with abandon_on_cancel=True
+        # the worker reaps at its own deadline; the cancel kill normally happens-before that
+        # reap (causing the exit the worker then reaps).  A killpg-after-reap PID-reuse
+        # race only opens if the process exits naturally at the cancel instant — the same
+        # narrow window accepted on the timeout path.
+        _kill_group(proc)
         raise
     elapsed = int((time.monotonic() - start) * 1000)
     if timed_out:
