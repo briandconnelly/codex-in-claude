@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import queue
 import signal
 import subprocess
 import threading
@@ -20,6 +21,9 @@ from dataclasses import dataclass
 
 import anyio
 from anyio.to_thread import run_sync
+
+# Sentinel enqueued after the stdout pump hits EOF, telling the observer thread to stop.
+_STREAM_DONE = object()
 
 # Generic module: log via the stdlib only (no parent imports). Records propagate
 # to the `codex_in_claude` logger, whose handlers go to stderr — never stdout, the
@@ -69,20 +73,34 @@ def _wait_streaming(
 ) -> tuple[str, str, bool]:
     """Drain stdout/stderr concurrently, calling ``on_stdout_line`` per stdout line.
 
-    Three daemon threads (stdin writer, stdout reader, stderr reader) avoid the
-    classic pipe-buffer deadlock. The complete streams are reassembled and returned
-    so the caller's final parse is identical to the communicate() path. On timeout
-    the tree is killed and ``timed_out`` is True."""
+    Observation is DECOUPLED from pipe draining: the stdout reader only appends to
+    ``out_chunks`` and enqueues each line, so it drains the pipe at full speed
+    regardless of how slow the observer is (a slow callback can never stall draining
+    or back up the OS pipe buffer). A separate observer thread invokes the callback
+    off that queue. The reader threads are joined WITHOUT a timeout once the process
+    has exited (or been killed) — both pipes are then guaranteed to reach EOF — so
+    the returned streams are always COMPLETE, never truncated by observer latency.
+    On timeout the tree is killed and ``timed_out`` is True."""
     out_chunks: list[str] = []
     err_chunks: list[str] = []
+    line_queue: queue.Queue = queue.Queue()
 
     def _pump_stdout() -> None:
-        if proc.stdout is None:
-            return
-        for line in proc.stdout:
-            out_chunks.append(line)
+        try:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    out_chunks.append(line)
+                    line_queue.put(line)
+        finally:
+            line_queue.put(_STREAM_DONE)  # always release the observer, even on read error
+
+    def _observe() -> None:
+        while True:
+            item = line_queue.get()
+            if item is _STREAM_DONE:
+                return
             with contextlib.suppress(Exception):
-                on_stdout_line(line)
+                on_stdout_line(item)
 
     def _pump_stderr() -> None:
         if proc.stderr is not None:
@@ -96,13 +114,15 @@ def _wait_streaming(
                 proc.stdin.write(stdin_text)
             proc.stdin.close()
 
-    threads = [
+    readers = [
         threading.Thread(target=_write_stdin, daemon=True),
         threading.Thread(target=_pump_stdout, daemon=True),
         threading.Thread(target=_pump_stderr, daemon=True),
     ]
-    for t in threads:
+    observer = threading.Thread(target=_observe, daemon=True)
+    for t in readers:
         t.start()
+    observer.start()
     try:
         proc.wait(timeout=timeout_seconds)
         timed_out = False
@@ -114,8 +134,12 @@ def _wait_streaming(
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=5)
         timed_out = True
-    for t in threads:
-        t.join(timeout=1)
+    # The process has exited (or been killed), so stdout/stderr reach EOF and the
+    # reader loops terminate. Join WITHOUT a timeout so capture is never truncated;
+    # the observer then drains the remaining queued lines and stops at the sentinel.
+    for t in readers:
+        t.join()
+    observer.join()
     return "".join(out_chunks), "".join(err_chunks), timed_out
 
 

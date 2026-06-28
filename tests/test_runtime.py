@@ -202,3 +202,28 @@ def test_run_async_without_observer_is_unchanged():
     run = anyio.run(lambda: runtime.run_async(_py(code), cwd=".", timeout_seconds=10))
     assert run.stdout.strip() == "plain"
     assert run.exit_code == 0
+
+
+def test_run_async_slow_observer_does_not_truncate_stdout():
+    # Regression: a slow observer must NOT truncate captured stdout. Pipe draining
+    # is decoupled from observation, so all 10 lines are captured regardless of how
+    # long the callback takes, and the observer eventually sees every line. The
+    # total callback time (~1.5s) exceeds the old fixed 1s join that caused the bug.
+    import time
+
+    seen: list[str] = []
+
+    def slow(line: str) -> None:
+        time.sleep(0.15)
+        seen.append(line)
+
+    code = "import sys\nfor i in range(10):\n    print(f'line{i}')\nsys.stdout.flush()"
+    run = anyio.run(
+        lambda: runtime.run_async(_py(code), cwd=".", timeout_seconds=20, on_stdout_line=slow)
+    )
+    assert run.exit_code == 0
+    assert run.timed_out is False
+    # Complete capture — not truncated by the slow observer.
+    assert run.stdout.splitlines() == [f"line{i}" for i in range(10)]
+    # Observation is decoupled but still complete on a clean exit.
+    assert [ln.strip() for ln in seen] == [f"line{i}" for i in range(10)]
