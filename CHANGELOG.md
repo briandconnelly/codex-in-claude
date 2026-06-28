@@ -5,6 +5,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Security
+
+- **Worktree git ops no longer run repo-configured hooks, fsmonitor, or signing in the server
+  process** (#156). The propose-tier worktree machinery runs porcelain git (`worktree add`,
+  `git apply`, `add`, `commit`) in the long-lived MCP server process, not in Codex's sandbox, so a
+  repo's git config could run code: `post-checkout` (on `worktree add`), `post-commit` (which
+  `--no-verify` does **not** suppress), fsmonitor, and a configured commit-signing program. Every git
+  invocation is now prefixed with `-c core.hooksPath=<empty dir>` (disables all hooks) and
+  `-c core.fsmonitor=false`, and the baseline commit adds `--no-gpg-sign`. (`-c` flags are used
+  rather than `GIT_CONFIG_*` env so the hardening does not silently fail open on git < 2.31.) This
+  matches the side-effect-free posture `gitdiff.py` already takes. Hardening under the own-repo trust
+  model; gitattributes `clean`/`smudge`/`process` filters still run at checkout/staging/diff and
+  remain a documented residual (full filter isolation is a separate, larger redesign).
+
 ### Fixed
 
 - Bound subprocess output and git-diff capture in memory to prevent OOM of the long-lived stdio

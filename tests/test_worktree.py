@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -344,5 +345,87 @@ def test_capture_diff_add_failure_raises(repo, monkeypatch):
         _fail_git_on(monkeypatch, lambda args: args[:2] == ["add", "-A"])
         with pytest.raises(worktree.WorktreeError):
             worktree.capture_diff(wt.path, timeout=30)
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+# --- Repo-config hardening (#156): worktree git ops must not run repo-configured code.
+
+
+def _sentinel_script(path, sentinel, *, exit_code=0):
+    # shlex.quote so a tmp path with shell metacharacters can't make `touch` silently
+    # no-op and turn a genuine execution into a false-negative (absent sentinel).
+    path.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(sentinel))}\nexit {exit_code}\n")
+    path.chmod(0o755)
+
+
+def _install_hook(repo, name, sentinel):
+    _sentinel_script(repo / ".git" / "hooks" / name, sentinel)
+
+
+def test_sentinel_hook_fires_under_plain_git(repo, tmp_path):
+    # Positive control: the sentinel mechanism really detects hook execution, so the
+    # "not sentinel.exists()" assertions below are meaningful and not false negatives.
+    sentinel = tmp_path / "control_ran"
+    _install_hook(repo, "post-commit", sentinel)
+    (repo / "a.py").write_text("x = 5\n")
+    _git(repo, "commit", "-aqm", "change")  # plain (unhardened) git -> hook fires
+    assert sentinel.exists()
+
+
+def test_create_does_not_run_post_checkout_hook(repo, tmp_path):
+    # `git worktree add` checks out HEAD and would fire a repo-configured post-checkout
+    # hook; the hardened hooksPath override must suppress it.
+    sentinel = tmp_path / "post_checkout_ran"
+    _install_hook(repo, "post-checkout", sentinel)
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert not sentinel.exists()
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_seed_does_not_run_post_commit_hook(repo, tmp_path):
+    # --no-verify does NOT suppress post-commit; the hooksPath override must.
+    sentinel = tmp_path / "post_commit_ran"
+    _install_hook(repo, "post-commit", sentinel)
+    (repo / "a.py").write_text("x = 7\n")  # uncommitted -> a baseline commit happens
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert wt.baseline_warning is None
+        assert not sentinel.exists()
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_baseline_commit_does_not_invoke_gpg_signing(repo, tmp_path):
+    # commit.gpgsign=true (not suppressed by --no-verify) would run a configured
+    # signing program; --no-gpg-sign must keep it from executing.
+    sentinel = tmp_path / "gpg_ran"
+    script = tmp_path / "fakegpg.sh"
+    _sentinel_script(script, sentinel, exit_code=1)  # a real signer that can't sign
+    _git(repo, "config", "commit.gpgsign", "true")
+    _git(repo, "config", "gpg.program", str(script))
+    (repo / "a.py").write_text("x = 9\n")  # uncommitted -> a baseline commit happens
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert wt.baseline_warning is None
+        assert not sentinel.exists()
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_capture_diff_does_not_run_fsmonitor(repo, tmp_path):
+    # A repo-configured core.fsmonitor program runs on index refresh (git add); the
+    # hardened core.fsmonitor=false override must suppress it.
+    sentinel = tmp_path / "fsmonitor_ran"
+    script = tmp_path / "fsm.sh"
+    _sentinel_script(script, sentinel)
+    _git(repo, "config", "core.fsmonitor", str(script))
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        (Path(wt.path) / "x.py").write_text("v = 1\n")
+        worktree.capture_diff(wt.path, timeout=30)
+        assert not sentinel.exists()
     finally:
         worktree.remove(str(repo), wt, timeout=30)

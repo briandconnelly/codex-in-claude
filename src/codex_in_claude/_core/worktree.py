@@ -4,11 +4,20 @@ This is the engine of the `propose` tier: the agent edits files in an isolated
 worktree (never the live tree), and we return the resulting patch for review. The
 worktree mirrors the live tree's *tracked* state (HEAD + uncommitted tracked
 changes as a baseline commit) so the agent builds on current code; the returned
-diff is exactly the agent's changes on top of that baseline. CLI-agnostic."""
+diff is exactly the agent's changes on top of that baseline. CLI-agnostic.
+
+Repo-config isolation: these porcelain git ops run in the *server process*, not in
+Codex's sandbox, so every invocation is prefixed with ``_hardening_flags`` (see
+there), which disables repo-configured hooks and fsmonitor; the baseline commit also
+passes ``--no-gpg-sign``. What stays disabled vs. what does not is documented on
+``_hardening_flags`` — notably, gitattributes filters still run at
+checkout/staging/diff, a documented residual under the issue's own-repo trust
+model."""
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import shutil
 import subprocess
@@ -60,15 +69,54 @@ class WorktreePlanData:
     untracked_files: int  # untracked files (never copied into the worktree)
 
 
+@functools.lru_cache(maxsize=1)
+def _empty_hooks_dir() -> str:
+    """An empty directory used as ``core.hooksPath`` so no repo-configured git hook
+    (``post-checkout`` on ``worktree add``, ``post-commit`` on the baseline commit,
+    etc.) executes during worktree operations. Created once per process and left for
+    the OS to reap — it holds nothing sensitive — and deliberately placed *outside*
+    any worktree so the sandboxed agent cannot drop a hook file into it."""
+    return tempfile.mkdtemp(prefix="cic-nohooks-")
+
+
+def _hardening_flags() -> list[str]:
+    """``git -c`` overrides prepended to every git call here, to neutralize
+    repo-configured code execution in the *server process* (these git ops run here,
+    not in Codex's sandbox): ``core.hooksPath`` -> an empty dir (disables every repo
+    hook, including ``post-checkout`` on ``worktree add`` and ``post-commit`` on the
+    baseline commit, which ``--no-verify`` does not suppress) and
+    ``core.fsmonitor=false`` (no fsmonitor program). The baseline commit additionally
+    passes ``--no-gpg-sign`` to keep a configured signing program from running.
+
+    Delivered as command-line ``-c`` (not ``GIT_CONFIG_*`` env, which git honors only
+    since 2.31 and would fail *open* on an older binary) at the highest config
+    precedence, so it overrides the repo's own local config and reaches even the
+    standalone ``git apply``.
+
+    What this does NOT disable: gitattributes ``clean``/``smudge``/``process``
+    filters, which git still runs during checkout (``worktree add``), staging
+    (``git add -A`` in seeding/capture), and working-tree diffs (``git diff HEAD``).
+    That is documented residual risk under the issue's own-repo trust model; full
+    filter isolation is a separate, larger redesign (no-checkout materialization +
+    plumbing on every diff/add path)."""
+    return ["-c", f"core.hooksPath={_empty_hooks_dir()}", "-c", "core.fsmonitor=false"]
+
+
+def _base_env() -> dict[str, str]:
+    """Locale/PATH pinning shared by every git subprocess (deterministic output, no
+    inherited locale surprises)."""
+    return {"LC_ALL": "C", "LANG": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+
+
 def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args],
+        ["git", *_hardening_flags(), *args],
         cwd=repo,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
-        env={"LC_ALL": "C", "LANG": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        env=_base_env(),
     )
 
 
@@ -221,14 +269,14 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     if not diff.stdout.strip():
         return None  # clean tree; HEAD is already the live state
     apply = subprocess.run(
-        ["git", "apply", "--whitespace=nowarn", "-"],
+        ["git", *_hardening_flags(), "apply", "--whitespace=nowarn", "-"],
         cwd=wt,
         input=diff.stdout,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
-        env={"LC_ALL": "C", "LANG": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        env=_base_env(),
     )
     if apply.returncode != 0:
         return "uncommitted changes could not be replayed; worktree based on HEAD only"
@@ -247,6 +295,7 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
             "commit",
             "--quiet",
             "--no-verify",
+            "--no-gpg-sign",
             "-m",
             "baseline: live uncommitted state",
         ],
