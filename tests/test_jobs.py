@@ -732,3 +732,31 @@ def test_status_dict_activity_defaults_when_no_file(tmp_path: Path):
 def test_read_activity_tolerates_corrupt_file(tmp_path: Path):
     (tmp_path / "activity.json").write_text("{not json")
     assert jobs.JobStore._read_activity(tmp_path) == (0, None)
+
+
+def test_activity_observer_end_to_end_into_job_store(tmp_path: Path):
+    """End-to-end: _worker._activity_observer drives ActivityRecorder → activity.json
+    → JobStore.status surfaces events_seen, last_event_at, and event_age_ms."""
+    from codex_in_claude import _worker
+
+    store = jobs.JobStore(root=tmp_path / "jobs", ttl_seconds=3600, max_seconds=60, max_count=10)
+    cwd = str(tmp_path)
+    # Use 'true' (a fast no-op) so the process exits quickly with no result.json;
+    # the worker subprocess is NOT the point — we simulate the activity write directly.
+    job_id, _ = store.start(lambda jd: ["true"], cwd=cwd, kind="codex_delegate")
+    jd = store._job_dir(cwd, job_id)
+
+    observer, recorder = _worker._activity_observer(jd)
+
+    # Three lines: two JSONL objects (count) + one non-object (ignored).
+    observer('{"type":"token_count"}\n')  # counts
+    observer("plain text line\n")  # ignored
+    observer('{"type":"agent_message"}\n')  # counts
+
+    recorder.flush()
+
+    status = store.status(cwd, job_id)
+    assert status is not None
+    assert status["events_seen"] == 2
+    assert status["last_event_at"] is not None
+    assert status["event_age_ms"] is not None and status["event_age_ms"] >= 0

@@ -41,6 +41,7 @@ def test_worker_writes_result(tmp_path, monkeypatch):
     async def fake_run_delegate(task, cwd, meta, **kw):
         assert task == "do x"
         assert kw["sandbox"] == "workspace-write"
+        assert callable(kw["on_event"])
         return {"ok": True, "tool": "codex_delegate", "summary": task}
 
     monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
@@ -181,6 +182,7 @@ def test_worker_dispatches_consult(tmp_path, monkeypatch):
         assert question == "why?"
         assert kw["extra_context"] == "ctx"
         assert kw["sandbox"] == "read-only"
+        assert callable(kw["on_event"])
         return {"ok": True, "tool": "codex_consult", "summary": question}
 
     monkeypatch.setattr(orchestration, "run_consult", fake_run_consult)
@@ -210,6 +212,7 @@ def test_worker_dispatches_review(tmp_path, monkeypatch):
     async def fake_run_review(cwd, meta, **kw):
         assert kw["scope"] == "working_tree"
         assert kw["max_bytes"] == 200000
+        assert callable(kw["on_event"])
         return {"ok": True, "tool": "codex_review_changes", "summary": "reviewed"}
 
     monkeypatch.setattr(orchestration, "run_review", fake_run_review)
