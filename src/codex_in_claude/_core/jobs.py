@@ -70,6 +70,23 @@ ACTIVITY_WRITE_THROTTLE_S = 0.5
 CmdFactory = Callable[[Path], list[str]]
 
 
+def _usable_epoch(epoch: int | float) -> bool:
+    """True if ``epoch`` is finite AND in range for datetime.fromtimestamp().
+
+    json.loads accepts NaN/Infinity, and a finite epoch can still be out of range
+    (1e308 raises OverflowError/OSError/ValueError depending on the platform). The
+    cheap finiteness check rejects the common corrupt case; the conversion probe
+    catches the rare out-of-range finite value so a corrupt activity.json can never
+    crash the job-status API."""
+    if not math.isfinite(epoch):
+        return False
+    try:
+        datetime.fromtimestamp(epoch, UTC)
+    except (OverflowError, OSError, ValueError):
+        return False
+    return True
+
+
 def poll_backoff_ms(
     elapsed_ms: int,
     *,
@@ -333,9 +350,12 @@ class JobStore:
         corrupt. Treated as opaque caller-declared state, like cleanup.json.
 
         Values are validated, not trusted: a non-int/negative count degrades to 0,
-        and a non-finite epoch (json.loads accepts NaN/Infinity) degrades to None —
-        otherwise the downstream datetime.fromtimestamp()/int() in _status_dict would
-        raise and take the whole job-status API down with a corrupt file."""
+        and an unusable epoch degrades to None — otherwise the downstream
+        datetime.fromtimestamp()/int() in _status_dict would raise and take the whole
+        job-status API down with a corrupt file. An epoch is unusable if it is
+        non-finite (json.loads accepts NaN/Infinity) OR finite but out of range for
+        datetime.fromtimestamp() (e.g. 1e308 raises OverflowError/OSError/ValueError
+        depending on the platform)."""
         try:
             data = json.loads((jd / "activity.json").read_text())
         except (OSError, json.JSONDecodeError):
@@ -347,13 +367,8 @@ class JobStore:
         count = (
             count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else 0
         )
-        epoch = (
-            epoch
-            if isinstance(epoch, (int, float))
-            and not isinstance(epoch, bool)
-            and math.isfinite(epoch)
-            else None
-        )
+        is_number = isinstance(epoch, (int, float)) and not isinstance(epoch, bool)
+        epoch = epoch if is_number and _usable_epoch(epoch) else None
         return count, epoch
 
     def _within_cleanup_root(self, path: str) -> bool:

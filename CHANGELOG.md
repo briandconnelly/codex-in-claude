@@ -7,6 +7,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A corrupt `activity.json` with an out-of-range epoch no longer crashes job status/list.**
+  `_read_activity` accepted any *finite* `last_event_epoch`, but a finite value still out of range
+  for `datetime.fromtimestamp()` (e.g. `1e308`) raised `OverflowError`/`OSError`/`ValueError`,
+  turning `codex_job_status`/`codex_job_list` into `internal_error`. The single validation point now
+  also probes representability and degrades an unusable epoch to `None` (the event count stays
+  valid), matching the existing non-finite handling. Internal hardening only — no agent-visible
+  surface change. (#150)
 - **Invalid-argument tool calls now return the structured error envelope.** An unknown/extra
   argument, a missing required argument, a wrong type, or an out-of-enum value for a `Literal`-typed
   param (e.g. `scope`, `isolation`, `detail`) is rejected by FastMCP/Pydantic *before* the handler
@@ -17,7 +24,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `invalid_arguments` error code: an `invalid_arguments[]` list of `{field, reason, allowed_values}`
   (enum `allowed_values` are read from the tool's input schema, not parsed prose; the rejected value
   is deliberately not echoed, since a param can accept arbitrary input that may be a secret), with
-  the top-level `offending_param`/`allowed_values` mirroring the first entry and a `repair` pointing
+  `details{field, reason, allowed_values}` mirroring the first entry and a `repair` pointing
   at the tool's inputSchema and `codex_capabilities`. Only genuine argument-validation failures are
   mapped;
   unrelated validation errors propagate untouched. `codex_status`, `codex_capabilities`, and
@@ -72,11 +79,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   schema-16 error envelope are returned as a corrupt `internal_error` result; compatible *success*
   results are still returned (with `fingerprint` re-stamped).
   (Migration: invalidate stale error results.)
-- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-16`)
+- The result `fingerprint` changes (`codex-in-claude/0.1/schema-12` → `codex-in-claude/0.1/schema-17`)
   for the agent-visible changes above (the async `readOnlyHint` fix #138 advanced it to `schema-13`;
   the `codex_job_cancel` `idempotentHint` fix #141 advanced it to `schema-14`; the `invalid_arguments`
   envelope #136 advanced it to `schema-15`; the error-envelope reshape #135 and catalog shrink #137
-  advanced it to `schema-16`). Pre-1.0, these changes make the next release a minor; clients that
+  advanced it to `schema-16`; the polled event-activity feature #139 advanced it to `schema-17`).
+  Pre-1.0, these changes make the next release a minor; clients that
   cache by `fingerprint` re-fetch the contract.
 
 ## [0.5.0] - 2026-06-26

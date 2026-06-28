@@ -747,12 +747,35 @@ def test_read_activity_degrades_negative_count(tmp_path: Path):
     assert jobs.JobStore._read_activity(tmp_path) == (0, 1000.0)
 
 
+@pytest.mark.parametrize("bad", ["1e308", "-1e308", "1e18", "1e15"])
+def test_read_activity_degrades_unrepresentable_epoch(tmp_path: Path, bad: str):
+    # A finite epoch can still be out of range for datetime.fromtimestamp(), which
+    # raises OverflowError/OSError/ValueError depending on the platform. Such an
+    # epoch must degrade to None so status/list don't crash. The count stays valid.
+    (tmp_path / "activity.json").write_text(f'{{"events_seen": 1, "last_event_epoch": {bad}}}')
+    assert jobs.JobStore._read_activity(tmp_path) == (1, None)
+
+
 def test_status_survives_nonfinite_epoch(tmp_path: Path):
     # Regression: a corrupt activity.json with a non-finite epoch must not crash status.
     store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
     jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
     jd = store._job_dir(str(tmp_path), jid)
     (jd / "activity.json").write_text('{"events_seen": 1, "last_event_epoch": NaN}')
+    status = store.status(str(tmp_path), jid)
+    assert status is not None
+    assert status["events_seen"] == 1
+    assert status["last_event_at"] is None
+    assert status["event_age_ms"] is None
+
+
+def test_status_survives_unrepresentable_epoch(tmp_path: Path):
+    # Regression (#150): a finite-but-out-of-range epoch (e.g. 1e308) used to reach
+    # datetime.fromtimestamp() and crash status/list with internal_error.
+    store = jobs.JobStore(root=tmp_path, ttl_seconds=60, max_seconds=60, max_count=10)
+    jid, _ = store.start(lambda jd: ["true"], cwd=str(tmp_path), kind="codex_consult")
+    jd = store._job_dir(str(tmp_path), jid)
+    (jd / "activity.json").write_text('{"events_seen": 1, "last_event_epoch": 1e308}')
     status = store.status(str(tmp_path), jid)
     assert status is not None
     assert status["events_seen"] == 1
