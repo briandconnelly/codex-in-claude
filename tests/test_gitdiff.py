@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from codex_in_claude._core import gitdiff
+from codex_in_claude._core import gitdiff, streamcap
 
 
 def _git(cwd, *args):
@@ -325,3 +325,24 @@ def test_branch_scope_ignores_untracked(repo):
         str(repo), "branch", base=base, paths=["fresh.py"], timeout=30, max_bytes=200_000
     )
     assert "fresh.py" not in res.text
+
+
+def test_large_diff_is_memory_bounded(repo, monkeypatch):
+    # A diff far larger than the cap: text is bounded to whole lines <= max_bytes,
+    # but diff_bytes still reports the exact full redacted size.
+    big = "def f():\n" + "\n".join(f"    v{i} = {i}" for i in range(5000)) + "\n"
+    (repo / "calc.py").write_text(big)
+
+    real_iter = streamcap.iter_bounded_lines
+    seen_chunked = {"used": False}
+
+    def spy(stream, max_line_bytes, chunk_size=65536):
+        seen_chunked["used"] = True
+        yield from real_iter(stream, max_line_bytes, chunk_size)
+
+    monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", spy)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=500)
+    assert res.truncated
+    assert len(res.text.encode("utf-8")) <= 500  # bounded, line-aligned
+    assert res.diff_bytes > 500  # exact full size still reported
+    assert seen_chunked["used"]  # went through the bounded reader

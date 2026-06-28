@@ -6,14 +6,21 @@ stays free of project config. Scopes: working_tree | branch | commit."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
-from codex_in_claude._core.redaction import redact
+from codex_in_claude._core import streamcap
+from codex_in_claude._core.redaction import DiffRedactor
+
+if TYPE_CHECKING:
+    from typing import TextIO
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -273,6 +280,100 @@ def _summary(cwd: str, diff_args: list[str], timeout: int) -> DiffSummary:
     return DiffSummary(files_changed=files, lines_added=added, lines_removed=removed)
 
 
+class _BoundedDiffAccumulator:
+    """Feed logical diff lines through an incremental redactor, storing only the
+    first ``max_bytes`` of redacted output while counting the full redacted size so
+    ``diff_bytes`` stays exact. Memory stays bounded regardless of diff size."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max_bytes = max_bytes
+        self._redactor = DiffRedactor()
+        self._head: list[str] = []
+        # _stored tracks len("\n".join(self._head).encode("utf-8", "replace")) exactly,
+        # including the joining newlines between lines, so text() is always <= max_bytes.
+        self._stored = 0
+        self._line_count = 0
+        self._content_bytes = 0
+        self.truncated = False
+
+    @property
+    def max_line_bytes(self) -> int:
+        """Per-line byte cap passed to the stream reader."""
+        return self._max_bytes
+
+    def feed(self, logical_line: str) -> None:
+        for out in self._redactor.feed(logical_line):
+            n = len(out.encode("utf-8", "replace"))
+            self._content_bytes += n
+            self._line_count += 1
+            # sep accounts for the joining "\n" between stored lines.
+            sep = 1 if self._head else 0
+            if not self.truncated and self._stored + sep + n <= self._max_bytes:
+                self._head.append(out)
+                self._stored += sep + n
+            else:
+                self.truncated = True
+
+    @property
+    def redacted_paths(self) -> list[str]:
+        return self._redactor.redacted
+
+    @property
+    def diff_bytes(self) -> int:
+        # Mirrors len("\n".join(lines).encode()): content bytes + (N-1) newlines.
+        return self._content_bytes + max(0, self._line_count - 1)
+
+    def text(self) -> str:
+        return "\n".join(self._head)
+
+
+def _stream_redacted_diff(
+    cwd: str, args: list[str], timeout: int, acc: _BoundedDiffAccumulator
+) -> None:
+    """Run `git <args>` and feed its stdout, line by line, into `acc` — bounded in
+    memory. Raises the same typed errors as `_git` on git failure/timeout."""
+    env = {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+    try:
+        proc = subprocess.Popen(
+            ["git", "-c", "core.quotepath=true", *args],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            env=env,
+            start_new_session=True,
+        )
+    except FileNotFoundError as exc:
+        raise GitUnavailableError("git executable not found") from exc
+    try:
+        # proc.stdout is IO[Any] from Popen's generic; cast to TextIO for iter_bounded_lines.
+        assert proc.stdout is not None
+        for physical in streamcap.iter_bounded_lines(
+            cast("TextIO", proc.stdout), acc.max_line_bytes
+        ):
+            for logical in physical.splitlines() or [""]:
+                acc.feed(logical)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s") from exc
+        stderr = proc.stderr.read() if proc.stderr is not None else ""
+    finally:
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                with contextlib.suppress(OSError):
+                    pipe.close()
+    if proc.returncode != 0:
+        message = stderr.strip() or "git failed"
+        if _is_not_git_repo_error(message):
+            raise NotAGitRepoError(message)
+        raise RuntimeError(message)
+
+
 def gather_diff(
     cwd: str,
     scope: str,
@@ -294,32 +395,30 @@ def gather_diff(
     if norm_paths:
         diff_args = [*diff_args, "--", *norm_paths]
     summary = _summary(cwd, diff_args, timeout)
-    raw = _git(cwd, diff_args, timeout)
+    acc = _BoundedDiffAccumulator(max_bytes)
+    _stream_redacted_diff(cwd, diff_args, timeout, acc)
     if scope == "working_tree" and norm_paths:
         # `git diff HEAD` only sees tracked files; surface explicitly-named untracked
         # ones too so targeting a brand-new file doesn't yield a silent empty review (#74).
         untracked, u_files, u_added = _untracked_new_file_diff(cwd, norm_paths, timeout)
         if untracked:
-            raw = f"{raw}{untracked}" if raw else untracked
+            for logical in untracked.splitlines():
+                acc.feed(logical)
             summary.files_changed += u_files
             summary.lines_added += u_added
-    text, redacted = redact(raw)
-    encoded = text.encode("utf-8", "replace")
-    diff_bytes = len(encoded)
-    truncated = False
+    diff_bytes = acc.diff_bytes
+    truncated = acc.truncated
     hint = None
-    if diff_bytes > max_bytes:
-        text = encoded[:max_bytes].decode("utf-8", "ignore")
-        truncated = True
+    if truncated:
         hint = (
             f"diff exceeded {max_bytes} bytes; retry with paths=[...], a closer "
             "branch base, or a single commit"
         )
     return DiffResult(
-        text=text,
+        text=acc.text(),
         summary=summary,
         truncated=truncated,
         truncation_hint=hint,
-        redacted_paths=redacted,
+        redacted_paths=acc.redacted_paths,
         diff_bytes=diff_bytes,
     )
