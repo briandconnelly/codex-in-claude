@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Callable  # noqa: TC003 — needed at runtime for run_codex_exec param
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -105,6 +106,7 @@ async def run_codex_exec(
     skip_git_repo_check: bool = False,
     ephemeral: bool = True,
     flag_support: FlagSupport | None = None,
+    on_event: Callable[[str], None] | None = None,
 ) -> CodexExecResult:
     """Run `codex exec` for the sync path, managing the temp output files.
 
@@ -130,7 +132,11 @@ async def run_codex_exec(
             flag_support=flag_support,
         )
         run = await runtime.run_async(
-            cmd, cwd=cwd, timeout_seconds=timeout_seconds, stdin_text=prompt
+            cmd,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            stdin_text=prompt,
+            on_stdout_line=on_event,
         )
         last_message = _read_last_message(last_msg_path)
     return CodexExecResult(
