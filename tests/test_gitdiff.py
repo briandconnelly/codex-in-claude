@@ -678,3 +678,72 @@ def test_stream_timeout_stderr_only_descendant_times_out(tmp_path, monkeypatch):
     assert elapsed < 10, (
         f"expected return well before grandchild's 30 s sleep; elapsed={elapsed:.1f}s"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: os.killpg must be guarded for non-POSIX platforms
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"), reason="tests killpg fallback — irrelevant if killpg absent"
+)
+def test_stream_timeout_no_killpg_falls_back_to_proc_kill(tmp_path, monkeypatch):
+    """Fix 4 regression: when os.killpg is unavailable (non-POSIX), gitdiff must not
+    crash with AttributeError. Instead it must fall back to proc.kill() so the timeout
+    path still terminates the process and raises RuntimeError('timed out').
+
+    RED (pre-fix): os.killpg is called unconditionally; AttributeError is NOT caught by
+    contextlib.suppress(ProcessLookupError, PermissionError), so the Timer thread crashes
+    silently without killing the process — the process runs to completion (3 s) before
+    the drain loop exits. proc.kill() is never called.
+    GREEN (post-fix): hasattr(os, "killpg") guard → proc.kill() is called, process is
+    killed promptly, RuntimeError raised within 1 s.
+    """
+    import time
+
+    real_popen = subprocess.Popen
+    kill_called: dict[str, int] = {"n": 0}
+
+    class _ProcProxy:
+        """Wrap a real Popen, counting proc.kill() calls."""
+
+        def __init__(self, proc: subprocess.Popen) -> None:
+            self._proc = proc
+
+        def kill(self) -> None:
+            kill_called["n"] += 1
+            self._proc.kill()
+
+        def __getattr__(self, name: str):  # type: ignore[override]
+            return getattr(self._proc, name)
+
+    def fake_popen(cmd, **kwargs):
+        stall_cmd = [
+            sys.executable,
+            "-c",
+            ("import sys, time; sys.stdout.write('line\\n'); sys.stdout.flush(); time.sleep(3)"),
+        ]
+        return _ProcProxy(real_popen(stall_cmd, **kwargs))
+
+    # Shim: delegates everything to os except killpg (simulates non-POSIX platform).
+    class _OsWithoutKillpg:
+        def __getattr__(self, name: str):  # type: ignore[override]
+            if name == "killpg":
+                raise AttributeError(name)
+            return getattr(os, name)
+
+    monkeypatch.setattr(gitdiff, "os", _OsWithoutKillpg())
+    monkeypatch.setattr(gitdiff.subprocess, "Popen", fake_popen)
+
+    acc = gitdiff._BoundedDiffAccumulator(1000)  # type: ignore[attr-defined]
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=1, acc=acc)  # type: ignore[attr-defined]
+    elapsed = time.monotonic() - start
+
+    # After fix: killed promptly (< 3 s stall duration); before fix: hangs 3 s then passes
+    # anyway (stall exits naturally, timed_out already set) — so timing distinguishes RED/GREEN.
+    assert elapsed < 3, f"expected prompt kill via proc.kill(); elapsed={elapsed:.1f}s"
+    # After fix: proc.kill() was called as the fallback; before fix: it was never called.
+    assert kill_called["n"] > 0, "proc.kill() was not called as the killpg fallback"

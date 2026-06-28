@@ -105,11 +105,13 @@ def _wait_streaming(  # noqa: PLR0915
     timed_out, output_truncated)``. Stdout is captured up to ``max_output_bytes``
     bytes; stderr is captured up to a separate ``_STDERR_RESERVE`` (~1 MiB) —
     worst-case retained is ``max_output_bytes + _STDERR_RESERVE``. Both use
-    head+tail windows so a flooding process cannot exhaust memory. A watchdog
-    timer kills the process GROUP after ``timeout_seconds``; this closes any
-    pipes held by descendants so the pump threads reach EOF and the joins
-    complete within the deadline. The observer queue is bounded and drops under
-    flood (it needs counts/timestamps only)."""
+    head+tail windows so a flooding process cannot exhaust memory. The timeout
+    is deadline-based: the main thread waits for the direct child and joins the
+    pump threads within the remaining budget; if the deadline is exceeded, the
+    whole process group is killed via ``_kill_group``, which closes any pipes
+    held by descendants so the pumps reach EOF and the joins complete. The
+    observer queue is bounded and drops under flood (it needs counts/timestamps
+    only)."""
     stdout_cap = max_output_bytes
     stderr_cap = _STDERR_RESERVE
     out = streamcap.BoundedCapture(stdout_cap)

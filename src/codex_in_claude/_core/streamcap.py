@@ -4,11 +4,13 @@ CLI-agnostic; no parent-package imports. Two tools:
 
 - ``iter_bounded_lines`` reads a text stream in fixed chunks and yields complete
   lines, capping any single logical line so a pathological producer cannot buffer
-  an unbounded line into memory before a newline arrives.
+  an unbounded line into memory before a newline arrives. Lines are kept whole up
+  to ``max_line_bytes``; a single logical line that exceeds the cap is truncated
+  mid-line with a ``…[line truncated]`` marker (so a pathologically long JSONL
+  line may not parse, but normal-sized lines are preserved intact).
 - ``BoundedCapture`` accumulates lines under a byte budget, keeping a head window
   plus a bounded tail so the newest lines (where codex emits usage/rate-limit
-  metadata) survive truncation. Complete lines only — never a mid-line cut — so
-  JSONL stays parseable.
+  metadata) survive truncation. Complete lines only.
 """
 
 from __future__ import annotations
@@ -27,6 +29,15 @@ _OUTPUT_TRUNC_MARKER = "[output truncated]\n"
 
 def _nbytes(text: str) -> int:
     return len(text.encode("utf-8", "replace"))
+
+
+def _truncate_to_marker(text: str, max_line_bytes: int) -> str:
+    """Truncate ``text`` (a logical line WITHOUT its trailing newline) so that the
+    returned line — truncated content plus ``_LINE_TRUNC_MARKER`` — encodes to
+    ``<= max_line_bytes`` bytes. UTF-8-safe: never splits a multibyte character."""
+    content_limit = max(0, max_line_bytes - _LINE_TRUNC_MARKER_BYTES)
+    encoded = text.encode("utf-8", "replace")
+    return encoded[:content_limit].decode("utf-8", "ignore") + _LINE_TRUNC_MARKER
 
 
 def iter_bounded_lines(
@@ -56,22 +67,27 @@ def iter_bounded_lines(
                         # Reserve space for the marker so content + marker fits
                         # within max_line_bytes (not just content alone).
                         # max(0, ...) guards against a pathologically tiny cap.
-                        content_limit = max(0, max_line_bytes - _LINE_TRUNC_MARKER_BYTES)
-                        encoded = "".join(pending).encode("utf-8", "replace")
-                        pending = [encoded[:content_limit].decode("utf-8", "ignore")]
+                        pending = [_truncate_to_marker("".join(pending), max_line_bytes)]
                         pending_bytes = _nbytes(pending[0])
                 break
             if overflowing:
-                yield "".join(pending) + _LINE_TRUNC_MARKER
+                # pending[0] already includes the marker (set by _truncate_to_marker above).
+                yield "".join(pending)
                 overflowing = False
             else:
-                pending.append(chunk[start : nl + 1])
-                yield "".join(pending)
+                line = "".join(pending) + chunk[start : nl + 1]
+                if _nbytes(line) > max_line_bytes:
+                    # strip the line's own trailing newline; the marker brings its own
+                    line = _truncate_to_marker(
+                        line[:-1] if line.endswith("\n") else line, max_line_bytes
+                    )
+                yield line
             pending = []
             pending_bytes = 0
             start = nl + 1
     if overflowing:
-        yield "".join(pending) + _LINE_TRUNC_MARKER
+        # pending[0] already includes the marker (set by _truncate_to_marker above).
+        yield "".join(pending)
     elif pending:
         yield "".join(pending)
 

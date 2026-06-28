@@ -412,7 +412,10 @@ def _stream_redacted_diff(  # noqa: PLR0915
             # whereas the process group is still live as long as any member (e.g. a
             # grandchild holding an inherited pipe) survives.
             with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(proc.pid, signal.SIGKILL)
+                if hasattr(os, "killpg"):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:  # pragma: no cover - non-POSIX fallback
+                    proc.kill()
 
     def _drain_stderr() -> None:
         # F1a: keep draining to EOF (avoids the >64 KB pipe-buffer deadlock
@@ -453,7 +456,10 @@ def _stream_redacted_diff(  # noqa: PLR0915
         if proc.poll() is None or stderr_thread.is_alive():
             timed_out.set()
             with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(proc.pid, signal.SIGKILL)
+                if hasattr(os, "killpg"):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:  # pragma: no cover - non-POSIX fallback
+                    proc.kill()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=5)
             stderr_thread.join(timeout=5)

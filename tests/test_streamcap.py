@@ -92,3 +92,19 @@ def test_bounded_capture_no_head_reentry_after_eviction():
     assert marker in result
     # The later "c" line must appear AFTER the marker, not adjacent to the "a" line.
     assert result.index("a") < result.index(marker) < result.index("c")
+
+
+def test_iter_bounded_lines_truncates_within_chunk_line():
+    # Fix 1 regression: a line whose newline falls within the current chunk but whose
+    # length exceeds max_line_bytes must be truncated, not yielded whole.
+    # chunk_size=64, max_line_bytes=20: "x"*40 + "\n" is 41 bytes — fits in one chunk
+    # but exceeds the cap. Before fix: yielded whole (41 bytes). After fix: truncated.
+    data = "x" * 40 + "\n" + "ok\n"
+    stream = io.StringIO(data)
+    out = list(streamcap.iter_bounded_lines(stream, max_line_bytes=20, chunk_size=64))
+    first = out[0]
+    assert len(first.encode("utf-8")) <= 20, (
+        f"first line exceeds max_line_bytes: {len(first.encode('utf-8'))} bytes"
+    )
+    assert "[line truncated]" in first, f"no truncation marker: {first!r}"
+    assert out[-1] == "ok\n"
