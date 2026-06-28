@@ -16,17 +16,26 @@ import signal
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, cast
 
 import anyio
 from anyio.to_thread import run_sync
 
+from codex_in_claude._core import streamcap
+
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import TextIO
 
 # Sentinel enqueued after the stdout pump hits EOF, telling the observer thread to stop.
 _STREAM_DONE = object()
+
+# Default aggregate cap for captured stdout+stderr; the caller (config-aware layer)
+# normally overrides this with CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES.
+DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+# Share of the aggregate cap reserved for stderr (diagnostic, smaller than stdout).
+_STDERR_RESERVE = 1 * 1024 * 1024
 
 # Generic module: log via the stdlib only (no parent imports). Records propagate
 # to the `codex_in_claude` logger, whose handlers go to stderr — never stdout, the
@@ -46,6 +55,7 @@ class CommandRun:
     exit_code: int
     elapsed_ms: int
     timed_out: bool
+    output_truncated: bool = field(default=False)
 
     @property
     def binary_missing(self) -> bool:
@@ -68,34 +78,42 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
-def _wait_streaming(
+def _wait_streaming(  # noqa: PLR0915
     proc: subprocess.Popen,
     stdin_text: str | None,
-    on_stdout_line: Callable[[str], None],
+    on_stdout_line: Callable[[str], None] | None,
     timeout_seconds: int,
-) -> tuple[str, str, bool]:
-    """Drain stdout/stderr concurrently, calling ``on_stdout_line`` per stdout line.
-
-    Observation is DECOUPLED from pipe draining: the stdout reader only appends to
-    ``out_chunks`` and enqueues each line, so it drains the pipe at full speed
-    regardless of how slow the observer is (a slow callback can never stall draining
-    or back up the OS pipe buffer). A separate observer thread invokes the callback
-    off that queue. The reader threads are joined WITHOUT a timeout once the process
-    has exited (or been killed) — both pipes are then guaranteed to reach EOF — so
-    the returned streams are always COMPLETE, never truncated by observer latency.
-    On timeout the tree is killed and ``timed_out`` is True."""
-    out_chunks: list[str] = []
-    err_chunks: list[str] = []
-    line_queue: queue.Queue = queue.Queue()
+    max_output_bytes: int,
+) -> tuple[str, str, bool, bool]:
+    """Drain stdout/stderr concurrently under a byte cap, optionally calling
+    ``on_stdout_line`` per stdout line. Returns ``(stdout, stderr, timed_out,
+    output_truncated)``. Capture is bounded (head+tail window) so a flooding
+    process cannot exhaust memory; the process is NOT killed for exceeding the cap
+    — only for timeout. The observer queue is bounded and drops under flood (it
+    needs counts/timestamps only)."""
+    stderr_cap = min(_STDERR_RESERVE, max_output_bytes // 2)
+    stdout_cap = max(1, max_output_bytes - stderr_cap)
+    out = streamcap.BoundedCapture(stdout_cap)
+    err = streamcap.BoundedCapture(stderr_cap)
+    observe = on_stdout_line is not None
+    line_queue: queue.Queue = queue.Queue(maxsize=10_000)
 
     def _pump_stdout() -> None:
         try:
             if proc.stdout is not None:
-                for line in proc.stdout:
-                    out_chunks.append(line)
-                    line_queue.put(line)
+                for line in streamcap.iter_bounded_lines(cast("TextIO", proc.stdout), stdout_cap):
+                    out.add(line)
+                    if observe:
+                        # Drop silently under flood; never stall draining.
+                        with contextlib.suppress(queue.Full):
+                            line_queue.put_nowait(line)
         finally:
-            line_queue.put(_STREAM_DONE)  # always release the observer, even on read error
+            if observe:
+                line_queue.put(_STREAM_DONE)  # observer keeps draining, so this lands
+
+    # Capture a narrowed local so _observe is type-safe: _observe is only started
+    # when observe=True, which means on_stdout_line is not None here.
+    _callback = on_stdout_line
 
     def _observe() -> None:
         while True:
@@ -103,11 +121,13 @@ def _wait_streaming(
             if item is _STREAM_DONE:
                 return
             with contextlib.suppress(Exception):
-                on_stdout_line(item)
+                if _callback is not None:  # narrowing guard for the type checker
+                    _callback(item)
 
     def _pump_stderr() -> None:
         if proc.stderr is not None:
-            err_chunks.append(proc.stderr.read())
+            for line in streamcap.iter_bounded_lines(cast("TextIO", proc.stderr), stderr_cap):
+                err.add(line)
 
     def _write_stdin() -> None:
         if proc.stdin is None:
@@ -122,10 +142,11 @@ def _wait_streaming(
         threading.Thread(target=_pump_stdout, daemon=True),
         threading.Thread(target=_pump_stderr, daemon=True),
     ]
-    observer = threading.Thread(target=_observe, daemon=True)
-    for t in readers:
+    threads = list(readers)
+    if observe:
+        threads.append(threading.Thread(target=_observe, daemon=True))
+    for t in threads:
         t.start()
-    observer.start()
     try:
         proc.wait(timeout=timeout_seconds)
         timed_out = False
@@ -137,13 +158,16 @@ def _wait_streaming(
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=5)
         timed_out = True
-    # The process has exited (or been killed), so stdout/stderr reach EOF and the
-    # reader loops terminate. Join WITHOUT a timeout so capture is never truncated;
-    # the observer then drains the remaining queued lines and stops at the sentinel.
-    for t in readers:
+    for t in threads:
         t.join()
-    observer.join()
-    return "".join(out_chunks), "".join(err_chunks), timed_out
+    truncated = out.truncated or err.truncated
+    if truncated:
+        logger.warning(
+            "subprocess pid=%s output exceeded %s bytes; capture bounded",
+            proc.pid,
+            max_output_bytes,
+        )
+    return out.result(), err.result(), timed_out, truncated
 
 
 async def run_async(
@@ -154,9 +178,13 @@ async def run_async(
     *,
     env: dict[str, str] | None = None,
     on_stdout_line: Callable[[str], None] | None = None,
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
 ) -> CommandRun:
     """Run `cmd` as a subprocess, returning a CommandRun. Never raises for process
-    failures; a missing binary or timeout is reported via the CommandRun fields."""
+    failures; a missing binary or timeout is reported via the CommandRun fields.
+    Captured output is bounded to `max_output_bytes` (head+tail window) so a runaway
+    process cannot OOM the server (#155); exceeding the cap sets `output_truncated`
+    but does NOT kill the process."""
     start = time.monotonic()
     try:
         proc = subprocess.Popen(
@@ -177,31 +205,18 @@ async def run_async(
 
     logger.debug("spawned pid=%s cmd=%s timeout=%ss", proc.pid, cmd[0], timeout_seconds)
 
-    def _wait() -> tuple[str, str, bool]:
-        if on_stdout_line is not None:
-            return _wait_streaming(proc, stdin_text, on_stdout_line, timeout_seconds)
-        try:
-            out, err = proc.communicate(input=stdin_text, timeout=timeout_seconds)
-            return out, err, False
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "subprocess pid=%s exceeded %ss; killing process group", proc.pid, timeout_seconds
-            )
-            kill_process_tree(proc)
-            out, err = proc.communicate()
-            return out, err, True
+    def _wait() -> tuple[str, str, bool, bool]:
+        return _wait_streaming(proc, stdin_text, on_stdout_line, timeout_seconds, max_output_bytes)
 
     try:
-        out, err, timed_out = await run_sync(_wait, abandon_on_cancel=True)
+        out, err, timed_out, truncated = await run_sync(_wait, abandon_on_cancel=True)
     except anyio.get_cancelled_exc_class():
-        # Client cancellation/disconnect: tear down the whole tree so no codex
-        # subprocess is orphaned, then re-raise to preserve cancel semantics.
         logger.warning("subprocess pid=%s cancelled; killing process group", proc.pid)
         kill_process_tree(proc)
         raise
     elapsed = int((time.monotonic() - start) * 1000)
     if timed_out:
-        return CommandRun(out, TIMED_OUT, -9, elapsed, True)
+        return CommandRun(out, TIMED_OUT, -9, elapsed, True, output_truncated=truncated)
     logger.debug(
         "subprocess pid=%s exited code=%s elapsed_ms=%s stdout_bytes=%s",
         proc.pid,
@@ -209,7 +224,7 @@ async def run_async(
         elapsed,
         len(out or ""),
     )
-    return CommandRun(out, err, proc.returncode, elapsed, False)
+    return CommandRun(out, err, proc.returncode, elapsed, False, output_truncated=truncated)
 
 
 def run_sync_capture(

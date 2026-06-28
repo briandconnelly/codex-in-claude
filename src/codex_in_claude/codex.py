@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from codex_in_claude import cli_contract, normalize, preflight
+from codex_in_claude import cli_contract, config, normalize, preflight
 from codex_in_claude._core import redaction, runtime
 from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
@@ -138,6 +138,7 @@ async def run_codex_exec(
             timeout_seconds=timeout_seconds,
             stdin_text=prompt,
             on_stdout_line=on_event,
+            max_output_bytes=config.max_output_bytes(),
         )
         last_message = _read_last_message(last_msg_path)
     return CodexExecResult(

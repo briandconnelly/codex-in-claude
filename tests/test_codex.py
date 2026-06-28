@@ -257,7 +257,9 @@ def test_login_status_unknown_when_missing(monkeypatch):
 
 
 async def test_run_codex_exec_reads_last_message(monkeypatch, tmp_path):
-    async def fake_run_async(cmd, *, cwd, timeout_seconds, stdin_text, on_stdout_line=None):
+    async def fake_run_async(
+        cmd, *, cwd, timeout_seconds, stdin_text, on_stdout_line=None, max_output_bytes=None
+    ):
         # Emulate codex writing the final message to --output-last-message.
         out_path = cmd[cmd.index("--output-last-message") + 1]
         from pathlib import Path
@@ -284,7 +286,9 @@ async def test_run_codex_exec_reads_last_message(monkeypatch, tmp_path):
 def test_run_codex_exec_forwards_on_event(monkeypatch):
     captured = {}
 
-    async def fake_run_async(cmd, *, cwd, timeout_seconds, stdin_text=None, on_stdout_line=None):
+    async def fake_run_async(
+        cmd, *, cwd, timeout_seconds, stdin_text=None, on_stdout_line=None, max_output_bytes=None
+    ):
         captured["on_stdout_line"] = on_stdout_line
         from codex_in_claude._core.runtime import CommandRun
 

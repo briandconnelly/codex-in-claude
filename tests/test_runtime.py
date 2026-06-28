@@ -227,3 +227,59 @@ def test_run_async_slow_observer_does_not_truncate_stdout():
     assert run.stdout.splitlines() == [f"line{i}" for i in range(10)]
     # Observation is decoupled but still complete on a clean exit.
     assert [ln.strip() for ln in seen] == [f"line{i}" for i in range(10)]
+
+
+async def test_run_async_caps_flooding_stdout(tmp_path):
+    # Emit ~5 MB of lines but cap capture at 50 KB: bounded, not killed, completes.
+    code = "import sys\n" + "for i in range(200000): sys.stdout.write(f'line{i}\\n')\n"
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=30,
+        max_output_bytes=50_000,
+    )
+    assert run.exit_code == 0
+    assert not run.timed_out
+    assert run.output_truncated
+    assert len(run.stdout.encode("utf-8")) <= 50_000 + len(b"[output truncated]\n")
+    assert "line0\n" in run.stdout  # head preserved
+    assert run.stdout.rstrip().endswith("199999")  # tail preserved
+
+
+async def test_run_async_huge_single_line_bounded(tmp_path):
+    code = "import sys; sys.stdout.write('x' * 5_000_000 + '\\n')"
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=30,
+        max_output_bytes=50_000,
+    )
+    assert run.exit_code == 0
+    assert len(run.stdout.encode("utf-8")) <= 100_000  # bounded despite one giant line
+
+
+async def test_run_async_streaming_caps_and_survives_tail(tmp_path):
+    seen: list[str] = []
+    code = "import sys\n" + "for i in range(100000): sys.stdout.write(f'{{\"i\": {i}}}\\n')\n"
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=30,
+        on_stdout_line=seen.append,
+        max_output_bytes=40_000,
+    )
+    assert run.exit_code == 0
+    assert run.output_truncated
+    assert seen  # observer still invoked
+    assert '{"i": 99999}' in run.stdout  # final event survives in the tail
+
+
+async def test_run_async_caps_stderr(tmp_path):
+    code = "import sys\n" + "for i in range(200000): sys.stderr.write(f'e{i}\\n')\n"
+    run = await runtime.run_async(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        timeout_seconds=30,
+        max_output_bytes=50_000,
+    )
+    assert len(run.stderr.encode("utf-8")) <= 50_000
