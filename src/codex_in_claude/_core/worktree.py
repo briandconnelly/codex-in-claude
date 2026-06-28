@@ -76,7 +76,7 @@ def _git_ok(repo: str, args: list[str], timeout: int) -> str:
     proc = _git(repo, args, timeout)
     if proc.returncode != 0:
         raise WorktreeError(
-            f"git {' '.join(args)} failed: {redact_text(proc.stderr.strip()[:200])}"
+            f"git {' '.join(args)} failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
         )
     return proc.stdout
 
@@ -194,7 +194,7 @@ def plan(repo: str, *, timeout: int) -> WorktreePlanData:
     except (subprocess.SubprocessError, OSError) as exc:
         # git binary missing (FileNotFoundError) or a subprocess timeout, etc.
         raise WorktreeError(
-            f"git command failed during plan: {redact_text(str(exc)[:200])}"
+            f"git command failed during plan: {(redact_text(str(exc)) or '')[:200]}"
         ) from exc
     return WorktreePlanData(
         head_commit=head,
@@ -234,7 +234,9 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
         return "uncommitted changes could not be replayed; worktree based on HEAD only"
     add = _git(wt, ["add", "-A"], timeout)
     if add.returncode != 0:
-        raise WorktreeError(f"staging the baseline failed: {redact_text(add.stderr.strip()[:200])}")
+        raise WorktreeError(
+            f"staging the baseline failed: {(redact_text(add.stderr.strip()) or '')[:200]}"
+        )
     commit = _git(
         wt,
         [
@@ -252,7 +254,7 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     )
     if commit.returncode != 0:
         raise WorktreeError(
-            f"committing the baseline failed: {redact_text(commit.stderr.strip()[:200])}"
+            f"committing the baseline failed: {(redact_text(commit.stderr.strip()) or '')[:200]}"
         )
     # The baseline commit must leave the worktree clean; any residue means the live
     # changes were not fully captured and would leak into the agent's diff.
@@ -287,14 +289,14 @@ def capture_diff(wt: str, *, timeout: int) -> str:
     add = _git(wt, ["add", "-A", "--", *pathspec], timeout)
     if add.returncode != 0:
         raise WorktreeError(
-            f"staging the worktree diff failed: {redact_text(add.stderr.strip()[:200])}"
+            f"staging the worktree diff failed: {(redact_text(add.stderr.strip()) or '')[:200]}"
         )
     proc = _git(
         wt, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec], timeout
     )
     if proc.returncode != 0:
         raise WorktreeError(
-            f"capturing the worktree diff failed: {redact_text(proc.stderr.strip()[:200])}"
+            f"capturing the worktree diff failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
         )
     return proc.stdout
 

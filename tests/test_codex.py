@@ -132,6 +132,16 @@ def test_classify_failure_redacts_secret_in_detail():
     assert "[redacted: secret value]" in err.message
 
 
+def test_classify_failure_redacts_secret_straddling_truncation_boundary():
+    # A secret that crosses the 300-char detail cut must still be fully redacted:
+    # redaction runs on the whole text before truncation, so no prefix can leak.
+    secret = "sk-" + "a" * 40
+    stderr = "x" * 290 + secret  # begins before the 300-char cut, extends past it
+    err = codex.classify_failure(CommandRun("", stderr, 1, 1, False))
+    assert err.code == "nonzero_exit"
+    assert "sk-aaaaaaa" not in err.message
+
+
 def test_classify_uses_error_event_message():
     events = '{"type":"turn.failed","error":{"message":"model overloaded"}}'
     err = codex.classify_failure(CommandRun(events, "", 1, 1, False), events=events)

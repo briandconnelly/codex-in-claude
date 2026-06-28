@@ -173,7 +173,7 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
         ErrorResult(
             error=make_error(
                 cast("ErrorCode", code),
-                redaction.redact_text(str(exc)[:300]) or "",
+                (redaction.redact_text(str(exc)) or "")[:300],
                 details=details,
             ),
             meta=meta,

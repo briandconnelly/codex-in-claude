@@ -240,5 +240,7 @@ def classify_failure(
         if retry_after is None:
             retry_after = cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
         return _rate_limit_error(retry_after)
-    detail = redaction.redact_text((event_error or run.stderr or run.stdout).strip()[:300])
+    # Redact the full text *before* truncating: a secret straddling the 300-char cut
+    # would otherwise lose the tail the redaction patterns need to match, leaking a prefix.
+    detail = (redaction.redact_text((event_error or run.stderr or run.stdout).strip()) or "")[:300]
     return make_error("nonzero_exit", f"codex exited {run.exit_code}: {detail}")

@@ -37,6 +37,16 @@ def test_git_ok_redacts_secret_in_error(repo, monkeypatch):
     assert "[redacted: secret value]" in str(ei.value)
 
 
+def test_git_ok_redacts_secret_straddling_truncation_boundary(repo, monkeypatch):
+    # A secret crossing the 200-char cut must still be redacted (redact, then truncate).
+    secret = "sk-" + "a" * 40
+    fake = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="x" * 190 + secret)
+    monkeypatch.setattr(worktree, "_git", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree._git_ok(str(repo), ["status"], 30)
+    assert "sk-aaaaaaa" not in str(ei.value)
+
+
 def test_create_cleans_parent_on_worktree_add_timeout(repo, monkeypatch):
     # A git hang during `worktree add` raises TimeoutExpired (not WorktreeError); the
     # cleanup must still fire so the temp parent dir does not leak.
