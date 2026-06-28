@@ -359,6 +359,33 @@ async def test_run_async_timeout_descendant_holds_pipe(tmp_path):
     )
 
 
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process-group kill is POSIX-only")
+async def test_run_async_closes_fds_but_stays_alive(tmp_path):
+    """Regression for #155: a child that closes its stdout/stderr file descriptors but
+    stays alive (sleeps 30s) must time out promptly and return timed_out=True, not hang
+    indefinitely past the configured timeout.
+
+    RED (pre-fix): all pump threads see EOF and finish; timer is cancelled before
+    firing; proc.wait() is unbounded — hangs ~30s until the child naturally exits.
+    GREEN (post-fix): proc.poll() is None after the deadline; the group is killed;
+    returns within a few seconds with timed_out=True.
+    """
+    import time
+
+    cmd = [sys.executable, "-c", "import os, time; os.close(1); os.close(2); time.sleep(30)"]
+    start = time.monotonic()
+    run = await runtime.run_async(cmd, cwd=str(tmp_path), timeout_seconds=2)
+    elapsed = time.monotonic() - start
+
+    assert run.timed_out is True, (
+        f"expected timed_out=True (child closed fds but stayed alive); "
+        f"got timed_out={run.timed_out}, elapsed={elapsed:.1f}s"
+    )
+    assert elapsed < 10, (
+        f"expected return within a few seconds of the timeout; elapsed={elapsed:.1f}s"
+    )
+
+
 async def test_f2_observer_queue_byte_bounded(tmp_path, monkeypatch):
     """F2: the observer queue must be byte-bounded, not just count-bounded. Patching
     _OBSERVER_QUEUE_BYTES to a tiny value verifies that lines exceeding the byte

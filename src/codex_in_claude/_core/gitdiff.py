@@ -13,6 +13,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -356,7 +357,7 @@ class _BoundedDiffAccumulator:
         return "\n".join(self._head)
 
 
-def _stream_redacted_diff(
+def _stream_redacted_diff(  # noqa: PLR0915
     cwd: str,
     args: list[str],
     timeout: int,
@@ -383,6 +384,7 @@ def _stream_redacted_diff(
         )
     except FileNotFoundError as exc:
         raise GitUnavailableError("git executable not found") from exc
+    deadline = time.monotonic() + timeout
     timed_out = threading.Event()
     stderr_buf: list[str] = []
     # Fix 2: guard kill and reap with a lock + flag so the Timer callback
@@ -427,16 +429,28 @@ def _stream_redacted_diff(
         ):
             for logical in physical.splitlines() or [""]:
                 acc.feed(logical)
-        # Stop the pending fire; no-op if the callback is already running.
-        timer.cancel()
-        # Tell any in-flight callback to no-op, then reap safely.  The lock
-        # ensures the callback either already killed the group (and has released
-        # the lock) or will see _finished=True and skip the killpg call — so
-        # the reap below can never race with a killpg on our PID.
+        # Drain finished (stdout EOF).  Disable the Timer's killer first so the
+        # kill+reap below is main-thread-only (no killpg-after-reap race), then
+        # bound the wait by the remaining deadline — git may have closed stdout
+        # yet still be running (e.g. closed its fds but stays alive).
         with _kill_lock:
             _finished[0] = True
-        proc.wait()  # pipes closed; instant
-        stderr_thread.join()
+        timer.cancel()
+        if not timed_out.is_set():
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                proc.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                timed_out.set()
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=5)
+        else:
+            # Timer already killed the group; just reap.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5)
+        stderr_thread.join(timeout=5)
     finally:
         timer.cancel()  # idempotent: cleans up on exception paths
         for pipe in (proc.stdout, proc.stderr):

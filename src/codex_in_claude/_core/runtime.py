@@ -169,64 +169,46 @@ def _wait_streaming(  # noqa: PLR0915
     threads = list(readers)
     if observe:
         threads.append(threading.Thread(target=_observe, daemon=True))
-    # F1 watchdog: a threading.Timer fires after timeout_seconds and kills the
-    # process GROUP (closing any pipes held by descendants), so the pump threads
-    # reach EOF and the joins complete within the deadline.  Using a Timer rather
-    # than proc.wait(timeout=…) means the deadline covers the full drain+join
-    # lifecycle — not just the direct child's exit — so a descendant holding an
-    # inherited pipe cannot bypass the configured timeout.
-    _timed_out_event = threading.Event()
-    # Fix 2: guard kill and reap with a lock + flag so the Timer callback
-    # cannot signal a reaped (potentially reused) PID.  A list is used instead
-    # of nonlocal to match the surrounding style (e.g. _queued_bytes above).
-    _kill_lock = threading.Lock()
-    _finished = [False]  # set by main thread before proc.wait(); callback no-ops after
-
-    def _on_timeout() -> None:
-        with _kill_lock:
-            if _finished[0]:
-                return
-            _timed_out_event.set()
-            logger.warning(
-                "subprocess pid=%s exceeded %ss; killing process group",
-                proc.pid,
-                timeout_seconds,
-            )
-            # Kill the process GROUP unconditionally, using proc.pid directly as the
-            # pgid. Because proc was spawned with start_new_session=True, it is its
-            # own process-group leader, so pgid == proc.pid. Descendants that did not
-            # start a new session inherit that pgid. Critically, proc.pid is used
-            # instead of os.getpgid(proc.pid) because on macOS (and possibly other
-            # platforms) getpgid raises ESRCH on a zombie, whereas the process group
-            # itself is still live as long as any member survives — including a
-            # descendant holding an inherited pipe. kill_process_tree is intentionally
-            # NOT used here: its proc.poll() guard short-circuits when the direct child
-            # has already exited, leaving pipe-holding descendants alive.
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                if hasattr(os, "killpg"):
-                    os.killpg(proc.pid, signal.SIGKILL)
-                else:  # pragma: no cover - non-POSIX fallback
-                    proc.kill()
-
     for t in threads:
         t.start()
-    timer = threading.Timer(timeout_seconds, _on_timeout)
-    try:
-        timer.start()
+    deadline = time.monotonic() + timeout_seconds
+    # 1. Wait for the DIRECT child, bounded by the timeout.
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=timeout_seconds)
+    # 2. Join the reader/observer threads within the remaining budget.  A descendant
+    #    that inherited a pipe can keep a pump blocked past the child's own exit, and
+    #    a child can close its fds yet keep running — both gaps are bounded here.
+    for t in threads:
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+    # 3. If the child is still running OR a pump is still blocked, the deadline was
+    #    exceeded: kill the whole process group and reap.  This runs on the MAIN thread
+    #    and proc is still unreaped, so proc.pid is a valid pgid and there is no
+    #    killpg-after-reap race.
+    timed_out = proc.poll() is None or any(t.is_alive() for t in threads)
+    if timed_out:
+        logger.warning(
+            "subprocess pid=%s exceeded %ss; killing process group", proc.pid, timeout_seconds
+        )
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            if hasattr(os, "killpg"):
+                # Kill the process GROUP using proc.pid directly as the pgid.  Because
+                # proc was spawned with start_new_session=True it is its own group
+                # leader (pgid == proc.pid).  Descendants that did not start a new
+                # session inherit that pgid.  proc.pid is used instead of
+                # os.getpgid(proc.pid) because on macOS getpgid raises ESRCH on a
+                # zombie while the group is still live as long as any member survives.
+                # kill_process_tree is intentionally NOT used here: its proc.poll()
+                # guard short-circuits when the direct child has already exited,
+                # leaving pipe-holding descendants alive.
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:  # pragma: no cover - non-POSIX fallback
+                proc.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
         for t in threads:
-            t.join()
-        # Stop the pending fire; no-op if the callback is already running.
-        timer.cancel()
-        # Tell any in-flight callback to no-op, then reap safely.  The lock
-        # ensures the callback either already killed the group (and has released
-        # the lock) or will see _finished=True and skip the killpg call — so
-        # the reap below can never race with a killpg on our PID.
-        with _kill_lock:
-            _finished[0] = True
-        proc.wait()  # reap the direct child; pipes closed so this is instant
-    finally:
-        timer.cancel()  # idempotent: cleans up on exception paths
-    timed_out = _timed_out_event.is_set()
+            t.join(timeout=5)
+    else:
+        proc.wait()  # already exited; reap (instant)
     truncated = out.truncated or err.truncated
     if truncated:
         logger.warning(

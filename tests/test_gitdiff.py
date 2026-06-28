@@ -556,6 +556,38 @@ def test_f3_long_line_secret_beyond_per_line_cap_redacted(repo, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_stream_timeout_watchdog_closes_fds_but_stays_alive(tmp_path, monkeypatch):
+    """Regression for #155: a fake git that closes its stdout/stderr file descriptors
+    but stays alive (sleeps 30s) must cause _stream_redacted_diff to raise RuntimeError
+    matching 'timed out' promptly — well within the 30-second sleep.
+
+    RED (pre-fix): stdout drain sees EOF immediately; proc.wait() is unbounded —
+    hangs ~30s until the child naturally exits.
+    GREEN (post-fix): the remaining-deadline bounded wait expires; the group is killed;
+    raises RuntimeError within a few seconds.
+    """
+    import time
+
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd, **kwargs):
+        close_cmd = [
+            sys.executable,
+            "-c",
+            "import os, time; os.close(1); os.close(2); time.sleep(30)",
+        ]
+        return real_popen(close_cmd, **kwargs)
+
+    monkeypatch.setattr(gitdiff.subprocess, "Popen", fake_popen)
+
+    acc = gitdiff._BoundedDiffAccumulator(1000)  # type: ignore[attr-defined]
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        gitdiff._stream_redacted_diff(str(tmp_path), ["diff"], timeout=2, acc=acc)  # type: ignore[attr-defined]
+    elapsed = time.monotonic() - start
+    assert elapsed < 10, f"expected return well before the 30s sleep; elapsed={elapsed:.1f}s"
+
+
 def test_f1b_large_untracked_uses_bounded_reader(repo, monkeypatch):
     """F1b: the untracked diff path must stream through iter_bounded_lines (bounded
     reader), not materialise the whole diff as a string first. Before fix: only the
