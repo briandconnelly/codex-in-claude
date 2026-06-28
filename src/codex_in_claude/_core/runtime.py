@@ -13,7 +13,9 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
+from collections.abc import Callable  # noqa: TC003 — needed at runtime for _wait_streaming param
 from dataclasses import dataclass
 
 import anyio
@@ -59,6 +61,64 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
+def _wait_streaming(
+    proc: subprocess.Popen,
+    stdin_text: str | None,
+    on_stdout_line: Callable[[str], None],
+    timeout_seconds: int,
+) -> tuple[str, str, bool]:
+    """Drain stdout/stderr concurrently, calling ``on_stdout_line`` per stdout line.
+
+    Three daemon threads (stdin writer, stdout reader, stderr reader) avoid the
+    classic pipe-buffer deadlock. The complete streams are reassembled and returned
+    so the caller's final parse is identical to the communicate() path. On timeout
+    the tree is killed and ``timed_out`` is True."""
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+
+    def _pump_stdout() -> None:
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            out_chunks.append(line)
+            with contextlib.suppress(Exception):
+                on_stdout_line(line)
+
+    def _pump_stderr() -> None:
+        if proc.stderr is not None:
+            err_chunks.append(proc.stderr.read())
+
+    def _write_stdin() -> None:
+        if proc.stdin is None:
+            return
+        with contextlib.suppress(OSError):
+            if stdin_text is not None:
+                proc.stdin.write(stdin_text)
+            proc.stdin.close()
+
+    threads = [
+        threading.Thread(target=_write_stdin, daemon=True),
+        threading.Thread(target=_pump_stdout, daemon=True),
+        threading.Thread(target=_pump_stderr, daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        proc.wait(timeout=timeout_seconds)
+        timed_out = False
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "subprocess pid=%s exceeded %ss; killing process group", proc.pid, timeout_seconds
+        )
+        kill_process_tree(proc)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
+        timed_out = True
+    for t in threads:
+        t.join(timeout=1)
+    return "".join(out_chunks), "".join(err_chunks), timed_out
+
+
 async def run_async(
     cmd: list[str],
     cwd: str,
@@ -66,6 +126,7 @@ async def run_async(
     stdin_text: str | None = None,
     *,
     env: dict[str, str] | None = None,
+    on_stdout_line: Callable[[str], None] | None = None,
 ) -> CommandRun:
     """Run `cmd` as a subprocess, returning a CommandRun. Never raises for process
     failures; a missing binary or timeout is reported via the CommandRun fields."""
@@ -90,6 +151,8 @@ async def run_async(
     logger.debug("spawned pid=%s cmd=%s timeout=%ss", proc.pid, cmd[0], timeout_seconds)
 
     def _wait() -> tuple[str, str, bool]:
+        if on_stdout_line is not None:
+            return _wait_streaming(proc, stdin_text, on_stdout_line, timeout_seconds)
         try:
             out, err = proc.communicate(input=stdin_text, timeout=timeout_seconds)
             return out, err, False
