@@ -92,10 +92,13 @@ class BoundedCapture:
 
     def add(self, line: str) -> None:
         n = _nbytes(line)
-        # Fill the head window first.  Once any line has gone to the tail, all
-        # subsequent lines follow so ordering is preserved (head=earliest,
-        # tail=most-recent with no gap when not truncated).
-        if not self._tail and self._head_bytes + n <= self._head_budget:
+        # Fill the head window first.  Once any line has gone to the tail OR a line
+        # has been evicted (``_truncated``), all subsequent lines follow into the
+        # tail so ordering is preserved (head=earliest, tail=most-recent).  The
+        # ``not self._truncated`` guard matters because eviction can empty the tail
+        # again: without it a later line would slip back into the head and end up
+        # before the truncation marker, ahead of output it actually followed.
+        if not self._truncated and not self._tail and self._head_bytes + n <= self._head_budget:
             self._head.append(line)
             self._head_bytes += n
             return

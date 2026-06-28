@@ -74,3 +74,19 @@ def test_bounded_capture_hard_ceiling_on_oversized_tail_line():
     assert cap.truncated, "oversized tail must force truncation"
     marker = b"[output truncated]\n"
     assert len(cap.result().encode("utf-8", "replace")) <= 100 + len(marker)
+
+
+def test_bounded_capture_no_head_reentry_after_eviction():
+    # After an eviction empties the tail, a later line must NOT slip back into the
+    # head ahead of the truncation marker — that would put it before output it
+    # actually followed (chronological misrepresentation).
+    cap = streamcap.BoundedCapture(max_bytes=100)
+    cap.add("a" * 39 + "\n")  # 40 bytes → head (<= head budget 50)
+    cap.add("b" * 99 + "\n")  # 100 bytes → tail, total 140 > 100 → evicts itself, truncated
+    cap.add("c" * 9 + "\n")  # 10 bytes → must go to the tail (after the marker), not head
+    assert cap.truncated
+    result = cap.result()
+    marker = "[output truncated]\n"
+    assert marker in result
+    # The later "c" line must appear AFTER the marker, not adjacent to the "a" line.
+    assert result.index("a") < result.index(marker) < result.index("c")
