@@ -165,6 +165,23 @@ _JOB_CANCEL = {**_JOB_MUTATE, "idempotentHint": True}
 
 mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=__version__)
 
+# F5 (audit): this server registers no MCP prompts, but the low-level SDK advertises
+# the prompts capability whenever a ListPromptsRequest handler exists (FastMCP always
+# registers one). There is no FastMCP constructor knob, so wrap get_capabilities and
+# null out prompts only — never remove shared request handlers. Guarded by
+# test_initialize_does_not_advertise_prompts, so a FastMCP upgrade that changes this
+# seam fails loudly.
+_lowlevel_server = mcp._mcp_server
+_orig_get_capabilities = _lowlevel_server.get_capabilities
+
+
+def _get_capabilities_without_prompts(*args: Any, **kwargs: Any) -> Any:
+    caps = _orig_get_capabilities(*args, **kwargs)
+    return caps.model_copy(update={"prompts": None})
+
+
+_lowlevel_server.get_capabilities = _get_capabilities_without_prompts  # ty: ignore[invalid-assignment]
+
 # Pydantic v2 (which FastMCP uses to generate tool input schemas) targets this dialect.
 INPUT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 

@@ -2544,6 +2544,25 @@ async def test_mcp_codex_run_failure_reports_is_error_true(monkeypatch, clean_en
     assert result.structured_content["error"]["code"] == "codex_auth_required"
 
 
+# --- initialize: no empty prompts capability (F5, audit) ---------------------
+async def test_initialize_does_not_advertise_prompts(clean_env):
+    """The server registers no MCP prompts; advertising the capability over an empty,
+    static catalog misleads clients (audit F5)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        caps = client.initialize_result.capabilities
+    assert caps.prompts is None
+    assert caps.tools is not None  # the override must not clobber siblings
+    assert caps.resources is not None
+    # `caps.prompts is None` alone can't distinguish an omitted wire key from an
+    # explicit `"prompts": null` — both parse back to None. The mcp SDK serializes
+    # InitializeResult via `model_dump(exclude_none=True)`, which recurses into nested
+    # models, so re-run that exact seam and assert the key is actually absent.
+    wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert "prompts" not in wire
+
+
 # --- advertised error codes must be MCP-reachable (#92) -----------------------
 # A code whose only production path is an out-of-enum value on a Literal-typed param
 # is rejected by FastMCP validation before the handler runs, so a real MCP caller can
