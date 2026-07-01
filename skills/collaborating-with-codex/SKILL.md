@@ -1,6 +1,6 @@
 ---
 name: collaborating-with-codex
-description: Use when you want a second opinion, code review, or a delegated coding task from OpenAI Codex (a different model) while working in Claude Code. Triggers — "ask Codex", "what would Codex do", "get a second opinion", "have Codex review this", "delegate this to Codex", cross-checking a risky change, or wanting an independent implementation to compare against.
+description: Use when you want a second opinion, code review, or a delegated coding task from OpenAI Codex (a different model) while working in Claude Code. Fires on user request — "ask Codex", "what would Codex do", "get a second opinion", "have Codex review this", "delegate this to Codex" — and, advisor-style, at self-initiated decision points even when no one asked and a process skill (planning, debugging, verification) is also in play, in addition to it, not instead: about to commit to one of several viable approaches on hard-to-reverse work; mid-debugging when a second consecutive fix for the same bug has just failed (consult before attempt three, alongside the debugging skill); about to declare a risky or security-sensitive change complete on self-checks alone; cross-checking a risky change; or wanting an independent implementation to compare against.
 ---
 
 # Collaborating with Codex

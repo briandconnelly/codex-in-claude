@@ -5,6 +5,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **`collaborating-with-codex` now triggers at advisor-style self-initiated decision points** (#167).
+  The skill description's triggers were all user-phrases ("ask Codex", "get a second opinion"), so
+  agents never surfaced the skill unprompted. The description now also fires — explicitly *alongside*
+  a process skill (planning, debugging, verification), not instead of it — when about to commit to
+  one of several viable approaches on hard-to-reverse work, when a second consecutive fix for the
+  same bug has just failed, or when about to declare a risky change complete on self-checks alone.
+  Modeled on the decision points of Claude Code's advisor tool, which cannot itself be pointed at an
+  MCP backend. Discovery-layer behavior was baseline/after tested with subagents (the stuck-mid-debugging
+  and approach-commitment cases went from 0/2 to 3/3 and 2/2; trivial work still correctly spends
+  nothing). Skill markdown only — no MCP surface change, no `fingerprint` bump.
+
 ## [0.6.0] - 2026-06-28
 
 A hardening-and-contract release. The agent-visible surface changed (result `fingerprint`
