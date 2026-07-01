@@ -46,7 +46,9 @@ _ALL_SCHEMAS = {
     "CONSULT_RESULT_SCHEMA": s.CONSULT_RESULT_SCHEMA,
     "REVIEW_RESULT_SCHEMA": s.REVIEW_RESULT_SCHEMA,
     "DELEGATE_RESULT_SCHEMA": s.DELEGATE_RESULT_SCHEMA,
-    "JOB_RESULT_SCHEMA": s.JOB_RESULT_SCHEMA,
+    # JOB_RESULT_SCHEMA is deliberately excluded: it is a handcrafted opaque-branch
+    # dict (not built via published_schema), so the noise-stripping/$defs invariants
+    # below don't apply to it. See TestJobResultSchemaSlim for its own contract.
     "STATUS_SCHEMA": s.STATUS_SCHEMA,
     "CAPABILITIES_SCHEMA": s.CAPABILITIES_SCHEMA,
     "MODEL_CATALOG_SCHEMA": s.MODEL_CATALOG_SCHEMA,
@@ -156,8 +158,9 @@ def test_opaque_error_branch_present(name, sch):
     assert set(eb["required"]) == {"ok", "error", "meta"}
 
 
-def test_job_result_schema_has_four_branches():
-    assert len(s.JOB_RESULT_SCHEMA["anyOf"]) == 4
+def test_job_result_schema_has_two_branches():
+    # Opaque success branch + the shared opaque error branch (audit F1).
+    assert len(s.JOB_RESULT_SCHEMA["anyOf"]) == 2
 
 
 def test_status_result_has_no_default_errors():
@@ -420,34 +423,6 @@ def test_delegate_result_with_findings_validates_against_schema():
     jsonschema.validate(payload, s.DELEGATE_RESULT_SCHEMA)
 
 
-def test_job_result_consult_variant_with_findings_validates_against_schema():
-    """JOB_RESULT_SCHEMA must accept a ConsultResult variant with findings."""
-    import jsonschema
-
-    result = s.ConsultResult(
-        summary="Job consult done",
-        findings=[_make_finding()],
-        meta=_make_meta(),
-    )
-    payload = result.model_dump(mode="json")
-    jsonschema.validate(payload, s.JOB_RESULT_SCHEMA)
-
-
-def test_job_result_review_variant_with_findings_validates_against_schema():
-    """JOB_RESULT_SCHEMA must accept a ReviewResult variant with findings."""
-    import jsonschema
-
-    result = s.ReviewResult(
-        summary="Job review done",
-        verdict="fail",
-        confidence="low",
-        findings=[_make_finding()],
-        meta=_make_meta(),
-    )
-    payload = result.model_dump(mode="json")
-    jsonschema.validate(payload, s.JOB_RESULT_SCHEMA)
-
-
 # --------------------------------------------------------------------------- #
 # Advisory polled event-activity fields (Task 3 / #139)
 # --------------------------------------------------------------------------- #
@@ -491,3 +466,26 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 def test_fingerprint_bumped_to_schema_19():
     assert FINGERPRINT == "codex-in-claude/0.1/schema-19"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (audit F1): slim JOB_RESULT_SCHEMA to an opaque tool-branch union
+# ---------------------------------------------------------------------------
+
+
+class TestJobResultSchemaSlim:
+    def test_opaque_success_branch_with_tool_enum(self):
+        branches = s.JOB_RESULT_SCHEMA["anyOf"]
+        success = branches[0]
+        assert success["properties"]["ok"] == {"const": True}
+        assert sorted(success["properties"]["tool"]["enum"]) == [
+            "codex_consult",
+            "codex_delegate",
+            "codex_review_changes",
+        ]
+
+    def test_no_embedded_result_defs(self):
+        assert s.JOB_RESULT_SCHEMA.get("$defs", {}) == {}
+
+    def test_serialized_size_ceiling(self):
+        assert len(json.dumps(s.JOB_RESULT_SCHEMA)) < 2000  # was ~14,576 bytes

@@ -7,6 +7,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`codex_job_result`/`codex_job_consume_result` advertise a slimmed, opaque success
+  branch instead of the full three-model union** (#169). The prior `JOB_RESULT_SCHEMA`
+  re-embedded `DelegateResult`/`ConsultResult`/`ReviewResult` (and their shared `$defs`)
+  in full on both tools — about 14.6KB of advertised schema neither tool needed, since a
+  finished job's payload always matches the shape the originating tool already
+  advertises. The success branch is now `{"ok": true, "tool": <enum>}`: branch on `tool`
+  and treat the payload as that tool's own success schema (unchanged; still validated
+  server-side before return). No `$defs` are embedded. Agent-visible surface change, but
+  `fingerprint` does not move again here — `codex-in-claude/0.1/schema-19` already covers
+  it from the `resets_at` change above.
 - **`RateLimitWindow.resets_at` is now RFC3339 UTC instead of epoch seconds** (#169). Agents had to
   know the field was epoch seconds and convert it themselves; it's now a directly readable
   timestamp string (e.g. `"2025-06-15T15:06:40+00:00"`), or `null` when the captured epoch is

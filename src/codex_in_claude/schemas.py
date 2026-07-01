@@ -823,9 +823,34 @@ def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[
 CONSULT_RESULT_SCHEMA = published_schema(ConsultResult)
 REVIEW_RESULT_SCHEMA = published_schema(ReviewResult)
 DELEGATE_RESULT_SCHEMA = published_schema(DelegateResult)
-# codex_job_result / codex_job_consume_result serve every async kind, so their result
-# may be any of the three success envelopes (or an error). Branch on `ok`, then `tool`.
-JOB_RESULT_SCHEMA = published_schema(DelegateResult, ConsultResult, ReviewResult)
+# codex_job_result/_consume_result return exactly the envelope the originating tool
+# produced. Advertising the full three-model union re-embedded ~14.6KB of $defs on BOTH
+# tools (audit F1); instead the success branch is opaque and points at the originating
+# tool's advertised outputSchema, which the client has already loaded. Payloads are
+# validated against the real model server-side (_validate_job_success) before return.
+_OPAQUE_JOB_SUCCESS_BRANCH = {
+    "type": "object",
+    "required": ["ok", "tool"],
+    "properties": {
+        "ok": {"const": True},
+        "tool": {
+            "enum": ["codex_consult", "codex_review_changes", "codex_delegate"],
+            "description": (
+                "Originating tool; the payload matches that tool's advertised "
+                "outputSchema success branch — branch on this field."
+            ),
+        },
+    },
+}
+JOB_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean", "description": "true = success result, false = error result"},
+    },
+    "required": ["ok"],
+    "anyOf": [_OPAQUE_JOB_SUCCESS_BRANCH, _OPAQUE_ERROR_BRANCH],
+    "$defs": {},
+}
 # These three tools return their success model on the happy path, but an invalid
 # argument is re-emitted as an ErrorResult at the call-tool boundary (#136), so each
 # advertises a success|error union — otherwise that envelope would violate the
