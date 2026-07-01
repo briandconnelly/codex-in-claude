@@ -7,6 +7,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`RateLimitWindow.resets_at` is now RFC3339 UTC instead of epoch seconds** (#169). Agents had to
+  know the field was epoch seconds and convert it themselves; it's now a directly readable
+  timestamp string (e.g. `"2025-06-15T15:06:40+00:00"`), or `null` when the captured epoch is
+  absent or not datetime-representable — conversion is tolerant and never raises. Agent-visible
+  surface change: `fingerprint` bumps `codex-in-claude/0.1/schema-18` → `codex-in-claude/0.1/schema-19`.
 - **`collaborating-with-codex` now triggers at advisor-style self-initiated decision points** (#167).
   The skill description's triggers were all user-phrases ("ask Codex", "get a second opinion"), so
   agents never surfaced the skill unprompted. The description now also fires — explicitly *alongside*

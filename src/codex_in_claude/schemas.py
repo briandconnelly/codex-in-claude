@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-18"
+FINGERPRINT = "codex-in-claude/0.1/schema-19"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -212,7 +212,9 @@ class RateLimitWindow(BaseModel):
     used_percent: float | None = None
     remaining_percent: float | None = None  # max(0, 100 - used_percent); None if reset_passed
     window_minutes: int | None = None
-    resets_at: int | None = None  # epoch seconds
+    # RFC3339 UTC (F6, schema-19); null when the captured epoch is absent or not
+    # datetime-representable — conversion never raises (tolerant parsing).
+    resets_at: str | None = None
     seconds_until_reset: int | None = None  # clamped ≥ 0; 0 when reset_passed; None if no resets_at
     reset_passed: bool = False
 

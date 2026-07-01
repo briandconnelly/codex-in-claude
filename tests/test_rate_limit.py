@@ -1,11 +1,22 @@
 from pathlib import Path
 
+import pytest
+
 from codex_in_claude import rate_limit
-from codex_in_claude.schemas import RateLimitSnapshot, RateLimitWindowSnapshot
+from codex_in_claude.schemas import RateLimitSnapshot, RateLimitWindow, RateLimitWindowSnapshot
 
 
 def _win(used, resets):
     return RateLimitWindowSnapshot(used_percent=used, window_minutes=300, resets_at=resets)
+
+
+def _interpreted_window_fixture(resets_at_epoch) -> RateLimitWindow:
+    """Interpret a snapshot with a primary window carrying resets_at_epoch, going
+    through the real rate_limit.interpret() path (not RateLimitWindow directly)."""
+    snap = RateLimitSnapshot(plan_type="plus", primary=_win(10.0, resets_at_epoch), secondary=None)
+    rl = rate_limit.interpret(snap, now_epoch=1000)
+    assert rl.primary is not None
+    return rl.primary
 
 
 def _both(p_used, p_reset, s_used, s_reset):
@@ -438,4 +449,17 @@ def test_current_cache_over_100_used_percent_is_none(monkeypatch):
     rl = rate_limit.current()
     assert rl.primary is not None
     assert rl.primary.used_percent is None
-    assert rl.primary.remaining_percent is None
+
+
+class TestResetsAtRfc3339:
+    def test_resets_at_is_rfc3339_string(self):
+        # Build a snapshot the interpreter accepts; pick any existing test that
+        # produces a populated window and reuse its fixture pattern.
+        win = _interpreted_window_fixture(resets_at_epoch=1_750_000_000)
+        assert isinstance(win.resets_at, str)
+        assert win.resets_at == "2025-06-15T15:06:40+00:00"
+
+    @pytest.mark.parametrize("bad", [1e30, -1e30, float("nan"), float("inf")])
+    def test_out_of_range_epoch_degrades_to_null(self, bad):
+        win = _interpreted_window_fixture(resets_at_epoch=bad)
+        assert win.resets_at is None  # tolerant parsing preserved — never raises

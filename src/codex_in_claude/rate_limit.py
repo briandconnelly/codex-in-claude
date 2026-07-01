@@ -204,7 +204,7 @@ def _window(snap: RateLimitWindowSnapshot | None, now_epoch: int) -> RateLimitWi
             used_percent=None,
             remaining_percent=None,
             window_minutes=snap.window_minutes,
-            resets_at=resets,
+            resets_at=_iso_or_none(resets),
             seconds_until_reset=0,
             reset_passed=True,
         )
@@ -215,7 +215,7 @@ def _window(snap: RateLimitWindowSnapshot | None, now_epoch: int) -> RateLimitWi
         used_percent=used,
         remaining_percent=remaining,
         window_minutes=snap.window_minutes,
-        resets_at=resets,
+        resets_at=_iso_or_none(resets),
         seconds_until_reset=secs,
         reset_passed=False,
     )
@@ -295,3 +295,16 @@ def _status(
 
 def _iso(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
+
+
+def _iso_or_none(epoch: float | int | None) -> str | None:
+    """RFC3339 UTC for a captured epoch, or None when absent/unrepresentable.
+
+    The raw snapshot accepts any finite numeric; datetime.fromtimestamp raises
+    OverflowError/OSError/ValueError outside its range — degrade, never raise."""
+    if epoch is None or not math.isfinite(epoch):
+        return None
+    try:
+        return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None

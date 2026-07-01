@@ -851,7 +851,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-18",
+                "default": "codex-in-claude/0.1/schema-19",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1192,7 +1192,7 @@
               "resets_at": {
                 "anyOf": [
                   {
-                    "type": "integer"
+                    "type": "string"
                   },
                   {
                     "type": "null"
@@ -2115,7 +2115,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -2181,7 +2181,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -2802,7 +2802,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -2868,7 +2868,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -3528,7 +3528,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -3594,7 +3594,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -4203,7 +4203,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -4269,7 +4269,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -5622,7 +5622,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -5688,7 +5688,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -6251,7 +6251,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -6317,7 +6317,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -6888,7 +6888,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -6954,7 +6954,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -7775,7 +7775,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -7841,7 +7841,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -8404,7 +8404,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -8470,7 +8470,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -9041,7 +9041,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -9107,7 +9107,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -10199,7 +10199,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -10265,7 +10265,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -10937,7 +10937,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -11003,7 +11003,7 @@
                                   "resets_at": {
                                     "anyOf": [
                                       {
-                                        "type": "integer"
+                                        "type": "string"
                                       },
                                       {
                                         "type": "null"
@@ -11449,7 +11449,7 @@
                           "resets_at": {
                             "anyOf": [
                               {
-                                "type": "integer"
+                                "type": "string"
                               },
                               {
                                 "type": "null"
@@ -11515,7 +11515,7 @@
                           "resets_at": {
                             "anyOf": [
                               {
-                                "type": "integer"
+                                "type": "string"
                               },
                               {
                                 "type": "null"
