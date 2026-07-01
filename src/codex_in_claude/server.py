@@ -111,18 +111,16 @@ CAPABILITY_SUMMARY = (
 )
 
 # Annotation presets. consult reaches the OpenAI API (openWorld) but never writes
-# files (readOnly). Free probes are local, idempotent, and closed-world.
+# files (readOnly). destructiveHint/idempotentHint have MCP-spec meaning only when
+# readOnlyHint is false, so read-only presets omit them rather than asserting a value
+# (audit F4).
 _ACTIVE_READONLY = {
     "readOnlyHint": True,
     "openWorldHint": True,
-    "destructiveHint": False,
-    "idempotentHint": False,
 }
 _FREE_READ = {
     "readOnlyHint": True,
     "openWorldHint": False,
-    "destructiveHint": False,
-    "idempotentHint": True,
 }
 # propose tier: Codex writes, but only inside a throwaway worktree — the caller's
 # live tree is never touched, so destructiveHint stays False.
@@ -141,19 +139,18 @@ _ACTIVE_PROPOSE = {
 # destructiveHint stays False.
 _ACTIVE_ASYNC = _ACTIVE_PROPOSE
 # Job lifecycle annotations, split by observable behavior. None call the model and
-# all are closed-world and non-destructive (they touch only this server's job state,
-# never the user's files/repo). Inspection tools (status/result/list) are read-only
-# and idempotent. consume and cancel both mutate state, so neither is read-only —
-# but they differ in idempotency: consume deletes the retained record (a repeat
-# consume returns not-found, a different response), so it is non-idempotent; cancel
-# is idempotent — a terminal job is returned unchanged and cancellation re-validates
-# concurrent completion, so a retry after a lost response has no additional effect
-# (#141).
+# all are closed-world (they touch only this server's job state, never the user's
+# files/repo). Inspection tools (status/result/list) are read-only; destructiveHint/
+# idempotentHint have MCP-spec meaning only when readOnlyHint is false, so this
+# preset omits them (audit F4). consume and cancel both mutate state, so neither is
+# read-only — but they differ in idempotency: consume deletes the retained record (a
+# repeat consume returns not-found, a different response), so it is non-idempotent;
+# cancel is idempotent — a terminal job is returned unchanged and cancellation
+# re-validates concurrent completion, so a retry after a lost response has no
+# additional effect (#141).
 _JOB_READ = {
     "readOnlyHint": True,
     "openWorldHint": False,
-    "destructiveHint": False,
-    "idempotentHint": True,
 }
 _JOB_MUTATE = {
     "readOnlyHint": False,

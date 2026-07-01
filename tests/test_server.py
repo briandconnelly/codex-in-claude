@@ -2210,28 +2210,30 @@ async def test_capabilities_list_error_codes_per_tool():
 @pytest.mark.parametrize(
     ("tool_name", "read_only", "idempotent"),
     [
-        ("codex_job_status", True, True),
-        ("codex_job_result", True, True),
-        ("codex_job_list", True, True),
+        ("codex_job_status", True, None),
+        ("codex_job_result", True, None),
+        ("codex_job_list", True, None),
         ("codex_job_consume_result", False, False),
         ("codex_job_cancel", False, True),
     ],
 )
 async def test_job_lifecycle_annotations_split_read_from_mutation(tool_name, read_only, idempotent):
-    """Read/inspect job tools are read-only+idempotent; consume/cancel mutate state (issue #9).
+    """Read/inspect job tools are read-only; consume/cancel mutate state (issue #9).
 
     cancel mutates (not read-only) but is idempotent: terminal jobs are returned
     unchanged, so a retry after a lost response has no additional effect (#141).
     consume stays non-idempotent — a repeat consume returns not-found, a different
-    response, since the first call deleted the record."""
+    response, since the first call deleted the record. Read-only tools omit
+    idempotentHint/destructiveHint entirely — those hints have MCP-spec meaning only
+    when readOnlyHint is false (audit F4)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
     assert ann.readOnlyHint is read_only
     assert ann.idempotentHint is idempotent
-    # Every job tool is local (closed-world) and touches only this server's job
-    # state, never the user's files/repo, so it's non-destructive.
+    # Every job tool is local (closed-world), so it's non-destructive; read-only
+    # tools omit destructiveHint (audit F4), mutating tools state it explicitly.
     assert ann.openWorldHint is False
-    assert ann.destructiveHint is False
+    assert ann.destructiveHint is (False if not read_only else None)
 
 
 async def test_job_cancel_is_idempotent_but_not_read_only():
@@ -2828,3 +2830,23 @@ def test_capabilities_advertises_error_envelope_pointer():
 
     caps = codex_capabilities()
     assert caps["error_envelope_resource"] == "codex://error-envelope"
+
+
+# --------------------------------------------------------------------------- #
+# destructive/idempotent hints only have MCP-spec meaning when readOnlyHint is
+# false (audit F4) — read-only tools must omit them, not assert them.
+# --------------------------------------------------------------------------- #
+
+
+async def test_read_only_tools_omit_meaningless_hints(clean_env):
+    """destructiveHint/idempotentHint have spec meaning only when readOnlyHint is
+    false (audit F4) — read-only tools must omit them, not assert them."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        tools = await client.list_tools()
+    for tool in tools:
+        ann = tool.annotations
+        if ann is not None and ann.readOnlyHint is True:
+            assert ann.destructiveHint is None, tool.name
+            assert ann.idempotentHint is None, tool.name
