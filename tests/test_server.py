@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
 from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
-from codex_in_claude import codex, server
+from codex_in_claude import codex, delegate, orchestration, server
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
     FINGERPRINT,
@@ -16,6 +18,7 @@ from codex_in_claude.schemas import (
     ErrorCode,
     Isolation,
     ReviewScope,
+    apply_detail,
 )
 
 
@@ -24,6 +27,90 @@ def _fake_result(last_message, *, exit_code=0, stderr="", events=""):
         run=CommandRun(events, stderr, exit_code, 12, exit_code == -9),
         last_message=last_message,
         events=events,
+    )
+
+
+# The sync consult/review/delegate tools now run the orchestration in a detached
+# worker subprocess (#169), so a monkeypatched `run_codex_exec`/`gather_diff`/worktree
+# seam can no longer be observed *through* the sync tool. These helpers call the same
+# orchestration/delegate entry points the worker calls, so the run-behavior tests
+# (parsing, redaction, truncation, error mapping) keep their assertions at the unit
+# level where that behavior now lives. Tool-level wiring is covered by the F3 tests.
+async def _run_consult_direct(tmp_path, question="q", **kw):
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    )
+    return await orchestration.run_consult(
+        question,
+        str(tmp_path),
+        meta,
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=180,
+        model=None,
+        **kw,
+    )
+
+
+async def _run_review_direct(
+    tmp_path, *, scope="working_tree", base=None, commit=None, paths=None, **kw
+):
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
+    )
+    return await orchestration.run_review(
+        str(tmp_path),
+        meta,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=180,
+        model=None,
+        git_timeout=30,
+        max_bytes=server.config.max_input_bytes(),
+        **kw,
+    )
+
+
+async def _run_delegate_direct(tmp_path, *, task="do work", **kw):
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    )
+    return await delegate.run_delegate(
+        task,
+        str(tmp_path),
+        meta,
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=180,
+        model=None,
+        git_timeout=30,
+        **kw,
     )
 
 
@@ -182,7 +269,7 @@ async def test_consult_structured_success(monkeypatch, clean_env, tmp_path):
         )
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_consult("is this ok?", workspace_root=str(tmp_path))
+    res = await _run_consult_direct(tmp_path, "is this ok?")
     assert res["ok"] is True
     assert res["tool"] == "codex_consult"
     # Consult is Q&A: a verdict/confidence is meaningless and must not appear (#31).
@@ -200,7 +287,7 @@ async def test_consult_plain_text_success(monkeypatch, clean_env, tmp_path):
         return _fake_result("Just a plain answer, no JSON.")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_consult("question", workspace_root=str(tmp_path))
+    res = await _run_consult_direct(tmp_path, "question")
     assert res["ok"] is True
     assert "plain answer" in res["summary"]
     assert "verdict" not in res  # consult carries no verdict (#31)
@@ -212,7 +299,7 @@ async def test_consult_codex_error(monkeypatch, clean_env, tmp_path):
         return _fake_result(None, exit_code=1, stderr="not logged in")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    res = await _run_consult_direct(tmp_path, "q")
     assert res["ok"] is False
     assert res["error"]["code"] == "codex_auth_required"
 
@@ -281,7 +368,7 @@ async def test_review_success(monkeypatch, clean_env, tmp_path):
         return _fake_result(json.dumps(payload))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is True
     assert res["verdict"] == "concerns"
     assert res["tool"] == "codex_review_changes"
@@ -298,9 +385,9 @@ async def test_review_extra_context_reaches_prompt(monkeypatch, clean_env, tmp_p
         return _fake_result(json.dumps({"summary": "ok", "verdict": "pass", "confidence": "high"}))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(
+    res = await _run_review_direct(
+        tmp_path,
         scope="working_tree",
-        workspace_root=str(tmp_path),
         extra_context="I verified git diff --numstat does not invoke textconv.",
     )
     assert res["ok"] is True
@@ -311,9 +398,7 @@ async def test_review_extra_context_reaches_prompt(monkeypatch, clean_env, tmp_p
 async def test_review_extra_context_too_large(monkeypatch, clean_env, tmp_path):
     monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
     monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
-    res = await server.codex_review_changes(
-        scope="working_tree", workspace_root=str(tmp_path), extra_context="x" * 2000
-    )
+    res = await _run_review_direct(tmp_path, scope="working_tree", extra_context="x" * 2000)
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
     assert res["error"]["details"]["field"] == "extra_context"
@@ -392,7 +477,7 @@ async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path
         return _fake_result("should not run")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is True
     assert res["verdict"] == "pass"
     assert called["n"] == 0  # no model call for an empty diff
@@ -408,7 +493,7 @@ async def test_review_exit0_non_json_returns_invalid_json_error(monkeypatch, cle
         return _fake_result("plain prose, not JSON")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_json"
     # raw output preserved (bounded, redacted) in the message for debugging
@@ -422,7 +507,7 @@ async def test_review_codex_error(monkeypatch, clean_env, tmp_path):
         return _fake_result(None, exit_code=1, stderr="not logged in")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is False
     assert res["error"]["code"] == "codex_auth_required"
 
@@ -432,7 +517,7 @@ async def test_review_not_a_git_repo(monkeypatch, clean_env, tmp_path):
         raise gitdiff.NotAGitRepoError("not a git repository")
 
     monkeypatch.setattr(gitdiff, "gather_diff", raise_not_repo)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is False
     assert res["error"]["code"] == "not_a_git_repo"
 
@@ -442,9 +527,7 @@ async def test_review_invalid_base(monkeypatch, clean_env, tmp_path):
         raise gitdiff.InvalidBaseError("bad base")
 
     monkeypatch.setattr(gitdiff, "gather_diff", raise_base)
-    res = await server.codex_review_changes(
-        scope="branch", base="-bad", workspace_root=str(tmp_path)
-    )
+    res = await _run_review_direct(tmp_path, scope="branch", base="-bad")
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_base"
     assert res["error"]["details"]["field"] == "base"
@@ -483,7 +566,7 @@ async def test_delegate_success(monkeypatch, clean_env, tmp_path):
         return _fake_result("Implemented the change.")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_delegate("add a feature", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="add a feature")
     assert res["ok"] is True
     assert res["tool"] == "codex_delegate"
     # Delegate returns a diff, not a review judgment: no meaningless verdict (#31).
@@ -507,7 +590,7 @@ async def _delegate_with_diff(monkeypatch, tmp_path, diff):
         return _fake_result("Implemented the change.")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    return await server.codex_delegate("do work", workspace_root=str(tmp_path))
+    return await _run_delegate_direct(tmp_path)
 
 
 async def test_delegate_small_diff_not_truncated(monkeypatch, clean_env, tmp_path):
@@ -599,7 +682,6 @@ async def test_delegate_redacts_secret_files_and_inline_values(monkeypatch, clea
 async def test_run_delegate_envelope_redacts_secrets(monkeypatch, clean_env, tmp_path):
     # The background worker serializes exactly run_delegate's returned dict, so this
     # validates the async result envelope (#57) without spawning a subprocess.
-    from codex_in_claude import delegate
     from codex_in_claude.schemas import Meta
 
     wt = _fake_worktree(tmp_path)
@@ -648,7 +730,7 @@ async def test_delegate_cleans_up_on_codex_error(monkeypatch, clean_env, tmp_pat
         return _fake_result(None, exit_code=1, stderr="not logged in")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_delegate("do it", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="do it")
     assert res["ok"] is False
     assert res["error"]["code"] == "codex_auth_required"
     assert removed["n"] == 1  # cleanup still happened
@@ -657,7 +739,6 @@ async def test_delegate_cleans_up_on_codex_error(monkeypatch, clean_env, tmp_pat
 async def test_run_delegate_reports_worktree_parent(monkeypatch, clean_env, tmp_path):
     # run_delegate forwards the on_worktree_parent hook to worktree.create so the
     # background worker can record the temp dir for cleanup before codex runs.
-    from codex_in_claude import delegate
     from codex_in_claude.schemas import Meta
 
     wt = _fake_worktree(tmp_path)
@@ -707,7 +788,6 @@ async def test_run_delegate_invalid_cap_falls_back_to_default(
     # A corrupt/legacy job spec could carry a non-positive or non-int cap. run_delegate
     # must ignore it and use the configured (floored) default rather than slicing with a
     # bad bound (negative slice / TypeError).
-    from codex_in_claude import delegate
     from codex_in_claude.schemas import Meta
 
     monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES", "1000")
@@ -759,7 +839,7 @@ async def test_delegate_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_
         return _fake_result(f'I read config and found password = "{_SECRET}" there.')
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_delegate("inspect config", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="inspect config")
     assert res["ok"] is True
     assert _SECRET not in res["summary"]
     assert _SECRET not in (res["raw_response"]["text"] or "")
@@ -785,7 +865,7 @@ async def test_consult_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_p
         return _fake_result(json.dumps(payload))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_consult("any secrets?", workspace_root=str(tmp_path))
+    res = await _run_consult_direct(tmp_path, "any secrets?")
     assert res["ok"] is True
     assert "ghp_" + "a" * 36 not in res["summary"]
     assert _SECRET not in res["findings"][0]["evidence"]
@@ -808,7 +888,7 @@ async def test_review_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_pa
         return _fake_result(json.dumps(payload))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is True
     assert _SECRET not in res["summary"]
     assert "AKIAIOSFODNN7EXAMPLE" not in res["summary"]
@@ -817,10 +897,12 @@ async def test_review_redacts_secret_in_free_text(monkeypatch, clean_env, tmp_pa
 
 
 async def test_delegate_not_a_git_repo(monkeypatch, clean_env, tmp_path):
+    # The sync tool now fails fast on the synchronous ensure_repo_with_head preflight
+    # (zero spend, no job record) — same as codex_delegate_async.
     def boom(*a, **k):
-        raise worktree.NotAGitRepoError("not a git repo")
+        raise server.worktree.NotAGitRepoError("not a git repo")
 
-    monkeypatch.setattr(worktree, "create", boom)
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
     res = await server.codex_delegate("x", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "not_a_git_repo"
@@ -828,9 +910,9 @@ async def test_delegate_not_a_git_repo(monkeypatch, clean_env, tmp_path):
 
 async def test_delegate_no_commits(monkeypatch, clean_env, tmp_path):
     def boom(*a, **k):
-        raise worktree.NoCommitsError("no commits")
+        raise server.worktree.NoCommitsError("no commits")
 
-    monkeypatch.setattr(worktree, "create", boom)
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
     res = await server.codex_delegate("x", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "worktree_error"
@@ -883,7 +965,7 @@ async def test_delegate_baseline_commit_failure_no_spend(monkeypatch, clean_env,
 
     monkeypatch.setattr(server.codex, "run_codex_exec", must_not_run)
 
-    res = await server.codex_delegate("do something", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="do something")
     assert res["ok"] is False
     assert res["error"]["code"] == "worktree_error"
     assert "diff" not in res  # no diff returned at all → nothing to misattribute
@@ -902,7 +984,7 @@ async def test_delegate_baseline_warning_surfaced(monkeypatch, clean_env, tmp_pa
         return _fake_result("done")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="x")
     assert res["ok"] is True
     assert "seed failed" in res["meta"]["security_warnings"]
     assert res["summary"].startswith("Codex made no changes")
@@ -1088,7 +1170,7 @@ async def test_delegate_capture_diff_error(monkeypatch, clean_env, tmp_path):
         return _fake_result("done")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="x")
     assert res["ok"] is False
     assert res["error"]["code"] == "worktree_error"
     assert removed["n"] == 1
@@ -1469,17 +1551,20 @@ _CONSULT_PAYLOAD = {"summary": "Looks fine", "findings": [], "questions": ["q1"]
 
 
 async def test_consult_default_detail_omits_raw_text(monkeypatch, clean_env, tmp_path):
-    # #56: the default (summary) envelope omits the large, duplicative raw model text
-    # but keeps the authoritative structured fields and a stable parser shape.
+    # #56: the orchestration (worker) envelope carries the full raw model text; the
+    # tool applies detail via _finished_job_envelope — summary omits raw_response.text
+    # while keeping the authoritative structured fields (tool-level path covered by the
+    # F3 tests; here we assert the seam directly on the orchestration envelope).
     async def fake(*a, **k):
         return _fake_result(json.dumps(_CONSULT_PAYLOAD))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_consult("ok?", workspace_root=str(tmp_path))
+    res = await _run_consult_direct(tmp_path, "ok?")
     assert res["ok"] is True
     assert res["summary"] == "Looks fine"
     assert res["questions"] == ["q1"]
-    assert res["raw_response"]["text"] is None  # omitted by default
+    assert res["raw_response"]["text"] == json.dumps(_CONSULT_PAYLOAD)  # populated by orchestration
+    assert apply_detail(res, "summary")["raw_response"]["text"] is None  # omitted by default
 
 
 async def test_consult_full_detail_includes_raw_text(monkeypatch, clean_env, tmp_path):
@@ -1487,9 +1572,8 @@ async def test_consult_full_detail_includes_raw_text(monkeypatch, clean_env, tmp
         return _fake_result(json.dumps(_CONSULT_PAYLOAD))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_consult("ok?", workspace_root=str(tmp_path), detail="full")
-    assert res["ok"] is True
-    assert res["raw_response"]["text"] == json.dumps(_CONSULT_PAYLOAD)
+    res = await _run_consult_direct(tmp_path, "ok?")
+    assert apply_detail(res, "full")["raw_response"]["text"] == json.dumps(_CONSULT_PAYLOAD)
 
 
 async def test_consult_bad_detail(clean_env, tmp_path):
@@ -1529,14 +1613,12 @@ async def test_review_default_detail_omits_raw_text(monkeypatch, clean_env, tmp_
         return _fake_result(json.dumps(payload))
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is True
     assert res["verdict"] == "pass"
-    assert res["raw_response"]["text"] is None
-    full = await server.codex_review_changes(
-        scope="working_tree", workspace_root=str(tmp_path), detail="full"
-    )
-    assert full["raw_response"]["text"] == json.dumps(payload)
+    assert res["raw_response"]["text"] == json.dumps(payload)  # populated by orchestration
+    assert apply_detail(res, "full")["raw_response"]["text"] == json.dumps(payload)
+    assert apply_detail(res, "summary")["raw_response"]["text"] is None
 
 
 async def test_delegate_default_detail_omits_raw_text(monkeypatch, clean_env, tmp_path):
@@ -1549,12 +1631,12 @@ async def test_delegate_default_detail_omits_raw_text(monkeypatch, clean_env, tm
         return _fake_result("Implemented the change.")
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_delegate("do x", workspace_root=str(tmp_path))
+    res = await _run_delegate_direct(tmp_path, task="do x")
     assert res["ok"] is True
     assert res["summary"] == "Implemented the change."
-    assert res["raw_response"]["text"] is None
-    full = await server.codex_delegate("do x", workspace_root=str(tmp_path), detail="full")
-    assert full["raw_response"]["text"] == "Implemented the change."
+    assert res["raw_response"]["text"] == "Implemented the change."  # populated by orchestration
+    assert apply_detail(res, "full")["raw_response"]["text"] == "Implemented the change."
+    assert apply_detail(res, "summary")["raw_response"]["text"] is None
 
 
 async def test_job_result_detail_controls_raw_text(monkeypatch, clean_env, tmp_path):
@@ -2123,7 +2205,7 @@ async def test_scope_error_lists_allowed_values(monkeypatch, clean_env, tmp_path
         raise gitdiff.InvalidScopeError("bad scope")
 
     monkeypatch.setattr(gitdiff, "gather_diff", raise_scope)
-    res = await server.codex_review_changes(scope="nope", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="nope")
     assert res["error"]["code"] == "invalid_scope"
     assert res["error"]["details"]["field"] == "scope"
     assert res["error"]["details"]["allowed_values"] == list(get_args(ReviewScope))
@@ -2319,7 +2401,9 @@ async def test_consult_unexpected_exception_returns_internal_error(
     def boom(*a, **k):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(server.codex, "run_codex_exec", boom)
+    # Inject an unexpected exception into the handler body via the job-start seam
+    # (the sync tool now dispatches through the detached worker, #169).
+    monkeypatch.setattr(server, "_start_job", boom)
     res = await server.codex_consult("q", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "internal_error"
@@ -2330,12 +2414,12 @@ async def test_consult_unexpected_exception_returns_internal_error(
 
 
 async def test_review_unexpected_exception_returns_internal_error(monkeypatch, clean_env, tmp_path):
-    # An unexpected exception escaping the review orchestration must be caught by the
-    # tool boundary and become a structured internal_error (not an opaque error).
-    async def boom(*a, **k):
+    # An unexpected exception escaping the review dispatch must be caught by the tool
+    # boundary and become a structured internal_error (not an opaque error).
+    def boom(*a, **k):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(server.orchestration, "run_review", boom)
+    monkeypatch.setattr(server, "_start_job", boom)
     res = await server.codex_review_changes(workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "internal_error"
@@ -2354,13 +2438,14 @@ async def test_delegate_unexpected_exception_uses_propose_meta(monkeypatch, clea
 
 
 async def test_boundary_internal_error_stamps_elapsed_ms(monkeypatch, clean_env, tmp_path):
-    import asyncio
 
-    async def slow_boom(*a, **k):
-        await asyncio.sleep(0.02)
+    import time
+
+    def slow_boom(*a, **k):
+        time.sleep(0.02)
         raise RuntimeError("late failure")
 
-    monkeypatch.setattr(server.codex, "run_codex_exec", slow_boom)
+    monkeypatch.setattr(server, "_start_job", slow_boom)
     res = await server.codex_consult("q", workspace_root=str(tmp_path))
     assert res["ok"] is False
     assert res["error"]["code"] == "internal_error"
@@ -2369,12 +2454,11 @@ async def test_boundary_internal_error_stamps_elapsed_ms(monkeypatch, clean_env,
 
 
 async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
-    import asyncio
 
     def cancel(*a, **k):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(server.codex, "run_codex_exec", cancel)
+    monkeypatch.setattr(server, "_start_job", cancel)
     with pytest.raises(asyncio.CancelledError):
         await server.codex_consult("q", workspace_root=str(tmp_path))
 
@@ -2527,23 +2611,10 @@ async def test_mcp_semantic_failure_reports_is_error_true(clean_env):
     assert result.structured_content["error"]["code"] == "invalid_workspace_root"
 
 
-async def test_mcp_codex_run_failure_reports_is_error_true(monkeypatch, clean_env, tmp_path):
-    """A failure surfaced from the codex run (not just input validation) also flips
-    the protocol flag, exercising the run path through the boundary."""
-    from fastmcp import Client
-
-    async def fake(*args, **kwargs):
-        return _fake_result(None, exit_code=1, stderr="not logged in")
-
-    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    async with Client(server.mcp) as client:
-        result = await client.call_tool(
-            "codex_consult",
-            {"question": "q", "workspace_root": str(tmp_path)},
-            raise_on_error=False,
-        )
-    assert result.is_error is True
-    assert result.structured_content["error"]["code"] == "codex_auth_required"
+# NOTE: the run-failure MCP-boundary is_error assertion for the now-worker-routed sync
+# path lives in test_sync_run_failure_reports_is_error_true (a job-produced error
+# envelope flows through the boundary with is_error=True), since the sync tool no
+# longer runs Codex in-process.
 
 
 # --- initialize: no empty prompts capability (F5, audit) ---------------------
@@ -2850,3 +2921,360 @@ async def test_read_only_tools_omit_meaningless_hints(clean_env):
         if ann is not None and ann.readOnlyHint is True:
             assert ann.destructiveHint is None, tool.name
             assert ann.idempotentHint is None, tool.name
+
+
+# --- F3: sync active calls run through the detached worker (#169) -------------
+# The sync consult/review/delegate tools now build the same worker spec their async
+# twins build, start a detached job, and await its result in-handler. These tests use
+# a fake `_worker_cmd` that writes a canned envelope (real JobStore, real await loop)
+# so a dropped connection leaves the result recoverable while explicit cancellation
+# still stops spend. A sentinel on `run_codex_exec` proves the sync handler never runs
+# Codex in-process (the worker subprocess does) — and keeps these tests spend-free.
+from fastmcp import Client  # noqa: E402
+
+
+def _fake_worker_cmd(envelope: dict):
+    """A `_worker_cmd` replacement whose worker writes `result.json` (atomically)
+    then exits — mirroring the real worker's terminal write (the JobStore derives
+    `done` from result.json presence + process exit; no meta mutation needed)."""
+    payload = json.dumps(envelope)
+
+    def factory(job_dir: object) -> list[str]:
+        code = (
+            "import os,sys,pathlib;"
+            "d=pathlib.Path(sys.argv[1]);"
+            "t=d/'result.json.tmp';"
+            "t.write_text(sys.argv[2]);"
+            "os.replace(str(t), str(d/'result.json'))"
+        )
+        return [sys.executable, "-c", code, str(job_dir), payload]
+
+    return factory
+
+
+def _sleeping_worker_cmd(seconds: float = 60.0):
+    """A worker that sleeps without ever writing a result — so the job stays running
+    until it is cancelled/timed out."""
+
+    def factory(job_dir: object) -> list[str]:
+        snippet = "import time,sys; time.sleep(float(sys.argv[1]))"
+        return [sys.executable, "-c", snippet, str(seconds)]
+
+    return factory
+
+
+def _no_codex_sentinel(monkeypatch):
+    async def _boom(*a, **k):
+        raise AssertionError("sync tool must not run Codex in-process; the worker does")
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", _boom)
+
+
+def _consult_success_envelope(
+    cwd: str, *, raw_text: str | None = None, summary: str = "Looks fine"
+):
+    meta = server._base_meta(
+        cwd,
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    ).model_dump(mode="json")
+    return {
+        "ok": True,
+        "tool": "codex_consult",
+        "summary": summary,
+        "findings": [],
+        "questions": [],
+        "raw_response": {"text": raw_text, "session_id": None, "model": None},
+        "meta": meta,
+    }
+
+
+def _timeout_error_envelope(cwd: str):
+    meta = server._base_meta(
+        cwd,
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    )
+    return server.serialize_error(
+        server.ErrorResult(
+            error=server.make_error("timeout", "codex run exceeded its timeout."), meta=meta
+        )
+    )
+
+
+async def test_sync_consult_runs_through_job_store_and_sets_job_id(
+    clean_env, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+    body = res.structured_content
+    assert body["ok"] is True
+    job_id = body["meta"]["job_id"]
+    assert job_id
+    # The record survives for recovery after a (hypothetical) dropped connection.
+    async with Client(server.mcp) as client:
+        again = await client.call_tool(
+            "codex_job_result",
+            {"job_id": job_id, "workspace_root": str(tmp_path), "detail": "full"},
+        )
+    assert again.structured_content["ok"] is True
+
+
+async def test_sync_summary_response_but_full_recoverable(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path), raw_text="RAW MODEL TEXT")
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+        assert res.structured_content["raw_response"]["text"] is None  # detail=summary default
+        job_id = res.structured_content["meta"]["job_id"]
+        full = await client.call_tool(
+            "codex_job_result",
+            {"job_id": job_id, "workspace_root": str(tmp_path), "detail": "full"},
+        )
+        assert full.structured_content["raw_response"]["text"] == "RAW MODEL TEXT"
+
+
+async def test_sync_full_detail_keeps_raw_text(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path), raw_text="RAW MODEL TEXT")
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), detail="full")
+    assert res["ok"] is True
+    assert res["raw_response"]["text"] == "RAW MODEL TEXT"
+    assert res["meta"]["job_id"]
+
+
+async def test_sync_error_envelope_is_recorded_done(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _timeout_error_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "timeout"
+
+
+async def test_sync_review_runs_through_job_store(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+        scope="working_tree",
+    ).model_dump(mode="json")
+    envelope = {
+        "ok": True,
+        "tool": "codex_review_changes",
+        "summary": "reviewed",
+        "verdict": "pass",
+        "confidence": "high",
+        "findings": [],
+        "raw_response": {"text": None, "session_id": None, "model": None},
+        "meta": meta,
+    }
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_review_changes"
+    assert res["verdict"] == "pass"
+    assert res["meta"]["job_id"]
+
+
+async def test_sync_delegate_runs_through_job_store(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    _init_repo(tmp_path)  # delegate has a synchronous ensure_repo_with_head preflight
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    ).model_dump(mode="json")
+    envelope = {
+        "ok": True,
+        "tool": "codex_delegate",
+        "summary": "did it",
+        "diff": "diff --git a/x b/x\n+y",
+        "findings": [],
+        "raw_response": {"text": None, "session_id": None, "model": None},
+        "meta": meta,
+    }
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    res = await server.codex_delegate("do x", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["tool"] == "codex_delegate"
+    assert res["meta"]["job_id"]
+
+
+async def test_sync_delegate_preflight_not_a_git_repo_records_nothing(
+    clean_env, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+
+    def must_not_spawn(_jd):
+        raise AssertionError("preflight failure must not start a worker")
+
+    monkeypatch.setattr(server, "_worker_cmd", must_not_spawn)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))  # tmp_path is no repo
+    assert res["ok"] is False
+    assert res["error"]["code"] == "not_a_git_repo"
+    store = server.config.job_store()
+    assert store.list_jobs(str(tmp_path)) == []
+
+
+def test_sync_preflight_failure_records_nothing(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+
+    async def go():
+        return await server.codex_consult("q", workspace_root="relative/not/absolute")
+
+    res = asyncio.run(go())
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_workspace_root"
+    # No job dirs created anywhere under the state root.
+    state = tmp_path / "state"
+    assert not state.exists() or not any(state.rglob("meta.json"))
+
+
+async def test_sync_spawn_failure_is_internal_error_no_record(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    monkeypatch.setattr(server, "_worker_cmd", lambda jd: ["/nonexistent-binary-xyz"])
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    store = server.config.job_store()
+    assert store.list_jobs(str(tmp_path)) == []
+
+
+async def test_sync_review_spawn_failure_is_internal_error(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    monkeypatch.setattr(server, "_worker_cmd", lambda jd: ["/nonexistent-binary-xyz"])
+    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert server.config.job_store().list_jobs(str(tmp_path)) == []
+
+
+async def test_sync_delegate_spawn_failure_is_internal_error(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    _init_repo(tmp_path)  # pass the synchronous ensure_repo_with_head preflight
+    monkeypatch.setattr(server, "_worker_cmd", lambda jd: ["/nonexistent-binary-xyz"])
+    res = await server.codex_delegate("do x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert server.config.job_store().list_jobs(str(tmp_path)) == []
+
+
+async def test_sync_cancellation_cancels_job(clean_env, tmp_path, monkeypatch):
+    # The in-process Client does not reliably propagate task cancellation into the
+    # handler coroutine, so we test _await_job_result's CancelledError path directly:
+    # cancelling the awaiting task must cancel the job (spend stops).
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(server, "_worker_cmd", _sleeping_worker_cmd())
+    cwd = str(tmp_path)
+    meta = server._base_meta(
+        cwd,
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=60,
+    )
+    handle = server._start_job(
+        meta, cwd, kind="codex_consult", spec={"kind": "codex_consult", "cwd": cwd}, deadline=60
+    )
+    job_id = handle["job_id"]
+    task = asyncio.create_task(
+        server._await_job_result(cwd, job_id, "codex_consult", meta, "summary", 60, None)
+    )
+    await asyncio.sleep(0.5)  # let the await loop poll at least once (worker running)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    store = server.config.job_store()
+    rec = store.status(cwd, job_id)
+    assert rec is not None
+    assert rec["status"] == "cancelled"  # spend stopped
+
+
+async def test_sync_call_returns_envelope_even_under_eviction(clean_env, tmp_path, monkeypatch):
+    # With a tiny count cap, each new sync call can evict an older terminal record —
+    # but every sync call must still return its own envelope successfully.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODEX_IN_CLAUDE_JOB_MAX_COUNT", "2")
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    job_ids = []
+    for _ in range(4):
+        res = await server.codex_consult("q", workspace_root=str(tmp_path))
+        assert res["ok"] is True  # envelope returned every time
+        job_ids.append(res["meta"]["job_id"])
+    # The count cap held: the earliest records were evicted, yet those calls still
+    # returned their envelopes (the payload is read in-hand before any eviction).
+    store = server.config.job_store()
+    live = {j["job_id"] for j in store.list_jobs(str(tmp_path))}
+    assert len(live) <= 2
+    assert job_ids[0] not in live  # earliest evicted
+
+
+async def test_sync_run_failure_reports_is_error_true(clean_env, tmp_path, monkeypatch):
+    # A failure surfaced from the (worker-produced) codex run flips the MCP protocol
+    # is_error flag through the boundary, same as before the reroute (#91).
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    )
+    envelope = server.serialize_error(
+        server.ErrorResult(
+            error=server.make_error("codex_auth_required", "not logged in"), meta=meta
+        )
+    )
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_consult",
+            {"question": "q", "workspace_root": str(tmp_path)},
+            raise_on_error=False,
+        )
+    assert result.is_error is True
+    assert result.structured_content["error"]["code"] == "codex_auth_required"

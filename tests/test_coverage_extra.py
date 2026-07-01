@@ -6,8 +6,39 @@ import subprocess
 
 import pytest
 
-from codex_in_claude import config, prompts, server
+from codex_in_claude import config, orchestration, prompts, server
 from codex_in_claude._core import runtime
+
+
+async def _run_review_direct(tmp_path, *, scope="working_tree", base=None, commit=None):
+    # The sync review tool now runs in a detached worker (#169); its run-behavior
+    # branches are exercised by calling the same orchestration entry point directly.
+    meta = server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+        scope=scope,
+        base=base,
+        commit=commit,
+    )
+    return await orchestration.run_review(
+        str(tmp_path),
+        meta,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=None,
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=180,
+        model=None,
+        git_timeout=30,
+        max_bytes=config.max_input_bytes(),
+    )
 
 
 # --- prompts -----------------------------------------------------------------
@@ -118,10 +149,23 @@ async def test_consult_uses_roots(monkeypatch, clean_env, tmp_path):
         )
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    # The sync consult now dispatches to the detached worker; assert the tool resolved
+    # the MCP root into the job spec's workspace (source == "roots") at the start seam.
+    captured = {}
+
+    def capture_start(meta, cwd, *, kind, spec, deadline):
+        captured["source"] = spec["workspace_source"]
+        captured["cwd"] = cwd
+        return server.serialize_error(
+            server.ErrorResult(error=server.make_error("internal_error", "stop"), meta=meta)
+        )
+
+    monkeypatch.setattr(server, "_start_job", capture_start)
     ctx = _FakeCtx([f"file://{tmp_path}"])
     res = await server.codex_consult("q", ctx=ctx)
-    assert res["ok"] is True
-    assert res["meta"]["workspace_source"] == "roots"
+    assert res["ok"] is False  # short-circuited by the capture stub
+    assert captured["source"] == "roots"
+    assert captured["cwd"] == str(tmp_path)
 
 
 # --- server status: could-not-determine auth --------------------------------
@@ -158,7 +202,7 @@ async def test_review_git_unavailable(monkeypatch, clean_env, tmp_path):
         raise gitdiff.GitUnavailableError("git not found")
 
     monkeypatch.setattr(gitdiff, "gather_diff", boom)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is False
     assert res["error"]["code"] == "git_unavailable"
 
@@ -170,7 +214,7 @@ async def test_review_generic_git_runtime_error(monkeypatch, clean_env, tmp_path
         raise RuntimeError("git diff timed out after 60s")
 
     monkeypatch.setattr(gitdiff, "gather_diff", boom)
-    res = await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is False
     assert res["error"]["code"] == "git_unavailable"
 
@@ -197,9 +241,7 @@ async def test_review_commit_scope_label(monkeypatch, clean_env, tmp_path):
         )
 
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
-    res = await server.codex_review_changes(
-        scope="commit", commit="abc123", workspace_root=str(tmp_path)
-    )
+    res = await _run_review_direct(tmp_path, scope="commit", commit="abc123")
     assert res["ok"] is True
     assert "commit abc123" in seen["prompt"]
     assert res["meta"]["commit"] == "abc123"

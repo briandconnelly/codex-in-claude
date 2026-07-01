@@ -110,14 +110,9 @@ CAPABILITY_SUMMARY = (
     "edits your working tree. Treat Codex's findings as claims to verify, not commands."
 )
 
-# Annotation presets. consult reaches the OpenAI API (openWorld) but never writes
-# files (readOnly). destructiveHint/idempotentHint have MCP-spec meaning only when
+# Annotation presets. destructiveHint/idempotentHint have MCP-spec meaning only when
 # readOnlyHint is false, so read-only presets omit them rather than asserting a value
 # (audit F4).
-_ACTIVE_READONLY = {
-    "readOnlyHint": True,
-    "openWorldHint": True,
-}
 _FREE_READ = {
     "readOnlyHint": True,
     "openWorldHint": False,
@@ -130,13 +125,13 @@ _ACTIVE_PROPOSE = {
     "destructiveHint": False,
     "idempotentHint": False,
 }
-# Async launchers (consult/review/delegate) all spawn a background job that commits
-# to spend and reaches the API. The job record is observable (codex_job_list) and
-# mutable (codex_job_cancel/consume) — shared state that outlives the response — so
-# none may advertise readOnlyHint, even consult/review whose underlying run is
-# read-only (issue #138). They share the propose-tier values: any file writes stay
-# inside a throwaway worktree, so the caller's live tree is never touched and
-# destructiveHint stays False.
+# Every active consult/review/delegate call — sync AND async — now spawns a
+# background job that commits to spend and reaches the API. The job record is
+# observable (codex_job_list) and mutable (codex_job_cancel/consume) — shared state
+# that outlives the response — so none may advertise readOnlyHint, even consult/review
+# whose underlying run is read-only (issue #138). They share the propose-tier values:
+# any file writes stay inside a throwaway worktree, so the caller's live tree is never
+# touched and destructiveHint stays False.
 _ACTIVE_ASYNC = _ACTIVE_PROPOSE
 # Job lifecycle annotations, split by observable behavior. None call the model and
 # all are closed-world (they touch only this server's job state, never the user's
@@ -1288,7 +1283,9 @@ def error_envelope_resource() -> dict:
 # --------------------------------------------------------------------------- #
 # Active tools
 # --------------------------------------------------------------------------- #
-@mcp.tool(annotations=_ACTIVE_READONLY, output_schema=CONSULT_RESULT_SCHEMA)
+# _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
+# via the detached worker, so it can't advertise readOnlyHint (issue #138).
+@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=CONSULT_RESULT_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult(
     question: QuestionParam,
@@ -1403,22 +1400,29 @@ async def codex_consult(
             )
         )
 
-    return apply_detail(
-        await orchestration.run_consult(
-            question,
-            cwd,
-            meta,
-            sandbox="read-only",
-            isolation=isolation_v,
-            timeout_seconds=timeout,
-            model=model or d.model,
-            extra_context=extra_context or "",
-        ),
-        detail_v,
+    spec = {
+        "kind": "codex_consult",
+        "question": question,
+        "extra_context": extra_context or "",
+        "cwd": cwd,
+        "workspace_source": res.source,
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": timeout,
+    }
+    handle = _start_job(meta, cwd, kind="codex_consult", spec=spec, deadline=timeout)
+    if handle.get("ok") is False:
+        return handle  # spawn failure: internal_error, no spend, no record
+    return await _await_job_result(
+        cwd, handle["job_id"], "codex_consult", meta, detail_v, timeout, ctx
     )
 
 
-@mcp.tool(annotations=_ACTIVE_READONLY, output_schema=REVIEW_RESULT_SCHEMA)
+# _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
+# via the detached worker, so it can't advertise readOnlyHint (issue #138).
+@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=REVIEW_RESULT_SCHEMA)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes(
     scope: ScopeParam = "working_tree",
@@ -1519,23 +1523,30 @@ async def codex_review_changes(
     if placeholder is not None:
         return placeholder
 
-    return apply_detail(
-        await orchestration.run_review(
-            cwd,
-            meta,
-            scope=scope,
-            base=base,
-            commit=commit,
-            paths=paths,
-            extra_context=extra_context or "",
-            sandbox="read-only",
-            isolation=isolation_v,
-            timeout_seconds=timeout,
-            model=model or d.model,
-            git_timeout=config.git_timeout_seconds(),
-            max_bytes=config.max_input_bytes(),
-        ),
-        detail_v,
+    # No input_too_large pre-check here: the diff is gathered in the worker, which
+    # enforces max_bytes (and bounds extra_context) — same as codex_review_changes_async.
+    spec = {
+        "kind": "codex_review_changes",
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": timeout,
+        "scope": scope,
+        "base": base,
+        "commit": commit,
+        "paths": paths,
+        "extra_context": extra_context or "",
+        "git_timeout": config.git_timeout_seconds(),
+        "max_bytes": config.max_input_bytes(),
+    }
+    handle = _start_job(meta, cwd, kind="codex_review_changes", spec=spec, deadline=timeout)
+    if handle.get("ok") is False:
+        return handle  # spawn failure: internal_error, no spend, no record
+    return await _await_job_result(
+        cwd, handle["job_id"], "codex_review_changes", meta, detail_v, timeout, ctx
     )
 
 
@@ -1630,19 +1641,48 @@ async def codex_delegate(
         return serialize_error(ErrorResult(error=detail_err, meta=meta))
     assert detail_v is not None
 
-    return apply_detail(
-        await delegate.run_delegate(
-            task,
-            cwd,
-            meta,
-            sandbox="workspace-write",
-            isolation=isolation_v,
-            timeout_seconds=timeout,
-            model=model or d.model,
-            git_timeout=config.git_timeout_seconds(),
-            max_diff_bytes=config.max_delegate_diff_bytes(),
-        ),
-        detail_v,
+    # Fail fast (no spend, no record) if this is not a git repo with a commit to base
+    # on — same synchronous preflight as codex_delegate_async.
+    git_timeout = config.git_timeout_seconds()
+    try:
+        worktree.ensure_repo_with_head(cwd, timeout=git_timeout)
+    except worktree.NotAGitRepoError as exc:
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "not_a_git_repo",
+                    str(exc),
+                    details=ErrorDetail(field="workspace_root"),
+                ),
+                meta=meta,
+            )
+        )
+    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
+        return serialize_error(
+            ErrorResult(
+                error=make_error("worktree_error", str(exc)[:300]),
+                meta=meta,
+            )
+        )
+
+    spec = {
+        "kind": "codex_delegate",
+        "task": task,
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "propose",
+        "sandbox": "workspace-write",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": timeout,
+        "git_timeout": git_timeout,
+        "max_diff_bytes": config.max_delegate_diff_bytes(),
+    }
+    handle = _start_job(meta, cwd, kind="codex_delegate", spec=spec, deadline=timeout)
+    if handle.get("ok") is False:
+        return handle  # spawn failure: internal_error, no spend, no record
+    return await _await_job_result(
+        cwd, handle["job_id"], "codex_delegate", meta, detail_v, timeout, ctx
     )
 
 
@@ -1801,6 +1841,62 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
         expires_at=None,
         meta=meta,
     ).model_dump(mode="json")
+
+
+# Local poll cadence for a sync handler awaiting its own detached job: in-process
+# disk reads, so much tighter than the client-facing poll_after_ms backoff.
+_SYNC_POLL_INTERVAL_S = 0.25
+# Post-timeout grace: the worker enforces the codex timeout itself and writes a
+# timeout envelope; this only covers worker scheduling/IO slack before we give up.
+_SYNC_AWAIT_GRACE_S = 30
+
+
+async def _await_job_result(
+    cwd: str,
+    job_id: str,
+    kind: str,
+    meta: Meta,
+    detail_v: str,
+    timeout: int,
+    ctx: Context | None,  # noqa: ARG001 - kept for Task 6 (progress); see below
+) -> dict:
+    """Await this handler's own detached job and return its envelope (F3).
+
+    Explicit cancellation (client Esc / notifications/cancelled) cancels the job so
+    spend stops; a transport drop kills this server but not the worker, leaving the
+    result recoverable via codex_job_list/codex_job_result. `ctx` is unused until
+    Task 6 wires progress reporting into it — kept now so signatures don't churn."""
+    store = config.job_store()
+    deadline = time.monotonic() + timeout + _SYNC_AWAIT_GRACE_S
+    try:
+        while True:
+            rec = await asyncio.to_thread(store.status, cwd, job_id)
+            if rec is None:
+                return _job_result_corrupt("job record disappeared while awaiting", meta)
+            if rec["status"] != "running":
+                break
+            if time.monotonic() > deadline:
+                await asyncio.to_thread(store.cancel, cwd, job_id)
+                return serialize_error(
+                    ErrorResult(
+                        error=make_error(
+                            "timeout",
+                            f"codex run exceeded {timeout}s and the grace window; job cancelled.",
+                        ),
+                        meta=meta,
+                    )
+                )
+            await asyncio.sleep(_SYNC_POLL_INTERVAL_S)
+    except asyncio.CancelledError:
+        # Deliberate cancellation must stop spend. Synchronous on purpose: an
+        # already-cancelled task cannot reliably await cleanup.
+        with contextlib.suppress(Exception):
+            store.cancel(cwd, job_id)
+        raise
+    rec2, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=False)
+    if rec2 is None:
+        return _job_result_corrupt("job record expired before its result was read", meta)
+    return _finished_job_envelope(rec2, payload, job_id, kind, meta, detail_v, None)
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
@@ -2466,6 +2562,20 @@ async def _job_result_impl(
     # Derive the lifecycle-error meta from the job's kind so a running/corrupt
     # consult/review job reports consult/read-only, not the default propose tier.
     meta = _job_meta(cwd, source, rec["kind"])
+    return _finished_job_envelope(rec, payload, job_id, rec["kind"], meta, detail_v, workspace_root)
+
+
+def _finished_job_envelope(
+    rec: dict,
+    payload: dict | None,
+    job_id: str,
+    kind: str,
+    meta: Meta,
+    detail_v: str,
+    workspace_root: str | None,
+) -> dict:
+    """Map a terminal-or-running job record to the caller-facing envelope. Shared by
+    the job-fetch tools and the sync await path so the two can never diverge."""
     state = rec["status"]
     if state == "done" and payload is not None:
         if isinstance(payload.get("meta"), dict):
@@ -2477,7 +2587,7 @@ async def _job_result_impl(
             payload["meta"]["job_id"] = job_id
             payload["meta"]["fingerprint"] = FINGERPRINT
         if payload.get("ok") is True:
-            return apply_detail(_validate_job_success(payload, rec["kind"], meta), detail_v)
+            return apply_detail(_validate_job_success(payload, kind, meta), detail_v)
         # An error payload (ok: false) should be an ErrorResult; validate it too, since
         # a disk-backed result.json could be partially written or corrupted.
         try:
