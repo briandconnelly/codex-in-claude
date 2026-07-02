@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from typing import get_args
 
 import pytest
@@ -1180,10 +1181,17 @@ async def test_delegate_capture_diff_error(monkeypatch, clean_env, tmp_path):
 class _FakeStore:
     """In-memory stand-in for JobStore used by the async/lifecycle tool tests."""
 
-    def __init__(self, *, status_dict="__unset__", record=None, result_json=None):
+    def __init__(
+        self, *, status_dict="__unset__", record=None, result_json=None, status_sequence=None
+    ):
         self._status = status_dict
         self._record = record
         self._result_json = result_json
+        # A list of status dicts returned one-per-call (e.g. increasing events_seen);
+        # the last entry repeats once the sequence is exhausted. Takes priority over
+        # status_dict/record when set.
+        self._status_sequence = status_sequence
+        self._status_sequence_idx = 0
         self.poll_after_ms = JOB_POLL_AFTER_MS  # base for the job_running backoff hint
         self.started = []
         self.cancelled = []
@@ -1197,6 +1205,10 @@ class _FakeStore:
         return "job-abc", "2026-06-17T00:00:00+00:00"
 
     def status(self, cwd, job_id):
+        if self._status_sequence is not None:
+            idx = min(self._status_sequence_idx, len(self._status_sequence) - 1)
+            self._status_sequence_idx += 1
+            return self._status_sequence[idx]
         if self._status == "__unset__":
             return self._record
         return self._status
@@ -3340,3 +3352,118 @@ async def test_sync_run_failure_reports_is_error_true(clean_env, tmp_path, monke
         )
     assert result.is_error is True
     assert result.structured_content["error"]["code"] == "codex_auth_required"
+
+
+# --- F2: throttled progress notifications while awaiting (#169) --------------
+# _await_job_result is driven directly (as test_sync_cancellation_cancels_job and the
+# _await_job_result_* tests above already do) with a stub ctx recording
+# report_progress calls. This is preferred over routing through fastmcp.Client: the
+# in-process Client's default progress plumbing requires the caller to send a
+# progressToken and wire a progress_handler through call_tool, which only exercises
+# the MCP-protocol relay (already FastMCP's responsibility) rather than the
+# throttle/dedupe logic that is actually new in this task. Driving the coroutine
+# directly isolates that logic with a fast, deterministic stub.
+class _StubProgressCtx:
+    def __init__(self, *, raise_error=False):
+        self.calls: list[tuple] = []
+        self._raise = raise_error
+
+    async def report_progress(self, progress, total=None, message=None):
+        if self._raise:
+            raise RuntimeError("boom")
+        self.calls.append((progress, total, message, time.monotonic()))
+
+
+def _running_record_with_events(events_seen: int):
+    return _ok_record("running") | {"events_seen": events_seen}
+
+
+async def test_await_job_result_reports_throttled_progress(clean_env, tmp_path, monkeypatch):
+    # Many events_seen changes spread across several throttle windows: at most one
+    # notification fires per window (message-only, no fake total), and consecutive
+    # notifications are separated by at least one throttle interval.
+    monkeypatch.setattr(server, "_SYNC_POLL_INTERVAL_S", 0.02)
+    monkeypatch.setattr(server, "_SYNC_PROGRESS_THROTTLE_S", 0.05)
+    sequence = [_running_record_with_events(n) for n in range(1, 31)]
+    sequence.append(_ok_record("done") | {"events_seen": 30})
+    store = _FakeStore(
+        status_sequence=sequence,
+        record=_ok_record("done"),
+        result_json=_consult_success_envelope(str(tmp_path)),
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    ctx = _StubProgressCtx()
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd)
+    res = await server._await_job_result(cwd, "job-abc", "codex_consult", meta, "summary", 180, ctx)
+    assert res["ok"] is True
+    assert ctx.calls, "no progress reported"
+    assert all(total is None for _, total, _, _ in ctx.calls)
+    assert all(m.startswith("codex events:") for _, _, m, _ in ctx.calls)
+    assert len(ctx.calls) > 1  # spans multiple throttle windows
+    gaps = [b[3] - a[3] for a, b in zip(ctx.calls, ctx.calls[1:], strict=False)]
+    assert all(g >= 0.05 * 0.9 for g in gaps)  # small tolerance for scheduling jitter
+
+
+async def test_await_job_result_progress_skipped_when_events_unchanged(
+    clean_env, tmp_path, monkeypatch
+):
+    # events_seen staying flat across many polls (spanning several throttle windows)
+    # must not re-notify: only the initial transition from "no events yet" fires.
+    monkeypatch.setattr(server, "_SYNC_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(server, "_SYNC_PROGRESS_THROTTLE_S", 0.02)
+    sequence = [_running_record_with_events(2) for _ in range(10)]
+    sequence.append(_ok_record("done") | {"events_seen": 2})
+    store = _FakeStore(
+        status_sequence=sequence,
+        record=_ok_record("done"),
+        result_json=_consult_success_envelope(str(tmp_path)),
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    ctx = _StubProgressCtx()
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd)
+    res = await server._await_job_result(cwd, "job-abc", "codex_consult", meta, "summary", 180, ctx)
+    assert res["ok"] is True
+    assert len(ctx.calls) == 1
+    assert ctx.calls[0][2] == "codex events: 2"
+
+
+async def test_await_job_result_no_ctx_no_progress_calls(clean_env, tmp_path, monkeypatch):
+    # No ctx (e.g. a transport that doesn't support progress) -> silently no calls,
+    # and the awaited result is unaffected.
+    monkeypatch.setattr(server, "_SYNC_POLL_INTERVAL_S", 0.01)
+    sequence = [_running_record_with_events(n) for n in range(1, 4)]
+    sequence.append(_ok_record("done") | {"events_seen": 3})
+    store = _FakeStore(
+        status_sequence=sequence,
+        record=_ok_record("done"),
+        result_json=_consult_success_envelope(str(tmp_path)),
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd)
+    res = await server._await_job_result(
+        cwd, "job-abc", "codex_consult", meta, "summary", 180, None
+    )
+    assert res["ok"] is True
+
+
+async def test_progress_failure_does_not_fail_call(clean_env, tmp_path, monkeypatch):
+    # report_progress raising must never surface: the awaited call still succeeds.
+    monkeypatch.setattr(server, "_SYNC_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(server, "_SYNC_PROGRESS_THROTTLE_S", 0.02)
+    sequence = [_running_record_with_events(n) for n in range(1, 4)]
+    sequence.append(_ok_record("done") | {"events_seen": 3})
+    store = _FakeStore(
+        status_sequence=sequence,
+        record=_ok_record("done"),
+        result_json=_consult_success_envelope(str(tmp_path)),
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    ctx = _StubProgressCtx(raise_error=True)
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd)
+    res = await server._await_job_result(cwd, "job-abc", "codex_consult", meta, "summary", 180, ctx)
+    assert res["ok"] is True
+    assert ctx.calls == []  # the raise happens before the call is recorded

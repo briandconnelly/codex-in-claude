@@ -1849,6 +1849,9 @@ _SYNC_POLL_INTERVAL_S = 0.25
 # Post-timeout grace: the worker enforces the codex timeout itself and writes a
 # timeout envelope; this only covers worker scheduling/IO slack before we give up.
 _SYNC_AWAIT_GRACE_S = 30
+# Minimum spacing between `notifications/progress` sends while awaiting (F2): a
+# module constant (not a literal) so tests can compress it to keep the suite fast.
+_SYNC_PROGRESS_THROTTLE_S = 1.0
 
 
 async def _await_job_result(
@@ -1858,16 +1861,20 @@ async def _await_job_result(
     meta: Meta,
     detail_v: str,
     timeout: int,
-    ctx: Context | None,  # noqa: ARG001 - kept for Task 6 (progress); see below
+    ctx: Context | None,
 ) -> dict:
     """Await this handler's own detached job and return its envelope (F3).
 
     Explicit cancellation (client Esc / notifications/cancelled) cancels the job so
     spend stops; a transport drop kills this server but not the worker, leaving the
-    result recoverable via codex_job_list/codex_job_result. `ctx` is unused until
-    Task 6 wires progress reporting into it — kept now so signatures don't churn."""
+    result recoverable via codex_job_list/codex_job_result. While running, throttled
+    `notifications/progress` are reported via `ctx` (F2) — message-only, at most one
+    per `_SYNC_PROGRESS_THROTTLE_S` and only when `events_seen` changed, so a caller
+    with no progressToken (or no `ctx` at all) sees no behavior change."""
     store = config.job_store()
     deadline = time.monotonic() + timeout + _SYNC_AWAIT_GRACE_S
+    last_progress_at = 0.0
+    last_events = -1
     try:
         while True:
             rec = await asyncio.to_thread(store.status, cwd, job_id)
@@ -1875,6 +1882,23 @@ async def _await_job_result(
                 return _job_result_corrupt("job record disappeared while awaiting", meta)
             if rec["status"] != "running":
                 break
+            events = rec.get("events_seen", 0)
+            now = time.monotonic()
+            if (
+                ctx is not None
+                and events != last_events
+                and now - last_progress_at >= _SYNC_PROGRESS_THROTTLE_S
+            ):
+                last_events = events
+                last_progress_at = now
+                with contextlib.suppress(Exception):
+                    # Message-only, indeterminate progress: no fake total, and never
+                    # raw event content (it can carry file contents/paths). With no
+                    # progressToken from the caller, FastMCP's report_progress is a
+                    # documented no-op, so this degrades silently either way.
+                    await ctx.report_progress(
+                        progress=float(events), message=f"codex events: {events}"
+                    )
             if time.monotonic() > deadline:
                 await asyncio.to_thread(store.cancel, cwd, job_id)
                 return serialize_error(
