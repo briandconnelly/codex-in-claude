@@ -5,8 +5,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Sync active calls stream coarse `notifications/progress` while running** (#169). When the
+  client supplies a `progressToken`, `codex_consult`/`codex_review_changes`/`codex_delegate` emit
+  throttled (≥1s apart), message-only progress derived from the worker's Codex event count — no
+  fake totals, never raw event content. Clients that request no progress see no change.
+
 ### Changed
 
+- **Sync `codex_consult`/`codex_review_changes`/`codex_delegate` now run through the detached
+  worker and are recorded as jobs** (#169). The result is written to the job store before the
+  response returns: `meta.job_id` names the record, so a connection dropped mid-run no longer
+  forfeits the paid result — the work continues detached and is recoverable via
+  `codex_job_list` → `codex_job_result` (retained for the job TTL, evictable by the per-workspace
+  cap). Explicit cancellation still stops the run and the spend. Because the run now creates an
+  observable, mutable job record, `codex_consult` and `codex_review_changes` no longer advertise
+  `readOnlyHint: true` (the same reading as #138 applied consistently). Agent-visible surface
+  change, covered by the `schema-19` fingerprint bump.
+- **The initialize response no longer advertises the `prompts` capability** (#169). The server
+  registers no MCP prompts; advertising an empty, static catalog misled clients. Covered by
+  `schema-19`.
+- **Read-only tools omit `destructiveHint`/`idempotentHint`** (#169). The MCP spec assigns those
+  hints meaning only when `readOnlyHint` is false; asserting them on read-only tools claimed
+  semantics the protocol does not define there. Covered by `schema-19`.
 - **`codex_job_result`/`codex_job_consume_result` advertise a slimmed, opaque success
   branch instead of the full three-model union** (#169). The prior `JOB_RESULT_SCHEMA`
   re-embedded `DelegateResult`/`ConsultResult`/`ReviewResult` (and their shared `$defs`)
