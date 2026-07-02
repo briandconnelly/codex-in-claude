@@ -663,6 +663,37 @@ def test_read_meta_unparseable(tmp_path):
     assert JobStore._read_meta(jd) is None
 
 
+def test_write_meta_is_atomic_against_torn_writes(tmp_path, monkeypatch):
+    # A concurrent reader (status/list/_enforce_count_cap in another process) must
+    # never observe a torn meta.json — a partial read parses as no meta, which
+    # _status_of treats as terminal, and eviction can then delete a live job. Simulate
+    # a write interrupted partway through: the original (pre-fix) _write_meta wrote
+    # straight to the real file, so an interrupted write corrupts it in place. The
+    # fixed stage-and-rename version only ever writes the interrupted data to a
+    # separate .tmp file, leaving the real meta.json untouched until the atomic
+    # os.replace, which is never reached if the write itself fails.
+    jd = tmp_path / "jd"
+    jd.mkdir()
+    original = {"job_id": "x", "kind": "k", "extra": {"marker": "original"}}
+    (jd / "meta.json").write_text(json.dumps(original))
+
+    real_write_text = Path.write_text
+
+    def torn_write(self, data, *a, **kw):
+        real_write_text(self, data[: len(data) // 2])  # partial write only
+        raise OSError("simulated torn write")
+
+    monkeypatch.setattr(Path, "write_text", torn_write)
+    new_meta = {"job_id": "x", "kind": "k", "extra": {"marker": "should-not-land-torn"}}
+    with pytest.raises(OSError):
+        JobStore._write_meta(jd, new_meta)
+
+    # The on-disk meta.json must still be the ORIGINAL, fully-parseable content — never
+    # a torn write of the new content.
+    assert json.loads((jd / "meta.json").read_text()) == original
+    assert JobStore._read_meta(jd) == original
+
+
 def test_count_cap_keeps_running_job(tmp_path):
     # max_count=1 with one running + one done: the running job is never evicted.
     store = _store(tmp_path, max_count=1)

@@ -311,7 +311,12 @@ class JobStore:
 
     @staticmethod
     def _write_meta(jd: Path, meta: dict) -> None:
-        (jd / "meta.json").write_text(json.dumps(meta))
+        # Atomic publication: a concurrent reader (status/list/_enforce_count_cap in
+        # another process) must never observe a torn meta.json — a partial read parses
+        # as no meta, which _status_of treats as terminal and eviction can delete.
+        tmp = jd / "meta.json.tmp"
+        tmp.write_text(json.dumps(meta))
+        tmp.replace(jd / "meta.json")
 
     @staticmethod
     def _read_envelope(jd: Path) -> dict | None:
