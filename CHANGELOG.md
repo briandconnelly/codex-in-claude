@@ -5,6 +5,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-01
+
+A background-jobs hardening release. Sync calls now run through the detached worker and stream
+progress; the agent-visible surface changed (result `fingerprint`
+`codex-in-claude/0.1/schema-18` → `codex-in-claude/0.1/schema-19`), so pre-1.0 this is a minor
+release; clients that cache by `fingerprint` re-fetch the contract.
+
 ### Added
 
 - **Sync active calls stream coarse `notifications/progress` while running** (#169). When the
