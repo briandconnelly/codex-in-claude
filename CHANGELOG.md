@@ -38,7 +38,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   and treat the payload as that tool's own success schema (unchanged; still validated
   server-side before return). No `$defs` are embedded. Agent-visible surface change, but
   `fingerprint` does not move again here — `codex-in-claude/0.1/schema-19` already covers
-  it from the `resets_at` change above.
+  it from the `resets_at` change below.
 - **`RateLimitWindow.resets_at` is now RFC3339 UTC instead of epoch seconds** (#169). Agents had to
   know the field was epoch seconds and convert it themselves; it's now a directly readable
   timestamp string (e.g. `"2025-06-15T15:06:40+00:00"`), or `null` when the captured epoch is

@@ -498,7 +498,8 @@ class AsyncLifecycle(BaseModel):
     Activity signal: the server exposes a polled (disk-persisted, poll-read) event-activity
     signal via `activity_support`/`event_count_field`/`last_event_field`/`event_age_field`.
     This is SEPARATE from `progress_support` — progress_support denotes native MCP
-    notifications/progress (which this server does not provide), and stays "none"."""
+    notifications/progress on THIS async/poll path, which has none (the sync await path
+    streams throttled notifications/progress instead), and stays "none"."""
 
     model_config = ConfigDict(extra="forbid")
     # No native MCP task object and no notifications/progress streaming — the run is
