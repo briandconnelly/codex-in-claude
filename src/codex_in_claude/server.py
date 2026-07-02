@@ -98,7 +98,8 @@ CAPABILITY_SUMMARY = (
     "reviewable diff it does NOT apply to your working tree; "
     "codex_consult_async / codex_review_changes_async / codex_delegate_async "
     "(+ codex_job_status/result/consume_result/cancel/list) — run any of the above as "
-    "a background job you poll. "
+    "a background job you poll. Sync consult/review/delegate record their run as a job "
+    "too (meta.job_id), so a dropped connection can be recovered the same way. "
     "Run codex_status first (free) to confirm the codex CLI is installed and "
     "authenticated and to see how much Codex rate-limit quota remains (its rate_limit "
     "block: status available|limited|exhausted|unknown, where unknown means no fresh "
@@ -505,8 +506,8 @@ DetailParam = Annotated[
 JobIdParam = Annotated[
     str,
     Field(
-        description="The job_id returned by an *_async call (codex_*_async); recover lost "
-        "ids with codex_job_list."
+        description="The job_id from an *_async call or a sync call's meta.job_id; recover "
+        "lost ids with codex_job_list."
     ),
 ]
 # codex_delegate_dry_run reuses these params but never calls Codex or returns a diff, so
@@ -1003,7 +1004,9 @@ def codex_capabilities() -> dict:
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
                 "Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex "
                 "always runs with a resolved working dir (workspace_root, your MCP roots, "
-                "or the server cwd) and may read and send files from it.",
+                "or the server cwd) and may read and send files from it. Recorded as a "
+                "terminal job (meta.job_id) recoverable via codex_job_result after a "
+                "dropped connection.",
             ),
             ToolCapability(
                 name="codex_consult_async",
@@ -1039,7 +1042,9 @@ def codex_capabilities() -> dict:
                 returns="A result envelope with verdict, findings, and a context summary. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
                 "Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) "
-                "extra_context to OpenAI; Codex may also read other repo files.",
+                "extra_context to OpenAI; Codex may also read other repo files. Recorded as "
+                "a terminal job (meta.job_id) recoverable via codex_job_result after a "
+                "dropped connection.",
             ),
             ToolCapability(
                 name="codex_review_changes_async",
@@ -1076,7 +1081,9 @@ def codex_capabilities() -> dict:
                 "unapplied changes plus a summary. detail='summary' (default) omits "
                 "raw_response.text; detail='full' includes it. "
                 "Egress: sends your task (raw) to OpenAI and lets Codex read tracked "
-                "files in the throwaway worktree and send their content.",
+                "files in the throwaway worktree and send their content. Recorded as a "
+                "terminal job (meta.job_id) recoverable via codex_job_result after a "
+                "dropped connection.",
             ),
             ToolCapability(
                 name="codex_delegate_async",
@@ -1097,7 +1104,9 @@ def codex_capabilities() -> dict:
                 name="codex_job_status",
                 cost="free",
                 stability="experimental",
-                use_when="To poll a background job's state without fetching the result.",
+                use_when="To poll a background job's state without fetching the result. "
+                "Jobs may originate from an async call or a sync consult/review/delegate's "
+                "meta.job_id.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root"],
                 returns="Status, elapsed time, expiry, and result_available.",
@@ -1106,7 +1115,8 @@ def codex_capabilities() -> dict:
                 name="codex_job_result",
                 cost="free",
                 stability="experimental",
-                use_when="When codex_job_status reports result_available=true.",
+                use_when="When codex_job_status reports result_available=true. Works for "
+                "async and sync-originated jobs alike.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root", "detail"],
                 returns="The finished job's envelope (delegate diff, consult answer, or "
@@ -1117,7 +1127,8 @@ def codex_capabilities() -> dict:
                 name="codex_job_consume_result",
                 cost="free",
                 stability="experimental",
-                use_when="To fetch a finished job's result and delete the stored record.",
+                use_when="To fetch a finished job's result and delete the stored record. "
+                "Works for async and sync-originated jobs alike.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root", "detail"],
                 returns="The same envelope as codex_job_result; removes completed state.",
@@ -1135,13 +1146,15 @@ def codex_capabilities() -> dict:
                 name="codex_job_list",
                 cost="free",
                 stability="experimental",
-                use_when="To recover job_ids or inspect known jobs for a workspace.",
+                use_when="To recover job_ids or inspect known jobs for a workspace, "
+                "including sync-originated ones.",
                 key_optional_params=["workspace_root"],
                 returns="Compact job summaries, newest first. Not permanent storage: "
                 "terminal records expire after the TTL, and a per-workspace soft cap "
                 "(default 50) evicts the oldest terminal records as new jobs start. "
                 "Running jobs are never evicted, so the list can transiently exceed the "
-                "cap; older finished jobs drop off.",
+                "cap; older finished jobs drop off. Includes sync-originated records; "
+                "the cap/TTL eviction covers both.",
             ),
             ToolCapability(
                 name="codex_status",
@@ -1314,12 +1327,14 @@ async def codex_consult(
     not cover them (it covers gathered diffs and Codex's returned output, not what you
     type or what Codex reads from files).
 
-    Progress: this is a blocking call that returns only when Codex finishes; it does
-    not stream incremental `notifications/progress`. Typical runs take tens of seconds;
-    the configured default timeout is normally 180s, clamped to 10-600s, overridable
-    per call via `timeout_seconds` (`codex_status` reports the resolved default and
-    bounds). If you need live status or recoverability for a long run, use
-    `codex_consult_async` for a `job_id` and poll `codex_job_status`."""
+    Progress & recovery: this call blocks until Codex finishes (typical runs take tens of
+    seconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —
+    `codex_status` reports the resolved bounds) and, when your client requests progress, streams
+    coarse `notifications/progress` while it runs. The run executes as a detached job recorded
+    under `meta.job_id`: if the connection drops mid-run the work continues, and the result is
+    recoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).
+    Explicit cancellation still stops the run. For fire-and-forget from the start, use
+    `codex_consult_async` and poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -1461,12 +1476,14 @@ async def codex_review_changes(
     and Codex may read and send other repo files. Redaction is not a guarantee — do
     not point a review at a tree full of live credentials and assume it protects them.
 
-    Progress: this is a blocking call that returns only when Codex finishes; it does
-    not stream incremental `notifications/progress`. Typical runs take tens of seconds;
-    the configured default timeout is normally 180s, clamped to 10-600s, overridable
-    per call via `timeout_seconds` (`codex_status` reports the resolved default and
-    bounds). If you need live status or recoverability for a long run, use
-    `codex_review_changes_async` for a `job_id` and poll `codex_job_status`."""
+    Progress & recovery: this call blocks until Codex finishes (typical runs take tens of
+    seconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —
+    `codex_status` reports the resolved bounds) and, when your client requests progress, streams
+    coarse `notifications/progress` while it runs. The run executes as a detached job recorded
+    under `meta.job_id`: if the connection drops mid-run the work continues, and the result is
+    recoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).
+    Explicit cancellation still stops the run. For fire-and-forget from the start, use
+    `codex_review_changes_async` and poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -1578,10 +1595,14 @@ async def codex_delegate(
     the worktree and send their content. Your `task` is sent raw — secret redaction is
     best-effort and does not cover it or files Codex reads itself.
 
-    Progress: this is a blocking call that returns only when Codex finishes; it does
-    not stream incremental `notifications/progress`, and a delegate can run ~20s+. If
-    you need live status or recoverability, use `codex_delegate_async` for a `job_id`
-    and poll `codex_job_status`."""
+    Progress & recovery: this call blocks until Codex finishes (typical runs take tens of
+    seconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —
+    `codex_status` reports the resolved bounds) and, when your client requests progress, streams
+    coarse `notifications/progress` while it runs. The run executes as a detached job recorded
+    under `meta.job_id`: if the connection drops mid-run the work continues, and the result is
+    recoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).
+    Explicit cancellation still stops the run. For fire-and-forget from the start, use
+    `codex_delegate_async` and poll `codex_job_status`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2504,8 +2525,9 @@ async def codex_job_status(
     """Check a background job's lifecycle state without fetching the full result.
 
     Use after any `*_async` call (codex_delegate_async, codex_consult_async,
-    codex_review_changes_async). Returns status, elapsed time, expiry, and
-    `result_available`; when it is true, call codex_job_result. Free — no model call.
+    codex_review_changes_async) or any sync consult/review/delegate (whose `meta.job_id`
+    names its record). Returns status, elapsed time, expiry, and `result_available`; when
+    it is true, call codex_job_result. Free — no model call.
 
     Honor `poll_after_ms` between polls — for a running job it GROWS with elapsed
     runtime (bounded), so following it backs you off instead of tight-looping (a
@@ -2654,8 +2676,9 @@ async def codex_job_result(
 ) -> dict:
     """Fetch a finished background Codex job's result WITHOUT deleting the record.
 
-    Works for any async job — codex_delegate_async (a `diff`), codex_consult_async (a
-    consult answer), or codex_review_changes_async (a review with `verdict`). Use when
+    Works for any async job or sync consult/review/delegate (whose `meta.job_id` names
+    its record) — codex_delegate_async (a `diff`), codex_consult_async (a consult
+    answer), or codex_review_changes_async (a review with `verdict`). Use when
     codex_job_status reports result_available=true; the envelope matches the job's
     kind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-
     out/failed job returns an error envelope. To fetch and delete, use
@@ -2720,7 +2743,8 @@ async def codex_job_list(
     24h), and a per-workspace soft cap (default 50, clamped 1-1000) evicts the oldest
     terminal records as new jobs start. Running jobs are never evicted, so the list can
     transiently exceed the cap; older finished jobs can silently drop off, so read a
-    result before its `expires_at`."""
+    result before its `expires_at`. Includes sync-originated records (any sync
+    consult/review/delegate call); the cap/TTL eviction covers both."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err

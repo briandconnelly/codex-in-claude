@@ -1543,9 +1543,11 @@ def test_server_advertises_tools_list_changed():
     assert opts.capabilities.tools.listChanged is True
 
 
-async def test_sync_active_tools_document_no_progress_and_async_fallback():
-    """The blocking active tools tell agents they don't stream progress and point to
-    the async variant + codex_job_status for live status (#72)."""
+async def test_sync_active_tools_document_progress_and_job_recovery():
+    """The blocking active tools tell agents they stream coarse progress when
+    requested, that the run is recorded as a recoverable job under meta.job_id, and
+    point to the async variant + codex_job_status for fire-and-forget from the start
+    (#72, #169)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     for name, async_name in (
         ("codex_consult", "codex_consult_async"),
@@ -1554,6 +1556,8 @@ async def test_sync_active_tools_document_no_progress_and_async_fallback():
     ):
         desc = tools[name].description or ""
         assert "notifications/progress" in desc, name
+        assert "meta.job_id" in desc, name
+        assert "codex_job_result" in desc, name
         assert async_name in desc, name
         assert "codex_job_status" in desc, name
 
