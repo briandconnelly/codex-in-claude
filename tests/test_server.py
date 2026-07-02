@@ -3229,6 +3229,68 @@ async def test_sync_cancellation_cancels_job(clean_env, tmp_path, monkeypatch):
     assert rec["status"] == "cancelled"  # spend stopped
 
 
+def _await_job_result_meta(cwd: str, timeout_seconds: int = 180):
+    return server._base_meta(
+        cwd,
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def test_await_job_result_grace_exhausted_cancels_and_times_out(
+    clean_env, tmp_path, monkeypatch
+):
+    # A job stuck "running" past timeout + grace must be actively cancelled (spend
+    # stops) and reported as a timeout, not silently hung or swallowed.
+    monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0.05)
+    monkeypatch.setattr(server, "_SYNC_POLL_INTERVAL_S", 0.01)
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd, timeout_seconds=1)
+    res = await server._await_job_result(cwd, "job-abc", "codex_consult", meta, "summary", 1, None)
+    assert store.cancelled == ["job-abc"]
+    assert res["ok"] is False
+    assert res["error"]["code"] == "timeout"
+
+
+async def test_await_job_result_status_disappears_is_internal_error(
+    clean_env, tmp_path, monkeypatch
+):
+    # store.status() returning None mid-await (record evicted/expired) must not
+    # crash or hang the awaiting handler; it is an internal_error, not a timeout.
+    store = _FakeStore(status_dict=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd)
+    res = await server._await_job_result(
+        cwd, "job-abc", "codex_consult", meta, "summary", 180, None
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_await_job_result_missing_result_payload_is_internal_error(
+    clean_env, tmp_path, monkeypatch
+):
+    # The job reports done, but result_payload() comes back (None, None) — a
+    # corrupt/expired record discovered right after the loop exits. Must surface
+    # as internal_error, not a success envelope or a crash.
+    store = _FakeStore(status_dict=_ok_record("done"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    cwd = str(tmp_path)
+    meta = _await_job_result_meta(cwd)
+    res = await server._await_job_result(
+        cwd, "job-abc", "codex_consult", meta, "summary", 180, None
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
 async def test_sync_call_returns_envelope_even_under_eviction(clean_env, tmp_path, monkeypatch):
     # With a tiny count cap, each new sync call can evict an older terminal record —
     # but every sync call must still return its own envelope successfully.
