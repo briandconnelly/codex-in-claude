@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-21"
+FINGERPRINT = "codex-in-claude/0.1/schema-22"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -301,8 +301,30 @@ class Meta(BaseModel):
     cwd: str
     workspace_source: str | None = None  # how cwd was resolved: param|roots|cwd
     workspace_warning: str | None = None  # set when cwd was resolved from server cwd
-    tier: Tier
-    sandbox: Sandbox
+    tier: Tier = Field(
+        description=(
+            "Codex intent tier of the run this envelope describes — consult (read-only, no "
+            "writes), propose (writes only inside a throwaway worktree), or apply. For a call "
+            "that runs Codex it is that call's own tier; for a retrieved background-job result "
+            "(codex_job_result/consume) it is the ORIGINATING run's tier (a completed delegate "
+            "reads 'propose'); for a codex_delegate_dry_run preview it is the previewed run's "
+            "tier. Job-lifecycle calls (codex_job_*) run no Codex, so their GENERATED error "
+            "envelopes report 'consult'. This is orthogonal to the MCP readOnlyHint annotation, "
+            "which describes whether the call mutates this server's own job state (so "
+            "codex_job_cancel/consume are readOnlyHint:false yet tier 'consult'). On a lifecycle "
+            "error envelope, meta.job_kind carries the inspected job's own kind/posture."
+        )
+    )
+    sandbox: Sandbox = Field(
+        description=(
+            "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, "
+            "no network egress), or danger-full-access. It tracks `tier` across the same cases — "
+            "the call's own run, a retrieved job's originating run, or a dry-run's previewed run; "
+            "lifecycle-generated errors report 'read-only'. Like tier, this describes Codex "
+            "execution posture, not whether the call mutates this server's job state (see "
+            "readOnlyHint)."
+        )
+    )
     isolation: Isolation
     model: str | None = None
     scope: str | None = None  # review scope: working_tree|branch|commit
@@ -328,6 +350,13 @@ class Meta(BaseModel):
     rate_limit: RateLimit | None = None
     context_summary: ContextSummary | None = None
     job_id: str | None = None  # set on background-job results; None for sync calls
+    # Kind of the background job a lifecycle error envelope refers to (e.g.
+    # "codex_delegate"), set only when codex_job_* resolved an existing record. It
+    # carries the inspected job's own posture — a propose-tier delegate vs a read-only
+    # consult/review — without overloading tier/sandbox, which describe the Codex run the
+    # envelope is about (for a lifecycle error, the read-only lifecycle call itself). None
+    # for not-found/pre-lookup errors and for every non-lifecycle call.
+    job_kind: str | None = None
     # Set to True ONLY on a response that replayed an existing run because the caller
     # passed an idempotency_key matching an in-flight/completed run — a signal that no
     # new Codex spend occurred. Null (like the other optional meta fields) otherwise;

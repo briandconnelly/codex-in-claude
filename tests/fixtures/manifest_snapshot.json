@@ -879,7 +879,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-21",
+                "default": "codex-in-claude/0.1/schema-22",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -916,6 +916,18 @@
                 ],
                 "default": null,
                 "title": "Job Id"
+              },
+              "job_kind": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Job Kind"
               },
               "model": {
                 "anyOf": [
@@ -967,6 +979,7 @@
                 "type": "string"
               },
               "sandbox": {
+                "description": "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, no network egress), or danger-full-access. It tracks `tier` across the same cases — the call's own run, a retrieved job's originating run, or a dry-run's previewed run; lifecycle-generated errors report 'read-only'. Like tier, this describes Codex execution posture, not whether the call mutates this server's job state (see readOnlyHint).",
                 "enum": [
                   "danger-full-access",
                   "read-only",
@@ -1007,6 +1020,7 @@
                 "title": "Session Id"
               },
               "tier": {
+                "description": "Codex intent tier of the run this envelope describes — consult (read-only, no writes), propose (writes only inside a throwaway worktree), or apply. For a call that runs Codex it is that call's own tier; for a retrieved background-job result (codex_job_result/consume) it is the ORIGINATING run's tier (a completed delegate reads 'propose'); for a codex_delegate_dry_run preview it is the previewed run's tier. Job-lifecycle calls (codex_job_*) run no Codex, so their GENERATED error envelopes report 'consult'. This is orthogonal to the MCP readOnlyHint annotation, which describes whether the call mutates this server's own job state (so codex_job_cancel/consume are readOnlyHint:false yet tier 'consult'). On a lifecycle error envelope, meta.job_kind carries the inspected job's own kind/posture.",
                 "enum": [
                   "apply",
                   "consult",
@@ -1826,7 +1840,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-21",
+            "default": "codex-in-claude/0.1/schema-22",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1863,6 +1877,18 @@
             ],
             "default": null,
             "title": "Job Id"
+          },
+          "job_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Kind"
           },
           "model": {
             "anyOf": [
@@ -1914,6 +1940,7 @@
             "type": "string"
           },
           "sandbox": {
+            "description": "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, no network egress), or danger-full-access. It tracks `tier` across the same cases — the call's own run, a retrieved job's originating run, or a dry-run's previewed run; lifecycle-generated errors report 'read-only'. Like tier, this describes Codex execution posture, not whether the call mutates this server's job state (see readOnlyHint).",
             "enum": [
               "danger-full-access",
               "read-only",
@@ -1954,6 +1981,7 @@
             "title": "Session Id"
           },
           "tier": {
+            "description": "Codex intent tier of the run this envelope describes — consult (read-only, no writes), propose (writes only inside a throwaway worktree), or apply. For a call that runs Codex it is that call's own tier; for a retrieved background-job result (codex_job_result/consume) it is the ORIGINATING run's tier (a completed delegate reads 'propose'); for a codex_delegate_dry_run preview it is the previewed run's tier. Job-lifecycle calls (codex_job_*) run no Codex, so their GENERATED error envelopes report 'consult'. This is orthogonal to the MCP readOnlyHint annotation, which describes whether the call mutates this server's own job state (so codex_job_cancel/consume are readOnlyHint:false yet tier 'consult'). On a lifecycle error envelope, meta.job_kind carries the inspected job's own kind/posture.",
             "enum": [
               "apply",
               "consult",
