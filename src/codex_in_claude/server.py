@@ -15,7 +15,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, cast, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
@@ -54,6 +54,7 @@ from codex_in_claude.schemas import (
     JOB_STARTED_SCHEMA,
     JOB_STATUS_SCHEMA,
     MODEL_CATALOG_SCHEMA,
+    RESULT_META_SCHEMA,
     REVIEW_RESULT_SCHEMA,
     STATUS_SCHEMA,
     AsyncLifecycle,
@@ -510,6 +511,14 @@ JobIdParam = Annotated[
         "lost ids with codex_job_list."
     ),
 ]
+IncludeSchemasParam = Annotated[
+    list[Literal["error-envelope", "result-meta"]] | None,
+    Field(
+        description="Opt-in tool-reachable fallback for resource-blind clients: also embed "
+        "the full 'error-envelope' and/or 'result-meta' schema in the response (the default "
+        "payload omits them and points at the codex:// resources instead).",
+    ),
+]
 # codex_delegate_dry_run reuses these params but never calls Codex or returns a diff, so
 # it needs preview-accurate wording rather than the active-delegate descriptions above.
 TaskDryRunParam = Annotated[
@@ -957,9 +966,11 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
-def codex_capabilities() -> dict:
+def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
     """List this server's tools, tiers, and the result fingerprint. Free — no
-    model call. Clients can cache by the fingerprint."""
+    model call. Clients can cache by the fingerprint. Pass include_schemas to also embed
+    the full error-envelope / result-meta schemas (a tool-reachable fallback to the
+    codex:// resources for resource-blind clients)."""
     caps = CapabilitiesResult(
         name="codex-in-claude",
         version=__version__,
@@ -1257,6 +1268,14 @@ def codex_capabilities() -> dict:
         cap.error_codes = codes
         if cap.name in _ASYNC_TOOLS:
             cap.async_lifecycle = _ASYNC_LIFECYCLE
+    if include_schemas:
+        # Opt-in only (#179): embed the requested full contracts so a resource-blind client
+        # can reach them from tools/list alone. De-duplicated and order-stable.
+        available = {
+            "error-envelope": ERROR_ENVELOPE_SCHEMA,
+            "result-meta": RESULT_META_SCHEMA,
+        }
+        caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas) if k in available}
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
     # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
     # it, and only the *_async tools carry `async_lifecycle`.
@@ -1293,6 +1312,13 @@ def error_envelope_resource() -> dict:
     return ERROR_ENVELOPE_SCHEMA
 
 
+@mcp.resource("codex://result-meta", mime_type="application/schema+json")
+def result_meta_resource() -> dict:
+    """The canonical full result-metadata schema (Meta). Every success envelope carries an
+    opaque `meta` pointer instead of inlining this per tool; this is the full shape (F1)."""
+    return RESULT_META_SCHEMA
+
+
 # --------------------------------------------------------------------------- #
 # Active tools
 # --------------------------------------------------------------------------- #
@@ -1327,14 +1353,11 @@ async def codex_consult(
     not cover them (it covers gathered diffs and Codex's returned output, not what you
     type or what Codex reads from files).
 
-    Progress & recovery: this call blocks until Codex finishes (typical runs take tens of
-    seconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —
-    `codex_status` reports the resolved bounds) and, when your client requests progress, streams
-    coarse `notifications/progress` while it runs. The run executes as a detached job recorded
-    under `meta.job_id`: if the connection drops mid-run the work continues, and the result is
-    recoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).
-    Explicit cancellation still stops the run. For fire-and-forget from the start, use
-    `codex_consult_async` and poll `codex_job_status`."""
+    Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
+    `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
+    it; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`
+    if the connection drops, and `codex_consult_async` runs the same work fire-and-forget
+    (poll `codex_job_status`)."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -1476,14 +1499,11 @@ async def codex_review_changes(
     and Codex may read and send other repo files. Redaction is not a guarantee — do
     not point a review at a tree full of live credentials and assume it protects them.
 
-    Progress & recovery: this call blocks until Codex finishes (typical runs take tens of
-    seconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —
-    `codex_status` reports the resolved bounds) and, when your client requests progress, streams
-    coarse `notifications/progress` while it runs. The run executes as a detached job recorded
-    under `meta.job_id`: if the connection drops mid-run the work continues, and the result is
-    recoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).
-    Explicit cancellation still stops the run. For fire-and-forget from the start, use
-    `codex_review_changes_async` and poll `codex_job_status`."""
+    Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
+    `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
+    it; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`
+    if the connection drops, and `codex_review_changes_async` runs the same work
+    fire-and-forget (poll `codex_job_status`)."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -1595,14 +1615,11 @@ async def codex_delegate(
     the worktree and send their content. Your `task` is sent raw — secret redaction is
     best-effort and does not cover it or files Codex reads itself.
 
-    Progress & recovery: this call blocks until Codex finishes (typical runs take tens of
-    seconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —
-    `codex_status` reports the resolved bounds) and, when your client requests progress, streams
-    coarse `notifications/progress` while it runs. The run executes as a detached job recorded
-    under `meta.job_id`: if the connection drops mid-run the work continues, and the result is
-    recoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).
-    Explicit cancellation still stops the run. For fire-and-forget from the start, use
-    `codex_delegate_async` and poll `codex_job_status`."""
+    Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
+    `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
+    it; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`
+    if the connection drops, and `codex_delegate_async` runs the same work fire-and-forget
+    (poll `codex_job_status`)."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds

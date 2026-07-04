@@ -36,6 +36,7 @@
       "codex CLI on PATH",
       "authenticated via `codex login`"
     ],
+    "result_meta_resource": "codex://result-meta",
     "sandboxes": [
       "read-only",
       "workspace-write",
@@ -851,7 +852,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-19",
+                "default": "codex-in-claude/0.1/schema-20",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1428,6 +1429,554 @@
       "mimeType": "application/json",
       "name": "codex_models_resource",
       "uri": "codex://models"
+    },
+    {
+      "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
+      "mimeType": "application/schema+json",
+      "name": "result_meta_resource",
+      "uri": "codex://result-meta"
+    }
+  ],
+  "result_meta": [
+    {
+      "mimeType": "application/schema+json",
+      "text": {
+        "$defs": {
+          "ContextSummary": {
+            "additionalProperties": false,
+            "properties": {
+              "files_changed": {
+                "default": 0,
+                "title": "Files Changed",
+                "type": "integer"
+              },
+              "lines_added": {
+                "default": 0,
+                "title": "Lines Added",
+                "type": "integer"
+              },
+              "lines_removed": {
+                "default": 0,
+                "title": "Lines Removed",
+                "type": "integer"
+              }
+            },
+            "title": "ContextSummary",
+            "type": "object"
+          },
+          "RateLimit": {
+            "additionalProperties": false,
+            "description": "Agent-facing rate-limit quota. A snapshot captured opportunistically from a\npaid call, interpreted against each window's reset clock. NOT a live query.\n\nAsymmetric by design: `available` is reported only when every binding window is\nobserved and healthy; an unobserved window (reset-passed, missing, or lacking\nresets_at) never yields `available` — it degrades to `unknown`. `limited`/\n`exhausted` come only from still-open windows, so they stay conservative even when\nthe snapshot is stale (captured usage is a lower bound on current usage).\n`unknown` means no fresh/usable reading yet — run any paid Codex call to populate\nit — not that anything is wrong.",
+            "properties": {
+              "age_seconds": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Age Seconds"
+              },
+              "as_of": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "As Of"
+              },
+              "home_unverified": {
+                "default": false,
+                "title": "Home Unverified",
+                "type": "boolean"
+              },
+              "is_stale": {
+                "default": false,
+                "title": "Is Stale",
+                "type": "boolean"
+              },
+              "limiting_window": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "primary",
+                      "secondary"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Limiting Window"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "plan_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Plan Type"
+              },
+              "primary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RateLimitWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "secondary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RateLimitWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "source": {
+                "default": "plugin_cache",
+                "enum": [
+                  "current_run",
+                  "plugin_cache"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "available",
+                  "exhausted",
+                  "limited",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "title": "RateLimit",
+            "type": "object"
+          },
+          "RateLimitWindow": {
+            "additionalProperties": false,
+            "description": "One quota window, interpreted for an agent. used_percent/remaining_percent are\ncurrent-ish (as of `as_of`) for an open window and are NULLED when reset_passed is\ntrue (the window rolled over since capture, so its captured usage is obsolete and\nits post-reset usage is unobserved). One source of truth: a present percentage\nalways means current-ish, never stale.",
+            "properties": {
+              "remaining_percent": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Remaining Percent"
+              },
+              "reset_passed": {
+                "default": false,
+                "title": "Reset Passed",
+                "type": "boolean"
+              },
+              "resets_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Resets At"
+              },
+              "seconds_until_reset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Seconds Until Reset"
+              },
+              "used_percent": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Used Percent"
+              },
+              "window_minutes": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Window Minutes"
+              }
+            },
+            "title": "RateLimitWindow",
+            "type": "object"
+          },
+          "Usage": {
+            "additionalProperties": false,
+            "properties": {
+              "cached_input_tokens": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Cached Input Tokens"
+              },
+              "input_tokens": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Input Tokens"
+              },
+              "output_tokens": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Output Tokens"
+              },
+              "total_tokens": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Total Tokens"
+              }
+            },
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base"
+          },
+          "command_exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Command Exit Code"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commit"
+          },
+          "compat_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Compat Warnings",
+            "type": "array"
+          },
+          "context_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ContextSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cwd": {
+            "title": "Cwd",
+            "type": "string"
+          },
+          "elapsed_ms": {
+            "title": "Elapsed Ms",
+            "type": "integer"
+          },
+          "fingerprint": {
+            "default": "codex-in-claude/0.1/schema-20",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "isolation": {
+            "enum": [
+              "ignore-config",
+              "ignore-rules",
+              "inherit"
+            ],
+            "title": "Isolation",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Paths"
+          },
+          "rate_limit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RateLimit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "redacted_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Redacted Paths",
+            "type": "array"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "sandbox": {
+            "enum": [
+              "danger-full-access",
+              "read-only",
+              "workspace-write"
+            ],
+            "title": "Sandbox",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "security_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Security Warnings",
+            "type": "array"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "tier": {
+            "enum": [
+              "apply",
+              "consult",
+              "propose"
+            ],
+            "title": "Tier",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "title": "Timeout Seconds",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "truncation_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Truncation Hint"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "workspace_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Source"
+          },
+          "workspace_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Warning"
+          }
+        },
+        "required": [
+          "cwd",
+          "elapsed_ms",
+          "isolation",
+          "sandbox",
+          "tier",
+          "timeout_seconds"
+        ],
+        "title": "Meta",
+        "type": "object"
+      },
+      "uri": "codex://result-meta"
     }
   ],
   "tools": [
@@ -1436,11 +1985,31 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint.",
+      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint. Pass include_schemas to also embed\nthe full error-envelope / result-meta schemas (a tool-reachable fallback to the\ncodex:// resources for resource-blind clients).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "include_schemas": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "error-envelope",
+                    "result-meta"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope' and/or 'result-meta' schema in the response (the default payload omits them and points at the codex:// resources instead)."
+          }
+        },
         "type": "object"
       },
       "name": "codex_capabilities",
@@ -1489,11 +2058,25 @@
                 },
                 "type": "array"
               },
+              "result_meta_resource": {
+                "type": "string"
+              },
               "sandboxes": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "schemas": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "scope": {
                 "items": {
@@ -1744,7 +2327,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) for a read-only second opinion or answer.\n\nRuns `codex exec` in a read-only sandbox — Codex never edits files. This is a\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on executing your checks to confirm its claims. For a repo-grounded\nquestion, pass `workspace_root` (absolute) so Codex reasons about the right repo;\nit is optional for pure Q&A that needs no codebase. Returns a result envelope;\ntreat findings as unvalidated claims to verify by running the checks yourself.\n\nData egress: this sends your `question` and `extra_context` to OpenAI via the\ncodex CLI. Codex always runs with a resolved working directory (`workspace_root`,\nyour MCP roots, or the server's cwd as a fallback), so it may read files there and\nsend their content too. Your inputs are sent raw — secret redaction is best-effort and does\nnot cover them (it covers gathered diffs and Codex's returned output, not what you\ntype or what Codex reads from files).\n\nProgress & recovery: this call blocks until Codex finishes (typical runs take tens of\nseconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —\n`codex_status` reports the resolved bounds) and, when your client requests progress, streams\ncoarse `notifications/progress` while it runs. The run executes as a detached job recorded\nunder `meta.job_id`: if the connection drops mid-run the work continues, and the result is\nrecoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).\nExplicit cancellation still stops the run. For fire-and-forget from the start, use\n`codex_consult_async` and poll `codex_job_status`.",
+      "description": "Ask Codex (a different model) for a read-only second opinion or answer.\n\nRuns `codex exec` in a read-only sandbox — Codex never edits files. This is a\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on executing your checks to confirm its claims. For a repo-grounded\nquestion, pass `workspace_root` (absolute) so Codex reasons about the right repo;\nit is optional for pure Q&A that needs no codebase. Returns a result envelope;\ntreat findings as unvalidated claims to verify by running the checks yourself.\n\nData egress: this sends your `question` and `extra_context` to OpenAI via the\ncodex CLI. Codex always runs with a resolved working directory (`workspace_root`,\nyour MCP roots, or the server's cwd as a fallback), so it may read files there and\nsend their content too. Your inputs are sent raw — secret redaction is best-effort and does\nnot cover them (it covers gathered diffs and Codex's returned output, not what you\ntype or what Codex reads from files).\n\nProgress & recovery: blocks until Codex finishes (timeout clamped 10-600s via\n`timeout_seconds`), streaming coarse `notifications/progress` when your client requests\nit; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`\nif the connection drops, and `codex_consult_async` runs the same work fire-and-forget\n(poll `codex_job_status`).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -1914,489 +2497,7 @@
                 "type": "array"
               },
               "meta": {
-                "additionalProperties": false,
-                "properties": {
-                  "base": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "command_exit_code": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "commit": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "compat_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "context_summary": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "files_changed": {
-                            "type": "integer"
-                          },
-                          "lines_added": {
-                            "type": "integer"
-                          },
-                          "lines_removed": {
-                            "type": "integer"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "type": "string"
-                  },
-                  "elapsed_ms": {
-                    "type": "integer"
-                  },
-                  "fingerprint": {
-                    "type": "string"
-                  },
-                  "isolation": {
-                    "enum": [
-                      "ignore-config",
-                      "ignore-rules",
-                      "inherit"
-                    ],
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "model": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "paths": {
-                    "anyOf": [
-                      {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "rate_limit": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "age_seconds": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "as_of": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "home_unverified": {
-                            "type": "boolean"
-                          },
-                          "is_stale": {
-                            "type": "boolean"
-                          },
-                          "limiting_window": {
-                            "anyOf": [
-                              {
-                                "enum": [
-                                  "primary",
-                                  "secondary"
-                                ],
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "note": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "plan_type": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "primary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "secondary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "enum": [
-                              "current_run",
-                              "plugin_cache"
-                            ],
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "available",
-                              "exhausted",
-                              "limited",
-                              "unknown"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "status"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "redacted_paths": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "request_id": {
-                    "type": "string"
-                  },
-                  "sandbox": {
-                    "enum": [
-                      "danger-full-access",
-                      "read-only",
-                      "workspace-write"
-                    ],
-                    "type": "string"
-                  },
-                  "scope": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "security_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "session_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "tier": {
-                    "enum": [
-                      "apply",
-                      "consult",
-                      "propose"
-                    ],
-                    "type": "string"
-                  },
-                  "timeout_seconds": {
-                    "type": "integer"
-                  },
-                  "truncated": {
-                    "type": "boolean"
-                  },
-                  "truncation_hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "usage": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "cached_input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "output_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "total_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_source": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_warning": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "cwd",
-                  "elapsed_ms",
-                  "isolation",
-                  "sandbox",
-                  "tier",
-                  "timeout_seconds"
-                ],
+                "description": "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); full schema at resource codex://result-meta",
                 "type": "object"
               },
               "next_steps": {
@@ -2601,489 +2702,7 @@
                 "type": "string"
               },
               "meta": {
-                "additionalProperties": false,
-                "properties": {
-                  "base": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "command_exit_code": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "commit": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "compat_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "context_summary": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "files_changed": {
-                            "type": "integer"
-                          },
-                          "lines_added": {
-                            "type": "integer"
-                          },
-                          "lines_removed": {
-                            "type": "integer"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "type": "string"
-                  },
-                  "elapsed_ms": {
-                    "type": "integer"
-                  },
-                  "fingerprint": {
-                    "type": "string"
-                  },
-                  "isolation": {
-                    "enum": [
-                      "ignore-config",
-                      "ignore-rules",
-                      "inherit"
-                    ],
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "model": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "paths": {
-                    "anyOf": [
-                      {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "rate_limit": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "age_seconds": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "as_of": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "home_unverified": {
-                            "type": "boolean"
-                          },
-                          "is_stale": {
-                            "type": "boolean"
-                          },
-                          "limiting_window": {
-                            "anyOf": [
-                              {
-                                "enum": [
-                                  "primary",
-                                  "secondary"
-                                ],
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "note": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "plan_type": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "primary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "secondary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "enum": [
-                              "current_run",
-                              "plugin_cache"
-                            ],
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "available",
-                              "exhausted",
-                              "limited",
-                              "unknown"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "status"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "redacted_paths": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "request_id": {
-                    "type": "string"
-                  },
-                  "sandbox": {
-                    "enum": [
-                      "danger-full-access",
-                      "read-only",
-                      "workspace-write"
-                    ],
-                    "type": "string"
-                  },
-                  "scope": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "security_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "session_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "tier": {
-                    "enum": [
-                      "apply",
-                      "consult",
-                      "propose"
-                    ],
-                    "type": "string"
-                  },
-                  "timeout_seconds": {
-                    "type": "integer"
-                  },
-                  "truncated": {
-                    "type": "boolean"
-                  },
-                  "truncation_hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "usage": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "cached_input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "output_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "total_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_source": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_warning": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "cwd",
-                  "elapsed_ms",
-                  "isolation",
-                  "sandbox",
-                  "tier",
-                  "timeout_seconds"
-                ],
+                "description": "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); full schema at resource codex://result-meta",
                 "type": "object"
               },
               "ok": {
@@ -3159,7 +2778,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex (a different model) in an isolated git\nworktree, and get back a **reviewable diff that is NOT applied** to your tree.\n\nCodex edits files with `workspace-write`, but only inside a throwaway worktree\nseeded from your current tracked state. The returned `diff` is Codex's changes;\nreview it, then apply it yourself if you want it. Requires a git repo with at\nleast one commit. Pass `workspace_root` (absolute).\n\nNO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the\nsandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`\nanything, `curl`, publish, or install dependencies (those fail inside the sandbox\nwith a DNS/host-resolution error). Ask only for local code changes; do any network\nstep yourself afterward. This does NOT mean nothing leaves the machine: the Codex\nmodel call still sends your `task` to OpenAI and lets Codex read tracked files in\nthe worktree and send their content. Your `task` is sent raw — secret redaction is\nbest-effort and does not cover it or files Codex reads itself.\n\nProgress & recovery: this call blocks until Codex finishes (typical runs take tens of\nseconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —\n`codex_status` reports the resolved bounds) and, when your client requests progress, streams\ncoarse `notifications/progress` while it runs. The run executes as a detached job recorded\nunder `meta.job_id`: if the connection drops mid-run the work continues, and the result is\nrecoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).\nExplicit cancellation still stops the run. For fire-and-forget from the start, use\n`codex_delegate_async` and poll `codex_job_status`.",
+      "description": "Delegate a coding task to Codex (a different model) in an isolated git\nworktree, and get back a **reviewable diff that is NOT applied** to your tree.\n\nCodex edits files with `workspace-write`, but only inside a throwaway worktree\nseeded from your current tracked state. The returned `diff` is Codex's changes;\nreview it, then apply it yourself if you want it. Requires a git repo with at\nleast one commit. Pass `workspace_root` (absolute).\n\nNO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the\nsandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`\nanything, `curl`, publish, or install dependencies (those fail inside the sandbox\nwith a DNS/host-resolution error). Ask only for local code changes; do any network\nstep yourself afterward. This does NOT mean nothing leaves the machine: the Codex\nmodel call still sends your `task` to OpenAI and lets Codex read tracked files in\nthe worktree and send their content. Your `task` is sent raw — secret redaction is\nbest-effort and does not cover it or files Codex reads itself.\n\nProgress & recovery: blocks until Codex finishes (timeout clamped 10-600s via\n`timeout_seconds`), streaming coarse `notifications/progress` when your client requests\nit; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`\nif the connection drops, and `codex_delegate_async` runs the same work fire-and-forget\n(poll `codex_job_status`).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -3327,489 +2946,7 @@
                 "type": "array"
               },
               "meta": {
-                "additionalProperties": false,
-                "properties": {
-                  "base": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "command_exit_code": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "commit": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "compat_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "context_summary": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "files_changed": {
-                            "type": "integer"
-                          },
-                          "lines_added": {
-                            "type": "integer"
-                          },
-                          "lines_removed": {
-                            "type": "integer"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "type": "string"
-                  },
-                  "elapsed_ms": {
-                    "type": "integer"
-                  },
-                  "fingerprint": {
-                    "type": "string"
-                  },
-                  "isolation": {
-                    "enum": [
-                      "ignore-config",
-                      "ignore-rules",
-                      "inherit"
-                    ],
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "model": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "paths": {
-                    "anyOf": [
-                      {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "rate_limit": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "age_seconds": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "as_of": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "home_unverified": {
-                            "type": "boolean"
-                          },
-                          "is_stale": {
-                            "type": "boolean"
-                          },
-                          "limiting_window": {
-                            "anyOf": [
-                              {
-                                "enum": [
-                                  "primary",
-                                  "secondary"
-                                ],
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "note": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "plan_type": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "primary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "secondary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "enum": [
-                              "current_run",
-                              "plugin_cache"
-                            ],
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "available",
-                              "exhausted",
-                              "limited",
-                              "unknown"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "status"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "redacted_paths": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "request_id": {
-                    "type": "string"
-                  },
-                  "sandbox": {
-                    "enum": [
-                      "danger-full-access",
-                      "read-only",
-                      "workspace-write"
-                    ],
-                    "type": "string"
-                  },
-                  "scope": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "security_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "session_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "tier": {
-                    "enum": [
-                      "apply",
-                      "consult",
-                      "propose"
-                    ],
-                    "type": "string"
-                  },
-                  "timeout_seconds": {
-                    "type": "integer"
-                  },
-                  "truncated": {
-                    "type": "boolean"
-                  },
-                  "truncation_hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "usage": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "cached_input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "output_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "total_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_source": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_warning": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "cwd",
-                  "elapsed_ms",
-                  "isolation",
-                  "sandbox",
-                  "tier",
-                  "timeout_seconds"
-                ],
+                "description": "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); full schema at resource codex://result-meta",
                 "type": "object"
               },
               "next_steps": {
@@ -4002,489 +3139,7 @@
                 "type": "string"
               },
               "meta": {
-                "additionalProperties": false,
-                "properties": {
-                  "base": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "command_exit_code": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "commit": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "compat_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "context_summary": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "files_changed": {
-                            "type": "integer"
-                          },
-                          "lines_added": {
-                            "type": "integer"
-                          },
-                          "lines_removed": {
-                            "type": "integer"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "type": "string"
-                  },
-                  "elapsed_ms": {
-                    "type": "integer"
-                  },
-                  "fingerprint": {
-                    "type": "string"
-                  },
-                  "isolation": {
-                    "enum": [
-                      "ignore-config",
-                      "ignore-rules",
-                      "inherit"
-                    ],
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "model": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "paths": {
-                    "anyOf": [
-                      {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "rate_limit": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "age_seconds": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "as_of": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "home_unverified": {
-                            "type": "boolean"
-                          },
-                          "is_stale": {
-                            "type": "boolean"
-                          },
-                          "limiting_window": {
-                            "anyOf": [
-                              {
-                                "enum": [
-                                  "primary",
-                                  "secondary"
-                                ],
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "note": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "plan_type": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "primary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "secondary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "enum": [
-                              "current_run",
-                              "plugin_cache"
-                            ],
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "available",
-                              "exhausted",
-                              "limited",
-                              "unknown"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "status"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "redacted_paths": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "request_id": {
-                    "type": "string"
-                  },
-                  "sandbox": {
-                    "enum": [
-                      "danger-full-access",
-                      "read-only",
-                      "workspace-write"
-                    ],
-                    "type": "string"
-                  },
-                  "scope": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "security_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "session_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "tier": {
-                    "enum": [
-                      "apply",
-                      "consult",
-                      "propose"
-                    ],
-                    "type": "string"
-                  },
-                  "timeout_seconds": {
-                    "type": "integer"
-                  },
-                  "truncated": {
-                    "type": "boolean"
-                  },
-                  "truncation_hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "usage": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "cached_input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "output_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "total_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_source": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_warning": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "cwd",
-                  "elapsed_ms",
-                  "isolation",
-                  "sandbox",
-                  "tier",
-                  "timeout_seconds"
-                ],
+                "description": "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); full schema at resource codex://result-meta",
                 "type": "object"
               },
               "ok": {
@@ -5980,7 +4635,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (Codex is instructed to treat embedded directives as data, not commands — a\nbest-effort injection mitigation, not a guarantee) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files. Redaction is not a guarantee — do\nnot point a review at a tree full of live credentials and assume it protects them.\n\nProgress & recovery: this call blocks until Codex finishes (typical runs take tens of\nseconds; default timeout normally 180s, clamped to 10-600s via `timeout_seconds` —\n`codex_status` reports the resolved bounds) and, when your client requests progress, streams\ncoarse `notifications/progress` while it runs. The run executes as a detached job recorded\nunder `meta.job_id`: if the connection drops mid-run the work continues, and the result is\nrecoverable later via `codex_job_list` → `codex_job_result` (retained for the job TTL).\nExplicit cancellation still stops the run. For fire-and-forget from the start, use\n`codex_review_changes_async` and poll `codex_job_status`.",
+      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (Codex is instructed to treat embedded directives as data, not commands — a\nbest-effort injection mitigation, not a guarantee) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files. Redaction is not a guarantee — do\nnot point a review at a tree full of live credentials and assume it protects them.\n\nProgress & recovery: blocks until Codex finishes (timeout clamped 10-600s via\n`timeout_seconds`), streaming coarse `notifications/progress` when your client requests\nit; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`\nif the connection drops, and `codex_review_changes_async` runs the same work\nfire-and-forget (poll `codex_job_status`).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6200,489 +4855,7 @@
                 "type": "array"
               },
               "meta": {
-                "additionalProperties": false,
-                "properties": {
-                  "base": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "command_exit_code": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "commit": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "compat_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "context_summary": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "files_changed": {
-                            "type": "integer"
-                          },
-                          "lines_added": {
-                            "type": "integer"
-                          },
-                          "lines_removed": {
-                            "type": "integer"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "type": "string"
-                  },
-                  "elapsed_ms": {
-                    "type": "integer"
-                  },
-                  "fingerprint": {
-                    "type": "string"
-                  },
-                  "isolation": {
-                    "enum": [
-                      "ignore-config",
-                      "ignore-rules",
-                      "inherit"
-                    ],
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "model": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "paths": {
-                    "anyOf": [
-                      {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "rate_limit": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "age_seconds": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "as_of": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "home_unverified": {
-                            "type": "boolean"
-                          },
-                          "is_stale": {
-                            "type": "boolean"
-                          },
-                          "limiting_window": {
-                            "anyOf": [
-                              {
-                                "enum": [
-                                  "primary",
-                                  "secondary"
-                                ],
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "note": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "plan_type": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "primary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "secondary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "enum": [
-                              "current_run",
-                              "plugin_cache"
-                            ],
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "available",
-                              "exhausted",
-                              "limited",
-                              "unknown"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "status"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "redacted_paths": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "request_id": {
-                    "type": "string"
-                  },
-                  "sandbox": {
-                    "enum": [
-                      "danger-full-access",
-                      "read-only",
-                      "workspace-write"
-                    ],
-                    "type": "string"
-                  },
-                  "scope": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "security_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "session_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "tier": {
-                    "enum": [
-                      "apply",
-                      "consult",
-                      "propose"
-                    ],
-                    "type": "string"
-                  },
-                  "timeout_seconds": {
-                    "type": "integer"
-                  },
-                  "truncated": {
-                    "type": "boolean"
-                  },
-                  "truncation_hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "usage": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "cached_input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "output_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "total_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_source": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_warning": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "cwd",
-                  "elapsed_ms",
-                  "isolation",
-                  "sandbox",
-                  "tier",
-                  "timeout_seconds"
-                ],
+                "description": "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); full schema at resource codex://result-meta",
                 "type": "object"
               },
               "next_steps": {
@@ -6938,489 +5111,7 @@
                 "type": "string"
               },
               "meta": {
-                "additionalProperties": false,
-                "properties": {
-                  "base": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "command_exit_code": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "commit": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "compat_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "context_summary": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "files_changed": {
-                            "type": "integer"
-                          },
-                          "lines_added": {
-                            "type": "integer"
-                          },
-                          "lines_removed": {
-                            "type": "integer"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "type": "string"
-                  },
-                  "elapsed_ms": {
-                    "type": "integer"
-                  },
-                  "fingerprint": {
-                    "type": "string"
-                  },
-                  "isolation": {
-                    "enum": [
-                      "ignore-config",
-                      "ignore-rules",
-                      "inherit"
-                    ],
-                    "type": "string"
-                  },
-                  "job_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "model": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "paths": {
-                    "anyOf": [
-                      {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "rate_limit": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "age_seconds": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "as_of": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "home_unverified": {
-                            "type": "boolean"
-                          },
-                          "is_stale": {
-                            "type": "boolean"
-                          },
-                          "limiting_window": {
-                            "anyOf": [
-                              {
-                                "enum": [
-                                  "primary",
-                                  "secondary"
-                                ],
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "note": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "plan_type": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "primary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "secondary": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "remaining_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "reset_passed": {
-                                    "type": "boolean"
-                                  },
-                                  "resets_at": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "seconds_until_reset": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "used_percent": {
-                                    "anyOf": [
-                                      {
-                                        "type": "number"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "window_minutes": {
-                                    "anyOf": [
-                                      {
-                                        "type": "integer"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "source": {
-                            "enum": [
-                              "current_run",
-                              "plugin_cache"
-                            ],
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "available",
-                              "exhausted",
-                              "limited",
-                              "unknown"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "status"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "redacted_paths": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "request_id": {
-                    "type": "string"
-                  },
-                  "sandbox": {
-                    "enum": [
-                      "danger-full-access",
-                      "read-only",
-                      "workspace-write"
-                    ],
-                    "type": "string"
-                  },
-                  "scope": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "security_warnings": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "session_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "tier": {
-                    "enum": [
-                      "apply",
-                      "consult",
-                      "propose"
-                    ],
-                    "type": "string"
-                  },
-                  "timeout_seconds": {
-                    "type": "integer"
-                  },
-                  "truncated": {
-                    "type": "boolean"
-                  },
-                  "truncation_hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "usage": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "cached_input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "input_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "output_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "total_tokens": {
-                            "anyOf": [
-                              {
-                                "type": "integer"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_source": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_warning": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "cwd",
-                  "elapsed_ms",
-                  "isolation",
-                  "sandbox",
-                  "tier",
-                  "timeout_seconds"
-                ],
+                "description": "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); full schema at resource codex://result-meta",
                 "type": "object"
               },
               "ok": {

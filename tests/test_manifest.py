@@ -7,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "9a08cf2650bce8b06b027fe22eb30cfc0e8192a48323f3d0b2fa9951d65fba3f"
+EXPECTED_MANIFEST_HASH = "4c498af4af472df9912509507799d8f19aa6049fe6411946f4ff30526fbc3685"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -39,7 +39,7 @@ async def test_build_manifest_covers_full_surface():
     caps = server.codex_capabilities()
     expected_tools = set(caps["active_tools"]) | set(caps["free_tools"])
     assert {t["name"] for t in m["tools"]} == expected_tools
-    # All seven manifest sections must be present as keys.
+    # All manifest sections must be present as keys.
     assert set(m) >= {
         "tools",
         "resources",
@@ -47,9 +47,10 @@ async def test_build_manifest_covers_full_surface():
         "prompts",
         "initialize",
         "error_envelope",
+        "result_meta",
         "capabilities",
     }
-    for section in ("resources", "initialize", "error_envelope", "capabilities"):
+    for section in ("resources", "initialize", "error_envelope", "result_meta", "capabilities"):
         assert m[section], f"manifest section {section} is empty"
 
 
@@ -88,6 +89,18 @@ async def test_build_manifest_captures_error_envelope_schema():
     assert parsed, "error-envelope content was not parsed into JSON"
     # The schema carries at least one non-empty enum (the ErrorCode set among them).
     assert any(enum for block in parsed for enum in _iter_enums(block))
+
+
+async def test_build_manifest_captures_result_meta_schema():
+    """The result-meta schema (the full Meta contract the opaque wire stub hides) is
+    captured AND parsed, so a change to it moves the snapshot and is flagged for the
+    FINGERPRINT bump — the guard is not weakened by opaquing meta on the wire (F1/#173)."""
+    m = await manifest.build_manifest()
+    assert m["result_meta"], "result_meta section is empty"
+    parsed = [b["text"] for b in m["result_meta"] if isinstance(b.get("text"), dict)]
+    assert parsed, "result-meta content was not parsed into JSON"
+    # The full Meta shape carries the fields the wire stub elides.
+    assert any("tier" in block.get("properties", {}) for block in parsed)
 
 
 async def test_build_manifest_captures_initialize_without_version():

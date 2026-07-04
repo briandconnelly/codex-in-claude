@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-19"
+FINGERPRINT = "codex-in-claude/0.1/schema-20"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -565,6 +565,12 @@ class CapabilitiesResult(BaseModel):
     prerequisites: list[str]
     deprecation_policy: str
     error_envelope_resource: str = "codex://error-envelope"
+    result_meta_resource: str = "codex://result-meta"
+    # Opt-in tool-reachable fallback: the full error-envelope / result-meta schemas,
+    # returned only when codex_capabilities(include_schemas=[...]) requests them, so a
+    # resource-blind client can still reach the contracts from tools/list alone (#179,
+    # #173). Omitted (exclude_none) from the default payload to keep it small.
+    schemas: dict[str, Any] | None = None
 
 
 ModelCatalogSource = Literal["cache", "static", "none"]
@@ -749,6 +755,20 @@ _OPAQUE_ERROR_BRANCH = {
 }
 _ERROR_POINTER_DESC = _OPAQUE_ERROR_BRANCH["properties"]["error"]["description"]
 
+# The full Meta model is inlined per success branch (~3.5KB each) and dominates the
+# tools/list wire response (audit F1, #173). Success branches instead advertise a compact
+# opaque meta stub — the server still EMITS the full Meta, so a strict client validating
+# structuredContent against this schema still passes ({"type":"object"} accepts any
+# object). The full contract is published once at the codex://result-meta resource.
+_RESULT_META_POINTER_DESC = (
+    "Result metadata (cwd, tier, sandbox, model, timeout, usage, rate_limit, and more); "
+    "full schema at resource codex://result-meta"
+)
+_OPAQUE_META = {"type": "object", "description": _RESULT_META_POINTER_DESC}
+_META_REF = {"$ref": "#/$defs/Meta"}
+# Descriptions that survive _strip_schema_noise: the two intentional resource pointers.
+_KEPT_DESCRIPTIONS = frozenset({_ERROR_POINTER_DESC, _RESULT_META_POINTER_DESC})
+
 
 # Keys whose VALUES are sub-schema maps (property name → sub-schema).
 # The keys of these maps are NAMES (e.g. a field called "title"), NOT JSON-Schema
@@ -772,7 +792,7 @@ def _strip_schema_noise(node: object) -> object:
         for k, v in node.items():
             if k in ("title", "default"):
                 continue
-            if k == "description" and v != _ERROR_POINTER_DESC:
+            if k == "description" and v not in _KEPT_DESCRIPTIONS:
                 continue
             if k in _SUBSCHEMA_MAPS and isinstance(v, dict):
                 # Preserve the map keys (they are names, not annotations);
@@ -784,6 +804,61 @@ def _strip_schema_noise(node: object) -> object:
     if isinstance(node, list):
         return [_strip_schema_noise(v) for v in node]
     return node
+
+
+def _opaque_meta_refs(node: object) -> object:
+    """Replace every ``{"$ref": "#/$defs/Meta"}`` with the opaque meta stub.
+
+    Meta is only ever referenced as a success envelope's ``meta`` field, so swapping the
+    ref anywhere it appears (top-level branches and inside other $defs, covering future
+    multi-model unions) collapses the ~3.5KB inlined object to a compact pointer (F1)."""
+    if isinstance(node, dict):
+        if node == _META_REF:
+            return dict(_OPAQUE_META)
+        return {k: _opaque_meta_refs(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_opaque_meta_refs(v) for v in node]
+    return node
+
+
+def _local_def_names(node: object) -> set[str]:
+    """Names of every ``#/$defs/<name>`` ref reachable in ``node`` (non-recursive over defs)."""
+    names: set[str] = set()
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            names.add(ref.split("/")[-1])
+        for v in node.values():
+            names |= _local_def_names(v)
+    elif isinstance(node, list):
+        for v in node:
+            names |= _local_def_names(v)
+    return names
+
+
+def _prune_defs(doc: dict) -> dict:  # type: ignore[type-arg]
+    """Drop ``$defs`` entries no longer reachable from the document body.
+
+    Reachability is seeded from the doc EXCLUDING ``$defs`` (otherwise every definition
+    would be trivially reachable by its own presence in the map), then closed transitively
+    over refs between definitions. After the Meta ref is opaqued, its closure
+    (RateLimit/RateLimitWindow/Usage/ContextSummary) is orphaned here — unless a
+    definition is independently referenced elsewhere (e.g. StatusResult → RateLimit,
+    DryRunResult → ContextSummary), in which case per-schema reachability keeps it."""
+    defs = doc.get("$defs")
+    if not defs:
+        return doc
+    body = {k: v for k, v in doc.items() if k != "$defs"}
+    reachable: set[str] = set()
+    frontier = _local_def_names(body)
+    while frontier:
+        name = frontier.pop()
+        if name in reachable or name not in defs:
+            continue
+        reachable.add(name)
+        frontier |= _local_def_names(defs[name])
+    doc["$defs"] = {k: v for k, v in defs.items() if k in reachable}
+    return doc
 
 
 def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[type-arg]
@@ -811,6 +886,11 @@ def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[
         "anyOf": [*branches, _OPAQUE_ERROR_BRANCH],
         "$defs": raw.get("$defs", {}),
     }
+    # Collapse the inlined Meta object to an opaque pointer, then drop the $defs it (and
+    # its now-unreferenced closure) leaves behind (audit F1, #173).
+    doc = _opaque_meta_refs(doc)
+    assert isinstance(doc, dict)
+    doc = _prune_defs(doc)
     result = _strip_schema_noise(doc)
     assert isinstance(result, dict)
     return result
@@ -899,6 +979,12 @@ def _harden_error_envelope_schema(schema: dict) -> dict:  # type: ignore[type-ar
 ERROR_ENVELOPE_SCHEMA = _harden_error_envelope_schema(
     TypeAdapter(ErrorResult).json_schema(ref_template="#/$defs/{model}")
 )
+
+# The full result-metadata contract, published once (resource codex://result-meta). Every
+# success envelope carries the opaque `meta` pointer above instead of inlining this ~3.5KB
+# object per tool; this is the canonical, discoverable full shape (audit F1, #173).
+RESULT_META_SCHEMA = TypeAdapter(Meta).json_schema(ref_template="#/$defs/{model}")
+RESULT_META_SCHEMA["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via
 # `codex exec --output-schema FILE`). It mirrors the agent-visible result fields we

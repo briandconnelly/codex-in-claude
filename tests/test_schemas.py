@@ -122,17 +122,35 @@ def _annotation_title_present(node: object) -> bool:
     return False
 
 
+def _is_meta_bearing(sch) -> bool:
+    """True if any success (ok:true) branch carries a `meta` property — those are the
+    schemas whose meta is opaqued to a codex://result-meta pointer (audit F1)."""
+    for br in sch.get("anyOf", []):
+        props = br.get("properties", {})
+        if props.get("ok", {}).get("const") is True and "meta" in props:
+            return True
+    return False
+
+
 @pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
-def test_noise_stripped_except_error_pointer(name, sch):
+def test_noise_stripped_except_pointers(name, sch):
     # No schema-object-level ``title`` annotations (generated Pydantic noise).
     assert not _annotation_title_present(sch), f"{name} has a title annotation"
     # No ``default`` annotations anywhere (a field named ``default`` is fine but
     # Pydantic models here do not use that name, so _has_key is safe for defaults).
     assert not _has_key(sch, "default"), f"{name} has a default"
-    # exactly one description survives: the opaque-error pointer
     text = json.dumps(sch)
-    assert text.count('"description"') == 1
+    # The opaque-error pointer description always survives.
     assert "codex://error-envelope" in text
+    # A meta-bearing schema also keeps its opaque result-meta pointer (audit F1): two
+    # surviving descriptions. A schema without a success-branch meta keeps only one.
+    if _is_meta_bearing(sch):
+        assert text.count('"description"') == 2, f"{name}: expected error + meta pointer"
+        assert "codex://result-meta" in text
+        assert '"$defs":{"Meta"' not in text.replace(" ", "")
+        assert '"Meta":' not in text, f"{name}: Meta $def should be pruned"
+    else:
+        assert text.count('"description"') == 1, f"{name}: expected only error pointer"
     # Finding.title property is preserved in schemas that carry findings.
     if "Finding" in sch.get("$defs", {}):
         finding_def = sch["$defs"]["Finding"]
@@ -161,6 +179,99 @@ def test_opaque_error_branch_present(name, sch):
 def test_job_result_schema_has_two_branches():
     # Opaque success branch + the shared opaque error branch (audit F1).
     assert len(s.JOB_RESULT_SCHEMA["anyOf"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Audit F1 (#173): opaque meta branch + $defs pruning
+# ---------------------------------------------------------------------------
+
+_META_BEARING = {
+    "CONSULT_RESULT_SCHEMA": s.CONSULT_RESULT_SCHEMA,
+    "REVIEW_RESULT_SCHEMA": s.REVIEW_RESULT_SCHEMA,
+    "DELEGATE_RESULT_SCHEMA": s.DELEGATE_RESULT_SCHEMA,
+    "JOB_STARTED_SCHEMA": s.JOB_STARTED_SCHEMA,
+}
+
+
+@pytest.mark.parametrize("name,sch", _META_BEARING.items())
+def test_success_branch_meta_is_opaque_pointer(name, sch):
+    """The success branch's meta is a compact opaque stub pointing at the resource,
+    not the full inlined Meta object (~3.5KB per branch pre-shrink)."""
+    success = [
+        b for b in sch["anyOf"] if b.get("properties", {}).get("ok", {}).get("const") is True
+    ]
+    assert success, f"{name}: no success branch"
+    for br in success:
+        meta = br["properties"]["meta"]
+        assert meta.get("type") == "object"
+        assert meta.get("description") == s._RESULT_META_POINTER_DESC
+        # Fully opaque: no inlined properties / required / additionalProperties.
+        assert set(meta) == {"type", "description"}, f"{name}: meta not fully opaque"
+
+
+@pytest.mark.parametrize("name,sch", _META_BEARING.items())
+def test_meta_closure_pruned_from_defs(name, sch):
+    """Replacing the Meta ref orphans its closure; pruning drops the unreachable defs."""
+    defs = sch.get("$defs", {})
+    for orphan in ("Meta", "RateLimit", "RateLimitWindow", "Usage", "ContextSummary"):
+        assert orphan not in defs, f"{name}: {orphan} should be pruned (unreachable)"
+
+
+def test_prune_keeps_defs_referenced_outside_meta():
+    """Pruning is per-schema reachability, not a hardcoded drop-list: a def reachable
+    WITHOUT going through Meta must survive.  StatusResult references RateLimit directly
+    (no meta field), and DryRunResult references ContextSummary directly."""
+    assert "RateLimit" in s.STATUS_SCHEMA["$defs"], "RateLimit must survive in STATUS_SCHEMA"
+    assert "RateLimitWindow" in s.STATUS_SCHEMA["$defs"]
+    assert "ContextSummary" in s.DRY_RUN_SCHEMA["$defs"], "ContextSummary must survive in dry_run"
+
+
+def test_result_meta_schema_is_full_meta_contract():
+    """RESULT_META_SCHEMA is the canonical, complete Meta shape published once at the
+    codex://result-meta resource (the counterpart to ERROR_ENVELOPE_SCHEMA)."""
+    rm = s.RESULT_META_SCHEMA
+    assert rm["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    props = rm["properties"]
+    # A representative sample of the fields the opaque wire stub hides.
+    for field in ("cwd", "tier", "sandbox", "isolation", "usage", "rate_limit", "fingerprint"):
+        assert field in props, f"result-meta missing {field}"
+
+
+def test_opaque_meta_refs_replaces_nested_ref():
+    """The transform swaps a Meta ref wherever it appears — including inside another $def
+    (the shape a future multi-success-model union would produce)."""
+    doc = {"$defs": {"Wrapper": {"properties": {"meta": dict(s._META_REF)}}}}
+    out = s._opaque_meta_refs(doc)
+    assert out["$defs"]["Wrapper"]["properties"]["meta"] == s._OPAQUE_META
+
+
+def test_prune_defs_noop_without_defs():
+    doc = {"type": "object"}
+    assert s._prune_defs(doc) is doc
+
+
+def test_prune_defs_handles_shared_and_orphan_defs():
+    """A def reachable via two paths is visited once (the `name in reachable` guard); an
+    unreferenced def is dropped."""
+    doc = {
+        "anyOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/A"}],
+        "$defs": {
+            "A": {"properties": {"b": {"$ref": "#/$defs/B"}}},
+            "B": {"type": "object"},
+            "Orphan": {"type": "object"},
+        },
+    }
+    pruned = s._prune_defs(doc)
+    assert set(pruned["$defs"]) == {"A", "B"}
+
+
+def test_meta_bearing_success_payload_still_validates():
+    """Making meta opaque must not break strict clients: a real full Meta object still
+    validates against {'type': 'object'} (audit F1 correctness question A)."""
+    import jsonschema
+
+    result = s.ConsultResult(summary="ok", meta=_make_meta())
+    jsonschema.validate(result.model_dump(mode="json"), s.CONSULT_RESULT_SCHEMA)
 
 
 def test_status_result_has_no_default_errors():
@@ -341,9 +452,12 @@ def _wire_catalog_bytes() -> int:
     return len(json.dumps(catalog, separators=(",", ":")).encode("utf-8"))
 
 
-# Cap = real MCP wire catalog (~103,526 bytes, incl. annotations/_meta) + ~12% headroom.
-# Was ~180,266 pre-shrink.
-CATALOG_BYTE_CAP = 116_000
+# Serialized-size budget for the tools/list wire response (audit F1, #173) — a weight
+# gate the content-only manifest snapshot does not provide. Cap = real MCP wire catalog
+# (~57,570 bytes, incl. annotations/_meta) + ~11% headroom. History: ~180,266 → ~103,526
+# (JOB_RESULT slim) → ~57,570 (opaque meta branch + docstring dedup). Tighten deliberately
+# when the surface legitimately shrinks; a bump means the wire response grew — justify it.
+CATALOG_BYTE_CAP = 64_000
 
 
 def test_wire_catalog_under_cap():
@@ -464,8 +578,8 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     assert lc.activity_support == "codex_events"
 
 
-def test_fingerprint_bumped_to_schema_19():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-19"
+def test_fingerprint_bumped_to_schema_20():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-20"
 
 
 # ---------------------------------------------------------------------------
