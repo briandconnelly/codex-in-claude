@@ -25,10 +25,11 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,10 +122,36 @@ class IdempotencyIndex:
         return time.time()
 
     # --------------------------------------------------------------- record io
+    @staticmethod
+    def _well_formed(rec: dict) -> bool:
+        """Whether a parsed record has every field a classification depends on, with a
+        supported version and a finite timestamp. A structurally invalid but parseable
+        record (e.g. `{}` or a missing/NaN `reserved_epoch`) must NOT be treated as a
+        valid entry — otherwise it defaults to epoch 0, reads as past the horizon, and
+        gets reclaimed instead of failing closed."""
+        version = rec.get("version")
+        if not isinstance(version, int) or isinstance(version, bool) or version > _RECORD_VERSION:
+            return False
+        if rec.get("state") not in ("reserved", "active"):
+            return False
+        if not isinstance(rec.get("arg_hash"), str):
+            return False
+        epoch = rec.get("reserved_epoch")
+        if (
+            isinstance(epoch, bool)
+            or not isinstance(epoch, (int, float))
+            or not math.isfinite(epoch)
+        ):
+            return False
+        if rec.get("state") == "active":
+            return isinstance(rec.get("job_id"), str) and bool(rec["job_id"])
+        return True
+
     def _read(self, path: Path) -> tuple[str, dict | None]:
         """(status, record). status: 'ok' | 'empty' | 'corrupt' | 'missing'. 'empty'
-        is a placeholder mid-setup (transient); 'corrupt' is a non-empty unparseable
-        file (fail closed)."""
+        is a placeholder mid-setup (transient); 'corrupt' is a non-empty file that is
+        unparseable OR structurally invalid — either way fail closed (never reclaimed
+        as a fresh miss within the window)."""
         try:
             text = path.read_text()
         except FileNotFoundError:
@@ -137,9 +164,31 @@ class IdempotencyIndex:
             rec = json.loads(text)
         except json.JSONDecodeError:
             return "corrupt", None
-        if not isinstance(rec, dict):
+        if not isinstance(rec, dict) or not self._well_formed(rec):
             return "corrupt", None
         return "ok", rec
+
+    @contextlib.contextmanager
+    def lock(self) -> Iterator[None]:
+        """Exclusive cross-process lock over this index directory, held across a full
+        reserve → spawn → publish cycle. ``O_EXCL`` alone makes a *first* create atomic,
+        but a stale-entry reclaim (unlink + re-create) and a publish are multi-step: two
+        processes could otherwise both delete and re-create the same key and both win.
+        The store wraps its keyed-start critical section in this lock so that can't
+        happen; a paused holder that dies releases it (advisory ``flock`` on a lockfile,
+        POSIX)."""
+        import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
+
+        self.dir.mkdir(parents=True, exist_ok=True)
+        # Not a ``*.json`` record, so sweep()/reserve() never treat it as an entry.
+        fd = os.open(self.dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def _atomic_write(self, path: Path, rec: dict) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)

@@ -82,7 +82,8 @@
           "extra_context",
           "model",
           "isolation",
-          "detail"
+          "detail",
+          "idempotency_key"
         ],
         "name": "codex_consult",
         "required_params": [
@@ -134,7 +135,8 @@
           "workspace_root",
           "extra_context",
           "model",
-          "isolation"
+          "isolation",
+          "idempotency_key"
         ],
         "name": "codex_consult_async",
         "required_params": [
@@ -180,7 +182,8 @@
           "extra_context",
           "model",
           "isolation",
-          "detail"
+          "detail",
+          "idempotency_key"
         ],
         "name": "codex_review_changes",
         "required_params": [],
@@ -239,7 +242,8 @@
           "workspace_root",
           "extra_context",
           "model",
-          "isolation"
+          "isolation",
+          "idempotency_key"
         ],
         "name": "codex_review_changes_async",
         "required_params": [],
@@ -274,7 +278,8 @@
           "workspace_root",
           "model",
           "isolation",
-          "detail"
+          "detail",
+          "idempotency_key"
         ],
         "name": "codex_delegate",
         "required_params": [
@@ -326,7 +331,8 @@
         "key_optional_params": [
           "workspace_root",
           "model",
-          "isolation"
+          "isolation",
+          "idempotency_key"
         ],
         "name": "codex_delegate_async",
         "required_params": [

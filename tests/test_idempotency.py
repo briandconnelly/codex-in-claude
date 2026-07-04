@@ -139,3 +139,69 @@ def test_sweep_removes_past_horizon_entries(tmp_path):
     time.sleep(0.01)
     idx.sweep(_resolver())  # job-1 gone, past horizon
     assert not out.path.exists()
+
+
+def _write_raw(tmp_path, text):
+    d = tmp_path / "ws" / ".idem"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{idem.key_digest('codex_consult', 'k1')}.json"
+    p.write_text(text)
+    return p
+
+
+def test_empty_json_object_fails_closed(tmp_path):
+    # A parseable-but-structurally-invalid record must NOT be reclaimed as a fresh miss
+    # (it would default reserved_epoch=0, read as past-horizon, and re-spawn).
+    idx = _idx(tmp_path)
+    _write_raw(tmp_path, "{}")
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert out.kind == idem.UNAVAILABLE
+
+
+def test_reserved_record_missing_epoch_fails_closed(tmp_path):
+    idx = _idx(tmp_path)
+    _write_raw(tmp_path, json.dumps({"version": 1, "state": "reserved", "arg_hash": "AH1"}))
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert out.kind == idem.UNAVAILABLE
+
+
+def test_unknown_future_version_fails_closed(tmp_path):
+    idx = _idx(tmp_path)
+    _write_raw(
+        tmp_path,
+        json.dumps(
+            {
+                "version": 99,
+                "state": "active",
+                "arg_hash": "AH1",
+                "reserved_epoch": 1.0,
+                "job_id": "j",
+            }
+        ),
+    )
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver(j={"exists": True, "terminal": True}))
+    assert out.kind == idem.UNAVAILABLE
+
+
+def test_lock_is_an_exclusive_cross_process_flock(tmp_path):
+    import fcntl
+    import os
+
+    idx = _idx(tmp_path)
+    lock_file = idx.dir / ".lock"
+    with idx.lock():
+        # A second open-file-description (what another process would hold) must not be
+        # able to grab the same advisory lock while we hold it.
+        fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+    # released outside the context: now acquirable
+    fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # no raise
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)

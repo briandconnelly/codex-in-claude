@@ -1039,6 +1039,7 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                     "model",
                     "isolation",
                     "detail",
+                    "idempotency_key",
                 ],
                 returns="A result envelope with summary, optional findings, and meta. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
@@ -1056,7 +1057,13 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "may run long, so you want a job_id immediately instead of blocking; "
                 "async counterpart to codex_consult.",
                 required_params=["question"],
-                key_optional_params=["workspace_root", "extra_context", "model", "isolation"],
+                key_optional_params=[
+                    "workspace_root",
+                    "extra_context",
+                    "model",
+                    "isolation",
+                    "idempotency_key",
+                ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the consult envelope with codex_job_result. "
                 "Egress: same as codex_consult — sends question+extra_context (raw) to "
@@ -1078,6 +1085,7 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                     "model",
                     "isolation",
                     "detail",
+                    "idempotency_key",
                 ],
                 returns="A result envelope with verdict, findings, and a context summary. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
@@ -1102,6 +1110,7 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                     "extra_context",
                     "model",
                     "isolation",
+                    "idempotency_key",
                 ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the review envelope with codex_job_result. "
@@ -1116,7 +1125,13 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "reviewable diff WITHOUT touching your working tree (it works in a "
                 "throwaway git worktree).",
                 required_params=["task"],
-                key_optional_params=["workspace_root", "model", "isolation", "detail"],
+                key_optional_params=[
+                    "workspace_root",
+                    "model",
+                    "isolation",
+                    "detail",
+                    "idempotency_key",
+                ],
                 returns="A result envelope whose `diff` holds Codex's proposed, "
                 "unapplied changes plus a summary. detail='summary' (default) omits "
                 "raw_response.text; detail='full' includes it. "
@@ -1134,7 +1149,12 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "want a job_id immediately instead of blocking; async counterpart to "
                 "codex_delegate.",
                 required_params=["task"],
-                key_optional_params=["workspace_root", "model", "isolation"],
+                key_optional_params=[
+                    "workspace_root",
+                    "model",
+                    "isolation",
+                    "idempotency_key",
+                ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read with codex_job_result. "
                 "Egress: same as codex_delegate — sends your task (raw) to OpenAI plus "
@@ -2211,10 +2231,15 @@ async def _run_sync(
             return _spawn_failure_envelope(exc, meta)
         result_kind = outcome["kind"]
         if result_kind == "created":
+            # Set meta.job_id up front so a keyed timeout/terminal-error envelope (which
+            # is built from this meta, not the job's stored one) still names the durable
+            # job the caller is told to recover via codex_job_result.
+            meta.job_id = outcome["job_id"]
             return await _await_job_result(
                 cwd, outcome["job_id"], kind, meta, detail_v, timeout, ctx, keyed=True
             )
         if result_kind == "replay":
+            meta.job_id = outcome["job_id"]
             env = await _await_job_result(
                 cwd, outcome["job_id"], kind, meta, detail_v, timeout, ctx, keyed=True
             )

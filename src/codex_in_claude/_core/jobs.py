@@ -808,25 +808,29 @@ class JobStore:
             def resolve(job_id: str) -> idempotency.JobFacts | None:
                 return self._resolve_job_facts(cwd, job_id)
 
-            index.sweep(resolve)  # bounded maintenance: drop entries past the horizon
-            outcome = index.reserve(tool, key, arg_hash, resolve)
-            if outcome.kind != idempotency.WON:
-                if outcome.kind == idempotency.REPLAY:
-                    return {"kind": "replay", "job_id": outcome.job_id}
-                return {"kind": outcome.kind}  # conflict | unavailable | in_progress
-            assert outcome.path is not None
-            try:
-                job_id, started_at = self.start(
-                    cmd_factory,
-                    cwd,
-                    kind=kind,
-                    extra={"idempotency_key_digest": idempotency.key_digest(tool, key)},
-                    write_spec=write_spec,
-                )
-            except BaseException:
-                # Spawn failed after we won the reservation: drop it so a clean retry is
-                # a fresh miss rather than a phantom in-progress.
-                index.remove(outcome.path)
-                raise
-            index.publish(outcome.path, job_id)
-            return {"kind": "created", "job_id": job_id, "started_at": started_at}
+            # Hold the index's cross-process lock across sweep → reserve → spawn →
+            # publish so a stale-entry reclaim (unlink + re-create) or a late publish
+            # cannot interleave with another process and let two callers both win.
+            with index.lock():
+                index.sweep(resolve)  # bounded maintenance: drop entries past the horizon
+                outcome = index.reserve(tool, key, arg_hash, resolve)
+                if outcome.kind != idempotency.WON:
+                    if outcome.kind == idempotency.REPLAY:
+                        return {"kind": "replay", "job_id": outcome.job_id}
+                    return {"kind": outcome.kind}  # conflict | unavailable | in_progress
+                assert outcome.path is not None
+                try:
+                    job_id, started_at = self.start(
+                        cmd_factory,
+                        cwd,
+                        kind=kind,
+                        extra={"idempotency_key_digest": idempotency.key_digest(tool, key)},
+                        write_spec=write_spec,
+                    )
+                except BaseException:
+                    # Spawn failed after we won the reservation: drop it so a clean retry
+                    # is a fresh miss rather than a phantom in-progress.
+                    index.remove(outcome.path)
+                    raise
+                index.publish(outcome.path, job_id)
+                return {"kind": "created", "job_id": job_id, "started_at": started_at}

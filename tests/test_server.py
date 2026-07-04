@@ -3722,3 +3722,35 @@ async def test_consult_sync_in_progress_then_created_loops(monkeypatch, clean_en
     res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
     assert res["ok"] is True
     assert len(store.idem_calls) == 2  # looped once past the in-progress reservation
+
+
+async def test_keyed_sync_created_sets_meta_job_id_before_await(monkeypatch, clean_env, tmp_path):
+    """A keyed sync call must set meta.job_id before awaiting so a timeout/terminal-error
+    envelope (built from this meta) names the durable job it tells the caller to fetch."""
+    store = _FakeIdemStore({"kind": "created", "job_id": "job-xyz", "started_at": "t"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    captured = {}
+
+    async def fake_await(cwd, job_id, kind, meta, detail_v, timeout, ctx, *, keyed=False):
+        captured["meta_job_id"] = meta.job_id
+        captured["keyed"] = keyed
+        return {"ok": True, "meta": {"job_id": meta.job_id}}
+
+    monkeypatch.setattr(server, "_await_job_result", fake_await)
+    await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert captured["meta_job_id"] == "job-xyz"
+    assert captured["keyed"] is True  # keyed => shared job never auto-cancelled
+
+
+def test_capabilities_advertise_idempotency_on_spend_committing_tools(clean_env):
+    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    for name in (
+        "codex_consult",
+        "codex_review_changes",
+        "codex_delegate",
+        "codex_consult_async",
+        "codex_review_changes_async",
+        "codex_delegate_async",
+    ):
+        assert "idempotency_key" in by_name[name]["key_optional_params"], name
+        assert "idempotency_conflict" in by_name[name]["error_codes"], name
