@@ -1407,6 +1407,58 @@ async def test_job_result_timeout_maps_error(monkeypatch, clean_env, tmp_path):
     assert res["error"]["code"] == "job_timeout"
 
 
+# --- F5: lifecycle envelopes report the OPERATION's posture, not the job's -----
+# The lifecycle tools never call Codex and never write the caller's workspace, so
+# their generated error envelopes must report meta.tier/sandbox = consult/read-only
+# (consistent with readOnlyHint), and carry the inspected job's kind in meta.job_kind
+# rather than overloading tier/sandbox with the job's posture (audit F5, #177).
+async def test_job_status_not_found_meta_reports_read_only_operation(
+    monkeypatch, clean_env, tmp_path
+):
+    store = _FakeStore(status_dict=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_status("nope", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "job_not_found"
+    # No job resolved: the LOOKUP is read-only, and there is no worst-case propose.
+    assert res["meta"]["tier"] == "consult"
+    assert res["meta"]["sandbox"] == "read-only"
+    # No record was found, so there is no job posture to report (None → omitted).
+    assert "job_kind" not in res["meta"]
+
+
+async def test_job_result_running_meta_read_only_with_job_kind(monkeypatch, clean_env, tmp_path):
+    store = _FakeStore(record=_ok_record("running"), result_json=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "job_running"
+    # The lookup itself is read-only — it did not run the delegate.
+    assert res["meta"]["tier"] == "consult"
+    assert res["meta"]["sandbox"] == "read-only"
+    # The inspected job's posture is preserved via its kind (a propose-tier delegate).
+    assert res["meta"]["job_kind"] == "codex_delegate"
+
+
+async def test_job_result_done_preserves_originating_meta(monkeypatch, clean_env, tmp_path):
+    # A retrieved success envelope carries the ORIGINATING run's meta (a delegate ran
+    # propose/workspace-write) — the lifecycle read-only posture must not overwrite it.
+    store = _FakeStore(record=_ok_record("done"), result_json=_done_envelope())
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["meta"]["tier"] == "propose"
+    assert res["meta"]["sandbox"] == "workspace-write"
+
+
+async def test_job_tool_invalid_arguments_meta_read_only(clean_env):
+    # A malformed-argument call to a read-only lifecycle tool must not claim the
+    # propose/workspace-write posture on its invalid_arguments envelope.
+    res = await server.mcp.call_tool("codex_job_status", {"definitely_not_a_param": 1})
+    sc = res.structured_content
+    assert sc["error"]["code"] == "invalid_arguments"
+    assert sc["meta"]["tier"] == "consult"
+    assert sc["meta"]["sandbox"] == "read-only"
+
+
 async def test_job_result_done_but_missing_payload(monkeypatch, clean_env, tmp_path):
     store = _FakeStore(record=_ok_record("done"), result_json=None)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
@@ -1510,8 +1562,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_21():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-21"
+def test_fingerprint_is_schema_22():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-22"
 
 
 def test_capabilities_mark_m4_surface_experimental():

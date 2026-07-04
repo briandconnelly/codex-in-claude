@@ -5,6 +5,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Job-lifecycle error envelopes no longer contradict their `readOnlyHint`** (#177, audit F5). The
+  five `codex_job_*` tools carry `readOnlyHint: true` (status/result/list) or mutate only this
+  server's job state (cancel/consume), yet their generated error envelopes reported
+  `meta.tier: "propose"`, `meta.sandbox: "workspace-write"` — the posture of a *delegate*, not of a
+  read-only lookup. `meta.tier`/`meta.sandbox` now describe **THIS call's** execution posture
+  (`consult`/`read-only` for every lifecycle call — none run Codex or write the caller's
+  workspace), consistent with `readOnlyHint`; the two are documented as orthogonal dimensions
+  (execution posture vs. server-state mutation) in the `Meta.tier`/`sandbox` field descriptions
+  (published at `codex://result-meta` / `codex://error-envelope`). The inspected job's own posture
+  is preserved — not discarded — via a new **`meta.job_kind`** field, set to the resolved job's
+  kind (e.g. `"codex_delegate"`) on lifecycle error envelopes and omitted for not-found/pre-lookup
+  errors; agents derive the job's posture from it. Retrieved success/error results still carry
+  their **originating** run's meta unchanged (a completed delegate still reads `propose`). The
+  worst-case `propose` fallback for unknown-kind lookups is removed. Agent-visible surface change →
+  new `meta.job_kind` field, documented `meta.tier`/`sandbox` semantics; fingerprint
+  `codex-in-claude/0.1/schema-21` → `codex-in-claude/0.1/schema-22`.
+
 ### Added
 
 - **Optional `idempotency_key` on the six spend-committing tools** (`codex_consult`,

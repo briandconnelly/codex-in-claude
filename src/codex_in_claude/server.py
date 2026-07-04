@@ -2761,29 +2761,23 @@ _STATE_TO_ERROR: dict[str, tuple[str, str]] = {
 }
 
 
-# tier/sandbox a job ran under, by kind — so a lifecycle envelope's meta reflects
-# the real run (read-only consult/review vs propose delegate), not a hardcoded tier.
-_KIND_TIER_SANDBOX: dict[str, tuple[str, str]] = {
-    "codex_delegate": ("propose", "workspace-write"),
-    "codex_consult": ("consult", "read-only"),
-    "codex_review_changes": ("consult", "read-only"),
-}
-
-
 def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
-    """Meta for job-lifecycle envelopes (deadline as timeout). tier/sandbox follow the
-    job's kind when known; an unknown kind (e.g. a not-found lookup) falls back to the
-    propose tier."""
-    tier, sandbox = _KIND_TIER_SANDBOX.get(kind or "", ("propose", "workspace-write"))
+    """Meta for a lifecycle-GENERATED error envelope (deadline as timeout). A codex_job_*
+    call never runs Codex and never writes the caller's workspace, so tier/sandbox report
+    the operation's own read-only posture — consistent with readOnlyHint — rather than the
+    inspected job's posture (audit F5, #177). When a job record was resolved, its `kind`
+    is surfaced via meta.job_kind so an agent can still recover the job's own posture; it
+    stays None for not-found and pre-lookup errors, which resolved no job."""
     d = config.defaults()
     return _base_meta(
         cwd,
         source,
-        tier=tier,
-        sandbox=sandbox,
+        tier="consult",
+        sandbox="read-only",
         isolation=d.isolation,
         model=d.model,
         timeout_seconds=config.job_max_seconds(),
+        job_kind=kind,
     )
 
 
@@ -2855,7 +2849,7 @@ def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_STATUS_SCHEMA)
-@_guard(tier="propose", sandbox="workspace-write")
+@_guard(tier="consult", sandbox="read-only")
 async def codex_job_status(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
 ) -> dict:
@@ -3013,7 +3007,7 @@ def _finished_job_envelope(
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)
-@_guard(tier="propose", sandbox="workspace-write")
+@_guard(tier="consult", sandbox="read-only")
 async def codex_job_result(
     job_id: JobIdParam,
     ctx: Context | None = None,
@@ -3036,7 +3030,7 @@ async def codex_job_result(
 
 
 @mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_RESULT_SCHEMA)
-@_guard(tier="propose", sandbox="workspace-write")
+@_guard(tier="consult", sandbox="read-only")
 async def codex_job_consume_result(
     job_id: JobIdParam,
     ctx: Context | None = None,
@@ -3053,7 +3047,7 @@ async def codex_job_consume_result(
 
 
 @mcp.tool(annotations=_JOB_CANCEL, output_schema=JOB_STATUS_SCHEMA)
-@_guard(tier="propose", sandbox="workspace-write")
+@_guard(tier="consult", sandbox="read-only")
 async def codex_job_cancel(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
 ) -> dict:
@@ -3075,7 +3069,7 @@ async def codex_job_cancel(
 
 
 @mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
-@_guard(tier="propose", sandbox="workspace-write")
+@_guard(tier="consult", sandbox="read-only")
 async def codex_job_list(
     ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
 ) -> dict:
