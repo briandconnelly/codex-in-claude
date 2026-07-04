@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-23"
+FINGERPRINT = "codex-in-claude/0.1/schema-24"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -111,6 +111,11 @@ ErrorCode = Literal[
     "git_unavailable",
     "worktree_error",
     "context_too_large",
+    # Resource read (JSON-RPC error carrier, not a tool result). Emitted only on a
+    # resources/read of an unknown/disabled URI — the §6 envelope now travels in the
+    # JSON-RPC error.data instead of leaving it null (audit F9, #181). Never reachable
+    # from a tool call.
+    "resource_not_found",
     # Runtime
     "timeout",
     "nonzero_exit",
@@ -427,6 +432,7 @@ RepairStep = Literal[
     "use_workspace_in_roots",
     "poll_job_status",
     "list_jobs",
+    "list_resources",
     "start_new_job",
     "authenticate",
     "install_codex",
@@ -635,6 +641,17 @@ class CapabilitiesResult(BaseModel):
     tool_error_carrier: str = (
         "tool result with isError: true; the error envelope is in structuredContent, "
         "and content[0].text mirrors it as JSON"
+    )
+    # Where a RESOURCE-read failure travels (audit F9, #181). A resources/read of an
+    # unknown/disabled URI returns a JSON-RPC error whose `error.data` now carries the
+    # §6 ErrorInfo shape (code/message/temporary/retry_after_ms/repair — the `error`
+    # object of codex://error-envelope), no longer a bare null. `error.code` is the MCP
+    # numeric -32002 (resource not found) or -32603 (read failure); the symbolic string
+    # code lives in `error.data.code` (e.g. resource_not_found).
+    resource_error_carrier: str = (
+        "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/"
+        "retry_after_ms/repair) is in error.data, and error.code is the MCP numeric "
+        "-32002 (not found) or -32603 (read failure)"
     )
     error_envelope_resource: str = "codex://error-envelope"
     result_meta_resource: str = "codex://result-meta"

@@ -19,8 +19,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
 from urllib.parse import unquote, urlparse
 
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import DisabledError, NotFoundError, ResourceError
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
+from mcp import McpError
+from mcp.types import INTERNAL_ERROR, ErrorData
 from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
@@ -40,7 +43,7 @@ from codex_in_claude import (
 )
 from codex_in_claude._core import gitdiff, idempotency, redaction, workspace, worktree
 from codex_in_claude.codex_models import read_model_catalog
-from codex_in_claude.errors import make_error, serialize_error
+from codex_in_claude.errors import make_error, serialize_error, serialize_error_info
 from codex_in_claude.schemas import (
     CAPABILITIES_SCHEMA,
     CONSULT_RESULT_SCHEMA,
@@ -430,6 +433,57 @@ class _ArgumentValidationMiddleware(Middleware):
 
 
 mcp.add_middleware(_ArgumentValidationMiddleware())
+
+# Resource-read error envelope (#181/F9) ------------------------------------- #
+# MCP numeric error code for "resource not found". The MCP spec / SDK use -32002 for it
+# (see fastmcp.server.mixins.mcp_operations), but the SDK exposes no named constant, so
+# we name it here. Read failures reuse the JSON-RPC standard INTERNAL_ERROR (-32603).
+_MCP_RESOURCE_NOT_FOUND = -32002
+
+
+class _ResourceErrorMiddleware(Middleware):
+    """Carry the §6 error envelope in a resource-read failure's JSON-RPC ``error.data``.
+
+    Unlike a tool call (whose failure is an ``ok: false`` envelope in structuredContent),
+    a ``resources/read`` failure is a JSON-RPC error. FastMCP would return it with
+    ``error.data: null`` — no symbolic ``code``, ``temporary``, or ``repair`` — so a
+    resource read is the one surface that bypassed the unified contract (audit F9, #181).
+
+    We intercept at the ``on_read_resource`` seam (mirroring ``_ArgumentValidationMiddleware``
+    at the tool seam) and re-raise an ``McpError`` whose ``error.data`` is the serialized
+    ``ErrorInfo`` shape. The mcp SDK's request handler does ``response = err.error`` for an
+    ``McpError``, so the ``data`` we attach survives verbatim to the client.
+
+    Exception routing is deliberate and ordered (per a cross-model design review):
+    - ``NotFoundError``/``DisabledError`` (unknown or disabled URI) → ``resource_not_found``
+      with MCP numeric -32002. FastMCP maps both to "resource not found" itself, so we match.
+    - ``ResourceError`` (a resource function raised; the core wraps arbitrary handler
+      exceptions into this) → ``internal_error`` with -32603.
+    - Any ``McpError`` an inner layer already raised is re-raised untouched — never
+      reclassified — so a deliberate protocol error keeps its own code/data.
+    - Nothing else is caught: an unexpected ``Exception`` keeps FastMCP's existing handling,
+      and cancellation (a ``BaseException``) propagates. The client-visible message is
+      generic (no URI or exception text echoed — matching the redaction posture of #189)."""
+
+    async def on_read_resource(self, context, call_next):  # type: ignore[no-untyped-def]
+        try:
+            return await call_next(context)
+        except (NotFoundError, DisabledError) as exc:
+            raise self._envelope_error(
+                "resource_not_found", _MCP_RESOURCE_NOT_FOUND, "Resource not found."
+            ) from exc
+        except ResourceError as exc:
+            raise self._envelope_error(
+                "internal_error", INTERNAL_ERROR, "Resource read failed."
+            ) from exc
+
+    @staticmethod
+    def _envelope_error(code: ErrorCode, mcp_code: int, message: str) -> McpError:
+        data = serialize_error_info(make_error(code, message))
+        return McpError(ErrorData(code=mcp_code, message=message, data=data))
+
+
+mcp.add_middleware(_ResourceErrorMiddleware())
 
 # The propose orchestration lives in delegate.py; re-exported here for test access.
 _diffstat = delegate._diffstat

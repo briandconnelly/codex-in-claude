@@ -7,6 +7,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Resource-read failures now carry the §6 error envelope in JSON-RPC `error.data`** (#181, audit
+  F9). A `resources/read` of an unknown or disabled URI returned a bare JSON-RPC error with
+  `error.data: null` — no symbolic `code`, `temporary`, or `repair` — making resource reads the one
+  surface that bypassed the unified error contract every tool already honors. A new
+  `on_read_resource` middleware (mirroring the tool-call argument-validation seam) now re-raises an
+  `McpError` whose `error.data` is the serialized `ErrorInfo` shape
+  (`code`/`message`/`temporary`/`retry_after_ms`/`repair` — the `error` object of
+  `codex://error-envelope`, with no `ok`/`meta` wrapper, since a resource read has no Codex run to
+  describe). Unknown/disabled URIs map to a new `resource_not_found` code (MCP numeric `-32002`)
+  whose `repair` (`next_step: list_resources`) steers the agent to the `resources/list` method /
+  `codex_capabilities`; a read that raises maps to `internal_error` (`-32603`). Client-visible
+  messages are bounded and generic — the requested URI and any exception text are not echoed
+  (redaction posture, #189). `codex_capabilities` gains a `resource_error_carrier` field stating this
+  up front so a discovery-only client need not infer the shape from a first failure. Agent-visible
+  surface change → new `resource_not_found` error code, new `list_resources` repair step, new
+  `resource_error_carrier` capability field; fingerprint `codex-in-claude/0.1/schema-23` →
+  `codex-in-claude/0.1/schema-24`.
 - **Combined-size (`input_too_large`) failures on `codex_consult`/`codex_consult_async` now name
   every offending input** (#174, audit F2). The byte limit applies to `question` +
   `extra_context` *together*, but the envelope hardcoded `details.field: "extra_context"` even when

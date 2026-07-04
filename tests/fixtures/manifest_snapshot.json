@@ -36,6 +36,7 @@
       "codex CLI on PATH",
       "authenticated via `codex login`"
     ],
+    "resource_error_carrier": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure)",
     "result_meta_resource": "codex://result-meta",
     "sandboxes": [
       "read-only",
@@ -697,6 +698,7 @@
                   "job_timeout",
                   "nonzero_exit",
                   "not_a_git_repo",
+                  "resource_not_found",
                   "schema_violation",
                   "timeout",
                   "unexpanded_env_placeholder",
@@ -897,7 +899,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-23",
+                "default": "codex-in-claude/0.1/schema-24",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1352,6 +1354,7 @@
                   "install_codex",
                   "install_git",
                   "list_jobs",
+                  "list_resources",
                   "poll_job_status",
                   "reduce_input",
                   "retry_after_delay",
@@ -1858,7 +1861,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-23",
+            "default": "codex-in-claude/0.1/schema-24",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2158,6 +2161,9 @@
                 },
                 "type": "array"
               },
+              "resource_error_carrier": {
+                "type": "string"
+              },
               "result_meta_resource": {
                 "type": "string"
               },
@@ -2307,6 +2313,7 @@
                           "job_timeout",
                           "nonzero_exit",
                           "not_a_git_repo",
+                          "resource_not_found",
                           "schema_violation",
                           "timeout",
                           "unexpanded_env_placeholder",

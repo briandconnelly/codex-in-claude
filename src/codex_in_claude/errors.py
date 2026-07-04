@@ -126,6 +126,16 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         False,
         "Inspect the error; retry with a smaller or corrected task.",
     ),
+    "resource_not_found": (
+        "list_resources",
+        # repair.tool names a server TOOL to call; the authoritative resource-discovery
+        # path is the MCP `resources/list` method (not a tool), so tool stays None and
+        # the alternative prose names both it and codex_capabilities (#181/F9).
+        None,
+        False,
+        "List the available resource URIs via the MCP resources/list method (or "
+        "codex_capabilities), then retry with an exact URI.",
+    ),
     "invalid_json": ("retry_then_report", None, True, "Retry; if it persists, report a bug."),
     "schema_violation": (
         "retry_then_report",
@@ -241,9 +251,22 @@ def make_error(
     )
 
 
+def serialize_error_info(error: ErrorInfo) -> dict:
+    """Serialize a bare `ErrorInfo`, stripping absent optionals (§8) but ALWAYS retaining
+    `retry_after_ms` (§6 wants the key present even when null).
+
+    This is the §6 shape carried in a resource-read failure's JSON-RPC `error.data`
+    (audit F9, #181): no `ok`/`meta` wrapper, since a resources/read has no Codex run to
+    describe — inventing a tier/sandbox for it would be dishonest. `serialize_error`
+    reuses this so the null-retention policy lives in exactly one place."""
+    payload = error.model_dump(mode="json", exclude_none=True)
+    payload.setdefault("retry_after_ms", None)
+    return payload
+
+
 def serialize_error(result: ErrorResult) -> dict:  # type: ignore[type-arg]
     """Serialize an ErrorResult, stripping absent optionals (§8) but ALWAYS retaining
     `error.retry_after_ms` (§6 wants the key present even when null)."""
     payload = result.model_dump(mode="json", exclude_none=True)
-    payload.setdefault("error", {}).setdefault("retry_after_ms", None)
+    payload["error"] = serialize_error_info(result.error)
     return payload

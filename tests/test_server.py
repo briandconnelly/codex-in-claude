@@ -1622,8 +1622,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_23():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-23"
+def test_fingerprint_is_schema_24():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-24"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -3155,6 +3155,96 @@ def test_capabilities_advertises_error_envelope_pointer():
 
     caps = codex_capabilities()
     assert caps["error_envelope_resource"] == "codex://error-envelope"
+
+
+# --------------------------------------------------------------------------- #
+# Resource-read failures carry the §6 envelope in JSON-RPC error.data (F9, #181)
+# --------------------------------------------------------------------------- #
+
+
+async def test_unknown_resource_read_carries_error_envelope(clean_env):
+    """A resources/read of an unknown URI must no longer return error.data: null — it
+    carries the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair) so
+    the resource surface matches the unified contract every tool already honors."""
+    from fastmcp import Client
+    from mcp import McpError
+
+    with pytest.raises(McpError) as excinfo:
+        async with Client(server.mcp) as client:
+            await client.read_resource("codex://does-not-exist")
+
+    err = excinfo.value.error
+    assert err.code == -32002  # MCP numeric "resource not found"
+    # The URI/exception text is NOT echoed into the client-visible message (redaction
+    # posture, #189) — it is a bounded generic string.
+    assert err.message == "Resource not found."
+    env = err.data
+    assert isinstance(env, dict)
+    assert env["code"] == "resource_not_found"
+    assert env["temporary"] is False
+    assert env["retry_after_ms"] is None  # §6: key present even when null
+    assert env["repair"]["next_step"] == "list_resources"
+    assert "resources/list" in env["repair"]["alternative"]
+    # The bare ErrorInfo shape — no ok/meta wrapper (no Codex run to describe).
+    assert "ok" not in env and "meta" not in env
+
+
+async def test_known_resource_read_is_unaffected(clean_env):
+    """The interception must not perturb a successful read."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        contents = await client.read_resource("codex://models")
+    assert contents and contents[0].text  # payload still delivered
+
+
+async def test_resource_error_middleware_maps_read_failure_to_internal_error():
+    """A ResourceError (a resource function raised; FastMCP's core wraps arbitrary
+    handler exceptions into it) maps to internal_error with MCP numeric -32603 — the
+    branch our static resources can't exercise end-to-end, driven directly here."""
+    from fastmcp.exceptions import ResourceError
+    from mcp import McpError
+
+    mw = server._ResourceErrorMiddleware()
+
+    async def call_next(_ctx):
+        raise ResourceError("boom (would leak internal detail)")
+
+    with pytest.raises(McpError) as excinfo:
+        await mw.on_read_resource(object(), call_next)
+    err = excinfo.value.error
+    assert err.code == -32603
+    assert err.message == "Resource read failed."  # generic; no exception text echoed
+    assert err.data["code"] == "internal_error"
+
+
+async def test_resource_error_middleware_does_not_reclassify_mcp_error():
+    """An McpError raised by an inner layer keeps its own code/data — the middleware
+    only wraps FastMCP's NotFoundError/DisabledError/ResourceError, never a protocol
+    error that already carries the contract."""
+    from mcp import McpError
+    from mcp.types import ErrorData
+
+    mw = server._ResourceErrorMiddleware()
+    original = McpError(ErrorData(code=-32000, message="deliberate", data={"x": 1}))
+
+    async def call_next(_ctx):
+        raise original
+
+    with pytest.raises(McpError) as excinfo:
+        await mw.on_read_resource(object(), call_next)
+    assert excinfo.value.error.code == -32000
+    assert excinfo.value.error.data == {"x": 1}
+
+
+def test_capabilities_advertises_resource_error_carrier(clean_env):
+    """The resource error carrier is stated up front so a client need not infer the
+    error.data shape from a first failure (F9, #181)."""
+    from codex_in_claude.server import codex_capabilities
+
+    carrier = codex_capabilities()["resource_error_carrier"]
+    assert "error.data" in carrier
+    assert "-32002" in carrier
 
 
 # --------------------------------------------------------------------------- #
