@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
@@ -461,11 +461,14 @@ class ErrorDetail(BaseModel):
     invalid — e.g. a combined-size limit where no single input is at fault on its own
     (#174/F2). Neither is required: a detail may instead carry only `reason`/`allowed_values`
     (e.g. an enum failure with no single named field). When `fields` is set it is non-empty
-    (schema `minItems: 1`) and its entries are unique."""
+    and its entries are unique — both advertised in the published schema (`minItems: 1`,
+    `uniqueItems: true`), not merely runtime-enforced."""
 
     model_config = ConfigDict(extra="forbid")
     field: str | None = None
-    fields: list[str] | None = Field(default=None, min_length=1)
+    fields: (
+        Annotated[list[str], Field(min_length=1, json_schema_extra={"uniqueItems": True})] | None
+    ) = None
     reason: str | None = None
     allowed_values: list[str] | None = None
 

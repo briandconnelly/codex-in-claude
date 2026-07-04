@@ -346,12 +346,15 @@ def _invalid_arguments_envelope(
         hints.append("provide the required argument(s)")
     if any(t == "literal_error" for t in types):
         hints.append("use one of the field's allowed_values")
-    fix = "; ".join(hints) if hints else "correct the argument(s)"
     # Always lead with correcting the arguments: repair.tool now names the failing tool
     # (#184/N3) and the rejected values are never echoed (repair.arguments stays absent),
-    # so the guidance must not read as "call the same tool again as-is".
+    # so the guidance must not read as "call the same tool again as-is". Append the
+    # type-specific hints only when present, so an untyped failure (e.g. a wrong-type
+    # value) doesn't render the self-referential "… first — correct the argument(s)."
+    # (Copilot review).
+    detail = f" — {'; '.join(hints)}" if hints else ""
     repair = (
-        f"Correct the argument(s) first — {fix}. "
+        f"Correct the argument(s) first{detail}. "
         "Consult each tool's inputSchema (tools/list) or call codex_capabilities "
         "for the parameters and accepted values, then retry."
     )

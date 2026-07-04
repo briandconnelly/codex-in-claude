@@ -72,6 +72,9 @@ def test_errordetail_rejects_empty_fields():
 def test_errordetail_rejects_duplicate_fields():
     with pytest.raises(ValidationError):
         ErrorDetail(fields=["question", "question"])
+    # Uniqueness is advertised in the published schema, not merely runtime-enforced,
+    # so schema-driven clients see the same contract (Copilot review).
+    assert "uniqueItems" in json.dumps(ErrorDetail.model_json_schema()["properties"]["fields"])
 
 
 # ---------------------------------------------------------------------------

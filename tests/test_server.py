@@ -1510,6 +1510,15 @@ async def test_invalid_arguments_repair_names_tool_and_leads_with_correction(cle
     assert repair["alternative"].startswith("Correct the argument(s) first")
 
 
+async def test_invalid_arguments_repair_untyped_failure_is_not_self_referential(clean_env):
+    # When no type-specific hint applies (e.g. a wrong-type value), the alternative must
+    # not render the self-referential "… first — correct the argument(s)." (Copilot review).
+    res = await server.mcp.call_tool("codex_consult", {"question": [1, 2]})
+    alt = res.structured_content["error"]["repair"]["alternative"]
+    assert alt.startswith("Correct the argument(s) first. ")
+    assert " — " not in alt
+
+
 async def test_job_result_done_but_missing_payload(monkeypatch, clean_env, tmp_path):
     store = _FakeStore(record=_ok_record("done"), result_json=None)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
