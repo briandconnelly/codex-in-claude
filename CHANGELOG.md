@@ -7,6 +7,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`isolation` param no longer advertises `'inherit'` as the unconditional default** (#183, audit
+  N2). The `isolation` schema description hardcoded `"'inherit' (default)"`, but the default is
+  env-configurable via `CODEX_IN_CLAUDE_ISOLATION`. Because `isolation` is behavior-bearing (it
+  drives Codex's `ignore-config`/`ignore-rules` config and rule loading), an agent omitting the
+  param on a configured server could get materially different behavior than the schema promised —
+  wrong omission semantics, not a style nit. The description now mirrors the `timeout_seconds`
+  pattern: it lists the allowed values without labeling `inherit` the unconditional default and
+  points to the server's configured default plus `codex_status` for the resolved value. The bundled
+  `collaborating-with-codex` skill's knob list is reworded to match; the README environment table is
+  unchanged (it correctly documents `inherit` as the env var's *built-in fallback*). Agent-visible
+  surface change → `isolation` description reworded; fingerprint `codex-in-claude/0.1/schema-24` →
+  `codex-in-claude/0.1/schema-25`.
 - **Resource-read failures now carry the §6 error envelope in JSON-RPC `error.data`** (#181, audit
   F9). A `resources/read` of an unknown or disabled URI returned a bare JSON-RPC error with
   `error.data: null` — no symbolic `code`, `temporary`, or `repair` — making resource reads the one

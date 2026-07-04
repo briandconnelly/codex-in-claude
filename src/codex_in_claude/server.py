@@ -564,8 +564,9 @@ PathsParam = Annotated[
 IsolationParam = Annotated[
     Isolation | None,
     Field(
-        description="Codex config isolation: 'inherit' (default), 'ignore-config', or "
-        "'ignore-rules'."
+        description="Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. "
+        "Defaults to the server's configured isolation (built-in default 'inherit'; "
+        "`codex_status` reports the resolved value)."
     ),
 ]
 ScopeParam = Annotated[

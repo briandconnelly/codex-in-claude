@@ -899,7 +899,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-24",
+                "default": "codex-in-claude/0.1/schema-25",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1861,7 +1861,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-24",
+            "default": "codex-in-claude/0.1/schema-25",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2495,7 +2495,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [
@@ -2778,7 +2778,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [
@@ -2962,7 +2962,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [
@@ -3243,7 +3243,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [
@@ -3402,7 +3402,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [
@@ -3659,7 +3659,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "paths": {
             "anyOf": [
@@ -4883,7 +4883,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [
@@ -5225,7 +5225,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit' (default), 'ignore-config', or 'ignore-rules'."
+            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
           },
           "model": {
             "anyOf": [

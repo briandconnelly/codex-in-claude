@@ -182,7 +182,8 @@ If a tool call fails with a transport error (e.g. `Connection closed`, or
 Optional per-call params (not every tool takes every one): `model` (override the
 Codex model) — on the active tools `codex_consult`, `codex_review_changes`,
 `codex_delegate`, and `codex_delegate_async`, plus the free `codex_delegate_dry_run`
-preview; `isolation` (`inherit` (default), `ignore-config`, or `ignore-rules`) — on
+preview; `isolation` (`inherit`, `ignore-config`, or `ignore-rules`; omit for the
+server's configured default — `codex_status` reports the resolved value) — on
 those four plus `codex_dry_run` and `codex_delegate_dry_run`; and
 `timeout_seconds` (clamped 10–600; default 180) — only on the synchronous active
 calls (`codex_consult`, `codex_review_changes`, `codex_delegate`), as

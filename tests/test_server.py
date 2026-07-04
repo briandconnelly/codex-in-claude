@@ -1623,7 +1623,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_schema_24():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-24"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-25"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2081,6 +2081,19 @@ async def test_fixed_value_params_advertise_enum(tool_name, param, expected):
     # part of the MCP contract and may vary across Pydantic/FastMCP versions).
     assert enum is not None, f"{tool_name}.{param} schema exposes no enum"
     assert set(enum) == set(expected)
+
+
+async def test_isolation_param_description_does_not_hardcode_default():
+    """IsolationParam must not label 'inherit' the unconditional default: the
+    default is env-configurable (CODEX_IN_CLAUDE_ISOLATION), so an agent omitting
+    the param on a configured server can get behavior the schema didn't promise.
+    The description instead points to the server's configured default and to
+    codex_status for the resolved value (issue #183, audit N2)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    desc = tools["codex_consult"].parameters["properties"]["isolation"]["description"]
+    assert "'inherit' (default)" not in desc
+    assert "configured" in desc
+    assert "codex_status" in desc
 
 
 async def test_all_tool_input_schemas_are_closed_and_declare_dialect():
