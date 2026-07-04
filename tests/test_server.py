@@ -1510,8 +1510,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_19():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-19"
+def test_fingerprint_is_schema_20():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-20"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -2917,6 +2917,51 @@ def test_capabilities_advertises_error_envelope_pointer():
 
     caps = codex_capabilities()
     assert caps["error_envelope_resource"] == "codex://error-envelope"
+
+
+# --------------------------------------------------------------------------- #
+# codex://result-meta resource + capabilities pointer + opt-in fallback (F1/#179)
+# --------------------------------------------------------------------------- #
+
+
+def test_result_meta_resource_returns_full_schema():
+    from codex_in_claude.server import result_meta_resource
+
+    schema = result_meta_resource()
+    # The full Meta contract the opaque wire stub hides.
+    props = schema["properties"]
+    for field in ("cwd", "tier", "sandbox", "usage", "rate_limit", "fingerprint"):
+        assert field in props, f"result-meta missing {field}"
+
+
+def test_capabilities_advertises_result_meta_pointer():
+    from codex_in_claude.server import codex_capabilities
+
+    assert codex_capabilities()["result_meta_resource"] == "codex://result-meta"
+
+
+def test_capabilities_omits_schemas_by_default():
+    from codex_in_claude.server import codex_capabilities
+
+    # The opt-in fallback must not bloat the default payload (#179 caveat).
+    assert "schemas" not in codex_capabilities()
+
+
+def test_capabilities_include_schemas_embeds_requested_contracts():
+    from codex_in_claude.server import codex_capabilities
+
+    caps = codex_capabilities(include_schemas=["error-envelope", "result-meta"])
+    assert set(caps["schemas"]) == {"error-envelope", "result-meta"}
+    # The embedded schemas are the real, full contracts.
+    assert "ErrorInfo" in caps["schemas"]["error-envelope"]["$defs"]
+    assert "tier" in caps["schemas"]["result-meta"]["properties"]
+
+
+def test_capabilities_include_schemas_single_and_deduped():
+    from codex_in_claude.server import codex_capabilities
+
+    caps = codex_capabilities(include_schemas=["result-meta", "result-meta"])
+    assert list(caps["schemas"]) == ["result-meta"]
 
 
 # --------------------------------------------------------------------------- #

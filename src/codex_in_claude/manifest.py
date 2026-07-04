@@ -102,6 +102,9 @@ async def build_manifest() -> dict[str, Any]:
         envelope = [
             _envelope_block(c) for c in await client.read_resource("codex://error-envelope")
         ]
+        result_meta = [
+            _envelope_block(c) for c in await client.read_resource("codex://result-meta")
+        ]
 
     caps = {k: v for k, v in codex_capabilities().items() if k not in _CAPABILITIES_EXCLUDE}
 
@@ -112,6 +115,7 @@ async def build_manifest() -> dict[str, Any]:
         "prompts": sorted(prompts, key=lambda p: p["name"]),
         "initialize": initialize,
         "error_envelope": envelope,
+        "result_meta": result_meta,
         "capabilities": _canonicalize(caps),
     }
 

@@ -5,6 +5,32 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **`tools/list` wire response shrunk ~44% (real MCP catalog ~103.5 KB → ~57.6 KB)** by
+  advertising an opaque `meta` branch (#173, audit F1). Every success envelope's `meta` was the
+  full `Meta` model inlined per tool (~3.5 KB × 6 tools ≈ 21 KB, since FastMCP dereferences
+  `$defs` on the wire); success schemas now carry a compact `{"type": "object"}` pointer — the
+  server still emits the full `Meta`, so strict clients validating `structuredContent` against the
+  advertised schema still pass. The full contract is published once at the new
+  **`codex://result-meta`** resource, mirroring `codex://error-envelope`, with a
+  `result_meta_resource` pointer in `codex_capabilities`. The now-orphaned `$defs` closure
+  (`RateLimit`/`RateLimitWindow`/`Usage`/`ContextSummary`) is pruned per-schema by reachability, so
+  definitions still referenced outside `Meta` (e.g. `codex_status` → `RateLimit`, `codex_dry_run`
+  → `ContextSummary`) are retained. The near-verbatim "Progress & recovery" docstring paragraph
+  (3×) is collapsed to one binding sentence. Agent-visible surface change → fingerprint
+  `codex-in-claude/0.1/schema-19` → `codex-in-claude/0.1/schema-20`.
+
+### Added
+
+- **`codex_capabilities(include_schemas=[...])`** — an opt-in, tool-reachable fallback that embeds
+  the full `error-envelope` and/or `result-meta` schemas in the response for resource-blind
+  clients (#179, audit F7; the shared mechanism the #173 opaque-`meta` caveat requires). Omitted
+  from the default payload, so it does not re-bloat discovery. Covered by `schema-20`.
+- **Wire-size budget** — the `tools/list` catalog size is now pinned in CI (`test_wire_catalog_under_cap`,
+  cap 64 KB with headroom) so serialized weight, not just content, is guarded; the manifest snapshot
+  additionally captures the `codex://result-meta` content so Meta-contract changes move the guard.
+
 ## [0.7.0] - 2026-07-01
 
 A background-jobs hardening release. Sync calls now run through the detached worker and stream
