@@ -72,6 +72,9 @@
           "cli_contract_changed",
           "codex_rate_limited",
           "internal_error",
+          "idempotency_conflict",
+          "idempotency_result_unavailable",
+          "idempotency_in_progress",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -122,6 +125,9 @@
           "cli_contract_changed",
           "codex_rate_limited",
           "internal_error",
+          "idempotency_conflict",
+          "idempotency_result_unavailable",
+          "idempotency_in_progress",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -160,6 +166,9 @@
           "cli_contract_changed",
           "codex_rate_limited",
           "internal_error",
+          "idempotency_conflict",
+          "idempotency_result_unavailable",
+          "idempotency_in_progress",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -217,6 +226,9 @@
           "cli_contract_changed",
           "codex_rate_limited",
           "internal_error",
+          "idempotency_conflict",
+          "idempotency_result_unavailable",
+          "idempotency_in_progress",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -253,6 +265,9 @@
           "cli_contract_changed",
           "codex_rate_limited",
           "internal_error",
+          "idempotency_conflict",
+          "idempotency_result_unavailable",
+          "idempotency_in_progress",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -303,6 +318,9 @@
           "cli_contract_changed",
           "codex_rate_limited",
           "internal_error",
+          "idempotency_conflict",
+          "idempotency_result_unavailable",
+          "idempotency_in_progress",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -636,6 +654,9 @@
                   "codex_rate_limited",
                   "context_too_large",
                   "git_unavailable",
+                  "idempotency_conflict",
+                  "idempotency_in_progress",
+                  "idempotency_result_unavailable",
                   "input_too_large",
                   "internal_error",
                   "invalid_arguments",
@@ -852,9 +873,22 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-20",
+                "default": "codex-in-claude/0.1/schema-21",
                 "title": "Fingerprint",
                 "type": "string"
+              },
+              "idempotency_replayed": {
+                "anyOf": [
+                  {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Idempotency Replayed"
               },
               "isolation": {
                 "enum": [
@@ -1287,6 +1321,7 @@
                   "start_new_job",
                   "update_plugin",
                   "use_allowed_value",
+                  "use_new_idempotency_key",
                   "use_workspace_in_roots"
                 ],
                 "title": "Next Step",
@@ -1785,9 +1820,22 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-20",
+            "default": "codex-in-claude/0.1/schema-21",
             "title": "Fingerprint",
             "type": "string"
+          },
+          "idempotency_replayed": {
+            "anyOf": [
+              {
+                "const": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Replayed"
           },
           "isolation": {
             "enum": [
@@ -2188,6 +2236,9 @@
                           "codex_rate_limited",
                           "context_too_large",
                           "git_unavailable",
+                          "idempotency_conflict",
+                          "idempotency_in_progress",
+                          "idempotency_result_unavailable",
                           "input_too_large",
                           "internal_error",
                           "invalid_arguments",
@@ -2352,6 +2403,20 @@
             ],
             "default": null,
             "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -2622,6 +2687,20 @@
             "default": null,
             "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+          },
           "isolation": {
             "anyOf": [
               {
@@ -2791,6 +2870,20 @@
               "summary"
             ],
             "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -3059,6 +3152,20 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+          },
           "isolation": {
             "anyOf": [
               {
@@ -4685,6 +4792,20 @@
             "default": null,
             "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+          },
           "isolation": {
             "anyOf": [
               {
@@ -5012,6 +5133,20 @@
             ],
             "default": null,
             "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [

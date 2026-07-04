@@ -38,7 +38,7 @@ from codex_in_claude import (
     prompts,
     rate_limit,
 )
-from codex_in_claude._core import gitdiff, workspace, worktree
+from codex_in_claude._core import gitdiff, idempotency, workspace, worktree
 from codex_in_claude.codex_models import read_model_catalog
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
@@ -73,6 +73,7 @@ from codex_in_claude.schemas import (
     Isolation,
     JobListResult,
     JobStarted,
+    JobState,
     JobStatus,
     JobSummary,
     Meta,
@@ -511,6 +512,22 @@ JobIdParam = Annotated[
         "lost ids with codex_job_list."
     ),
 ]
+IdempotencyKeyParam = Annotated[
+    str | None,
+    Field(
+        min_length=1,
+        max_length=200,
+        description="Optional client-supplied dedup key. Reusing it (same workspace, same "
+        "tool, same arguments) replays the existing run instead of starting — and paying "
+        "for — a duplicate Codex call: a sync call returns the in-flight run's result, an "
+        "_async call returns the same job_id. Reuse with DIFFERENT arguments is refused "
+        "(idempotency_conflict); a key whose prior result was already consumed/evicted is "
+        "idempotency_result_unavailable; a still-publishing reservation is "
+        "idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup "
+        "holds for the job TTL window. meta.idempotency_replayed=true marks a replayed "
+        "(unpaid) response.",
+    ),
+]
 IncludeSchemasParam = Annotated[
     list[Literal["error-envelope", "result-meta"]] | None,
     Field(
@@ -833,6 +850,12 @@ _GITDIFF_ERROR_CODES: tuple[ErrorCode, ...] = (
     "not_a_git_repo",
     "git_unavailable",
 )
+# Advertised only on the six spend-committing tools that accept idempotency_key.
+_IDEMPOTENCY_ERRORS: tuple[ErrorCode, ...] = (
+    "idempotency_conflict",
+    "idempotency_result_unavailable",
+    "idempotency_in_progress",
+)
 _JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
 _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
@@ -880,23 +903,27 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         _WORKSPACE_ERRORS,
         ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
+        _IDEMPOTENCY_ERRORS,
     ),
     "codex_consult_async": _err_codes(
         _WORKSPACE_ERRORS,
         ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
+        _IDEMPOTENCY_ERRORS,
     ),
     "codex_review_changes": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
         ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
+        _IDEMPOTENCY_ERRORS,
     ),
     "codex_review_changes_async": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
         ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
+        _IDEMPOTENCY_ERRORS,
     ),
     "codex_delegate": _err_codes(
         _WORKSPACE_ERRORS,
@@ -906,11 +933,13 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
             "worktree_error",
         ),
         _RUNTIME_ERRORS,
+        _IDEMPOTENCY_ERRORS,
     ),
     "codex_delegate_async": _err_codes(
         _WORKSPACE_ERRORS,
         ("input_too_large", "not_a_git_repo", "worktree_error"),
         _RUNTIME_ERRORS,
+        _IDEMPOTENCY_ERRORS,
     ),
     "codex_models": [],
     "codex_status": [],
@@ -1335,6 +1364,7 @@ async def codex_consult(
     isolation: IsolationParam = None,
     timeout_seconds: TimeoutSecondsParam = None,
     detail: DetailParam = "summary",
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
@@ -1450,11 +1480,16 @@ async def codex_consult(
         "model": model or d.model,
         "timeout_seconds": timeout,
     }
-    handle = _start_job(meta, cwd, kind="codex_consult", spec=spec, deadline=timeout)
-    if handle.get("ok") is False:
-        return handle  # spawn failure: internal_error, no spend, no record
-    return await _await_job_result(
-        cwd, handle["job_id"], "codex_consult", meta, detail_v, timeout, ctx
+    return await _run_sync(
+        meta,
+        cwd,
+        kind="codex_consult",
+        tool="codex_consult",
+        spec=spec,
+        timeout=timeout,
+        detail_v=detail_v,
+        ctx=ctx,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -1474,6 +1509,7 @@ async def codex_review_changes(
     isolation: IsolationParam = None,
     timeout_seconds: TimeoutSecondsParam = None,
     detail: DetailParam = "summary",
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
@@ -1579,11 +1615,16 @@ async def codex_review_changes(
         "git_timeout": config.git_timeout_seconds(),
         "max_bytes": config.max_input_bytes(),
     }
-    handle = _start_job(meta, cwd, kind="codex_review_changes", spec=spec, deadline=timeout)
-    if handle.get("ok") is False:
-        return handle  # spawn failure: internal_error, no spend, no record
-    return await _await_job_result(
-        cwd, handle["job_id"], "codex_review_changes", meta, detail_v, timeout, ctx
+    return await _run_sync(
+        meta,
+        cwd,
+        kind="codex_review_changes",
+        tool="codex_review_changes",
+        spec=spec,
+        timeout=timeout,
+        detail_v=detail_v,
+        ctx=ctx,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -1597,6 +1638,7 @@ async def codex_delegate(
     isolation: IsolationParam = None,
     timeout_seconds: TimeoutSecondsParam = None,
     detail: DetailParam = "summary",
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Delegate a coding task to Codex (a different model) in an isolated git
     worktree, and get back a **reviewable diff that is NOT applied** to your tree.
@@ -1716,11 +1758,16 @@ async def codex_delegate(
         "git_timeout": git_timeout,
         "max_diff_bytes": config.max_delegate_diff_bytes(),
     }
-    handle = _start_job(meta, cwd, kind="codex_delegate", spec=spec, deadline=timeout)
-    if handle.get("ok") is False:
-        return handle  # spawn failure: internal_error, no spend, no record
-    return await _await_job_result(
-        cwd, handle["job_id"], "codex_delegate", meta, detail_v, timeout, ctx
+    return await _run_sync(
+        meta,
+        cwd,
+        kind="codex_delegate",
+        tool="codex_delegate",
+        spec=spec,
+        timeout=timeout,
+        detail_v=detail_v,
+        ctx=ctx,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -1732,6 +1779,7 @@ async def codex_delegate_async(
     workspace_root: WorkspaceRootParam = None,
     model: ModelParam = None,
     isolation: IsolationParam = None,
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Delegate a coding task to Codex in the background and get a `job_id` back
     immediately (does not block on the run).
@@ -1840,11 +1888,106 @@ async def codex_delegate_async(
         "git_timeout": git_timeout,
         "max_diff_bytes": config.max_delegate_diff_bytes(),
     }
-    return _start_job(meta, cwd, kind="codex_delegate", spec=spec, deadline=deadline)
+    return _start_async(
+        meta,
+        cwd,
+        kind="codex_delegate",
+        tool="codex_delegate_async",
+        spec=spec,
+        deadline=deadline,
+        idempotency_key=idempotency_key,
+    )
 
 
 def _worker_cmd(job_dir: object) -> list[str]:
     return [sys.executable, "-m", "codex_in_claude._worker", str(job_dir)]
+
+
+# Fields of a run `spec` that do NOT belong in the idempotency argument hash: pure
+# provenance/scope dimensions already captured by (workspace, tool), never a knob that
+# changes the paid run. `detail` is never in a spec (it is presentation-only). Hashing
+# raw effective values is fine — the hash is internal and never returned.
+_ARG_HASH_EXCLUDE = frozenset({"cwd", "workspace_source", "kind"})
+
+# Backoff hint for idempotency_in_progress (a reservation still being published), and
+# how long a SYNC keyed call waits for that publication before giving up. The wait is a
+# module constant so tests can compress it; publication normally takes milliseconds.
+_IDEM_IN_PROGRESS_RETRY_MS = 250
+_IDEM_SYNC_INPROGRESS_WAIT_S = 1.0
+_IDEM_SYNC_INPROGRESS_POLL_S = 0.05
+
+_IDEM_MESSAGES = {
+    "idempotency_conflict": "idempotency_key already used with different arguments.",
+    "idempotency_result_unavailable": (
+        "A prior run for this idempotency_key already completed; its result is no longer available."
+    ),
+    "idempotency_in_progress": "A run for this idempotency_key is still starting; retry shortly.",
+}
+
+
+def _arg_hash_for_spec(spec: dict) -> str:
+    """Hash the effective run inputs of a spec, dropping pure provenance fields."""
+    return idempotency.arg_hash({k: v for k, v in spec.items() if k not in _ARG_HASH_EXCLUDE})
+
+
+def _spawn_failure_envelope(exc: Exception, meta: Meta) -> dict:
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "internal_error",
+                f"failed to start background job: {exc}"[:300],
+                repair_alternative=(
+                    "Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry."
+                ),
+            ),
+            meta=meta,
+        )
+    )
+
+
+def _idem_error(code: str, meta: Meta, *, retry_after_ms: int | None = None) -> dict:
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                cast("ErrorCode", code), _IDEM_MESSAGES[code], retry_after_ms=retry_after_ms
+            ),
+            meta=meta,
+        )
+    )
+
+
+def _job_started_handle(
+    job_id: str,
+    *,
+    kind: str,
+    status: JobState,
+    started_at: str,
+    deadline: int,
+    expires_at: str | None,
+    meta: Meta,
+) -> dict:
+    meta.job_id = job_id
+    return JobStarted(
+        job_id=job_id,
+        kind=kind,
+        status=status,
+        started_at=started_at,
+        deadline_seconds=deadline,
+        ttl_seconds=config.job_ttl_seconds(),
+        expires_at=expires_at,
+        meta=meta,
+    ).model_dump(mode="json")
+
+
+def _mark_replayed(env: dict) -> dict:
+    """Stamp meta.idempotency_replayed=true on an outgoing envelope so the caller can
+    see no new spend occurred. Applied after the result is built (a replayed done job's
+    envelope carries the worker's stored meta, not this call's), so the signal is not
+    persisted into result.json."""
+    meta = env.get("meta")
+    if isinstance(meta, dict):
+        meta["idempotency_replayed"] = True
+    return env
 
 
 def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) -> dict:
@@ -1855,30 +1998,78 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
     try:
         job_id, started_at = store.start(_worker_cmd, cwd, kind=kind, write_spec=spec)
     except OSError as exc:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "internal_error",
-                    f"failed to start background job: {exc}"[:300],
-                    repair_alternative=(
-                        "Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry."
-                    ),
-                ),
-                meta=meta,
-            )
-        )
-
-    meta.job_id = job_id
-    return JobStarted(
-        job_id=job_id,
+        return _spawn_failure_envelope(exc, meta)
+    return _job_started_handle(
+        job_id,
         kind=kind,
         status="running",
         started_at=started_at,
-        deadline_seconds=deadline,
-        ttl_seconds=config.job_ttl_seconds(),
+        deadline=deadline,
         expires_at=None,
         meta=meta,
-    ).model_dump(mode="json")
+    )
+
+
+def _start_async(
+    meta: Meta,
+    cwd: str,
+    *,
+    kind: str,
+    tool: str,
+    spec: dict,
+    deadline: int,
+    idempotency_key: str | None,
+) -> dict:
+    """The *_async return path. Without a key it is exactly `_start_job`. With one it
+    reserves (tool, key): a first reservation spawns and returns a running handle; a
+    duplicate returns the existing job's REAL handle (its true status/timestamps, not a
+    synthetic 'running'); conflict/unavailable/in-progress become their error envelopes.
+    An _async caller never blocks, so in-progress is returned immediately (retryable)."""
+    if idempotency_key is None:
+        return _start_job(meta, cwd, kind=kind, spec=spec, deadline=deadline)
+    store = config.job_store()
+    try:
+        outcome = store.start_idempotent(
+            _worker_cmd,
+            cwd,
+            kind=kind,
+            tool=tool,
+            key=idempotency_key,
+            arg_hash=_arg_hash_for_spec(spec),
+            write_spec=spec,
+        )
+    except OSError as exc:
+        return _spawn_failure_envelope(exc, meta)
+    result_kind = outcome["kind"]
+    if result_kind == "created":
+        return _job_started_handle(
+            outcome["job_id"],
+            kind=kind,
+            status="running",
+            started_at=outcome["started_at"],
+            deadline=deadline,
+            expires_at=None,
+            meta=meta,
+        )
+    if result_kind == "replay":
+        snap = store.status(cwd, outcome["job_id"])
+        if snap is None:  # vanished between reserve and read (rare) -> treat as gone
+            return _idem_error("idempotency_result_unavailable", meta)
+        meta.idempotency_replayed = True
+        return _job_started_handle(
+            outcome["job_id"],
+            kind=kind,
+            status=snap["status"],
+            started_at=snap["started_at"],
+            deadline=snap["deadline_seconds"],
+            expires_at=snap["expires_at"],
+            meta=meta,
+        )
+    if result_kind == "conflict":
+        return _idem_error("idempotency_conflict", meta)
+    if result_kind == "unavailable":
+        return _idem_error("idempotency_result_unavailable", meta)
+    return _idem_error("idempotency_in_progress", meta, retry_after_ms=_IDEM_IN_PROGRESS_RETRY_MS)
 
 
 # Local poll cadence for a sync handler awaiting its own detached job: in-process
@@ -1900,6 +2091,8 @@ async def _await_job_result(
     detail_v: str,
     timeout: int,
     ctx: Context | None,
+    *,
+    keyed: bool = False,
 ) -> dict:
     """Await this handler's own detached job and return its envelope (F3).
 
@@ -1908,7 +2101,14 @@ async def _await_job_result(
     result recoverable via codex_job_list/codex_job_result. While running, throttled
     `notifications/progress` are reported via `ctx` (F2) — message-only, at most one
     per `_SYNC_PROGRESS_THROTTLE_S` and only when `events_seen` changed, so a caller
-    with no progressToken (or no `ctx` at all) sees no behavior change."""
+    with no progressToken (or no `ctx` at all) sees no behavior change.
+
+    When ``keyed`` (this call carried an idempotency_key), the job is treated as a
+    durable shared run: neither a local-grace timeout nor this waiter's own
+    cancellation cancels it, because another idempotent caller may be awaiting the same
+    job. The run continues to its own deadline and stays recoverable via its job_id;
+    only an explicit codex_job_cancel stops it. That aligns with the point of an
+    idempotency_key — the run should survive this connection dropping."""
     store = config.job_store()
     deadline = time.monotonic() + timeout + _SYNC_AWAIT_GRACE_S
     last_progress_at = 0.0
@@ -1938,27 +2138,98 @@ async def _await_job_result(
                         progress=float(events), message=f"codex events: {events}"
                     )
             if time.monotonic() > deadline:
-                await asyncio.to_thread(store.cancel, cwd, job_id)
+                if not keyed:
+                    await asyncio.to_thread(store.cancel, cwd, job_id)
+                    tail = "job cancelled."
+                else:
+                    tail = "the job continues in the background; fetch it via codex_job_result."
                 return serialize_error(
                     ErrorResult(
                         error=make_error(
                             "timeout",
-                            f"codex run exceeded {timeout}s and the grace window; job cancelled.",
+                            f"codex run exceeded {timeout}s and the grace window; {tail}",
                         ),
                         meta=meta,
                     )
                 )
             await asyncio.sleep(_SYNC_POLL_INTERVAL_S)
     except asyncio.CancelledError:
-        # Deliberate cancellation must stop spend. Synchronous on purpose: an
-        # already-cancelled task cannot reliably await cleanup.
-        with contextlib.suppress(Exception):
-            store.cancel(cwd, job_id)
+        # Deliberate cancellation must stop spend — UNLESS this call is keyed, when the
+        # job may be a run shared with another idempotent caller and must not be killed
+        # by one waiter's cancellation. Synchronous on purpose: an already-cancelled
+        # task cannot reliably await cleanup.
+        if not keyed:
+            with contextlib.suppress(Exception):
+                store.cancel(cwd, job_id)
         raise
     rec2, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=False)
     if rec2 is None:
         return _job_result_corrupt("job record expired before its result was read", meta)
     return _finished_job_envelope(rec2, payload, job_id, kind, meta, detail_v, None)
+
+
+async def _run_sync(
+    meta: Meta,
+    cwd: str,
+    *,
+    kind: str,
+    tool: str,
+    spec: dict,
+    timeout: int,
+    detail_v: str,
+    ctx: Context | None,
+    idempotency_key: str | None,
+) -> dict:
+    """The synchronous active-tool tail: start (or dedup) the detached job and await it.
+    Without a key it is the prior behavior. With one, a first reservation awaits its own
+    new job; a duplicate awaits the EXISTING job's result and stamps
+    meta.idempotency_replayed; conflict/unavailable become their error envelopes. A
+    still-publishing reservation is waited on briefly (publication is normally
+    sub-second) before returning idempotency_in_progress. A keyed await never cancels
+    the shared job on timeout or client cancellation."""
+    store = config.job_store()
+    if idempotency_key is None:
+        handle = _start_job(meta, cwd, kind=kind, spec=spec, deadline=timeout)
+        if handle.get("ok") is False:
+            return handle  # spawn failure: internal_error, no spend, no record
+        return await _await_job_result(cwd, handle["job_id"], kind, meta, detail_v, timeout, ctx)
+
+    arg_hash = _arg_hash_for_spec(spec)
+    wait_deadline = time.monotonic() + _IDEM_SYNC_INPROGRESS_WAIT_S
+    while True:
+        try:
+            outcome = store.start_idempotent(
+                _worker_cmd,
+                cwd,
+                kind=kind,
+                tool=tool,
+                key=idempotency_key,
+                arg_hash=arg_hash,
+                write_spec=spec,
+            )
+        except OSError as exc:
+            return _spawn_failure_envelope(exc, meta)
+        result_kind = outcome["kind"]
+        if result_kind == "created":
+            return await _await_job_result(
+                cwd, outcome["job_id"], kind, meta, detail_v, timeout, ctx, keyed=True
+            )
+        if result_kind == "replay":
+            env = await _await_job_result(
+                cwd, outcome["job_id"], kind, meta, detail_v, timeout, ctx, keyed=True
+            )
+            return _mark_replayed(env)
+        if result_kind == "conflict":
+            return _idem_error("idempotency_conflict", meta)
+        if result_kind == "unavailable":
+            return _idem_error("idempotency_result_unavailable", meta)
+        # in_progress: a concurrent reservation is still publishing. Wait briefly for it
+        # to resolve to replay rather than bouncing the caller.
+        if time.monotonic() >= wait_deadline:
+            return _idem_error(
+                "idempotency_in_progress", meta, retry_after_ms=_IDEM_IN_PROGRESS_RETRY_MS
+            )
+        await asyncio.sleep(_IDEM_SYNC_INPROGRESS_POLL_S)
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
@@ -1970,6 +2241,7 @@ async def codex_consult_async(
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
     isolation: IsolationParam = None,
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Ask Codex for a read-only second opinion in the background; get a `job_id`
     back immediately instead of blocking.
@@ -2048,7 +2320,15 @@ async def codex_consult_async(
         "model": model or d.model,
         "timeout_seconds": deadline,
     }
-    return _start_job(meta, cwd, kind="codex_consult", spec=spec, deadline=deadline)
+    return _start_async(
+        meta,
+        cwd,
+        kind="codex_consult",
+        tool="codex_consult_async",
+        spec=spec,
+        deadline=deadline,
+        idempotency_key=idempotency_key,
+    )
 
 
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
@@ -2063,6 +2343,7 @@ async def codex_review_changes_async(
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
     isolation: IsolationParam = None,
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Review your git changes in the background; get a `job_id` back immediately.
 
@@ -2135,7 +2416,15 @@ async def codex_review_changes_async(
         "git_timeout": config.git_timeout_seconds(),
         "max_bytes": config.max_input_bytes(),
     }
-    return _start_job(meta, cwd, kind="codex_review_changes", spec=spec, deadline=deadline)
+    return _start_async(
+        meta,
+        cwd,
+        kind="codex_review_changes",
+        tool="codex_review_changes_async",
+        spec=spec,
+        deadline=deadline,
+        idempotency_key=idempotency_key,
+    )
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)

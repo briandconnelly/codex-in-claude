@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-20"
+FINGERPRINT = "codex-in-claude/0.1/schema-21"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -129,6 +129,16 @@ ErrorCode = Literal[
     "job_cancelled",
     "job_timeout",
     "job_failed",
+    # Idempotency (client-supplied idempotency_key on spend-committing tools):
+    # the same key was reused with different effective arguments (a duplicate would be
+    # a mismatched result, so it is refused rather than silently returning the other run).
+    "idempotency_conflict",
+    # a prior run for this key+arguments completed but its result is no longer available
+    # (consumed via codex_job_consume_result, or count-cap evicted) within the dedup
+    # window; refused rather than silently starting a new paid run.
+    "idempotency_result_unavailable",
+    # a concurrent reservation for this key is still being published; transient — retry.
+    "idempotency_in_progress",
 ]
 
 
@@ -318,6 +328,12 @@ class Meta(BaseModel):
     rate_limit: RateLimit | None = None
     context_summary: ContextSummary | None = None
     job_id: str | None = None  # set on background-job results; None for sync calls
+    # Set to True ONLY on a response that replayed an existing run because the caller
+    # passed an idempotency_key matching an in-flight/completed run — a signal that no
+    # new Codex spend occurred. Null (like the other optional meta fields) otherwise;
+    # it is patched onto the outgoing envelope for a replay and is never persisted into
+    # a job's result.json, so a later ordinary read of that job never looks replayed.
+    idempotency_replayed: Literal[True] | None = None
     request_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str = FINGERPRINT
 
@@ -390,6 +406,7 @@ RepairStep = Literal[
     "update_plugin",
     "inspect_and_retry",
     "retry_then_report",
+    "use_new_idempotency_key",
 ]
 
 

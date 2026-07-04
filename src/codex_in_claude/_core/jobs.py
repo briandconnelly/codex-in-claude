@@ -47,6 +47,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from codex_in_claude._core import idempotency
+
+# Reserved subdirectory name (of a workspace dir) for the idempotency index; it is not
+# a job and must be excluded from every job-directory iteration.
+_IDEM_DIRNAME = ".idem"
+
 _TERMINAL = frozenset({"done", "failed", "cancelled", "timeout"})
 _LOCK = threading.RLock()
 
@@ -300,6 +306,34 @@ class JobStore:
 
     def _job_dir(self, cwd: str, job_id: str) -> Path:
         return self._ws_dir(cwd) / job_id
+
+    def _job_dirs(self, ws: Path) -> list[Path]:
+        """Job subdirectories of a workspace, excluding reserved non-job dirs (the
+        idempotency index). The single place every reap/count/list iteration goes
+        through so the ``.idem`` dir is never mistaken for a job."""
+        if not ws.is_dir():
+            return []
+        return [d for d in ws.iterdir() if d.is_dir() and d.name != _IDEM_DIRNAME]
+
+    def _idem_index(self, cwd: str) -> idempotency.IdempotencyIndex:
+        """The dedup index for a workspace. The horizon is a conservative floor: a job's
+        whole wall-clock life (max_seconds) plus its terminate grace plus the terminal
+        TTL, so a reserved/gone entry is never reclaimed while any real duplicate could
+        still be spawned against it."""
+        horizon = self.max_seconds + self.terminate_grace_seconds + self.ttl_seconds
+        return idempotency.IdempotencyIndex(
+            self._ws_dir(cwd) / _IDEM_DIRNAME, horizon_seconds=horizon
+        )
+
+    def _resolve_job_facts(self, cwd: str, job_id: str) -> idempotency.JobFacts | None:
+        """Injected into the index: does this job still exist and is it terminal? Uses
+        the same live-read (and expiry reaping) as every other lookup, so a terminal
+        job past its TTL reads as gone (→ result-unavailable), never as replayable."""
+        live = self._read_live_job(cwd, job_id)
+        if live is None:
+            return None
+        _jd, _meta, state = live
+        return idempotency.JobFacts(exists=True, terminal=state in _TERMINAL)
 
     # --------------------------------------------------------------- meta i/o
     @staticmethod
@@ -630,9 +664,7 @@ class JobStore:
         if not ws.is_dir():
             return
         now = time.time()
-        for jd in ws.iterdir():
-            if not jd.is_dir():
-                continue
+        for jd in self._job_dirs(ws):
             meta = self._read_meta(jd)
             if meta is None:
                 continue
@@ -644,7 +676,7 @@ class JobStore:
 
     def _enforce_count_cap(self, cwd: str) -> None:
         ws = self._ws_dir(cwd)
-        dirs = [d for d in ws.iterdir() if d.is_dir()] if ws.is_dir() else []
+        dirs = self._job_dirs(ws)
         if len(dirs) <= self.max_count:
             return
         scored = []
@@ -734,14 +766,67 @@ class JobStore:
             self._reap_workspace(cwd)
             ws = self._ws_dir(cwd)
             summaries: list[dict] = []
-            if ws.is_dir():
-                for jd in ws.iterdir():
-                    if not jd.is_dir():
-                        continue
-                    meta = self._read_meta(jd)
-                    if meta is None:
-                        continue
-                    state = self._status_of(jd, meta)
-                    summaries.append(self._status_dict(jd, meta, state))
+            for jd in self._job_dirs(ws):
+                meta = self._read_meta(jd)
+                if meta is None:
+                    continue
+                state = self._status_of(jd, meta)
+                summaries.append(self._status_dict(jd, meta, state))
             summaries.sort(key=lambda s: s["started_epoch"], reverse=True)  # newest first
             return summaries
+
+    def start_idempotent(
+        self,
+        cmd_factory: CmdFactory,
+        cwd: str,
+        *,
+        kind: str,
+        tool: str,
+        key: str,
+        arg_hash: str,
+        write_spec: dict | None = None,
+    ) -> dict:
+        """Deduplicated :meth:`start`. Reserves ``(tool, key)`` in the workspace index;
+        on a first reservation it spawns the job and publishes the id, otherwise it
+        classifies the existing entry. Returns one of:
+
+        - ``{"kind": "created", "job_id", "started_at"}`` — a new paid job was spawned.
+        - ``{"kind": "replay", "job_id"}`` — an existing job for this key+args; caller
+          should await/return it (sync) or return its real handle (async).
+        - ``{"kind": "conflict"}`` — same key, different effective arguments.
+        - ``{"kind": "unavailable"}`` — a prior run for this key+args completed but its
+          result is gone (consumed or evicted) within the dedup window.
+        - ``{"kind": "in_progress"}`` — a concurrent reservation for this key is still
+          being published; retry.
+
+        The whole reserve→spawn→publish critical section runs under the process lock;
+        cross-process exclusivity on the reservation itself comes from ``O_EXCL``.
+        """
+        with _LOCK:
+            index = self._idem_index(cwd)
+
+            def resolve(job_id: str) -> idempotency.JobFacts | None:
+                return self._resolve_job_facts(cwd, job_id)
+
+            index.sweep(resolve)  # bounded maintenance: drop entries past the horizon
+            outcome = index.reserve(tool, key, arg_hash, resolve)
+            if outcome.kind != idempotency.WON:
+                if outcome.kind == idempotency.REPLAY:
+                    return {"kind": "replay", "job_id": outcome.job_id}
+                return {"kind": outcome.kind}  # conflict | unavailable | in_progress
+            assert outcome.path is not None
+            try:
+                job_id, started_at = self.start(
+                    cmd_factory,
+                    cwd,
+                    kind=kind,
+                    extra={"idempotency_key_digest": idempotency.key_digest(tool, key)},
+                    write_spec=write_spec,
+                )
+            except BaseException:
+                # Spawn failed after we won the reservation: drop it so a clean retry is
+                # a fresh miss rather than a phantom in-progress.
+                index.remove(outcome.path)
+                raise
+            index.publish(outcome.path, job_id)
+            return {"kind": "created", "job_id": job_id, "started_at": started_at}

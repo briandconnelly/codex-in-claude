@@ -53,3 +53,21 @@ def test_serialize_error_keeps_populated_fields():
     d = serialize_error(env)
     assert d["error"]["retry_after_ms"] == 60000
     assert d["error"]["temporary"] is True
+
+
+def test_idempotency_conflict_repair_is_new_key_and_permanent():
+    e = make_error("idempotency_conflict", "reused key with different args")
+    assert e.repair.next_step == "use_new_idempotency_key"
+    assert e.temporary is False and e.retry_after_ms is None
+
+
+def test_idempotency_result_unavailable_is_permanent_new_key():
+    e = make_error("idempotency_result_unavailable", "result gone")
+    assert e.repair.next_step == "use_new_idempotency_key"
+    assert e.temporary is False
+
+
+def test_idempotency_in_progress_is_temporary_with_backoff():
+    e = make_error("idempotency_in_progress", "still starting", retry_after_ms=250)
+    assert e.repair.next_step == "retry_after_delay"
+    assert e.temporary is True and e.retry_after_ms == 250

@@ -898,3 +898,84 @@ def test_activity_observer_end_to_end_into_job_store(tmp_path: Path):
     assert status["events_seen"] == 2
     assert status["last_event_at"] is not None
     assert status["event_age_ms"] is not None and status["event_age_ms"] >= 0
+
+
+# ------------------------------------------------------- idempotent starts
+_SLEEP = "import time; time.sleep(30)"
+
+
+def test_idempotent_first_start_creates_and_indexes(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    out = store.start_idempotent(
+        _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="AH"
+    )
+    assert out["kind"] == "created" and out["job_id"]
+    assert (store._ws_dir(cwd) / ".idem").is_dir()
+    store.cancel(cwd, out["job_id"])
+
+
+def test_idempotent_duplicate_replays_running_job(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    a = store.start_idempotent(
+        _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="AH"
+    )
+    b = store.start_idempotent(
+        _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="AH"
+    )
+    assert b["kind"] == "replay" and b["job_id"] == a["job_id"]
+    assert len([j for j in store.list_jobs(cwd)]) == 1  # only one paid job spawned
+    store.cancel(cwd, a["job_id"])
+
+
+def test_idempotent_same_key_different_args_conflicts(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    a = store.start_idempotent(
+        _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="AH"
+    )
+    b = store.start_idempotent(
+        _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="OTHER"
+    )
+    assert b["kind"] == "conflict"
+    store.cancel(cwd, a["job_id"])
+
+
+def test_idempotent_replays_terminal_job_until_consumed(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    a = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
+    )
+    _wait_terminal(store, cwd, a["job_id"])
+    # still on disk -> replay
+    b = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
+    )
+    assert b["kind"] == "replay" and b["job_id"] == a["job_id"]
+
+
+def test_idempotent_consumed_result_is_unavailable(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    a = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
+    )
+    _wait_terminal(store, cwd, a["job_id"])
+    store.result_payload(cwd, a["job_id"], consume=True)  # tombstone survives this
+    b = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
+    )
+    assert b["kind"] == "unavailable"
+
+
+def test_idem_dir_excluded_from_listing_and_count_cap(tmp_path):
+    store = _store(tmp_path, max_count=1)
+    cwd = str(tmp_path)
+    a = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
+    )
+    _wait_terminal(store, cwd, a["job_id"])
+    jobs = store.list_jobs(cwd)
+    assert [j["job_id"] for j in jobs] == [a["job_id"]]  # .idem is not a job

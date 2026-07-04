@@ -5,6 +5,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Optional `idempotency_key` on the six spend-committing tools** (`codex_consult`,
+  `codex_review_changes`, `codex_delegate` and their `_async` variants) so a retry after a
+  transport drop **replays** the existing run instead of starting — and paying for — a duplicate
+  Codex call (#176, audit F4). Dedup is scoped to (resolved workspace, exact tool, argument hash)
+  and backed by a disk-backed, `O_EXCL`-guarded index beside the job store, so it holds within and
+  across server processes for the job-TTL window. A sync retry awaits/returns the in-flight run's
+  result; an `_async` retry returns the existing job's real handle. Reuse with **different**
+  arguments is refused (`idempotency_conflict`); a key whose prior result was already
+  consumed/evicted is `idempotency_result_unavailable`; a still-publishing reservation is
+  `idempotency_in_progress` (retryable). A replayed response carries `meta.idempotency_replayed:
+  true`, and a run started with a key is treated as durable — a single waiter's timeout or
+  cancellation no longer cancels it (only `codex_job_cancel` does). Omit the param for the prior
+  no-dedup behavior. Agent-visible surface change → three new error codes, one new repair step, a
+  new `meta.idempotency_replayed` field, and per-tool advertised `error_codes`; fingerprint
+  `codex-in-claude/0.1/schema-20` → `codex-in-claude/0.1/schema-21`.
+
 ### Changed
 
 - **`tools/list` wire response shrunk ~44% (real MCP catalog ~103.5 KB → ~57.6 KB)** by

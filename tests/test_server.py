@@ -1510,8 +1510,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_20():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-20"
+def test_fingerprint_is_schema_21():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-21"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -3516,3 +3516,209 @@ async def test_progress_failure_does_not_fail_call(clean_env, tmp_path, monkeypa
     res = await server._await_job_result(cwd, "job-abc", "codex_consult", meta, "summary", 180, ctx)
     assert res["ok"] is True
     assert ctx.calls == []  # the raise happens before the call is recorded
+
+
+# --- idempotency_key wiring on the spend-committing tools (F4) ----------------
+class _FakeIdemStore(_FakeStore):
+    """Fake store whose start_idempotent returns a canned outcome, for exercising the
+    server's mapping of each idempotency outcome onto the wire envelope."""
+
+    def __init__(self, outcome, *, snapshot=None, outcomes=None, **kw):
+        super().__init__(**kw)
+        self._outcome = outcome
+        # A sequence returned one-per-call (last repeats), for the in-progress->resolve loop.
+        self._outcomes = list(outcomes) if outcomes is not None else None
+        self._snapshot = snapshot
+        self.idem_calls = []
+
+    def start_idempotent(self, cmd_factory, cwd, *, kind, tool, key, arg_hash, write_spec=None):
+        self.idem_calls.append({"tool": tool, "key": key, "arg_hash": arg_hash, "kind": kind})
+        if self._outcomes is not None:
+            idx = min(len(self.idem_calls) - 1, len(self._outcomes) - 1)
+            return self._outcomes[idx]
+        return self._outcome
+
+    def status(self, cwd, job_id):
+        return self._snapshot if self._snapshot is not None else super().status(cwd, job_id)
+
+
+async def test_consult_async_conflict_maps_to_error(monkeypatch, clean_env, tmp_path):
+    store = _FakeIdemStore({"kind": "conflict"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "idempotency_conflict"
+    assert res["error"]["temporary"] is False
+    # the exact public tool name is the namespace, not the normalized kind
+    assert store.idem_calls[0]["tool"] == "codex_consult_async"
+
+
+async def test_consult_async_result_unavailable_maps_to_error(monkeypatch, clean_env, tmp_path):
+    store = _FakeIdemStore({"kind": "unavailable"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "idempotency_result_unavailable"
+    assert res["error"]["temporary"] is False
+
+
+async def test_consult_async_in_progress_is_temporary(monkeypatch, clean_env, tmp_path):
+    store = _FakeIdemStore({"kind": "in_progress"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "idempotency_in_progress"
+    assert res["error"]["temporary"] is True
+    assert res["error"]["retry_after_ms"] == server._IDEM_IN_PROGRESS_RETRY_MS
+
+
+async def test_delegate_async_replay_returns_real_handle(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    snap = _ok_record("done")  # a replayed job may already be terminal
+    store = _FakeIdemStore({"kind": "replay", "job_id": "job-abc"}, snapshot=snap)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_delegate_async(
+        "do x", workspace_root=str(tmp_path), idempotency_key="k1"
+    )
+    assert res["ok"] is True
+    assert res["job_id"] == "job-abc"
+    assert res["status"] == "done"  # the job's REAL status, not a synthetic "running"
+    assert res["meta"]["idempotency_replayed"] is True
+
+
+async def test_consult_async_created_has_no_replayed_flag(monkeypatch, clean_env, tmp_path):
+    store = _FakeIdemStore({"kind": "created", "job_id": "job-abc", "started_at": "t"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is True and res["status"] == "running"
+    assert res["meta"].get("idempotency_replayed") is None  # only set on a replay
+
+
+async def test_consult_sync_replay_marks_replayed(monkeypatch, clean_env, tmp_path):
+    done = _ok_record("done")
+    done["kind"] = "codex_consult"
+    env = {
+        "ok": True,
+        "tool": "codex_consult",
+        "summary": "answer",
+        "meta": server._base_meta(
+            str(tmp_path),
+            "param",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            model=None,
+            timeout_seconds=180,
+        ).model_dump(mode="json"),
+    }
+    store = _FakeIdemStore(
+        {"kind": "replay", "job_id": "job-abc"}, snapshot=done, record=done, result_json=env
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is True
+    assert res["meta"]["idempotency_replayed"] is True
+    assert store.cancelled == []  # a replay waiter never cancels the shared job
+
+
+async def test_empty_idempotency_key_rejected_at_boundary():
+    """An empty idempotency_key violates min_length -> the invalid_arguments envelope."""
+    res = await server.mcp.call_tool("codex_consult", {"question": "q", "idempotency_key": ""})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["details"]["field"] == "idempotency_key"
+
+
+def _consult_meta(cwd):
+    return server._base_meta(
+        cwd,
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=1,
+    )
+
+
+async def test_keyed_await_timeout_leaves_shared_job_running(monkeypatch, clean_env, tmp_path):
+    """A keyed sync waiter that hits its local grace must NOT cancel the job — another
+    idempotent caller may be awaiting the same run; it stays recoverable via job_id."""
+    monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0)
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._await_job_result(
+        str(tmp_path),
+        "job-abc",
+        "codex_consult",
+        _consult_meta(str(tmp_path)),
+        "summary",
+        0,
+        None,
+        keyed=True,
+    )
+    assert res["error"]["code"] == "timeout"
+    assert store.cancelled == []  # not cancelled
+    assert "continues in the background" in res["error"]["message"]
+
+
+async def test_unkeyed_await_timeout_cancels_job(monkeypatch, clean_env, tmp_path):
+    """The prior (no-key) behavior is preserved: a timed-out unkeyed waiter cancels."""
+    monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0)
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._await_job_result(
+        str(tmp_path),
+        "job-abc",
+        "codex_consult",
+        _consult_meta(str(tmp_path)),
+        "summary",
+        0,
+        None,
+    )
+    assert res["error"]["code"] == "timeout"
+    assert store.cancelled == ["job-abc"]
+
+
+async def test_consult_sync_conflict_maps_to_error(monkeypatch, clean_env, tmp_path):
+    store = _FakeIdemStore({"kind": "conflict"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False and res["error"]["code"] == "idempotency_conflict"
+    assert store.idem_calls[0]["tool"] == "codex_consult"  # sync tool namespace
+
+
+async def test_consult_sync_in_progress_after_wait(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(server, "_IDEM_SYNC_INPROGRESS_WAIT_S", 0.0)  # don't actually block
+    store = _FakeIdemStore({"kind": "in_progress"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False and res["error"]["code"] == "idempotency_in_progress"
+    assert res["error"]["temporary"] is True
+
+
+async def test_consult_sync_in_progress_then_created_loops(monkeypatch, clean_env, tmp_path):
+    """A reservation that is still publishing resolves on a retry within the wait window."""
+    monkeypatch.setattr(server, "_IDEM_SYNC_INPROGRESS_POLL_S", 0.0)
+    done = _ok_record("done")
+    done["kind"] = "codex_consult"
+    env = {
+        "ok": True,
+        "tool": "codex_consult",
+        "summary": "a",
+        "meta": _consult_meta(str(tmp_path)).model_dump(mode="json"),
+    }
+    store = _FakeIdemStore(
+        None,
+        outcomes=[
+            {"kind": "in_progress"},
+            {"kind": "created", "job_id": "job-abc", "started_at": "t"},
+        ],
+        record=done,
+        result_json=env,
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is True
+    assert len(store.idem_calls) == 2  # looped once past the in-progress reservation

@@ -172,6 +172,27 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         False,
         "Inspect the failure detail; start a new job.",
     ),
+    "idempotency_conflict": (
+        "use_new_idempotency_key",
+        None,
+        False,
+        "This idempotency_key was already used with different arguments; resend the"
+        " original arguments to replay, or pass a new idempotency_key to run again.",
+    ),
+    "idempotency_result_unavailable": (
+        "use_new_idempotency_key",
+        None,
+        False,
+        "The prior run for this idempotency_key already completed and its result is no"
+        " longer available; pass a new idempotency_key to run again.",
+    ),
+    "idempotency_in_progress": (
+        "retry_after_delay",
+        None,
+        True,
+        "A run for this idempotency_key is still starting; retry the same call after"
+        " retry_after_ms.",
+    ),
 }
 
 
