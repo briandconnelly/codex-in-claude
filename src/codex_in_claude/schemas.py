@@ -353,7 +353,8 @@ class Meta(BaseModel):
     # Kind of the background job a lifecycle error envelope refers to (e.g.
     # "codex_delegate"), set only when codex_job_* resolved an existing record. It
     # carries the inspected job's own posture — a propose-tier delegate vs a read-only
-    # consult/review — without overloading tier/sandbox, which describe THIS call. None
+    # consult/review — without overloading tier/sandbox, which describe the Codex run the
+    # envelope is about (for a lifecycle error, the read-only lifecycle call itself). None
     # for not-found/pre-lookup errors and for every non-lifecycle call.
     job_kind: str | None = None
     # Set to True ONLY on a response that replayed an existing run because the caller

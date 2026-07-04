@@ -11,9 +11,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   five `codex_job_*` tools carry `readOnlyHint: true` (status/result/list) or mutate only this
   server's job state (cancel/consume), yet their generated error envelopes reported
   `meta.tier: "propose"`, `meta.sandbox: "workspace-write"` — the posture of a *delegate*, not of a
-  read-only lookup. `meta.tier`/`meta.sandbox` now describe **THIS call's** execution posture
-  (`consult`/`read-only` for every lifecycle call — none run Codex or write the caller's
-  workspace), consistent with `readOnlyHint`; the two are documented as orthogonal dimensions
+  read-only lookup. On lifecycle-**generated** error envelopes, `meta.tier`/`meta.sandbox` now
+  describe the lifecycle call's own execution posture — `consult`/`read-only`, since these calls
+  never run Codex or write the caller's workspace — consistent with `readOnlyHint`. (Retrieved job
+  *results* keep their originating run's posture; see below.) The two fields are documented as
+  orthogonal dimensions
   (execution posture vs. server-state mutation) in the `Meta.tier`/`sandbox` field descriptions
   (published at `codex://result-meta` / `codex://error-envelope`). The inspected job's own posture
   is preserved — not discarded — via a new **`meta.job_kind`** field, set to the resolved job's
