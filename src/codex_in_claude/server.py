@@ -1958,7 +1958,10 @@ def _spawn_failure_envelope(exc: Exception, meta: Meta) -> dict:
         ErrorResult(
             error=make_error(
                 "internal_error",
-                f"failed to start background job: {redaction.redact_text(str(exc)) or ''}"[:300],
+                (
+                    f"failed to start background job: {type(exc).__name__}: "
+                    f"{redaction.redact_text(str(exc)) or ''}"
+                )[:300],
                 repair_alternative=(
                     "Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry."
                 ),

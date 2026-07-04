@@ -202,7 +202,10 @@ def main(argv: list[str] | None = None) -> int:
             ErrorResult(
                 error=make_error(
                     "internal_error",
-                    f"background worker crashed: {redaction.redact_text(str(exc)) or ''}"[:300],
+                    (
+                        f"background worker crashed: {type(exc).__name__}: "
+                        f"{redaction.redact_text(str(exc)) or ''}"
+                    )[:300],
                 ),
                 meta=_meta_from_spec(spec),
             )

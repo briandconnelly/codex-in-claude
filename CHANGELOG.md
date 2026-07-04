@@ -58,7 +58,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (which can carry paths, URLs, or stored-payload fragments) into the returned message with no
   redaction pass, against the repo convention that every free-text surface is redacted before
   return. All four now wrap the text in `redaction.redact_text(...)` at the sink, matching
-  `orchestration.gitdiff_error`; the safe exception class name is preserved. As belt-and-braces, a
+  `orchestration.gitdiff_error`; the safe exception class name (`type(exc).__name__`) is preserved
+  in each exception-derived message for debugging. As belt-and-braces, a
   schema-valid stored error payload (e.g. written by a pre-fix worker still within its TTL) is also
   redacted at the `_finished_job_envelope` return boundary. Best-effort defense-in-depth (the error
   channel is the local client, not OpenAI); message text only, so no fingerprint change.

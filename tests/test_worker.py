@@ -118,6 +118,8 @@ def test_worker_crash_redacts_secret_in_message(tmp_path, monkeypatch):
     assert out["error"]["code"] == "internal_error"
     assert "AKIAIOSFODNN7EXAMPLE" not in out["error"]["message"]
     assert "[redacted: secret value]" in out["error"]["message"]
+    # The safe exception class name is preserved, consistent with the other sinks.
+    assert "RuntimeError" in out["error"]["message"]
 
 
 def test_worker_no_args_returns_error_code():

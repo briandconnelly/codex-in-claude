@@ -2501,6 +2501,8 @@ def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_
     msg = res["error"]["message"]
     assert "AKIAIOSFODNN7EXAMPLE" not in msg
     assert "[redacted: secret value]" in msg
+    # The safe exception class name is preserved, consistent with the other sinks.
+    assert "OSError" in msg
 
 
 def test_job_result_corrupt_redacts_secret_in_detail(clean_env, tmp_path):
