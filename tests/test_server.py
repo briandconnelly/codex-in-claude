@@ -177,6 +177,22 @@ def test_capabilities_shape():
     assert res["fingerprint"] == FINGERPRINT
 
 
+def test_capabilities_names_tool_error_carrier():
+    # F3: agents must learn WHERE a tool failure travels before the first failure.
+    res = server.codex_capabilities()
+    carrier = res["tool_error_carrier"]
+    assert "structuredContent" in carrier
+    assert "isError" in carrier
+
+
+def test_instructions_name_the_error_carrier():
+    # F3: the capability summary (served as MCP instructions) names the carrier for
+    # tool failures, so a discovery-only client need not infer it from the outputSchema.
+    summary = server.CAPABILITY_SUMMARY
+    assert "isError" in summary
+    assert "structuredContent" in summary
+
+
 def test_workspace_write_no_egress_is_documented():
     """The propose-tier no-network constraint of workspace-write is discoverable (issue #24).
 
@@ -324,6 +340,28 @@ async def test_consult_input_too_large(monkeypatch, clean_env, tmp_path):
     res = await server.codex_consult("q", workspace_root=str(tmp_path), extra_context=big)
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
+
+
+async def test_consult_combined_too_large_names_both_fields(monkeypatch, clean_env, tmp_path):
+    # F2: the combined-size limit is on question + extra_context together, so when both
+    # contribute the envelope names both via details.fields (not a single misleading field).
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_consult(
+        "x" * 600, workspace_root=str(tmp_path), extra_context="y" * 600
+    )
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["details"]["fields"] == ["question", "extra_context"]
+    assert "field" not in res["error"]["details"]  # exactly one of field/fields
+
+
+async def test_consult_question_only_too_large_names_question(monkeypatch, clean_env, tmp_path):
+    # F2: when only `question` is oversized (no extra_context), report field="question"
+    # rather than blaming extra_context, which contributed nothing.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_consult("x" * 2000, workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["details"]["field"] == "question"
+    assert "fields" not in res["error"]["details"]
 
 
 async def test_consult_placeholder_env(monkeypatch, clean_env, tmp_path):
@@ -1459,6 +1497,19 @@ async def test_job_tool_invalid_arguments_meta_read_only(clean_env):
     assert sc["meta"]["sandbox"] == "read-only"
 
 
+async def test_invalid_arguments_repair_names_tool_and_leads_with_correction(clean_env):
+    # N3: the failing tool name is known and non-sensitive, so repair.tool surfaces it.
+    res = await server.mcp.call_tool("codex_consult", {"definitely_not_a_param": 1})
+    repair = res.structured_content["error"]["repair"]
+    assert repair["next_step"] == "correct_arguments"
+    assert repair["tool"] == "codex_consult"
+    # Values are never echoed, so repair.arguments must stay absent, and the alternative
+    # must lead with correcting the args so (tool set, no arguments) can't read as a
+    # blind re-call of the same tool.
+    assert "arguments" not in repair
+    assert repair["alternative"].startswith("Correct the argument(s) first")
+
+
 async def test_job_result_done_but_missing_payload(monkeypatch, clean_env, tmp_path):
     store = _FakeStore(record=_ok_record("done"), result_json=None)
     monkeypatch.setattr(server.config, "job_store", lambda: store)
@@ -1562,8 +1613,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_22():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-22"
+def test_fingerprint_is_schema_23():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-23"
 
 
 def test_capabilities_mark_m4_surface_experimental():
@@ -1777,6 +1828,16 @@ async def test_consult_async_returns_job_id(monkeypatch, clean_env, tmp_path):
     assert spec["tier"] == "consult"
 
 
+async def test_consult_async_combined_too_large_names_both_fields(monkeypatch, clean_env, tmp_path):
+    # F2: the async consult path shares the combined-size guard, so it names both fields too.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_consult_async(
+        "x" * 600, workspace_root=str(tmp_path), extra_context="y" * 600
+    )
+    assert res["error"]["code"] == "input_too_large"
+    assert res["error"]["details"]["fields"] == ["question", "extra_context"]
+
+
 async def test_consult_async_bad_isolation(clean_env, tmp_path):
     res = await server.codex_consult_async("q", workspace_root=str(tmp_path), isolation="nope")
     assert res["ok"] is False
@@ -1796,7 +1857,8 @@ async def test_consult_async_input_too_large(monkeypatch, clean_env, tmp_path):
     )
     assert res["ok"] is False
     assert res["error"]["code"] == "input_too_large"
-    assert res["error"]["details"]["field"] == "extra_context"
+    # Both inputs contributed to the combined-size limit, so both are named (#174/F2).
+    assert res["error"]["details"]["fields"] == ["question", "extra_context"]
     assert res["error"]["limit_bytes"] == 1000
     # actual_bytes covers question + extra_context: len("q") + 2000.
     assert res["error"]["actual_bytes"] == 2001

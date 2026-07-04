@@ -7,6 +7,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Combined-size (`input_too_large`) failures on `codex_consult`/`codex_consult_async` now name
+  every offending input** (#174, audit F2). The byte limit applies to `question` +
+  `extra_context` *together*, but the envelope hardcoded `details.field: "extra_context"` even when
+  `question` alone was oversized — blaming an input that contributed nothing. `ErrorDetail` gains a
+  `fields: list[str]` carrier (mutually exclusive with `field` — exactly one, never both): the
+  envelope now reports `fields: ["question", "extra_context"]` when both contribute and
+  `field: "question"` when it was sent alone. Agent-visible surface change → new
+  `error.details.fields` field. Part of the schema-22 → schema-23 fingerprint bump.
+- **`invalid_arguments` repair now names the failing tool** (#184, audit N3). The repair guidance
+  identified the tool only in prose; `error.repair.tool` was left null though the called tool's name
+  is known and non-sensitive. It is now set. Because the rejected argument *values* are never echoed,
+  `repair.arguments` stays absent and every `invalid_arguments` `repair.alternative` now leads with
+  "Correct the argument(s) first — …", so the `(tool set, arguments absent, next_step:
+  correct_arguments)` combination cannot read as "call the same tool again as-is". Agent-visible
+  surface change → `repair.tool`/`alternative` prose on `invalid_arguments`. Part of the schema-22 →
+  schema-23 fingerprint bump.
+
 - **Job-lifecycle error envelopes no longer contradict their `readOnlyHint`** (#177, audit F5). The
   five `codex_job_*` tools carry `readOnlyHint: true` (status/result/list) or mutate only this
   server's job state (cancel/consume), yet their generated error envelopes reported
@@ -27,6 +44,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `codex-in-claude/0.1/schema-21` → `codex-in-claude/0.1/schema-22`.
 
 ### Added
+
+- **The tool-failure carrier is now named before the first failure** (#175, audit F3).
+  `codex_capabilities` gains a `tool_error_carrier` field, and the capability summary (served as MCP
+  `instructions`) gains one sentence, both stating that a tool failure comes back as the tool result
+  itself (`isError: true`) with the error envelope in `structuredContent` (and `content[0].text`
+  mirroring it) — so a discovery-only client need not infer the carrier from the `outputSchema`
+  union. Scoped deliberately to *tool* calls: resource-read failures use the JSON-RPC error carrier
+  (tracked separately as audit F9, #181). Agent-visible surface change → new
+  `tool_error_carrier` capability field and instructions prose. Part of the schema-22 → schema-23
+  fingerprint bump.
 
 - **Optional `idempotency_key` on the six spend-committing tools** (`codex_consult`,
   `codex_review_changes`, `codex_delegate` and their `_async` variants) so a retry after a

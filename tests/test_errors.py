@@ -37,6 +37,16 @@ def test_make_error_non_temporary_has_no_backoff():
     assert e.repair.next_step == "correct_arguments"
 
 
+def test_make_error_repair_tool_override_names_the_failing_tool():
+    # N3: invalid_arguments has no table-derived repair tool, but the failing
+    # tool name is known and non-sensitive — the override surfaces it.
+    e = make_error("invalid_arguments", "bad arg", repair_tool="codex_consult")
+    assert e.repair.tool == "codex_consult"
+    # The rejected argument values are never echoed, so repair.arguments stays absent
+    # and the combination can't read as "call the same tool again as-is".
+    assert e.repair.arguments is None
+
+
 def test_serialize_error_strips_nulls_but_keeps_retry_after_ms():
     env = ErrorResult(error=make_error("invalid_arguments", "bad"), meta=_meta())
     d = serialize_error(env)

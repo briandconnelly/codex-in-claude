@@ -22,7 +22,7 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # the fixture in the same commit. It is an acknowledgment guard — it surfaces the
 # drift, it does not mechanically force the integer bump (the snapshot and this
 # string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-22"
+FINGERPRINT = "codex-in-claude/0.1/schema-23"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -454,12 +454,23 @@ class Repair(BaseModel):
 class ErrorDetail(BaseModel):
     """§6 details{field, value, reason}. `value` is deliberately omitted: a Literal/string
     param accepts arbitrary input that could be a secret, and best-effort redaction cannot
-    reliably catch a plain one; the caller already holds what it sent. Documented divergence."""
+    reliably catch a plain one; the caller already holds what it sent. Documented divergence.
+
+    `field` and `fields` are mutually exclusive (exactly one, never both): `field` names a
+    single offending input; `fields` names a set of inputs whose *combination* is invalid —
+    e.g. a combined-size limit where no single input is at fault on its own (#174/F2)."""
 
     model_config = ConfigDict(extra="forbid")
     field: str | None = None
+    fields: list[str] | None = None
     reason: str | None = None
     allowed_values: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _one_of_field_or_fields(self) -> ErrorDetail:
+        if self.field is not None and self.fields is not None:
+            raise ValueError("ErrorDetail: set exactly one of field/fields, never both")
+        return self
 
 
 class ErrorInfo(BaseModel):
@@ -610,6 +621,13 @@ class CapabilitiesResult(BaseModel):
     negative_scope: list[str]  # what it deliberately does NOT do
     prerequisites: list[str]
     deprecation_policy: str
+    # Where a TOOL failure travels, stated before the first failure so a client need not
+    # infer it from the outputSchema union (#175/F3). Scoped to tool calls deliberately:
+    # resource-read failures use the JSON-RPC error carrier, not a tool result.
+    tool_error_carrier: str = (
+        "tool result with isError: true; the error envelope is in structuredContent, "
+        "and content[0].text mirrors it as JSON"
+    )
     error_envelope_resource: str = "codex://error-envelope"
     result_meta_resource: str = "codex://result-meta"
     # Opt-in tool-reachable fallback: the full error-envelope / result-meta schemas,

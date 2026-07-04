@@ -38,6 +38,22 @@ def test_errordetail_has_no_value_field():
     assert "value" not in ErrorDetail.model_fields
 
 
+def test_errordetail_accepts_field_or_fields_alone():
+    # F2: `field` names one offending input; `fields` names a set whose
+    # combination is invalid. Each is valid on its own.
+    assert ErrorDetail(field="question").field == "question"
+    assert ErrorDetail(fields=["question", "extra_context"]).fields == [
+        "question",
+        "extra_context",
+    ]
+
+
+def test_errordetail_rejects_both_field_and_fields():
+    # F2: exactly one of field/fields, never both.
+    with pytest.raises(ValidationError):
+        ErrorDetail(field="question", fields=["question", "extra_context"])
+
+
 # ---------------------------------------------------------------------------
 # Task 3: published_schema / opaque-error branch tests
 # ---------------------------------------------------------------------------
@@ -578,8 +594,8 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     assert lc.activity_support == "codex_events"
 
 
-def test_fingerprint_bumped_to_schema_22():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-22"
+def test_fingerprint_bumped_to_schema_23():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-23"
 
 
 # ---------------------------------------------------------------------------

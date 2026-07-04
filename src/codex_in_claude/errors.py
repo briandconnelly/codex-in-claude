@@ -202,6 +202,7 @@ def make_error(
     *,
     retry_after_ms: int | None = None,
     temporary: bool | None = None,
+    repair_tool: str | None = None,
     repair_arguments: dict[str, Any] | None = None,
     repair_alternative: str | None = None,
     details: ErrorDetail | None = None,
@@ -212,8 +213,12 @@ def make_error(
 ) -> ErrorInfo:
     """Build the §6 error envelope for `code`, deriving the symbolic repair from the
     per-code table. `temporary` defaults to the table's value; pass it to override.
-    `retry_after_ms` is honored only when the result is temporary."""
+    `retry_after_ms` is honored only when the result is temporary. `repair_tool` overrides
+    the table's repair tool when the failing tool is known at the call site but not fixed
+    per code (e.g. invalid_arguments names the tool that was called — #184/N3)."""
     next_step, tool, temp_default, alt_default = _REPAIR_BY_CODE[code]
+    if repair_tool is not None:
+        tool = repair_tool
     is_temp = temp_default if temporary is None else temporary
     backoff = retry_after_ms if is_temp else None
     repair = Repair(
