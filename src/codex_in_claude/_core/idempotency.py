@@ -226,7 +226,7 @@ class IdempotencyIndex:
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             except FileExistsError:
-                decision = self._classify(path, arg_hash_, resolve)
+                decision, replay_job_id = self._classify(path, arg_hash_, resolve)
                 if decision == _SWEEP:
                     if attempt == 0:
                         self.remove(path)
@@ -235,9 +235,13 @@ class IdempotencyIndex:
                     # in-progress so the caller retries rather than double-spending.
                     return Outcome(kind=IN_PROGRESS, path=path)
                 if decision == REPLAY:
-                    status, rec = self._read(path)
-                    jid = rec.get("job_id") if (status == "ok" and rec is not None) else None
-                    return Outcome(kind=REPLAY, job_id=jid, path=path)
+                    # The job_id comes from the same read that decided REPLAY (no second
+                    # read that could race to None). _well_formed guarantees an active
+                    # record has one; if it is somehow absent, fail closed rather than
+                    # hand back a null job_id the caller would dereference.
+                    if not replay_job_id:  # pragma: no cover - defensive; _well_formed
+                        return Outcome(kind=UNAVAILABLE, path=path)  # guarantees active has one
+                    return Outcome(kind=REPLAY, job_id=replay_job_id, path=path)
                 return Outcome(kind=decision, path=path)
             else:
                 os.close(fd)
@@ -256,18 +260,21 @@ class IdempotencyIndex:
                 return Outcome(kind=WON, path=path)
         return Outcome(kind=IN_PROGRESS, path=path)  # pragma: no cover - loop always returns
 
-    def _classify(self, path: Path, arg_hash_: str, resolve: JobResolver) -> str:
+    def _classify(self, path: Path, arg_hash_: str, resolve: JobResolver) -> tuple[str, str | None]:
+        """Classify an existing entry. Returns (decision, job_id); job_id is set only for
+        a REPLAY and is read from the SAME record the decision was made on, so reserve()
+        never has to re-read (which could race the record to a null job_id)."""
         status, rec = self._read(path)
         now = self._now()
         if status == "missing":
-            return _SWEEP  # vanished between O_EXCL failure and read; retry create
+            return _SWEEP, None  # vanished between O_EXCL failure and read; retry create
         if status == "empty":
             age = self._mtime_age(path, now)
             if age is None:
-                return IN_PROGRESS
-            return _SWEEP if age > self.horizon_seconds else IN_PROGRESS
+                return IN_PROGRESS, None
+            return (_SWEEP if age > self.horizon_seconds else IN_PROGRESS), None
         if status == "corrupt":
-            return UNAVAILABLE  # non-empty but unparseable -> fail closed
+            return UNAVAILABLE, None  # non-empty but unparseable -> fail closed
         assert rec is not None
         reserved_epoch = rec.get("reserved_epoch") or 0.0
         within = (now - reserved_epoch) <= self.horizon_seconds
@@ -278,15 +285,17 @@ class IdempotencyIndex:
             if facts is not None and facts.exists:
                 # A live-or-terminal job still on disk keeps the entry alive regardless
                 # of age; classify by argument match.
-                return CONFLICT if rec.get("arg_hash") != arg_hash_ else REPLAY
+                if rec.get("arg_hash") != arg_hash_:
+                    return CONFLICT, None
+                return REPLAY, job_id
             # Job dir gone (consumed or count-cap evicted).
             if not within:
-                return _SWEEP
-            return CONFLICT if rec.get("arg_hash") != arg_hash_ else UNAVAILABLE
+                return _SWEEP, None
+            return (CONFLICT if rec.get("arg_hash") != arg_hash_ else UNAVAILABLE), None
         # Reserved but not yet published.
         if not within:
-            return _SWEEP
-        return CONFLICT if rec.get("arg_hash") != arg_hash_ else IN_PROGRESS
+            return _SWEEP, None
+        return (CONFLICT if rec.get("arg_hash") != arg_hash_ else IN_PROGRESS), None
 
     def publish(self, path: Path, job_id: str) -> None:
         """Promote a reserved entry to active, atomically. Only the O_EXCL winner ever

@@ -205,3 +205,25 @@ def test_lock_is_an_exclusive_cross_process_flock(tmp_path):
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+def test_replay_never_returns_null_job_id(tmp_path):
+    # Copilot review: an active record lacking a job_id must not classify as a REPLAY
+    # with job_id=None (the caller would dereference it). _well_formed rejects it, so it
+    # fails closed as unavailable instead.
+    idx = _idx(tmp_path)
+    _write_raw(
+        tmp_path,
+        json.dumps(
+            {
+                "version": 1,
+                "state": "active",
+                "arg_hash": "AH1",
+                "reserved_epoch": time.time(),
+                "job_id": None,
+            }
+        ),
+    )
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert out.kind == idem.UNAVAILABLE
+    assert out.job_id is None
