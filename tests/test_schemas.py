@@ -49,9 +49,29 @@ def test_errordetail_accepts_field_or_fields_alone():
 
 
 def test_errordetail_rejects_both_field_and_fields():
-    # F2: exactly one of field/fields, never both.
+    # F2: at most one of field/fields, never both.
     with pytest.raises(ValidationError):
         ErrorDetail(field="question", fields=["question", "extra_context"])
+
+
+def test_errordetail_allows_neither_carrier():
+    # F2: neither is required — an enum failure may carry only allowed_values (e.g.
+    # gitdiff_error's invalid_scope path). This must stay valid.
+    d = ErrorDetail(allowed_values=["working_tree", "branch", "commit"])
+    assert d.field is None and d.fields is None
+
+
+def test_errordetail_rejects_empty_fields():
+    # A "combination" of zero inputs is meaningless; the constraint is published as
+    # minItems: 1 (not merely runtime-enforced) so the advertised contract is honest.
+    with pytest.raises(ValidationError):
+        ErrorDetail(fields=[])
+    assert "minItems" in json.dumps(ErrorDetail.model_json_schema()["properties"]["fields"])
+
+
+def test_errordetail_rejects_duplicate_fields():
+    with pytest.raises(ValidationError):
+        ErrorDetail(fields=["question", "question"])
 
 
 # ---------------------------------------------------------------------------

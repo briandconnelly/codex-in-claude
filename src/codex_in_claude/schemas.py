@@ -456,20 +456,25 @@ class ErrorDetail(BaseModel):
     param accepts arbitrary input that could be a secret, and best-effort redaction cannot
     reliably catch a plain one; the caller already holds what it sent. Documented divergence.
 
-    `field` and `fields` are mutually exclusive (exactly one, never both): `field` names a
-    single offending input; `fields` names a set of inputs whose *combination* is invalid —
-    e.g. a combined-size limit where no single input is at fault on its own (#174/F2)."""
+    `field` and `fields` are mutually exclusive — at most one is set, never both: `field`
+    names a single offending input; `fields` names a set of inputs whose *combination* is
+    invalid — e.g. a combined-size limit where no single input is at fault on its own
+    (#174/F2). Neither is required: a detail may instead carry only `reason`/`allowed_values`
+    (e.g. an enum failure with no single named field). When `fields` is set it is non-empty
+    (schema `minItems: 1`) and its entries are unique."""
 
     model_config = ConfigDict(extra="forbid")
     field: str | None = None
-    fields: list[str] | None = None
+    fields: list[str] | None = Field(default=None, min_length=1)
     reason: str | None = None
     allowed_values: list[str] | None = None
 
     @model_validator(mode="after")
     def _one_of_field_or_fields(self) -> ErrorDetail:
         if self.field is not None and self.fields is not None:
-            raise ValueError("ErrorDetail: set exactly one of field/fields, never both")
+            raise ValueError("ErrorDetail: set at most one of field/fields, never both")
+        if self.fields is not None and len(set(self.fields)) != len(self.fields):
+            raise ValueError("ErrorDetail.fields must not contain duplicates")
         return self
 
 

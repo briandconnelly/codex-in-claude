@@ -568,7 +568,7 @@
           },
           "ErrorDetail": {
             "additionalProperties": false,
-            "description": "§6 details{field, value, reason}. `value` is deliberately omitted: a Literal/string\nparam accepts arbitrary input that could be a secret, and best-effort redaction cannot\nreliably catch a plain one; the caller already holds what it sent. Documented divergence.\n\n`field` and `fields` are mutually exclusive (exactly one, never both): `field` names a\nsingle offending input; `fields` names a set of inputs whose *combination* is invalid —\ne.g. a combined-size limit where no single input is at fault on its own (#174/F2).",
+            "description": "§6 details{field, value, reason}. `value` is deliberately omitted: a Literal/string\nparam accepts arbitrary input that could be a secret, and best-effort redaction cannot\nreliably catch a plain one; the caller already holds what it sent. Documented divergence.\n\n`field` and `fields` are mutually exclusive — at most one is set, never both: `field`\nnames a single offending input; `fields` names a set of inputs whose *combination* is\ninvalid — e.g. a combined-size limit where no single input is at fault on its own\n(#174/F2). Neither is required: a detail may instead carry only `reason`/`allowed_values`\n(e.g. an enum failure with no single named field). When `fields` is set it is non-empty\n(schema `minItems: 1`) and its entries are unique.",
             "properties": {
               "allowed_values": {
                 "anyOf": [
@@ -603,6 +603,7 @@
                     "items": {
                       "type": "string"
                     },
+                    "minItems": 1,
                     "type": "array"
                   },
                   {

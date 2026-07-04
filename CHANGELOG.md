@@ -11,10 +11,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   every offending input** (#174, audit F2). The byte limit applies to `question` +
   `extra_context` *together*, but the envelope hardcoded `details.field: "extra_context"` even when
   `question` alone was oversized — blaming an input that contributed nothing. `ErrorDetail` gains a
-  `fields: list[str]` carrier (mutually exclusive with `field` — exactly one, never both): the
-  envelope now reports `fields: ["question", "extra_context"]` when both contribute and
-  `field: "question"` when it was sent alone. Agent-visible surface change → new
-  `error.details.fields` field. Part of the schema-22 → schema-23 fingerprint bump.
+  `fields: list[str]` carrier, mutually exclusive with `field` (at most one — never both; when set,
+  `fields` is non-empty (`minItems: 1`) with unique entries; neither carrier is required, so a
+  detail may still carry only `reason`/`allowed_values`): the envelope now reports
+  `fields: ["question", "extra_context"]` when both contribute and `field: "question"` when it was
+  sent alone. Agent-visible surface change → new `error.details.fields` field. Part of the
+  schema-22 → schema-23 fingerprint bump.
 - **`invalid_arguments` repair now names the failing tool** (#184, audit N3). The repair guidance
   identified the tool only in prose; `error.repair.tool` was left null though the called tool's name
   is known and non-sensitive. It is now set. Because the rejected argument *values* are never echoed,
