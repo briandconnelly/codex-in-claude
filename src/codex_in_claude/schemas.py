@@ -27,7 +27,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     "error_codes",  # the per-tool ErrorCode set
     "value_enums",  # the tier/sandbox/isolation/scope value sets
     # Resource + prompt surface (manifest `resources`/`resource_templates`/`prompts`)
-    "resource_metadata",  # resource records (name/title/uri/mimeType/size)
+    "resource_metadata",  # resource-record metadata (the resources/list wire fields)
     "resource_templates",  # resource-template wire shapes
     "prompts",  # prompt wire shapes (name/description/arguments)
     # Server-level surface
