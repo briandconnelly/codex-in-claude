@@ -5,6 +5,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_capabilities` now discloses what the fingerprint covers** (#178, audit F6). The result
+  gains a `fingerprint_covers` field — a list of granular, machine-readable identifiers naming
+  exactly the categories a change to the `fingerprint` may signal (`tool_names`,
+  `tool_input_schemas`, `tool_output_schemas`, `tool_descriptions`, `tool_annotations`,
+  `error_codes`, `value_enums`, `resource_metadata`, `resource_templates`, `prompts`,
+  `initialize_response`, `error_envelope_schema`, `result_meta_schema`, `capabilities_payload`,
+  `capability_guarantees`). Previously that coverage lived only in a `schemas.py` source comment and
+  `AGENTS.md`, so a client could see the fingerprint change but not reason about *what* invalidated
+  its cache without reading source. The field derives from a new authoritative `FINGERPRINT_COVERS`
+  tuple (now the single source of truth; the `FINGERPRINT` comment points to it rather than
+  duplicating the list). The token set is kept complete relative to the actual guard — the manifest
+  surface — by a structural test that maps every manifest section to a coverage token, so the
+  disclosure can neither drift from the constant nor silently under-report a guarded surface.
+  Agent-visible surface change → new `fingerprint_covers` capability field; fingerprint
+  `codex-in-claude/0.1/schema-25` → `codex-in-claude/0.1/schema-26`.
+
 ### Fixed
 
 - **`isolation` param no longer advertises `'inherit'` as the unconditional default** (#183, audit

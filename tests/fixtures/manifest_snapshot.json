@@ -10,6 +10,23 @@
     ],
     "deprecation_policy": "Pre-1.0: minor versions may change the agent-visible surface; the fingerprint changes when they do.",
     "error_envelope_resource": "codex://error-envelope",
+    "fingerprint_covers": [
+      "tool_names",
+      "tool_input_schemas",
+      "tool_output_schemas",
+      "tool_descriptions",
+      "tool_annotations",
+      "error_codes",
+      "value_enums",
+      "resource_metadata",
+      "resource_templates",
+      "prompts",
+      "initialize_response",
+      "error_envelope_schema",
+      "result_meta_schema",
+      "capabilities_payload",
+      "capability_guarantees"
+    ],
     "free_tools": [
       "codex_models",
       "codex_status",
@@ -899,7 +916,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-25",
+                "default": "codex-in-claude/0.1/schema-26",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1861,7 +1878,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-25",
+            "default": "codex-in-claude/0.1/schema-26",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2135,6 +2152,12 @@
               },
               "fingerprint": {
                 "type": "string"
+              },
+              "fingerprint_covers": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "free_tools": {
                 "items": {

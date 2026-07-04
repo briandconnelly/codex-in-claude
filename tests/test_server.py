@@ -1622,8 +1622,17 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_25():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-25"
+def test_fingerprint_is_schema_26():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-26"
+
+
+def test_capabilities_payload_discloses_fingerprint_covers():
+    """The capabilities payload advertises what the fingerprint covers so a client can
+    reason about cache invalidation programmatically instead of reading source (#178, F6)."""
+    from codex_in_claude.schemas import FINGERPRINT_COVERS
+
+    caps = server.codex_capabilities()
+    assert caps["fingerprint_covers"] == list(FINGERPRINT_COVERS)
 
 
 def test_capabilities_mark_m4_surface_experimental():

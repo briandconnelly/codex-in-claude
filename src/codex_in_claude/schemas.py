@@ -11,18 +11,41 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 
 from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 
-# Bump this whenever the agent-visible surface changes: tool names, input or
-# output schemas, descriptions, annotations, the ErrorCode set, the
-# tier/sandbox/isolation/scope value sets, the capability guarantees, the
-# initialize response (serverInfo/protocolVersion/capabilities/instructions),
-# resource metadata, or the codex_capabilities payload. Clients cache by it. The
-# committed manifest snapshot (tests/fixtures/manifest_snapshot.json, guarded by
-# tests/test_manifest.py) fails CI on any covered change, so such a change can't
-# land unreviewed; its failure message directs you to bump this and regenerate
-# the fixture in the same commit. It is an acknowledgment guard — it surfaces the
-# drift, it does not mechanically force the integer bump (the snapshot and this
-# string are independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-25"
+# The agent-visible surface the FINGERPRINT covers, as granular machine-readable
+# identifiers. This tuple is the single source of truth: CapabilitiesResult.fingerprint_covers
+# derives from it (audit F6, #178), so a client can reason about the fingerprint's
+# cache-invalidation scope programmatically instead of reading this comment. Bump FINGERPRINT
+# whenever anything in one of these categories changes. Keep the tokens stable — they are
+# themselves part of the surface (a rename is a covered change under `capabilities_payload`).
+FINGERPRINT_COVERS: tuple[str, ...] = (
+    # Tool surface (manifest `tools` section)
+    "tool_names",
+    "tool_input_schemas",
+    "tool_output_schemas",
+    "tool_descriptions",
+    "tool_annotations",
+    "error_codes",  # the per-tool ErrorCode set
+    "value_enums",  # the tier/sandbox/isolation/scope value sets
+    # Resource + prompt surface (manifest `resources`/`resource_templates`/`prompts`)
+    "resource_metadata",  # resource records (name/title/uri/mimeType/size)
+    "resource_templates",  # resource-template wire shapes
+    "prompts",  # prompt wire shapes (name/description/arguments)
+    # Server-level surface
+    "initialize_response",  # serverInfo/protocolVersion/advertised capabilities/instructions
+    "error_envelope_schema",  # codex://error-envelope content
+    "result_meta_schema",  # codex://result-meta content
+    "capabilities_payload",  # the codex_capabilities result body
+    "capability_guarantees",  # the semantic promises within it (annotations/tiers/error contracts)
+)
+
+# Bump this whenever the agent-visible surface changes — see FINGERPRINT_COVERS above for the
+# exact categories. Clients cache by it. The committed manifest snapshot
+# (tests/fixtures/manifest_snapshot.json, guarded by tests/test_manifest.py) fails CI on any
+# covered change, so such a change can't land unreviewed; its failure message directs you to bump
+# this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
+# the drift, it does not mechanically force the integer bump (the snapshot and this string are
+# independently editable).
+FINGERPRINT = "codex-in-claude/0.1/schema-26"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -624,6 +647,12 @@ class CapabilitiesResult(BaseModel):
     name: str
     version: str
     fingerprint: str = FINGERPRINT
+    # What a change to the fingerprint may signal, as granular machine-readable identifiers
+    # (audit F6, #178). A client can key its cache-invalidation reasoning off these categories
+    # rather than treating every fingerprint change as opaque. Any change within one of these
+    # categories bumps `fingerprint`; nothing outside them affects it. Derived from the
+    # authoritative FINGERPRINT_COVERS tuple so the disclosure can't drift from the source of truth.
+    fingerprint_covers: list[str] = Field(default_factory=lambda: list(FINGERPRINT_COVERS))
     transport: str
     stability: str
     active_tools: list[str]

@@ -7,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "12d426659ec60e22383405e6cfc24f3483bae69e30db92e3fe9cf3a11c04e387"
+EXPECTED_MANIFEST_HASH = "3556184b9e6958f4a1dfa0663fd8b0dadaf13ca03bed2a6289a6bc23dbdd0b19"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -52,6 +52,43 @@ async def test_build_manifest_covers_full_surface():
     }
     for section in ("resources", "initialize", "error_envelope", "result_meta", "capabilities"):
         assert m[section], f"manifest section {section} is empty"
+
+
+async def test_fingerprint_covers_accounts_for_every_section():
+    """`FINGERPRINT_COVERS` is advertised as an authoritative disclosure of what the
+    fingerprint guards (#178, audit F6), so it must stay complete relative to the actual
+    guard — the manifest surface. Every manifest section maps to at least one coverage
+    token, and the tokens are exactly that union: a newly guarded section (or a token
+    with no section) fails here until the disclosure is reconciled."""
+    from codex_in_claude.schemas import FINGERPRINT_COVERS
+
+    # Each canonical manifest section → the coverage token(s) that disclose it.
+    section_tokens = {
+        "tools": {
+            "tool_names",
+            "tool_input_schemas",
+            "tool_output_schemas",
+            "tool_descriptions",
+            "tool_annotations",
+            "error_codes",
+            "value_enums",
+        },
+        "resources": {"resource_metadata"},
+        "resource_templates": {"resource_templates"},
+        "prompts": {"prompts"},
+        "initialize": {"initialize_response"},
+        "error_envelope": {"error_envelope_schema"},
+        "result_meta": {"result_meta_schema"},
+        "capabilities": {"capabilities_payload", "capability_guarantees"},
+    }
+    m = await manifest.build_manifest()
+    # A new manifest section must gain a mapping entry (and thus a coverage token).
+    assert set(section_tokens) == set(m), (
+        "manifest sections changed; update FINGERPRINT_COVERS and this mapping in lockstep"
+    )
+    # The advertised tokens are exactly the union of the section tokens — no token that
+    # discloses nothing guarded, no guarded section left undisclosed.
+    assert set().union(*section_tokens.values()) == set(FINGERPRINT_COVERS)
 
 
 def _iter_enums(obj):

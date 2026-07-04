@@ -579,7 +579,13 @@ def test_delegate_result_with_findings_validates_against_schema():
 # --------------------------------------------------------------------------- #
 # Advisory polled event-activity fields (Task 3 / #139)
 # --------------------------------------------------------------------------- #
-from codex_in_claude.schemas import FINGERPRINT, AsyncLifecycle, JobStatus  # noqa: E402
+from codex_in_claude.schemas import (  # noqa: E402
+    FINGERPRINT,
+    FINGERPRINT_COVERS,
+    AsyncLifecycle,
+    CapabilitiesResult,
+    JobStatus,
+)
 
 
 def test_jobstatus_has_advisory_activity_fields_defaulting_safely():
@@ -617,8 +623,42 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     assert lc.activity_support == "codex_events"
 
 
-def test_fingerprint_bumped_to_schema_25():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-25"
+def test_fingerprint_bumped_to_schema_26():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-26"
+
+
+def test_fingerprint_covers_is_a_nonempty_stable_tuple():
+    # The coverage enumeration is the single source of truth (#178, audit F6): it is
+    # an immutable tuple of granular, machine-readable identifiers.
+    assert isinstance(FINGERPRINT_COVERS, tuple)
+    assert FINGERPRINT_COVERS  # non-empty
+    assert all(isinstance(c, str) and c for c in FINGERPRINT_COVERS)
+    # Deduplicated and machine-readable (snake_case tokens, no prose).
+    assert len(set(FINGERPRINT_COVERS)) == len(FINGERPRINT_COVERS)
+    assert all(c == c.lower() and " " not in c for c in FINGERPRINT_COVERS)
+    # Completeness relative to the actual fingerprint guard (the manifest surface) is
+    # asserted structurally in test_manifest.py::test_fingerprint_covers_accounts_for_every_section.
+
+
+def test_capabilities_result_exposes_fingerprint_covers_derived_from_constant():
+    caps = CapabilitiesResult(
+        name="codex-in-claude",
+        version="0.0.0",
+        transport="stdio",
+        stability="alpha",
+        active_tools=[],
+        free_tools=[],
+        tiers=[],
+        sandboxes=[],
+        scope=[],
+        negative_scope=[],
+        prerequisites=[],
+        deprecation_policy="x",
+    )
+    # The field derives from the constant but is an independent list (no shared mutable state).
+    assert caps.fingerprint_covers == list(FINGERPRINT_COVERS)
+    caps.fingerprint_covers.append("mutated")
+    assert "mutated" not in FINGERPRINT_COVERS
 
 
 # ---------------------------------------------------------------------------
