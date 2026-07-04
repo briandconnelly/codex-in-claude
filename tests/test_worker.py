@@ -102,6 +102,24 @@ def test_worker_crash_writes_error(tmp_path, monkeypatch):
     assert out["error"]["temporary"] is True
 
 
+def test_worker_crash_redacts_secret_in_message(tmp_path, monkeypatch):
+    # F10: the worker's crash sink writes result.json, which the server returns to the
+    # client unchanged — so a secret in the exception message must be redacted at write time.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    async def boom(*a, **k):
+        raise RuntimeError("crashed with token AKIAIOSFODNN7EXAMPLE")
+
+    monkeypatch.setattr(delegate, "run_delegate", boom)
+
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out["error"]["code"] == "internal_error"
+    assert "AKIAIOSFODNN7EXAMPLE" not in out["error"]["message"]
+    assert "[redacted: secret value]" in out["error"]["message"]
+
+
 def test_worker_no_args_returns_error_code():
     assert _worker.main([]) == 2
 

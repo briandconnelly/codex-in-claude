@@ -49,6 +49,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   cap 64 KB with headroom) so serialized weight, not just content, is guarded; the manifest snapshot
   additionally captures the `codex://result-meta` content so Meta-contract changes move the guard.
 
+### Security
+
+- **Redact exception-derived text in the four client-visible `internal_error` sinks** (#186,
+  audit F10). `_internal_error_result`, `_spawn_failure_envelope`, and `_job_result_corrupt`
+  (`server.py`) plus the background worker's crash sink (`_worker.py`, whose stored `result.json`
+  the server returns unchanged) interpolated raw `str(exc)` / Pydantic `ValidationError` text
+  (which can carry paths, URLs, or stored-payload fragments) into the returned message with no
+  redaction pass, against the repo convention that every free-text surface is redacted before
+  return. All four now wrap the text in `redaction.redact_text(...)` at the sink, matching
+  `orchestration.gitdiff_error`; the safe exception class name is preserved. As belt-and-braces, a
+  schema-valid stored error payload (e.g. written by a pre-fix worker still within its TTL) is also
+  redacted at the `_finished_job_envelope` return boundary. Best-effort defense-in-depth (the error
+  channel is the local client, not OpenAI); message text only, so no fingerprint change.
+
 ## [0.7.0] - 2026-07-01
 
 A background-jobs hardening release. Sync calls now run through the detached worker and stream

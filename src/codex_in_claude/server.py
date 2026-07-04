@@ -38,7 +38,7 @@ from codex_in_claude import (
     prompts,
     rate_limit,
 )
-from codex_in_claude._core import gitdiff, idempotency, workspace, worktree
+from codex_in_claude._core import gitdiff, idempotency, redaction, workspace, worktree
 from codex_in_claude.codex_models import read_model_catalog
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
@@ -691,7 +691,10 @@ def _internal_error_result(
         ErrorResult(
             error=make_error(
                 "internal_error",
-                f"{tool_name} failed unexpectedly: {type(exc).__name__}: {exc}"[:300],
+                (
+                    f"{tool_name} failed unexpectedly: {type(exc).__name__}: "
+                    f"{redaction.redact_text(str(exc)) or ''}"
+                )[:300],
                 repair_alternative=(
                     "Server-side error; retry. If it persists, run codex_status and inspect "
                     "the server's stderr log (set CODEX_IN_CLAUDE_LOG_LEVEL=DEBUG for detail)."
@@ -1955,7 +1958,7 @@ def _spawn_failure_envelope(exc: Exception, meta: Meta) -> dict:
         ErrorResult(
             error=make_error(
                 "internal_error",
-                f"failed to start background job: {exc}"[:300],
+                f"failed to start background job: {redaction.redact_text(str(exc)) or ''}"[:300],
                 repair_alternative=(
                     "Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry."
                 ),
@@ -2903,11 +2906,13 @@ def _validate_job_success(payload: dict, kind: str, meta: Meta) -> dict:
 
 
 def _job_result_corrupt(detail: str, meta: Meta) -> dict:
+    # `detail` interpolates ValidationError text that can echo stored payload fragments
+    # (Pydantic's input_value), so redact at this single sink for both corrupt-result paths.
     return serialize_error(
         ErrorResult(
             error=make_error(
                 "internal_error",
-                f"job result could not be returned: {detail}"[:300],
+                f"job result could not be returned: {redaction.redact_text(detail) or ''}"[:300],
                 repair_alternative=(
                     "Start a new job; if this persists, run codex_status and check the server logs."
                 ),
@@ -2971,6 +2976,13 @@ def _finished_job_envelope(
             validated = ErrorResult.model_validate(payload)
         except ValidationError as exc:
             return _job_result_corrupt(f"stored error result was malformed: {exc}", meta)
+        # Boundary redact (#186/F10): a schema-valid payload written by a pre-fix worker
+        # (still within its TTL) could carry unredacted exception text in its message. Scope
+        # this belt-and-braces pass to `internal_error` — the code every raw-exception sink
+        # emits — so domain errors (already redacted at write time) aren't re-run through the
+        # heuristic redactor and can't be over-redacted.
+        if validated.error.code == "internal_error":
+            validated.error.message = redaction.redact_text(validated.error.message) or ""
         return serialize_error(validated)
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))
     # A still-running job is the one recoverable case: point at the poll tool with

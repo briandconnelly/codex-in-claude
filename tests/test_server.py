@@ -2469,6 +2469,119 @@ async def test_boundary_internal_error_stamps_elapsed_ms(monkeypatch, clean_env,
     assert res["meta"]["elapsed_ms"] > 0
 
 
+# --- exception-derived client-visible text is redacted before return (#186/F10) ---
+def _meta_for(tmp_path):
+    return server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=180,
+    )
+
+
+def test_internal_error_result_redacts_secret_in_exception_text(clean_env, tmp_path):
+    # F10: an unexpected exception whose message carries a secret-looking value must not
+    # reach the client raw — redact it like orchestration.gitdiff_error does.
+    exc = RuntimeError("upstream blew up with token AKIAIOSFODNN7EXAMPLE")
+    res = server._internal_error_result("codex_consult", exc, tier="consult", sandbox="read-only")
+    msg = res["error"]["message"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in msg
+    assert "[redacted: secret value]" in msg
+    # The safe exception class name is still preserved for debugging.
+    assert "RuntimeError" in msg
+
+
+def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_path):
+    # F10: the spawn-failure internal_error is a second exception-text sink.
+    exc = OSError("cannot exec /home/AKIAIOSFODNN7EXAMPLE/worker")
+    res = server._spawn_failure_envelope(exc, _meta_for(tmp_path))
+    msg = res["error"]["message"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in msg
+    assert "[redacted: secret value]" in msg
+
+
+def test_job_result_corrupt_redacts_secret_in_detail(clean_env, tmp_path):
+    # F10: the corrupt-stored-result internal_error interpolates ValidationError text,
+    # which can echo stored payload fragments — redact its detail at the sink.
+    res = server._job_result_corrupt(
+        "stored codex_consult result did not match its schema: AKIAIOSFODNN7EXAMPLE",
+        _meta_for(tmp_path),
+    )
+    msg = res["error"]["message"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in msg
+    assert "[redacted: secret value]" in msg
+
+
+async def test_job_result_malformed_error_payload_redacts_secret(monkeypatch, clean_env, tmp_path):
+    # End-to-end: a stored ok:false payload whose malformed `error` value carries a secret
+    # leaks it via the Pydantic ValidationError's input_value echo — the returned message
+    # must redact it (regression through the real _finished_job_envelope path, not a mock).
+    rec = _ok_record("done")
+    store = _FakeStore(record=rec, result_json={"ok": False, "error": "AKIAIOSFODNN7EXAMPLE"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert "AKIAIOSFODNN7EXAMPLE" not in res["error"]["message"]
+    assert "[redacted: secret value]" in res["error"]["message"]
+
+
+async def test_job_result_valid_stored_error_message_redacted(monkeypatch, clean_env, tmp_path):
+    # F10 boundary redact: a SCHEMA-VALID stored ErrorResult (e.g. written by a pre-fix
+    # worker still within its TTL) whose message carries a secret is returned via
+    # serialize_error(validated) — the return boundary must redact it too.
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    meta = _meta_for(tmp_path).model_dump(mode="json")
+    stored = _serialize_error(
+        _ErrorResult(
+            error=_make_error("internal_error", "prior crash leaked AKIAIOSFODNN7EXAMPLE"),
+            meta=_meta_for(tmp_path),
+        )
+    )
+    stored["meta"] = meta
+    rec = _ok_record("done")
+    store = _FakeStore(record=rec, result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert "AKIAIOSFODNN7EXAMPLE" not in res["error"]["message"]
+    assert "[redacted: secret value]" in res["error"]["message"]
+
+
+async def test_job_result_valid_stored_error_message_preserved_when_clean(
+    monkeypatch, clean_env, tmp_path
+):
+    # The boundary redact must not alter legitimate, non-secret stored error text — and it
+    # only touches internal_error (domain errors are already redacted at write time).
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    meta = _meta_for(tmp_path).model_dump(mode="json")
+    # A domain error whose message merely resembles a token must pass through verbatim.
+    stored = _serialize_error(
+        _ErrorResult(
+            error=_make_error("git_unavailable", "git failed near ref AKIAIOSFODNN7EXAMPLE"),
+            meta=_meta_for(tmp_path),
+        )
+    )
+    stored["meta"] = meta
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "git_unavailable"
+    # Non-internal_error stored messages are returned untouched (no boundary redaction).
+    assert res["error"]["message"] == "git failed near ref AKIAIOSFODNN7EXAMPLE"
+
+
 async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
 
     def cancel(*a, **k):

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from codex_in_claude import delegate, orchestration
+from codex_in_claude._core import redaction
 from codex_in_claude._core.jobs import ActivityRecorder
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
@@ -201,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
             ErrorResult(
                 error=make_error(
                     "internal_error",
-                    f"background worker crashed: {exc}"[:300],
+                    f"background worker crashed: {redaction.redact_text(str(exc)) or ''}"[:300],
                 ),
                 meta=_meta_from_spec(spec),
             )
