@@ -1,6 +1,11 @@
 import typing
 
-from codex_in_claude.errors import _REPAIR_BY_CODE, make_error, serialize_error
+from codex_in_claude.errors import (
+    _REPAIR_BY_CODE,
+    make_error,
+    serialize_error,
+    serialize_error_info,
+)
 from codex_in_claude.schemas import ErrorCode, ErrorResult, Meta
 
 
@@ -35,6 +40,27 @@ def test_make_error_non_temporary_has_no_backoff():
     e = make_error("invalid_arguments", "bad arg")
     assert e.temporary is False and e.retry_after_ms is None
     assert e.repair.next_step == "correct_arguments"
+
+
+def test_resource_not_found_repair_lists_resources():
+    """The resource-read carrier (F9, #181): resource_not_found is permanent, has no
+    backoff, and steers the agent to list resources. repair.tool stays None because the
+    authoritative discovery path (resources/list) is an MCP method, not a server tool."""
+    e = make_error("resource_not_found", "Resource not found.")
+    assert e.temporary is False and e.retry_after_ms is None
+    assert e.repair.next_step == "list_resources"
+    assert e.repair.tool is None
+    assert "resources/list" in e.repair.alternative
+
+
+def test_serialize_error_info_retains_null_retry_after_ms():
+    """The bare-ErrorInfo serializer used for resource errors keeps retry_after_ms present
+    even when null (§6), and carries no ok/meta wrapper."""
+    d = serialize_error_info(make_error("resource_not_found", "Resource not found."))
+    assert d["code"] == "resource_not_found"
+    assert d["retry_after_ms"] is None  # present though null
+    assert "ok" not in d and "meta" not in d
+    assert d["repair"]["next_step"] == "list_resources"
 
 
 def test_make_error_repair_tool_override_names_the_failing_tool():
