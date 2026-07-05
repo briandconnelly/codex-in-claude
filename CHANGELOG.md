@@ -7,6 +7,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Idempotent job starts no longer strand a reservation on a partial failure** (#200). Two
+  paths in the `reserve → spawn → publish` cycle left the per-workspace idempotency index in
+  a state that denied the key (with no job running) until the ~24.5h horizon sweep. (1) In
+  `IdempotencyIndex.reserve`, the `O_EXCL` winner created an *empty* placeholder and then
+  populated it; if that initial write (or the `fd` close) failed — `ENOSPC`, `EACCES` — the
+  empty file was left behind and classified as `in_progress`, so every retry with that key
+  looped against a key that could never progress. The initial write is now rolled back
+  (placeholder unlinked, original error re-raised; a cleanup that itself fails is logged, not
+  masked). (2) In `JobStore.start_idempotent`, `index.publish(...)` sat *outside* the guard
+  around the paid `start(...)`; a publish failure after the worker was already spawned
+  surfaced as a false "failed to start … retry" while the job actually ran, and a retry
+  double-spent. The publish failure is now caught and logged, and the caller gets the real
+  running job's handle (so it won't retry); the un-promoted reservation fails closed
+  (`in_progress` until the horizon) for other callers reusing the key. A related hardening
+  surfaced in Codex review: `publish` now writes a complete active record from the reservation
+  the winner already holds instead of re-reading the file, so a reservation that was corrupted
+  or *deleted* between reserve and publish self-heals — it no longer drops the idempotency
+  mapping (a stub built from an unreadable record) nor, in the missing-file case, leaves the
+  path empty for a same-key retry to win and double-spend. Behavior/robustness only — no tool,
+  param, enum, or error-code change, so no `fingerprint` bump.
+
 - **Keyed idempotent job starts no longer block the asyncio event loop** (#199). The
   `idempotency_key` start paths (`_start_async`, and `_run_sync`'s in-progress wait loop)
   called `JobStore.start_idempotent` — which takes an unbounded cross-process `flock`,
