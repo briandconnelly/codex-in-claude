@@ -7,307 +7,168 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [0.8.0] - 2026-07-05
 
+An agent-friendliness and spend-safety release. It completes the 2026-07 agent-friendliness audit
+(findings F1–F10 and N1–N4) and hardens the idempotency and background-job paths. The agent-visible
+surface changed across ten increments (result `fingerprint` `codex-in-claude/0.1/schema-19` →
+`codex-in-claude/0.1/schema-29`), so pre-1.0 this is a minor release; clients that cache by
+`fingerprint` re-fetch the contract. Several existing contracts changed shape or meaning — notably the
+`tools/list` `meta` branch, lifecycle-error `meta.tier`/`sandbox`, and the `input_too_large`,
+`isolation`, and `idempotency_key` surfaces.
+
 ### Added
 
-- **`codex_capabilities` now discloses what the fingerprint covers** (#178, audit F6). The result
-  gains a `fingerprint_covers` field — a list of granular, machine-readable identifiers naming
-  exactly the categories a change to the `fingerprint` may signal (`tool_names`,
-  `tool_input_schemas`, `tool_output_schemas`, `tool_descriptions`, `tool_annotations`,
-  `error_codes`, `value_enums`, `resource_metadata`, `resource_templates`, `prompts`,
-  `initialize_response`, `error_envelope_schema`, `result_meta_schema`, `capabilities_payload`,
-  `capability_guarantees`). Previously that coverage lived only in a `schemas.py` source comment and
-  `AGENTS.md`, so a client could see the fingerprint change but not reason about *what* invalidated
-  its cache without reading source. The field derives from a new authoritative `FINGERPRINT_COVERS`
-  tuple (now the single source of truth; the `FINGERPRINT` comment points to it rather than
-  duplicating the list). The token set is kept complete relative to the actual guard — the manifest
-  surface — by a structural test that maps every manifest section to a coverage token, so the
-  disclosure can neither drift from the constant nor silently under-report a guarded surface.
-  Agent-visible surface change → new `fingerprint_covers` capability field; fingerprint
-  `codex-in-claude/0.1/schema-25` → `codex-in-claude/0.1/schema-26`.
-
-- **Advertised output schemas now declare their JSON Schema dialect** (#185, audit N4). Every tool's
-  `outputSchema` gains a root `$schema` of `https://json-schema.org/draft/2020-12/schema`, matching
-  the dialect already stamped on input schemas — so both directions of a tool's contract are
-  self-describing and a strict client knows which draft to validate a result against. The dialect is
-  now a single shared `JSON_SCHEMA_DIALECT` constant referenced by the input-schema middleware, every
-  published output schema, and the two resource schemas, so the two directions cannot drift. Part of the schema-26 → schema-27 fingerprint bump.
-
-- **MCP resources now advertise an explicit `name` and `title`** (#182, audit N1). The three
-  `codex://` resources (`models`, `error-envelope`, `result-meta`) carried function-derived names
-  (`codex_models_resource`, …) and no `title`; they now expose intent-revealing identifiers
-  (`codex-models` / "Codex model catalog", etc.) so a resource-browsing agent sees purpose, not
-  internals. (`size` is left unset: FastMCP's resource decorator exposes no `size` field to populate.) Part of the schema-26 → schema-27 fingerprint bump.
-
-- **The tool-failure carrier is now named before the first failure** (#175, audit F3).
-  `codex_capabilities` gains a `tool_error_carrier` field, and the capability summary (served as MCP
-  `instructions`) gains one sentence, both stating that a tool failure comes back as the tool result
-  itself (`isError: true`) with the error envelope in `structuredContent` (and `content[0].text`
-  mirroring it) — so a discovery-only client need not infer the carrier from the `outputSchema`
-  union. Scoped deliberately to *tool* calls: resource-read failures use the JSON-RPC error carrier
-  (tracked separately as audit F9, #181). Agent-visible surface change → new
-  `tool_error_carrier` capability field and instructions prose. Part of the schema-22 → schema-23
-  fingerprint bump.
-
 - **Optional `idempotency_key` on the six spend-committing tools** (`codex_consult`,
-  `codex_review_changes`, `codex_delegate` and their `_async` variants) so a retry after a
-  transport drop **replays** the existing run instead of starting — and paying for — a duplicate
-  Codex call (#176, audit F4). Dedup is scoped to (resolved workspace, exact tool, argument hash)
-  and backed by a disk-backed, `O_EXCL`-guarded index beside the job store, so it holds within and
-  across server processes for the job-TTL window. A sync retry awaits/returns the in-flight run's
-  result; an `_async` retry returns the existing job's real handle. Reuse with **different**
-  arguments is refused (`idempotency_conflict`); a key whose prior result was already
-  consumed/evicted is `idempotency_result_unavailable`; a still-publishing reservation is
-  `idempotency_in_progress` (retryable). A replayed response carries `meta.idempotency_replayed:
-  true`, and a run started with a key is treated as durable — a single waiter's timeout or
-  cancellation no longer cancels it (only `codex_job_cancel` does). Omit the param for the prior
-  no-dedup behavior. Agent-visible surface change → three new error codes, one new repair step, a
-  new `meta.idempotency_replayed` field, and per-tool advertised `error_codes`; fingerprint
-  `codex-in-claude/0.1/schema-20` → `codex-in-claude/0.1/schema-21`.
+  `codex_review_changes`, `codex_delegate`, and their `_async` variants) — a retry after a transport
+  drop **replays** the existing run instead of paying for a duplicate Codex call (#176, audit F4).
+  Dedup is keyed on (resolved workspace, exact tool, argument hash); a sync retry returns the in-flight
+  result, an `_async` retry the existing job handle. New error codes `idempotency_conflict` (different
+  arguments), `idempotency_result_unavailable` (prior result consumed/evicted), and
+  `idempotency_in_progress` (retryable); replays carry `meta.idempotency_replayed: true`, and a keyed
+  run is durable (only `codex_job_cancel` stops it). Omit the param for the prior no-dedup behavior.
+  Covered by `schema-21`.
 
-- **`codex_capabilities(include_schemas=[...])`** — an opt-in, tool-reachable fallback that embeds
-  the full `error-envelope` and/or `result-meta` schemas in the response for resource-blind
-  clients (#179, audit F7; the shared mechanism the #173 opaque-`meta` caveat requires). Omitted
-  from the default payload, so it does not re-bloat discovery. Covered by `schema-20`.
+- **`codex_capabilities` discloses what the fingerprint covers** (#178, audit F6). A new
+  `fingerprint_covers` field lists the machine-readable categories a `fingerprint` change may signal
+  (tool names/schemas/descriptions/annotations, error codes, value enums, resource metadata, prompts,
+  the initialize response, and more), so a client can reason about *what* invalidated its cache without
+  reading source. Derived from a new authoritative `FINGERPRINT_COVERS` tuple. Covered by `schema-26`.
 
-- **Wire-size budget** — the `tools/list` catalog size is now pinned in CI (`test_wire_catalog_under_cap`,
-  cap 64 KB with headroom) so serialized weight, not just content, is guarded; the manifest snapshot
-  additionally captures the `codex://result-meta` content so Meta-contract changes move the guard.
+- **`codex_capabilities(include_schemas=[...])`** — an opt-in fallback that embeds the full
+  `error-envelope` and/or `result-meta` schemas for resource-blind clients, omitted from the default
+  payload so it does not re-bloat discovery (#179, audit F7). Covered by `schema-20`.
+
+- **Advertised output schemas declare their JSON Schema dialect** (#185, audit N4). Every tool's
+  `outputSchema` gains a root `$schema` of `https://json-schema.org/draft/2020-12/schema`, matching
+  input schemas, so both directions of a tool's contract are self-describing. Part of the `schema-27`
+  bump.
+
+- **MCP resources advertise an explicit `name` and `title`** (#182, audit N1). The three `codex://`
+  resources now expose intent-revealing identifiers (`codex-models` / "Codex model catalog", etc.)
+  instead of function-derived names. Part of the `schema-27` bump.
+
+- **The tool-failure carrier is named before the first failure** (#175, audit F3).
+  `codex_capabilities.tool_error_carrier` and one sentence in the capability summary state that a tool
+  failure returns as the tool result itself (`isError: true`, envelope in `structuredContent`), so a
+  discovery-only client need not infer it from the `outputSchema` union. Part of the `schema-23` bump.
+
+- **CI wire-size budget** — the `tools/list` catalog size is pinned in CI (cap 64 KB with headroom) so
+  serialized weight is guarded, not just content; the manifest snapshot also captures the
+  `codex://result-meta` content.
 
 ### Changed
 
-- Restructured the collaborating-with-codex skill for rules-vs-context auditability: binding rules
-  surfaced as explicit guardrail bullets (workspace_root scope, setup-retry loop, the split
-  decider rules), the Knobs section rebuilt as per-param bullets with the idempotent-retry rule
-  extracted as its own bolded directive and a discovery pointer replacing the exhaustive
-  param-to-tool enumeration, and the frontmatter description trimmed (≤650 chars); added behavioral
-  test scenarios under `skills/collaborating-with-codex/tests/scenarios.md` (#221).
-
-- **Internal: shared preparation and idempotency-outcome mapping extracted for the sync/async tool
-  pairs** (#204). Each active tool and its `_async` twin (`codex_consult`, `codex_review_changes`,
-  `codex_delegate`) duplicated ~50 lines of isolation/detail resolution, workspace resolution, meta
-  construction, placeholder + input-size pre-flight, and spec assembly; that shape now lives in one
-  `_prepare_*` helper per pair called by both twins. The `conflict`/`unavailable`/`in_progress`
-  outcome→envelope mapping shared by `_start_async` and `_run_sync` is likewise consolidated in
-  `_idem_terminal_error`. Behavior is byte-identical — the run `spec` keys feed the idempotency
-  argument hash, so they are unchanged, and the manifest snapshot and `fingerprint` are unchanged.
-  New `tests/test_tool_pair_parity.py` pins sync/async spec parity (identical except
-  `timeout_seconds`), pre-flight error-envelope parity, and competing-error precedence.
+- **`tools/list` wire response shrunk ~44% (~103.5 KB → ~57.6 KB)** by advertising an opaque `meta`
+  branch (#173, audit F1). Success schemas now carry a `{"type": "object"}` pointer instead of the full
+  `Meta` model inlined per tool; the server still emits the full `Meta`, so strict clients validating
+  `structuredContent` against the advertised schema still pass. The full contract is published once at
+  the new **`codex://result-meta`** resource, with a `result_meta_resource` pointer in
+  `codex_capabilities`. Covered by `schema-20`.
 
 - **The capability summary (MCP `instructions`) is restructured as rules-then-context** (#180, audit
-  F8). The first-read instructions were a single run-on paragraph that interleaved background (the
-  `rate_limit` block field semantics) between the binding routing and safety rules. They are now
-  ordered: a does/does-not lead, each routing and safety rule as its own imperative sentence, then
-  discovery rules, and finally a single background paragraph carrying the async-job mechanics and the
-  cached rate-limit semantics — so an agent that skims reaches the actionable rules first. No rule or
-  fact was dropped; only the ordering and sentence boundaries changed. Part of the schema-26 → schema-27 fingerprint bump.
+  F8) — a does/does-not lead, each routing and safety rule as its own imperative sentence, then
+  discovery rules, then a single background paragraph (async-job mechanics, cached rate-limit
+  semantics). No rule or fact dropped; ordering only. Part of the `schema-27` bump.
 
-- **`tools/list` wire response shrunk ~44% (real MCP catalog ~103.5 KB → ~57.6 KB)** by
-  advertising an opaque `meta` branch (#173, audit F1). Every success envelope's `meta` was the
-  full `Meta` model inlined per tool (~3.5 KB × 6 tools ≈ 21 KB, since FastMCP dereferences
-  `$defs` on the wire); success schemas now carry a compact `{"type": "object"}` pointer — the
-  server still emits the full `Meta`, so strict clients validating `structuredContent` against the
-  advertised schema still pass. The full contract is published once at the new
-  **`codex://result-meta`** resource, mirroring `codex://error-envelope`, with a
-  `result_meta_resource` pointer in `codex_capabilities`. The now-orphaned `$defs` closure
-  (`RateLimit`/`RateLimitWindow`/`Usage`/`ContextSummary`) is pruned per-schema by reachability, so
-  definitions still referenced outside `Meta` (e.g. `codex_status` → `RateLimit`, `codex_dry_run`
-  → `ContextSummary`) are retained. The near-verbatim "Progress & recovery" docstring paragraph
-  (3×) is collapsed to one binding sentence. Agent-visible surface change → fingerprint
-  `codex-in-claude/0.1/schema-19` → `codex-in-claude/0.1/schema-20`.
+- **Restructured the `collaborating-with-codex` skill for rules-vs-context auditability** (#221) —
+  binding rules surfaced as guardrail bullets, the Knobs section rebuilt as per-param bullets with the
+  idempotent-retry rule extracted as its own directive, and the description trimmed; added behavioral
+  test scenarios under `skills/collaborating-with-codex/tests/scenarios.md`. Skill markdown only.
+
+- **Internal: shared prep and idempotency-outcome mapping extracted for the sync/async tool pairs**
+  (#204). Each tool and its `_async` twin duplicated ~50 lines of setup (isolation/detail/workspace
+  resolution, meta, pre-flight, spec); that now lives in one `_prepare_*` helper per pair, with the
+  shared idempotency outcome→envelope mapping consolidated in `_idem_terminal_error`. Behavior is
+  byte-identical — `fingerprint` unchanged.
 
 ### Fixed
 
-- Corrected factual overclaims in the collaborating-with-codex skill (workspace_root scope, timeout
-  default, codex_status repair field, error.details presence, slash-command parity) (#220).
+- **Keyed idempotent job starts no longer block the asyncio event loop** (#199). The `idempotency_key`
+  start paths ran a blocking cross-process `flock` + index sweep + subprocess spawn on the event-loop
+  thread, so a stalled sibling process holding the lock could freeze every concurrent request this
+  process served. The blocking store calls now run off-loop via `asyncio.to_thread`, and lock
+  acquisition is bounded (a shared 0.5s deadline degrading to the retryable `idempotency_in_progress`
+  envelope); the off-loop unkeyed spawn is shielded so cancellation still stops its spend.
+  Behavior/robustness only — no `fingerprint` bump.
 
-- **Integration docs corrected for the `details.fields` carrier and the idempotency surface**
-  (#206, #207). `COMPATIBILITY.md`, `docs/REFERENCE.md`, and `README.md` still described the
-  pre-#191 `details{field,reason,allowed_values}` shape; they now document `field` XOR `fields`
-  (the carrier that names inputs whose *combination* is invalid, e.g. a combined-size limit).
-  `docs/REFERENCE.md` gains an Idempotency section covering the `idempotency_key` param,
-  `meta.idempotency_replayed`, and `meta.job_kind`. The bundled `collaborating-with-codex` skill's
-  Knobs list under-reported `model`/`isolation` scope (both are also accepted on
-  `codex_consult_async`/`codex_review_changes_async`) and omitted `idempotency_key`; both are
-  fixed, and its `error.details` note now mentions `error.details.fields`. Documentation only — no tool,
-  schema, or `fingerprint` change.
+- **Idempotent job starts no longer strand a reservation on a partial failure** (#200). Two paths in
+  the `reserve → spawn → publish` cycle could leave the idempotency index denying a key with no job
+  running until the ~24.5h sweep: a failed initial placeholder write is now rolled back, and a publish
+  failure after a successful spawn returns the real running job's handle instead of a false "retry"
+  (which double-spent). Behavior/robustness only — no `fingerprint` bump.
 
-- **Keyed sync-timeout recovery no longer steers agents into a second paid run; the
-  `idempotency_key` description no longer over-promises cross-variant reuse** (#201). Two
-  agent-facing surfaces contradicted the dedup contract (identity is `(workspace, concrete
-  tool, arg_hash)`, so `codex_consult` and `codex_consult_async` never share a key's run).
-  (1) When a *keyed* synchronous call hit its local wait deadline, the run was correctly
-  left alive in the background — but the envelope's `error.repair` came from the static
-  `timeout` table, which points at the matching `_async` tool. Following it started a second
-  paid run under a different dedup identity while the first completed unobserved. The
-  keyed-timeout envelope now emits a `poll_job_status` repair (`next_step`,
-  `tool=codex_job_status`, `arguments={job_id, workspace_root}`, and the record's grown
-  `poll_after_ms` as `retry_after_ms`) and prose that says to poll the existing run — noting
-  that repeating the *exact* keyed call reattaches without new spend, while the async variant
-  or an unkeyed call starts a new one. The unkeyed branch (which *does* cancel the run) keeps
-  the table's async-escape-hatch repair unchanged. (2) The `idempotency_key` param
-  description now states the key is scoped to the concrete tool (sync and `_async` are
-  different tools and never share a key's run), that a different `timeout_seconds` conflicts,
-  and replaces the misleading "Dedup holds for the job TTL window" with the true fail-closed
-  horizon (replay lives while the job record does, subject to consumption/eviction; the
-  conflict/in-progress window can extend to max runtime + termination grace + TTL). The
-  `idempotency_conflict` message and repair prose now say "different effective arguments or
-  server execution settings" (the arg hash also covers config-derived fields). The
-  description change is FINGERPRINT-covered surface, so `fingerprint` bumps schema-28 →
-  schema-29; the repair-content change is runtime error text (not manifest-covered).
+- **Keyed sync-timeout recovery no longer steers agents into a second paid run** (#201). A keyed
+  synchronous call that hit its wait deadline correctly left the run alive, but emitted the static
+  `timeout` repair pointing at the `_async` tool — following it started a second paid run under a
+  different dedup identity. It now emits a `poll_job_status` repair pointing at the live run, and the
+  `idempotency_key` description no longer over-promises cross-variant reuse (sync and `_async` are
+  different tools and never share a key's run). Covered by `schema-29`.
 
-- **Idempotent job starts no longer strand a reservation on a partial failure** (#200). Two
-  paths in the `reserve → spawn → publish` cycle left the per-workspace idempotency index in
-  a state that denied the key (with no job running) until the ~24.5h horizon sweep. (1) In
-  `IdempotencyIndex.reserve`, the `O_EXCL` winner created an *empty* placeholder and then
-  populated it; if that initial write (or the `fd` close) failed — `ENOSPC`, `EACCES` — the
-  empty file was left behind and classified as `in_progress`, so every retry with that key
-  looped against a key that could never progress. The initial write is now rolled back
-  (placeholder unlinked, original error re-raised; a cleanup that itself fails is logged, not
-  masked). (2) In `JobStore.start_idempotent`, `index.publish(...)` sat *outside* the guard
-  around the paid `start(...)`; a publish failure after the worker was already spawned
-  surfaced as a false "failed to start … retry" while the job actually ran, and a retry
-  double-spent. The publish failure is now caught and logged, and the caller gets the real
-  running job's handle (so it won't retry); the un-promoted reservation fails closed
-  (`in_progress` until the horizon) for other callers reusing the key. A related hardening
-  surfaced in Codex review: `publish` now writes a complete active record from the reservation
-  the winner already holds instead of re-reading the file, so a reservation that was corrupted
-  or *deleted* between reserve and publish self-heals — it no longer drops the idempotency
-  mapping (a stub built from an unreadable record) nor, in the missing-file case, leaves the
-  path empty for a same-key retry to win and double-spend. Behavior/robustness only — no tool,
-  param, enum, or error-code change, so no `fingerprint` bump.
+- **The `timeout` error's repair hint points at the async escape hatch** (#195). The prior hint only
+  steered a retry of the same synchronous call, which — having just hit the sync clamp — would likely
+  time out again. It now leads with re-running via the matching `*_async` tool (which runs to the longer
+  background-job deadline, default 1800s), then polling `codex_job_status`/`codex_job_result`. Repair
+  prose only — no `fingerprint` bump.
 
-- **Keyed idempotent job starts no longer block the asyncio event loop** (#199). The
-  `idempotency_key` start paths (`_start_async`, and `_run_sync`'s in-progress wait loop)
-  called `JobStore.start_idempotent` — which takes an unbounded cross-process `flock`,
-  sweeps the index, and spawns a subprocess — directly on the event-loop thread, so any
-  delay there stalled *every* concurrent MCP request this process served (status polls,
-  job progress, unkeyed tools). A stopped sibling process (SIGSTOP, container suspend, hung
-  disk I/O) holding the flock could freeze the server indefinitely. Fix: (1) the blocking
-  store calls — `start_idempotent`, the replay-branch `status`, and the unkeyed
-  `start` — now run off the loop via `asyncio.to_thread`; (2) lock acquisition is now
-  *bounded* — both the per-process lock and the cross-process index flock are acquired under
-  a shared 0.5s deadline, and a contended acquire degrades to the existing (retryable,
-  `temporary: true`) `idempotency_in_progress` envelope instead of hanging a worker. Its
-  message is broadened to name lock contention too, since the workspace flock serializes the
-  whole index (contention may come from another key). Moving the unkeyed spawn off-loop also
-  made it cancellable mid-flight, so it is now shielded: a client cancellation landing during
-  the spawn cancels the resulting job, preserving the "explicit cancellation stops unkeyed
-  spend" guarantee. Behavior/robustness only — no tool, param, enum, or error-code change
-  (the manifest snapshot does not cover error-message text), so no `fingerprint` bump.
+- **Agent-facing instructions separate binding rules from context more cleanly** (#198). Four
+  wording-only fixes: the `codex_status` rate-limit note states its strength (*prefer* to defer
+  non-urgent calls when quota is `limited`/`exhausted`), the consult-vs-review routing line gains a real
+  tiebreaker (a diff pasted inline vs changes already in git), the discovery sentence is split into two
+  checkable rules, and `codex_dry_run` frames redaction as a best-effort check rather than proof.
+  Description and initialize-response text only; the callable contract is unchanged. Part of the
+  `schema-28` bump.
 
-- **Agent-facing instructions separate binding rules from context more cleanly** (#198). A
-  rules-vs-context audit (cross-checked with Codex) found four spots where the server
-  instructions or a tool description blurred a rule into background prose. Fixes, all
-  wording-only: the `codex_status` rate-limit note now states its strength explicitly —
-  *prefer* to defer non-urgent calls when quota is `limited`/`exhausted` (urgent ones may
-  still proceed) — instead of the ambiguous "are reasons to defer"; the server-instruction
-  routing line now gives `codex_consult` vs `codex_review_changes` a real tiebreaker
-  (consult for a diff you paste inline, review for changes already in git) rather than both
-  branding themselves a "second opinion"; the discovery sentence is split so the
-  `codex_capabilities` inventory rule and the "discover slugs before overriding `model`"
-  prerequisite are separately checkable; and `codex_dry_run` no longer claims it can
-  "confirm ... secrets are redacted" — it now frames the preview as a best-effort scope/redaction
-  check, not proof that no secret remains, matching the best-effort framing used elsewhere.
-  Tool-description and initialize-response text only (no tool/param/enum/error-code change), so
-  the callable contract is unchanged; still an agent-visible surface change, so the result
-  `fingerprint` bumps `codex-in-claude/0.1/schema-27` → `codex-in-claude/0.1/schema-28`.
+- **`isolation` param no longer advertises `'inherit'` as the unconditional default** (#183, audit N2).
+  The default is env-configurable via `CODEX_IN_CLAUDE_ISOLATION`, and `isolation` is behavior-bearing,
+  so the hardcoded `"'inherit' (default)"` misdescribed omission semantics. The description now lists
+  the allowed values and points to `codex_status` for the resolved value, matching the `timeout_seconds`
+  pattern. Covered by `schema-25`.
 
-- **The `timeout` error's repair hint now points at the async escape hatch** (#195). An MCP error
-  audit found `timeout` was the only recurring real-friction error, and its hint (`"Narrow the task
-  or raise timeout_seconds, then retry."`) only steered the agent to retry the *same* synchronous
-  call — which, having just hit the 10-600s sync clamp, will likely time out again. The hint now
-  leads with the real recovery: re-run the timed-out call via its matching `*_async` tool
-  (`codex_consult_async` / `codex_review_changes_async` / `codex_delegate_async`), then poll
-  `codex_job_status` and fetch `codex_job_result` — async jobs run to the separately configured
-  background-job deadline (default 1800s) rather than the sync timeout — with narrowing the task or
-  raising `timeout_seconds` as the other sync-call fallbacks. Repair prose only; `repair.tool` stays
-  `None` because `timeout` is emitted from a shared classifier serving consult/review/delegate. No
-  wire-shape change → no `fingerprint` bump.
+- **Resource-read failures carry the error envelope in JSON-RPC `error.data`** (#181, audit F9). A
+  `resources/read` of an unknown or disabled URI returned a bare error with `error.data: null`,
+  bypassing the unified error contract every tool honors. Unknown/disabled URIs now map to a new
+  `resource_not_found` code (with a `list_resources` repair) and a bare `ErrorInfo` in `error.data`;
+  `codex_capabilities.resource_error_carrier` states this up front. Messages stay generic — no URI or
+  exception text echoed. Covered by `schema-24`.
 
-- **`isolation` param no longer advertises `'inherit'` as the unconditional default** (#183, audit
-  N2). The `isolation` schema description hardcoded `"'inherit' (default)"`, but the default is
-  env-configurable via `CODEX_IN_CLAUDE_ISOLATION`. Because `isolation` is behavior-bearing (it
-  drives Codex's `ignore-config`/`ignore-rules` config and rule loading), an agent omitting the
-  param on a configured server could get materially different behavior than the schema promised —
-  wrong omission semantics, not a style nit. The description now mirrors the `timeout_seconds`
-  pattern: it lists the allowed values without labeling `inherit` the unconditional default and
-  points to the server's configured default plus `codex_status` for the resolved value. The bundled
-  `collaborating-with-codex` skill's knob list is reworded to match; the README environment table is
-  unchanged (it correctly documents `inherit` as the env var's *built-in fallback*). Agent-visible
-  surface change → `isolation` description reworded; fingerprint `codex-in-claude/0.1/schema-24` →
-  `codex-in-claude/0.1/schema-25`.
+- **Combined-size (`input_too_large`) failures on `codex_consult`/`codex_consult_async` name every
+  offending input** (#174, audit F2). The limit applies to `question` + `extra_context` together, but
+  the envelope hardcoded `details.field: "extra_context"` even when `question` alone was oversized.
+  `ErrorDetail` gains a `fields: list[str]` carrier (mutually exclusive with `field`), so the envelope
+  now reports `fields: ["question", "extra_context"]` when both contribute. Part of the `schema-23`
+  bump.
 
-- **Resource-read failures now carry the §6 error envelope in JSON-RPC `error.data`** (#181, audit
-  F9). A `resources/read` of an unknown or disabled URI returned a bare JSON-RPC error with
-  `error.data: null` — no symbolic `code`, `temporary`, or `repair` — making resource reads the one
-  surface that bypassed the unified error contract every tool already honors. A new
-  `on_read_resource` middleware (mirroring the tool-call argument-validation seam) now re-raises an
-  `McpError` whose `error.data` is the serialized `ErrorInfo` shape
-  (`code`/`message`/`temporary`/`retry_after_ms`/`repair` — the `error` object of
-  `codex://error-envelope`, with no `ok`/`meta` wrapper, since a resource read has no Codex run to
-  describe). Unknown/disabled URIs map to a new `resource_not_found` code (MCP numeric `-32002`)
-  whose `repair` (`next_step: list_resources`) steers the agent to the `resources/list` method /
-  `codex_capabilities`; a read that raises maps to `internal_error` (`-32603`). Client-visible
-  messages are bounded and generic — the requested URI and any exception text are not echoed
-  (redaction posture, #189). `codex_capabilities` gains a `resource_error_carrier` field stating this
-  up front so a discovery-only client need not infer the shape from a first failure. Agent-visible
-  surface change → new `resource_not_found` error code, new `list_resources` repair step, new
-  `resource_error_carrier` capability field; fingerprint `codex-in-claude/0.1/schema-23` →
-  `codex-in-claude/0.1/schema-24`.
-
-- **Combined-size (`input_too_large`) failures on `codex_consult`/`codex_consult_async` now name
-  every offending input** (#174, audit F2). The byte limit applies to `question` +
-  `extra_context` *together*, but the envelope hardcoded `details.field: "extra_context"` even when
-  `question` alone was oversized — blaming an input that contributed nothing. `ErrorDetail` gains a
-  `fields: list[str]` carrier, mutually exclusive with `field` (at most one — never both; when set,
-  `fields` is non-empty (`minItems: 1`) with unique entries; neither carrier is required, so a
-  detail may still carry only `reason`/`allowed_values`): the envelope now reports
-  `fields: ["question", "extra_context"]` when both contribute and `field: "question"` when it was
-  sent alone. Agent-visible surface change → new `error.details.fields` field. Part of the
-  schema-22 → schema-23 fingerprint bump.
-
-- **`invalid_arguments` repair now names the failing tool** (#184, audit N3). The repair guidance
-  identified the tool only in prose; `error.repair.tool` was left null though the called tool's name
-  is known and non-sensitive. It is now set. Because the rejected argument *values* are never echoed,
-  `repair.arguments` stays absent and every `invalid_arguments` `repair.alternative` now leads with
-  "Correct the argument(s) first — …", so the `(tool set, arguments absent, next_step:
-  correct_arguments)` combination cannot read as "call the same tool again as-is". Agent-visible
-  surface change → `repair.tool`/`alternative` prose on `invalid_arguments`. Part of the schema-22 →
-  schema-23 fingerprint bump.
+- **`invalid_arguments` repair names the failing tool** (#184, audit N3). `error.repair.tool` was left
+  null though the called tool's name is known and non-sensitive; it is now set, and each
+  `repair.alternative` leads with "Correct the argument(s) first — " so the (tool set, arguments absent)
+  combination can't read as "call the same tool again as-is". Rejected argument values are still never
+  echoed. Part of the `schema-23` bump.
 
 - **Job-lifecycle error envelopes no longer contradict their `readOnlyHint`** (#177, audit F5). The
-  five `codex_job_*` tools carry `readOnlyHint: true` (status/result/list) or mutate only this
-  server's job state (cancel/consume), yet their generated error envelopes reported
-  `meta.tier: "propose"`, `meta.sandbox: "workspace-write"` — the posture of a *delegate*, not of a
-  read-only lookup. On lifecycle-**generated** error envelopes, `meta.tier`/`meta.sandbox` now
-  describe the lifecycle call's own execution posture — `consult`/`read-only`, since these calls
-  never run Codex or write the caller's workspace — consistent with `readOnlyHint`. (Retrieved job
-  *results* keep their originating run's posture; see below.) The two fields are documented as
-  orthogonal dimensions
-  (execution posture vs. server-state mutation) in the `Meta.tier`/`sandbox` field descriptions
-  (published at `codex://result-meta` / `codex://error-envelope`). The inspected job's own posture
-  is preserved — not discarded — via a new **`meta.job_kind`** field, set to the resolved job's
-  kind (e.g. `"codex_delegate"`) on lifecycle error envelopes and omitted for not-found/pre-lookup
-  errors; agents derive the job's posture from it. Retrieved success/error results still carry
-  their **originating** run's meta unchanged (a completed delegate still reads `propose`). The
-  worst-case `propose` fallback for unknown-kind lookups is removed. Agent-visible surface change →
-  new `meta.job_kind` field, documented `meta.tier`/`sandbox` semantics; fingerprint
-  `codex-in-claude/0.1/schema-21` → `codex-in-claude/0.1/schema-22`.
+  `codex_job_*` tools reported `meta.tier: "propose"` / `sandbox: "workspace-write"` — a delegate's
+  posture — on their own error envelopes; these now report the read-only lifecycle posture
+  (`consult`/`read-only`), documented as orthogonal to `readOnlyHint`, with the inspected job's posture
+  preserved in a new **`meta.job_kind`** field. Retrieved job *results* keep their originating run's
+  meta (a completed delegate still reads `propose`). Covered by `schema-22`.
+
+- **Integration docs corrected for the `details.fields` carrier and the idempotency surface** (#206,
+  #207). `COMPATIBILITY.md`, `docs/REFERENCE.md`, and `README.md` still described the old `details`
+  shape; they now document `field` XOR `fields`, `docs/REFERENCE.md` gains an Idempotency section, and
+  the bundled skill's Knobs list is corrected (async-variant scope, `idempotency_key`). Documentation
+  only.
+
+- **Corrected factual overclaims in the `collaborating-with-codex` skill** (#220) — `workspace_root`
+  scope, timeout default, `codex_status` repair field, `error.details` presence, slash-command parity.
+  Documentation only.
 
 ### Security
 
-- **Redact exception-derived text in the four client-visible `internal_error` sinks** (#186,
-  audit F10). `_internal_error_result`, `_spawn_failure_envelope`, and `_job_result_corrupt`
-  (`server.py`) plus the background worker's crash sink (`_worker.py`, whose stored `result.json`
-  the server returns unchanged) interpolated raw `str(exc)` / Pydantic `ValidationError` text
-  (which can carry paths, URLs, or stored-payload fragments) into the returned message with no
-  redaction pass, against the repo convention that every free-text surface is redacted before
-  return. All four now wrap the text in `redaction.redact_text(...)` at the sink, matching
-  `orchestration.gitdiff_error`; the safe exception class name (`type(exc).__name__`) is preserved
-  in each exception-derived message for debugging. As belt-and-braces, a
-  schema-valid stored error payload (e.g. written by a pre-fix worker still within its TTL) is also
-  redacted at the `_finished_job_envelope` return boundary. Best-effort defense-in-depth (the error
-  channel is the local client, not OpenAI); message text only, so no fingerprint change.
+- **Redact exception-derived text in the four client-visible `internal_error` sinks** (#186, audit
+  F10). `_internal_error_result`, `_spawn_failure_envelope`, `_job_result_corrupt`, and the background
+  worker's crash sink interpolated raw `str(exc)` / `ValidationError` text (which can carry paths, URLs,
+  or stored-payload fragments) with no redaction pass. All four now route through `redact_text` while
+  preserving the exception class name for debugging; a schema-valid stored error payload is also
+  redacted at the `_finished_job_envelope` boundary. Best-effort defense-in-depth (the error channel is
+  the local client, not OpenAI); message text only — no `fingerprint` bump.
 
 ## [0.7.0] - 2026-07-01
 
