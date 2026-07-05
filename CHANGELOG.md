@@ -73,6 +73,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- Restructured the collaborating-with-codex skill for rules-vs-context auditability: binding rules
+  surfaced as explicit guardrail bullets (workspace_root scope, setup-retry loop, the split
+  decider rules), the Knobs section rebuilt as per-param bullets with the idempotent-retry rule
+  extracted as its own bolded directive and a discovery pointer replacing the exhaustive
+  param-to-tool enumeration, and the frontmatter description trimmed (≤650 chars); added behavioral
+  test scenarios under `skills/collaborating-with-codex/tests/scenarios.md` (#221).
+
 - **Internal: shared preparation and idempotency-outcome mapping extracted for the sync/async tool
   pairs** (#204). Each active tool and its `_async` twin (`codex_consult`, `codex_review_changes`,
   `codex_delegate`) duplicated ~50 lines of isolation/detail resolution, workspace resolution, meta
