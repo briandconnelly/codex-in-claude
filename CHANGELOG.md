@@ -5,6 +5,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-05
+
 ### Added
 
 - **`codex_capabilities` now discloses what the fingerprint covers** (#178, audit F6). The result
