@@ -2780,6 +2780,224 @@ async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path
         await server.codex_consult("q", workspace_root=str(tmp_path))
 
 
+# --- job starts execute off the asyncio event loop (#199) --------------------
+# The blocking store calls (subprocess spawn, and for keyed starts a cross-process
+# flock + index sweep) must run in a worker thread so one slow start can't stall
+# every concurrent MCP request served by this process. Each test injects a store
+# whose call records the executing thread and asserts it is not the main thread.
+def _offloop_meta(tmp_path):
+    return server._base_meta(
+        str(tmp_path),
+        "param",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        model=None,
+        timeout_seconds=60,
+    )
+
+
+async def test_unkeyed_start_runs_store_start_off_event_loop(monkeypatch, clean_env, tmp_path):
+    import threading
+
+    seen = {}
+
+    class _Store:
+        def start(self, *a, **k):
+            seen["thread"] = threading.current_thread()
+            return ("job-1", "t")
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._start_job(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        deadline=60,
+    )
+    assert res["job_id"] == "job-1"
+    assert seen["thread"] is not threading.main_thread()
+
+
+async def test_keyed_async_start_idempotent_runs_off_event_loop(monkeypatch, clean_env, tmp_path):
+    import threading
+
+    seen = {}
+
+    class _Store:
+        def start_idempotent(self, *a, **k):
+            seen["thread"] = threading.current_thread()
+            return {"kind": "created", "job_id": "job-1", "started_at": "t"}
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._start_async(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        tool="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        deadline=60,
+        idempotency_key="k1",
+    )
+    assert res.get("ok") is not False  # a running JobStarted handle, not an error
+    assert seen["thread"] is not threading.main_thread()
+
+
+async def test_keyed_async_replay_status_runs_off_event_loop(monkeypatch, clean_env, tmp_path):
+    import threading
+
+    seen = {}
+
+    class _Store:
+        def start_idempotent(self, *a, **k):
+            return {"kind": "replay", "job_id": "job-1"}
+
+        def status(self, cwd, job_id):
+            seen["thread"] = threading.current_thread()
+            return {
+                "status": "running",
+                "started_at": "t",
+                "deadline_seconds": 60,
+                "expires_at": None,
+            }
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._start_async(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        tool="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        deadline=60,
+        idempotency_key="k1",
+    )
+    assert res["meta"]["idempotency_replayed"] is True
+    assert seen["thread"] is not threading.main_thread()
+
+
+async def test_keyed_sync_start_idempotent_runs_off_event_loop(monkeypatch, clean_env, tmp_path):
+    import threading
+
+    seen = {}
+
+    class _Store:
+        def start_idempotent(self, *a, **k):
+            seen["thread"] = threading.current_thread()
+            return {"kind": "conflict"}  # short-circuits before any await loop
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._run_sync(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        tool="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        timeout=60,
+        detail_v="summary",
+        ctx=None,
+        idempotency_key="k1",
+    )
+    assert res["error"]["code"] == "idempotency_conflict"
+    assert seen["thread"] is not threading.main_thread()
+
+
+async def test_unkeyed_start_cancel_during_spawn_cancels_job(monkeypatch, clean_env, tmp_path):
+    # #199 regression: moving the spawn off-loop made it cancellable. A cancellation that
+    # lands *during* the spawn must not orphan the just-started (paid, unkeyed) job — the
+    # shielded start runs to completion and its cleanup callback cancels the resulting job.
+    import threading
+
+    gate = threading.Event()
+    cancels = []
+
+    class _Store:
+        def start(self, *a, **k):
+            gate.wait(5.0)  # hold the spawn open so we can cancel mid-flight
+            return ("job-1", "t")
+
+        def cancel(self, cwd, job_id):
+            cancels.append(job_id)
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    task = asyncio.create_task(
+        server._start_job(
+            _offloop_meta(tmp_path),
+            str(tmp_path),
+            kind="codex_consult",
+            spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+            deadline=60,
+        )
+    )
+    await asyncio.sleep(0.1)  # let the task reach the shielded to_thread
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    gate.set()  # release the spawn; the done-callback must now cancel the job
+    deadline = time.monotonic() + 5.0
+    while not cancels and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert cancels == ["job-1"]  # spend stopped despite cancellation mid-spawn
+
+
+async def test_unkeyed_start_cancel_during_failed_spawn_cancels_nothing(
+    monkeypatch, clean_env, tmp_path
+):
+    # If the shielded spawn *fails* after its awaiter was cancelled, there is no job to
+    # stop — the cleanup callback must not call store.cancel (#199).
+    import threading
+
+    gate = threading.Event()
+    cancels = []
+
+    class _Store:
+        def start(self, *a, **k):
+            gate.wait(5.0)
+            raise OSError("spawn failed")
+
+        def cancel(self, cwd, job_id):
+            cancels.append(job_id)  # pragma: no cover - must never run for a failed spawn
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    task = asyncio.create_task(
+        server._start_job(
+            _offloop_meta(tmp_path),
+            str(tmp_path),
+            kind="codex_consult",
+            spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+            deadline=60,
+        )
+    )
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    gate.set()  # release the failing spawn; the callback sees an exception, cancels nothing
+    await asyncio.sleep(0.2)  # give the done-callback a chance to (not) fire
+    assert cancels == []
+
+
+async def test_swallow_future_result_is_safe_on_cancelled_and_failed():
+    # The fire-and-forget cleanup callback must never re-raise: a cancelled future (loop
+    # teardown) is skipped, and a failed future has its exception retrieved (no warning).
+    loop = asyncio.get_running_loop()
+
+    cancelled = loop.create_future()
+    cancelled.cancel()
+    await asyncio.sleep(0)  # let the cancellation settle
+    server._swallow_future_result(cancelled)  # must not raise CancelledError
+
+    failed = loop.create_future()
+    failed.set_exception(RuntimeError("cancel failed"))
+    server._swallow_future_result(failed)  # retrieves the exception; no raise
+    assert failed.exception() is not None  # still readable after retrieval
+
+
 # --- structured repair fields for size/workspace errors (#95) ----------------
 async def test_input_too_large_carries_size_fields_consult(monkeypatch, clean_env, tmp_path):
     """input_too_large exposes the byte limit and the offending input's actual size in
@@ -3664,7 +3882,7 @@ async def test_sync_cancellation_cancels_job(clean_env, tmp_path, monkeypatch):
         model=None,
         timeout_seconds=60,
     )
-    handle = server._start_job(
+    handle = await server._start_job(
         meta, cwd, kind="codex_consult", spec={"kind": "codex_consult", "cwd": cwd}, deadline=60
     )
     job_id = handle["job_id"]
@@ -3922,8 +4140,18 @@ class _FakeIdemStore(_FakeStore):
         self._snapshot = snapshot
         self.idem_calls = []
 
-    def start_idempotent(self, cmd_factory, cwd, *, kind, tool, key, arg_hash, write_spec=None):
-        self.idem_calls.append({"tool": tool, "key": key, "arg_hash": arg_hash, "kind": kind})
+    def start_idempotent(
+        self, cmd_factory, cwd, *, kind, tool, key, arg_hash, write_spec=None, lock_timeout=None
+    ):
+        self.idem_calls.append(
+            {
+                "tool": tool,
+                "key": key,
+                "arg_hash": arg_hash,
+                "kind": kind,
+                "lock_timeout": lock_timeout,
+            }
+        )
         if self._outcomes is not None:
             idx = min(len(self.idem_calls) - 1, len(self._outcomes) - 1)
             return self._outcomes[idx]

@@ -785,6 +785,7 @@ class JobStore:
         key: str,
         arg_hash: str,
         write_spec: dict | None = None,
+        lock_timeout: float | None = None,
     ) -> dict:
         """Deduplicated :meth:`start`. Reserves ``(tool, key)`` in the workspace index;
         on a first reservation it spawns the job and publishes the id, otherwise it
@@ -797,12 +798,31 @@ class JobStore:
         - ``{"kind": "unavailable"}`` — a prior run for this key+args completed but its
           result is gone (consumed or evicted) within the dedup window.
         - ``{"kind": "in_progress"}`` — a concurrent reservation for this key is still
-          being published; retry.
+          being published, OR (with ``lock_timeout``) coordination was contended and the
+          bounded lock acquisition timed out; retry either way.
 
-        The whole reserve→spawn→publish critical section runs under the process lock;
-        cross-process exclusivity on the reservation itself comes from ``O_EXCL``.
+        The whole reserve→spawn→publish critical section runs under both the process
+        ``_LOCK`` and the index's cross-process flock; cross-process exclusivity on the
+        reservation itself comes from ``O_EXCL``.
+
+        ``lock_timeout`` (seconds) bounds *lock acquisition only*, not the critical
+        section. When set, both the process lock and the flock are acquired under a
+        single shared deadline; if either cannot be taken in time — a sibling holds the
+        flock, or a peer thread holds ``_LOCK`` — this returns ``in_progress`` rather than
+        blocking a worker indefinitely (see #199). ``None`` keeps the original unbounded
+        blocking acquisition. A non-finite or negative value is a ``ValueError``.
         """
-        with _LOCK:
+        if lock_timeout is not None and (not math.isfinite(lock_timeout) or lock_timeout < 0):
+            raise ValueError(f"lock_timeout must be finite and non-negative, got {lock_timeout!r}")
+        deadline = None if lock_timeout is None else time.monotonic() + lock_timeout
+
+        if deadline is None:
+            _LOCK.acquire()
+        elif not _LOCK.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            # A peer thread holds _LOCK (itself likely stuck on the flock); don't pile up
+            # this worker behind it — degrade to a retryable in_progress.
+            return {"kind": idempotency.IN_PROGRESS}
+        try:
             index = self._idem_index(cwd)
 
             def resolve(job_id: str) -> idempotency.JobFacts | None:
@@ -810,27 +830,35 @@ class JobStore:
 
             # Hold the index's cross-process lock across sweep → reserve → spawn →
             # publish so a stale-entry reclaim (unlink + re-create) or a late publish
-            # cannot interleave with another process and let two callers both win.
-            with index.lock():
-                index.sweep(resolve)  # bounded maintenance: drop entries past the horizon
-                outcome = index.reserve(tool, key, arg_hash, resolve)
-                if outcome.kind != idempotency.WON:
-                    if outcome.kind == idempotency.REPLAY:
-                        return {"kind": "replay", "job_id": outcome.job_id}
-                    return {"kind": outcome.kind}  # conflict | unavailable | in_progress
-                assert outcome.path is not None
-                try:
-                    job_id, started_at = self.start(
-                        cmd_factory,
-                        cwd,
-                        kind=kind,
-                        extra={"idempotency_key_digest": idempotency.key_digest(tool, key)},
-                        write_spec=write_spec,
-                    )
-                except BaseException:
-                    # Spawn failed after we won the reservation: drop it so a clean retry
-                    # is a fresh miss rather than a phantom in-progress.
-                    index.remove(outcome.path)
-                    raise
-                index.publish(outcome.path, job_id)
-                return {"kind": "created", "job_id": job_id, "started_at": started_at}
+            # cannot interleave with another process and let two callers both win. The
+            # flock is taken on `with` entry, so its bounded LockTimeout surfaces here;
+            # nothing inside the body raises LockTimeout, so catching it is unambiguous.
+            lock_wait = None if deadline is None else max(0.0, deadline - time.monotonic())
+            try:
+                with index.lock(timeout=lock_wait):
+                    index.sweep(resolve)  # bounded maintenance: drop entries past horizon
+                    outcome = index.reserve(tool, key, arg_hash, resolve)
+                    if outcome.kind != idempotency.WON:
+                        if outcome.kind == idempotency.REPLAY:
+                            return {"kind": "replay", "job_id": outcome.job_id}
+                        return {"kind": outcome.kind}  # conflict | unavailable | in_progress
+                    assert outcome.path is not None
+                    try:
+                        job_id, started_at = self.start(
+                            cmd_factory,
+                            cwd,
+                            kind=kind,
+                            extra={"idempotency_key_digest": idempotency.key_digest(tool, key)},
+                            write_spec=write_spec,
+                        )
+                    except BaseException:
+                        # Spawn failed after we won the reservation: drop it so a clean
+                        # retry is a fresh miss rather than a phantom in-progress.
+                        index.remove(outcome.path)
+                        raise
+                    index.publish(outcome.path, job_id)
+                    return {"kind": "created", "job_id": job_id, "started_at": started_at}
+            except idempotency.LockTimeout:
+                return {"kind": idempotency.IN_PROGRESS}
+        finally:
+            _LOCK.release()

@@ -153,7 +153,7 @@ async def test_consult_uses_roots(monkeypatch, clean_env, tmp_path):
     # the MCP root into the job spec's workspace (source == "roots") at the start seam.
     captured = {}
 
-    def capture_start(meta, cwd, *, kind, spec, deadline):
+    async def capture_start(meta, cwd, *, kind, spec, deadline):
         captured["source"] = spec["workspace_source"]
         captured["cwd"] = cwd
         return server.serialize_error(
