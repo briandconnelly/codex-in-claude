@@ -43,6 +43,41 @@ CONFLICT = "conflict"
 UNAVAILABLE = "unavailable"
 IN_PROGRESS = "in_progress"
 
+# Backoff between non-blocking flock retries while a bounded acquire waits for the
+# cross-process lock. Small enough that a lock freed mid-wait is taken promptly.
+_LOCK_POLL_SECONDS = 0.025
+
+
+class LockTimeout(Exception):
+    """A bounded :meth:`IdempotencyIndex.lock` could not take the cross-process flock
+    before its deadline — a sibling holds it. Callers degrade this to a retryable
+    in-progress outcome rather than blocking indefinitely."""
+
+
+def _acquire_flock(fd: int, timeout: float | None) -> None:
+    """Take ``LOCK_EX`` on ``fd``. With ``timeout`` None, block indefinitely (original
+    semantics). Otherwise poll ``LOCK_EX | LOCK_NB`` until a monotonic deadline and raise
+    :class:`LockTimeout` on expiry; ``0`` is a single non-blocking attempt. A non-finite
+    or negative ``timeout`` is a ``ValueError``. Only contention (``BlockingIOError``) is
+    retried — any other ``OSError`` propagates so a real filesystem fault is not masked."""
+    import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
+
+    if timeout is None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ValueError(f"lock timeout must be finite and non-negative, got {timeout!r}")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LockTimeout("timed out acquiring the idempotency index lock") from None
+            time.sleep(min(_LOCK_POLL_SECONDS, remaining))
+
 
 def canonical_json(payload: object) -> str:
     """Deterministic JSON for hashing: sorted keys, compact, UTF-8, no NaN/Inf."""
@@ -169,21 +204,38 @@ class IdempotencyIndex:
         return "ok", rec
 
     @contextlib.contextmanager
-    def lock(self) -> Iterator[None]:
+    def lock(self, timeout: float | None = None) -> Iterator[None]:
         """Exclusive cross-process lock over this index directory, held across a full
         reserve → spawn → publish cycle. ``O_EXCL`` alone makes a *first* create atomic,
         but a stale-entry reclaim (unlink + re-create) and a publish are multi-step: two
         processes could otherwise both delete and re-create the same key and both win.
         The store wraps its keyed-start critical section in this lock so that can't
         happen; a paused holder that dies releases it (advisory ``flock`` on a lockfile,
-        POSIX)."""
+        POSIX).
+
+        ``timeout`` bounds *lock acquisition only* (not the protected body):
+
+        - ``None`` (default): block on ``LOCK_EX`` indefinitely — the original semantics,
+          for callers that must wait.
+        - a finite, non-negative float: poll ``LOCK_EX | LOCK_NB`` until a monotonic
+          deadline and raise :class:`LockTimeout` if the lock cannot be taken in time, so
+          a sibling stuck mid-critical-section degrades to a fast, retryable failure
+          instead of an indefinite hang. ``0`` makes a single non-blocking attempt. A
+          non-finite or negative value is a ``ValueError``.
+        """
         import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
 
         self.dir.mkdir(parents=True, exist_ok=True)
         # Not a ``*.json`` record, so sweep()/reserve() never treat it as an entry.
         fd = os.open(self.dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            _acquire_flock(fd, timeout)
+        except BaseException:
+            # Acquisition failed (LockTimeout / ValueError / an unexpected error): we never
+            # held the lock, so just close the fd and propagate — nothing to unlock.
+            os.close(fd)
+            raise
+        try:
             yield
         finally:
             with contextlib.suppress(OSError):

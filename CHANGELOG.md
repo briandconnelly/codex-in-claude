@@ -7,6 +7,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Keyed idempotent job starts no longer block the asyncio event loop** (#199). The
+  `idempotency_key` start paths (`_start_async`, and `_run_sync`'s in-progress wait loop)
+  called `JobStore.start_idempotent` — which takes an unbounded cross-process `flock`,
+  sweeps the index, and spawns a subprocess — directly on the event-loop thread, so any
+  delay there stalled *every* concurrent MCP request this process served (status polls,
+  job progress, unkeyed tools). A stopped sibling process (SIGSTOP, container suspend, hung
+  disk I/O) holding the flock could freeze the server indefinitely. Fix: (1) the blocking
+  store calls — `start_idempotent`, the replay-branch `status`, and the unkeyed
+  `start` — now run off the loop via `asyncio.to_thread`; (2) lock acquisition is now
+  *bounded* — both the per-process lock and the cross-process index flock are acquired under
+  a shared 0.5s deadline, and a contended acquire degrades to the existing (retryable,
+  `temporary: true`) `idempotency_in_progress` envelope instead of hanging a worker. Its
+  message is broadened to name lock contention too, since the workspace flock serializes the
+  whole index (contention may come from another key). Moving the unkeyed spawn off-loop also
+  made it cancellable mid-flight, so it is now shielded: a client cancellation landing during
+  the spawn cancels the resulting job, preserving the "explicit cancellation stops unkeyed
+  spend" guarantee. Behavior/robustness only — no tool, param, enum, or error-code change
+  (the manifest snapshot does not cover error-message text), so no `fingerprint` bump.
+
 - **Agent-facing instructions separate binding rules from context more cleanly** (#198). A
   rules-vs-context audit (cross-checked with Codex) found four spots where the server
   instructions or a tool description blurred a rule into background prose. Fixes, all

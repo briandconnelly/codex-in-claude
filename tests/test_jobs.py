@@ -979,3 +979,92 @@ def test_idem_dir_excluded_from_listing_and_count_cap(tmp_path):
     _wait_terminal(store, cwd, a["job_id"])
     jobs = store.list_jobs(cwd)
     assert [j["job_id"] for j in jobs] == [a["job_id"]]  # .idem is not a job
+
+
+def test_idempotent_lock_timeout_degrades_to_in_progress(tmp_path):
+    # A sibling process holding the cross-process index flock must not hang a keyed
+    # start: with a bounded lock_timeout it degrades to a retryable in_progress and
+    # spawns no job (zero spend), rather than blocking the caller indefinitely.
+    import fcntl
+    import os
+
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    idx = store._idem_index(cwd)
+    idx_dir = idx.dir
+    idx_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(idx_dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)  # stand in for a sibling holding the lock
+    try:
+        start = time.monotonic()
+        out = store.start_idempotent(
+            _factory(_SLEEP),
+            cwd,
+            kind="k",
+            tool="codex_consult",
+            key="k1",
+            arg_hash="AH",
+            lock_timeout=0.2,
+        )
+        elapsed = time.monotonic() - start
+        assert out["kind"] == "in_progress"
+        assert elapsed < 2.0  # bounded, not hung on the unbounded flock
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    assert store.list_jobs(cwd) == []  # no paid job spawned under contention
+
+
+def test_idempotent_process_lock_contention_degrades_to_in_progress(tmp_path):
+    # The process-local _LOCK is bounded too (#199): if a peer thread holds it (itself
+    # likely stuck on the cross-process flock), a keyed start degrades to in_progress
+    # rather than parking this worker on _LOCK indefinitely.
+    import threading
+
+    from codex_in_claude._core import jobs as jobs_mod
+
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with jobs_mod._LOCK:
+            held.set()
+            release.wait(5.0)
+
+    t = threading.Thread(target=hold_lock)
+    t.start()
+    try:
+        assert held.wait(5.0)  # peer now holds _LOCK
+        start = time.monotonic()
+        out = store.start_idempotent(
+            _factory(_SLEEP),
+            cwd,
+            kind="k",
+            tool="codex_consult",
+            key="k1",
+            arg_hash="AH",
+            lock_timeout=0.2,
+        )
+        assert out["kind"] == "in_progress"
+        assert time.monotonic() - start < 2.0  # bounded, not parked on _LOCK
+    finally:
+        release.set()
+        t.join()
+    assert store.list_jobs(cwd) == []
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
+def test_idempotent_rejects_non_finite_lock_timeout(tmp_path, bad):
+    store = _store(tmp_path)
+    with pytest.raises(ValueError):
+        store.start_idempotent(
+            _factory(_SLEEP),
+            str(tmp_path),
+            kind="k",
+            tool="t",
+            key="k1",
+            arg_hash="AH",
+            lock_timeout=bad,
+        )

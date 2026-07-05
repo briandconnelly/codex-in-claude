@@ -30,6 +30,9 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
+    from codex_in_claude._core.jobs import JobStore
+
+
 from codex_in_claude import (
     __version__,
     codex,
@@ -2021,7 +2024,7 @@ async def codex_delegate_async(
         "git_timeout": git_timeout,
         "max_diff_bytes": config.max_delegate_diff_bytes(),
     }
-    return _start_async(
+    return await _start_async(
         meta,
         cwd,
         kind="codex_delegate",
@@ -2042,19 +2045,33 @@ def _worker_cmd(job_dir: object) -> list[str]:
 # raw effective values is fine — the hash is internal and never returned.
 _ARG_HASH_EXCLUDE = frozenset({"cwd", "workspace_source", "kind"})
 
-# Backoff hint for idempotency_in_progress (a reservation still being published), and
-# how long a SYNC keyed call waits for that publication before giving up. The wait is a
-# module constant so tests can compress it; publication normally takes milliseconds.
+# Backoff hint for idempotency_in_progress (a reservation still being published, or a
+# contended lock), and how long a SYNC keyed call waits for that publication before
+# giving up. The wait is a module constant so tests can compress it; publication normally
+# takes milliseconds.
 _IDEM_IN_PROGRESS_RETRY_MS = 250
 _IDEM_SYNC_INPROGRESS_WAIT_S = 1.0
 _IDEM_SYNC_INPROGRESS_POLL_S = 0.05
+
+# Bound on acquiring the idempotency coordination locks (the per-process lock and the
+# cross-process index flock) for a keyed start. A sibling stuck mid-critical-section (or a
+# suspended peer holding the flock) degrades to a retryable idempotency_in_progress within
+# this window instead of hanging a thread-pool worker indefinitely (#199). Kept under the
+# sync in-progress wait so a bounded acquire fits inside that budget; normal contention
+# clears in milliseconds.
+_IDEM_LOCK_ACQUIRE_TIMEOUT_S = 0.5
 
 _IDEM_MESSAGES = {
     "idempotency_conflict": "idempotency_key already used with different arguments.",
     "idempotency_result_unavailable": (
         "A prior run for this idempotency_key already completed; its result is no longer available."
     ),
-    "idempotency_in_progress": "A run for this idempotency_key is still starting; retry shortly.",
+    # Covers both a reservation still being published and a contended coordination lock
+    # (the index flock serializes the whole workspace, so contention may be another key).
+    "idempotency_in_progress": (
+        "Idempotency coordination is momentarily busy (a run is still starting or the "
+        "workspace lock is contended); retry shortly."
+    ),
 }
 
 
@@ -2126,13 +2143,59 @@ def _mark_replayed(env: dict) -> dict:
     return env
 
 
-def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) -> dict:
+# Strong refs to shielded-start futures whose awaiter was cancelled mid-spawn, so the
+# loop cannot garbage-collect them before their cleanup callback runs (asyncio holds only
+# weak refs to tasks). Each callback discards its own entry.
+_PENDING_START_CLEANUPS: set[asyncio.Future] = set()
+
+
+def _stop_orphaned_start(store: JobStore, cwd: str) -> Callable[[asyncio.Future], None]:
+    """Build a done-callback for a shielded unkeyed start whose awaiter was cancelled
+    mid-spawn (#199). Moving the spawn off-loop made it cancellable, so a client Esc during
+    the spawn could otherwise leave a just-started (paid) job with no waiter to stop it —
+    unkeyed jobs have no idempotency record to recover them. Once the spawn finishes this
+    cancels the job it created so spend still stops; the store.cancel is offloaded to a
+    thread because the callback runs on the event loop.
+
+    Bound: if the event loop itself is torn down before the shielded spawn returns, the
+    spawn's own task is cancelled and the job id is unavailable here — the job then becomes
+    an ordinary detached worker that survives server shutdown and self-terminates at its
+    deadline, which is the job store's designed behavior (a dropped server never kills a
+    live worker), not an unbounded leak."""
+
+    def _cb(fut: asyncio.Future) -> None:
+        _PENDING_START_CLEANUPS.discard(fut)
+        if fut.cancelled() or fut.exception() is not None:
+            return  # the spawn itself was cancelled or failed: no job to stop
+        job_id, _ = fut.result()
+        with contextlib.suppress(RuntimeError):  # loop may be closing during teardown
+            cancel_fut = asyncio.get_running_loop().run_in_executor(None, store.cancel, cwd, job_id)
+            # Retrieve the fire-and-forget result so a store.cancel failure doesn't surface
+            # as an unretrieved-future warning; cleanup failures are best-effort here.
+            cancel_fut.add_done_callback(lambda f: f.exception())
+
+    return _cb
+
+
+async def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) -> dict:
     """Spawn a detached worker for `spec` and return the JobStarted handle (or an
     internal_error envelope if the job process could not be launched). Shared by
     every *_async tool so the spawn/handle contract stays identical across kinds."""
     store = config.job_store()
+    # Off-loop: the subprocess spawn + meta/spec writes are blocking (#199). Shield the
+    # spawn so a cancellation landing during it can't orphan a paid job: the spawn always
+    # runs to completion, and if we were cancelled we register a callback that cancels the
+    # resulting job before re-raising (keyed jobs are intentionally durable across cancel,
+    # so this guard is only for the unkeyed path).
+    start_fut = asyncio.ensure_future(
+        asyncio.to_thread(store.start, _worker_cmd, cwd, kind=kind, write_spec=spec)
+    )
     try:
-        job_id, started_at = store.start(_worker_cmd, cwd, kind=kind, write_spec=spec)
+        job_id, started_at = await asyncio.shield(start_fut)
+    except asyncio.CancelledError:
+        _PENDING_START_CLEANUPS.add(start_fut)
+        start_fut.add_done_callback(_stop_orphaned_start(store, cwd))
+        raise
     except OSError as exc:
         return _spawn_failure_envelope(exc, meta)
     return _job_started_handle(
@@ -2146,7 +2209,7 @@ def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: int) ->
     )
 
 
-def _start_async(
+async def _start_async(
     meta: Meta,
     cwd: str,
     *,
@@ -2160,12 +2223,17 @@ def _start_async(
     reserves (tool, key): a first reservation spawns and returns a running handle; a
     duplicate returns the existing job's REAL handle (its true status/timestamps, not a
     synthetic 'running'); conflict/unavailable/in-progress become their error envelopes.
-    An _async caller never blocks, so in-progress is returned immediately (retryable)."""
+    An _async caller never blocks, so in-progress is returned immediately (retryable).
+
+    The keyed path's `start_idempotent`/`status` calls are blocking (cross-process flock,
+    index sweep, subprocess spawn), so they run off the event loop via `asyncio.to_thread`
+    to keep this process responsive to concurrent MCP requests (#199)."""
     if idempotency_key is None:
-        return _start_job(meta, cwd, kind=kind, spec=spec, deadline=deadline)
+        return await _start_job(meta, cwd, kind=kind, spec=spec, deadline=deadline)
     store = config.job_store()
     try:
-        outcome = store.start_idempotent(
+        outcome = await asyncio.to_thread(
+            store.start_idempotent,
             _worker_cmd,
             cwd,
             kind=kind,
@@ -2173,6 +2241,7 @@ def _start_async(
             key=idempotency_key,
             arg_hash=_arg_hash_for_spec(spec),
             write_spec=spec,
+            lock_timeout=_IDEM_LOCK_ACQUIRE_TIMEOUT_S,
         )
     except OSError as exc:
         return _spawn_failure_envelope(exc, meta)
@@ -2188,7 +2257,7 @@ def _start_async(
             meta=meta,
         )
     if result_kind == "replay":
-        snap = store.status(cwd, outcome["job_id"])
+        snap = await asyncio.to_thread(store.status, cwd, outcome["job_id"])
         if snap is None:  # vanished between reserve and read (rare) -> treat as gone
             return _idem_error("idempotency_result_unavailable", meta)
         meta.idempotency_replayed = True
@@ -2325,7 +2394,7 @@ async def _run_sync(
     the shared job on timeout or client cancellation."""
     store = config.job_store()
     if idempotency_key is None:
-        handle = _start_job(meta, cwd, kind=kind, spec=spec, deadline=timeout)
+        handle = await _start_job(meta, cwd, kind=kind, spec=spec, deadline=timeout)
         if handle.get("ok") is False:
             return handle  # spawn failure: internal_error, no spend, no record
         return await _await_job_result(cwd, handle["job_id"], kind, meta, detail_v, timeout, ctx)
@@ -2334,7 +2403,9 @@ async def _run_sync(
     wait_deadline = time.monotonic() + _IDEM_SYNC_INPROGRESS_WAIT_S
     while True:
         try:
-            outcome = store.start_idempotent(
+            # Off-loop: blocking flock + index sweep + subprocess spawn (#199).
+            outcome = await asyncio.to_thread(
+                store.start_idempotent,
                 _worker_cmd,
                 cwd,
                 kind=kind,
@@ -2342,6 +2413,7 @@ async def _run_sync(
                 key=idempotency_key,
                 arg_hash=arg_hash,
                 write_spec=spec,
+                lock_timeout=_IDEM_LOCK_ACQUIRE_TIMEOUT_S,
             )
         except OSError as exc:
             return _spawn_failure_envelope(exc, meta)
@@ -2461,7 +2533,7 @@ async def codex_consult_async(
         "model": model or d.model,
         "timeout_seconds": deadline,
     }
-    return _start_async(
+    return await _start_async(
         meta,
         cwd,
         kind="codex_consult",
@@ -2557,7 +2629,7 @@ async def codex_review_changes_async(
         "git_timeout": config.git_timeout_seconds(),
         "max_bytes": config.max_input_bytes(),
     }
-    return _start_async(
+    return await _start_async(
         meta,
         cwd,
         kind="codex_review_changes",

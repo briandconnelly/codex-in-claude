@@ -227,3 +227,82 @@ def test_replay_never_returns_null_job_id(tmp_path):
     out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
     assert out.kind == idem.UNAVAILABLE
     assert out.job_id is None
+
+
+# ----------------------------------------------------- bounded lock acquisition
+def _hold_lock(idx):
+    """Open a *second* file description on the index lockfile and hold LOCK_EX,
+    mimicking a sibling process that grabbed the cross-process flock. Returns the fd;
+    the caller must unlock+close it."""
+    import fcntl
+    import os
+
+    idx.dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(idx.dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def _release_lock(fd):
+    import fcntl
+    import os
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+
+
+def test_lock_with_timeout_acquires_when_free(tmp_path):
+    idx = _idx(tmp_path)
+    with idx.lock(timeout=1.0):
+        entered = True
+    assert entered
+    # released on exit -> re-acquirable with a bound
+    with idx.lock(timeout=1.0):
+        pass
+
+
+def test_lock_timeout_raises_when_held_by_sibling(tmp_path):
+    # A sibling holding the flock must make a bounded acquire fail fast (LockTimeout)
+    # instead of hanging indefinitely on the unbounded LOCK_EX.
+    idx = _idx(tmp_path)
+    fd = _hold_lock(idx)
+    try:
+        start = time.monotonic()
+        with pytest.raises(idem.LockTimeout), idx.lock(timeout=0.2):
+            pass  # pragma: no cover - body never runs; acquire times out
+        elapsed = time.monotonic() - start
+        assert 0.2 <= elapsed < 2.0  # bounded to the timeout, not hung
+    finally:
+        _release_lock(fd)
+
+
+def test_lock_zero_timeout_attempts_once_and_fails_when_held(tmp_path):
+    idx = _idx(tmp_path)
+    fd = _hold_lock(idx)
+    try:
+        with pytest.raises(idem.LockTimeout), idx.lock(timeout=0.0):
+            pass  # pragma: no cover - acquire fails on the single non-blocking try
+    finally:
+        _release_lock(fd)
+
+
+def test_lock_zero_timeout_acquires_when_free(tmp_path):
+    idx = _idx(tmp_path)
+    with idx.lock(timeout=0.0):  # single non-blocking attempt succeeds uncontended
+        pass
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
+def test_lock_rejects_non_finite_or_negative_timeout(tmp_path, bad):
+    idx = _idx(tmp_path)
+    with pytest.raises(ValueError), idx.lock(timeout=bad):
+        pass  # pragma: no cover - validation raises before the body
+
+
+def test_lock_releases_after_body_exception_with_timeout(tmp_path):
+    idx = _idx(tmp_path)
+    with pytest.raises(RuntimeError), idx.lock(timeout=1.0):
+        raise RuntimeError("boom")
+    # released despite the exception -> re-acquirable
+    with idx.lock(timeout=1.0):
+        pass
