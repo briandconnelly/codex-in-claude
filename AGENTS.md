@@ -70,7 +70,8 @@ independently editable, so bumping remains review policy). Keep the change in `C
 
     | Change | Bumps `FINGERPRINT` | Breaking |
     |---|---|---|
-    | Add/rename/remove/retype a tool, param, resource, prompt, field, error code, or enum value | Yes | Yes — except a backward-compatible addition |
+    | Add a backward-compatible tool, param, resource, prompt, field, error code, or enum value | Yes | No |
+    | Remove/rename/retype a field/tool/resource/prompt, add a required input, or narrow a value set | Yes | Yes |
     | Reword a description/instruction, no guarantee change | Yes | No |
     | Reword text that weakens a documented guarantee | Yes | Yes |
     | Change a `_REPAIR_BY_CODE` machine field (`next_step`'s `RepairStep`, `repair.tool`, `temporary`) | Yes | Per the rules above |

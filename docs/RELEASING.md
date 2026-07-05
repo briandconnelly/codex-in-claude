@@ -32,8 +32,9 @@ No PyPI API token is stored anywhere — publishing uses short-lived OIDC creden
    is on PyPI (after the tag publishes) — same as the previous git-tag pin. Do **not** bump
    `FINGERPRINT` here — it moves in the feature/fix PRs that changed the agent-visible surface (see
    AGENTS.md → Versioning and Release coordination); a bump in the release PR would double-count.
-   Just verify it already reflects everything shipping in this release (the manifest guard test
-   enforces that).
+   Just verify it already reflects everything shipping in this release; the committed manifest
+   snapshot surfaces any un-acknowledged surface drift for review (the bump itself stays review
+   policy — it is an acknowledgment guard, not a mechanical one).
 2. Move the `## [Unreleased]` entries in `CHANGELOG.md` into a new dated section
    `## [X.Y.Z] - YYYY-MM-DD`, and leave a fresh empty `## [Unreleased]` on top.
 3. Open a PR, get CI green, and merge to `main`.
