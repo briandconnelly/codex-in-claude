@@ -193,6 +193,60 @@ def test_instructions_name_the_error_carrier():
     assert "structuredContent" in summary
 
 
+def test_capability_summary_routing_tiebreaker_is_stated():
+    """#209 (pins #198): consult and review both self-brand as a "second opinion", so
+    the summary must give an agent a concrete tiebreaker — consult for a diff pasted
+    inline, review for changes already in git. Pin the full clauses so the tiebreaker
+    can't silently collapse back to two undifferentiated blurbs while a fragment survives
+    (server.py CAPABILITY_SUMMARY routing)."""
+    summary = server.CAPABILITY_SUMMARY
+    # consult side: routes a diff pasted inline.
+    assert "read-only second opinion or Q&A — including on a diff you paste inline." in summary
+    # review side: routes changes already in git, and states the precedence over consult.
+    assert "prefer it over codex_consult whenever the changes already live in git." in summary
+
+
+def test_capability_summary_splits_inventory_from_model_discovery():
+    """#209 (pins #198): the capabilities inventory rule and the "discover valid model
+    slugs before overriding model" prerequisite have different triggers, so they must read
+    as two separate consecutive sentences, not one bundled clause. Pin them as one
+    contiguous substring so the split itself is what's asserted, not just the two fragments
+    coexisting somewhere (server.py CAPABILITY_SUMMARY discovery rules)."""
+    summary = server.CAPABILITY_SUMMARY
+    assert (
+        "Use codex_capabilities for the full inventory. Before overriding the model, use "
+        "codex_models (or the codex://models resource) to discover valid model slugs." in summary
+    )
+
+
+async def test_codex_status_defers_with_prefer_not_a_bare_fact():
+    """#209 (pins #198): the rate-limit posture must state the default as a recommendation
+    an agent can act on — *prefer* to defer non-urgent calls when limited/exhausted, urgent
+    ones may proceed — not the bare fact that limited/exhausted "are reasons to defer",
+    which left the strength ambiguous (codex_status docstring)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    # The docstring wraps across lines; normalize whitespace before matching the clause.
+    desc = " ".join((tools["codex_status"].description or "").split())
+    assert "prefer to defer non-urgent Codex calls (urgent ones may still proceed)" in desc
+    # Regression guard: the complete pre-#198 bare-fact sentence must not return.
+    assert "are reasons to defer non-urgent Codex calls" not in desc
+
+
+async def test_codex_dry_run_frames_redaction_as_best_effort_not_confirmation():
+    """#209 (pins #198): codex_dry_run previews scope and reported redactions, but
+    redaction is best-effort everywhere else, so its description must frame the preview as a
+    scope check, not proof no secret remains — the pre-#198 wording over-promised that it
+    confirms secrets are redacted (codex_dry_run docstring)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    desc = " ".join((tools["codex_dry_run"].description or "").split())
+    assert (
+        "redaction is best-effort, so treat the preview as a check on scope, "
+        "not as confirmation that no secret remains." in desc
+    )
+    # Regression guard: the complete pre-#198 over-promise must not return.
+    assert "confirm the scope and that secrets are redacted" not in desc
+
+
 def test_workspace_write_no_egress_is_documented():
     """The propose-tier no-network constraint of workspace-write is discoverable (issue #24).
 
