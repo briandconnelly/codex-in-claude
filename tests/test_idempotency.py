@@ -57,7 +57,7 @@ def _idx(tmp_path, horizon=3600.0):
 
 
 def _publish(idx, out, job_id):
-    idx.publish(out.path, job_id)
+    idx.publish(out, job_id)
 
 
 def test_first_reserve_wins_and_writes_reserved_record(tmp_path):
@@ -306,3 +306,67 @@ def test_lock_releases_after_body_exception_with_timeout(tmp_path):
     # released despite the exception -> re-acquirable
     with idx.lock(timeout=1.0):
         pass
+
+
+# ---------------------------------------------- partial-failure rollback (#200)
+def _raise(exc):
+    def _fn(*_a, **_k):
+        raise exc
+
+    return _fn
+
+
+def test_reserve_removes_placeholder_when_initial_write_fails(tmp_path, monkeypatch):
+    # If populating the just-created O_EXCL placeholder fails (ENOSPC/EACCES), the
+    # empty file must be rolled back — otherwise it reads as IN_PROGRESS until the
+    # horizon and every retry with this key is stranded with no job running.
+    idx = _idx(tmp_path)
+    boom = OSError("ENOSPC")
+    monkeypatch.setattr(idem.IdempotencyIndex, "_atomic_write", _raise(boom))
+    with pytest.raises(OSError) as excinfo:
+        idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert excinfo.value is boom  # original error propagates unchanged
+    assert not idx._path("codex_consult", "k1").exists()  # placeholder rolled back
+    monkeypatch.undo()
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert out.kind == idem.WON  # a clean fresh win, not a stranded in_progress
+
+
+def test_reserve_logs_when_placeholder_cleanup_fails(tmp_path, monkeypatch, caplog):
+    # A cleanup that itself fails (EROFS, etc.) must not mask the original write
+    # error, but should leave a breadcrumb.
+    idx = _idx(tmp_path)
+    monkeypatch.setattr(idem.IdempotencyIndex, "_atomic_write", _raise(OSError("write")))
+    monkeypatch.setattr(idem.Path, "unlink", _raise(OSError("unlink")))
+    with caplog.at_level("WARNING"), pytest.raises(OSError, match="write"):
+        idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert any("placeholder" in r.getMessage() for r in caplog.records)
+
+
+def test_publish_self_heals_vanished_reservation(tmp_path):
+    # If the reservation file disappears between reserve() and publish() (external
+    # deletion or a fault under the held lock), publish must still write a COMPLETE
+    # active record from the reservation it holds — not leave the path empty, which would
+    # let a same-key retry win a fresh O_EXCL create and double-spend against the running
+    # job. A same-args retry must therefore replay, a different-args retry must conflict.
+    idx = _idx(tmp_path)
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert out.kind == idem.WON
+    out.path.unlink()  # reservation vanishes before publish
+    idx.publish(out, "job-1")
+    live = _resolver(**{"job-1": {"exists": True, "terminal": False}})
+    replay = idx.reserve("codex_consult", "k1", "AH1", live)
+    assert replay.kind == idem.REPLAY and replay.job_id == "job-1"  # not a second win
+    clash = idx.reserve("codex_consult", "k1", "OTHER", live)
+    assert clash.kind == idem.CONFLICT  # arg_hash survived the rewrite
+
+
+def test_publish_writes_full_active_record_without_reread(tmp_path):
+    # publish() rewrites the complete record even over a corrupted file, so the mapping
+    # (arg_hash/version) is never dropped for a paid job.
+    idx = _idx(tmp_path)
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    out.path.write_text("{ corrupt")  # file unreadable at publish time
+    idx.publish(out, "job-1")
+    rec = json.loads(out.path.read_text())
+    assert rec["state"] == "active" and rec["job_id"] == "job-1" and rec["arg_hash"] == "AH1"

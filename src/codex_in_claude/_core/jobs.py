@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
@@ -48,6 +49,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from codex_in_claude._core import idempotency
+
+logger = logging.getLogger(__name__)
 
 # Reserved subdirectory name (of a workspace dir) for the idempotency index; it is not
 # a job and must be excluded from every job-directory iteration.
@@ -842,7 +845,6 @@ class JobStore:
                         if outcome.kind == idempotency.REPLAY:
                             return {"kind": "replay", "job_id": outcome.job_id}
                         return {"kind": outcome.kind}  # conflict | unavailable | in_progress
-                    assert outcome.path is not None
                     try:
                         job_id, started_at = self.start(
                             cmd_factory,
@@ -856,7 +858,20 @@ class JobStore:
                         # retry is a fresh miss rather than a phantom in-progress.
                         index.remove(outcome.path)
                         raise
-                    index.publish(outcome.path, job_id)
+                    try:
+                        index.publish(outcome, job_id)
+                    except Exception:
+                        # The worker is already spawned and spend is committed, so a
+                        # publish failure must NOT surface as "failed to start" — that is
+                        # false, and a retry would spawn a second paid run. Hand back the
+                        # real running handle (the caller uses it and won't retry) and
+                        # leave the un-promoted reservation to fail closed (in_progress
+                        # until the horizon) for any other caller reusing this key (#200).
+                        # Never log the raw key; job_id is a random handle, safe to log.
+                        logger.exception(
+                            "idempotency publish failed after spawn; returning running job %s",
+                            job_id,
+                        )
                     return {"kind": "created", "job_id": job_id, "started_at": started_at}
             except idempotency.LockTimeout:
                 return {"kind": idempotency.IN_PROGRESS}

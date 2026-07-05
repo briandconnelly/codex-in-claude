@@ -41,6 +41,13 @@ def _factory(code: str):
     return lambda _jd: [sys.executable, "-c", code]
 
 
+def _raise_oserror(msg: str):
+    def _fn(*_a, **_k):
+        raise OSError(msg)
+
+    return _fn
+
+
 # A snippet (run with cwd=job_dir) that creates a throwaway dir under the cleanup
 # root, declares it in cleanup.json, then sleeps — mimicking the real worker
 # holding a temp worktree open while the job runs.
@@ -1068,3 +1075,27 @@ def test_idempotent_rejects_non_finite_lock_timeout(tmp_path, bad):
             arg_hash="AH",
             lock_timeout=bad,
         )
+
+
+def test_idempotent_publish_failure_returns_running_job(tmp_path, monkeypatch, caplog):
+    # A publish() failure happens AFTER the paid worker is spawned. It must not be
+    # reported as "failed to start" (false, and a retry would double-spend): the
+    # caller gets the real running handle, and a same-key retry fails closed (#200).
+    from codex_in_claude._core import idempotency
+
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    monkeypatch.setattr(idempotency.IdempotencyIndex, "publish", _raise_oserror("publish failed"))
+    with caplog.at_level("ERROR"):
+        out = store.start_idempotent(
+            _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="AH"
+        )
+    assert out["kind"] == "created" and out["job_id"]  # real handle, not a failure
+    assert store.status(cwd, out["job_id"]) is not None  # worker really spawned
+    assert len(store.list_jobs(cwd)) == 1  # spawned exactly once
+    assert any(out["job_id"] in r.getMessage() for r in caplog.records)  # logged
+    retry = store.start_idempotent(
+        _factory(_SLEEP), cwd, kind="k", tool="codex_consult", key="k1", arg_hash="AH"
+    )
+    assert retry["kind"] == idempotency.IN_PROGRESS  # fails closed, no double-spend
+    store.cancel(cwd, out["job_id"])

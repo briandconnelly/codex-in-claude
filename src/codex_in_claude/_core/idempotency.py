@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import os
 import tempfile
@@ -32,6 +33,8 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _RECORD_VERSION = 1
 
@@ -105,12 +108,17 @@ def key_digest(tool: str, key: str) -> str:
 @dataclass
 class Outcome:
     """Classification of a reserve()/lookup. ``kind`` is one of the module constants.
-    ``path`` is set only for WON (so the caller can publish/remove it); ``job_id`` is
-    set for WON-after-publish and REPLAY."""
+    ``path`` is the entry's path — always set (every reserve() outcome carries it), so it is
+    a required, non-optional field; only a WON entry may be *mutated* by the caller
+    (publish() or remove() it), the others are read-only classifications. ``job_id`` is set
+    for WON-after-publish and REPLAY. ``record`` is the reserved record the winner just
+    wrote — carried on a WON so :meth:`publish` can rewrite a complete active record without
+    re-reading the file (see #200)."""
 
     kind: str
+    path: Path
     job_id: str | None = None
-    path: Path | None = None
+    record: dict | None = None
 
 
 # A resolver the store injects: job_id -> (exists, terminal) or None when the job dir
@@ -296,20 +304,35 @@ class IdempotencyIndex:
                     return Outcome(kind=REPLAY, job_id=replay_job_id, path=path)
                 return Outcome(kind=decision, path=path)
             else:
-                os.close(fd)
-                self._atomic_write(
-                    path,
-                    {
-                        "version": _RECORD_VERSION,
-                        "tool": tool,
-                        "key_digest": key_digest(tool, key),
-                        "arg_hash": arg_hash_,
-                        "job_id": None,
-                        "state": "reserved",
-                        "reserved_epoch": self._now(),
-                    },
-                )
-                return Outcome(kind=WON, path=path)
+                rec = {
+                    "version": _RECORD_VERSION,
+                    "tool": tool,
+                    "key_digest": key_digest(tool, key),
+                    "arg_hash": arg_hash_,
+                    "job_id": None,
+                    "state": "reserved",
+                    "reserved_epoch": self._now(),
+                }
+                try:
+                    os.close(fd)
+                    self._atomic_write(path, rec)
+                except BaseException:
+                    # Roll back the empty O_EXCL placeholder: a failed initial write
+                    # (ENOSPC/EACCES, or a rare close failure) would otherwise strand it
+                    # as a phantom IN_PROGRESS until the horizon sweep, and every retry
+                    # with this key would loop with no job running (#200). We hold the
+                    # index lock and the placeholder is ours, so the unlink is race-safe.
+                    # A cleanup that itself fails must not mask the original error.
+                    try:
+                        path.unlink()
+                    except OSError:
+                        logger.warning(
+                            "failed to remove idempotency placeholder after write error: %s",
+                            path,
+                            exc_info=True,
+                        )
+                    raise
+                return Outcome(kind=WON, path=path, record=rec)
         return Outcome(kind=IN_PROGRESS, path=path)  # pragma: no cover - loop always returns
 
     def _classify(self, path: Path, arg_hash_: str, resolve: JobResolver) -> tuple[str, str | None]:
@@ -349,14 +372,23 @@ class IdempotencyIndex:
             return _SWEEP, None
         return (CONFLICT if rec.get("arg_hash") != arg_hash_ else IN_PROGRESS), None
 
-    def publish(self, path: Path, job_id: str) -> None:
-        """Promote a reserved entry to active, atomically. Only the O_EXCL winner ever
-        publishes a given path, so this read-modify-write has no cross-process race."""
-        status, rec = self._read(path)
-        record = dict(rec) if (status == "ok" and rec is not None) else {}
-        record["job_id"] = job_id
-        record["state"] = "active"
-        self._atomic_write(path, record)
+    def publish(self, outcome: Outcome, job_id: str) -> None:
+        """Promote a WON reservation to active, atomically. Writes a complete active
+        record from the reservation the winner already holds (``outcome.record``) rather
+        than re-reading the file. Only the O_EXCL winner ever publishes a given path, so
+        there is no cross-process race.
+
+        Not re-reading is deliberate (#200): if the reservation file were corrupted or
+        deleted between reserve() and publish(), a read-modify-write would either drop the
+        idempotency mapping (a stub built from `{}` lacks `arg_hash`/`version` and reads
+        back as corrupt) or, if the file is *missing*, leave nothing on disk — letting a
+        same-key retry win a fresh O_EXCL create and double-spend against the running job.
+        Rewriting the full record instead self-heals both cases. If ``_atomic_write``
+        itself fails, the original reserved record stays on disk and the entry fails
+        closed (in-progress until the horizon) for other callers."""
+        assert outcome.record is not None  # invariant of a WON outcome (path is always set)
+        record = {**outcome.record, "job_id": job_id, "state": "active"}
+        self._atomic_write(outcome.path, record)
 
     def sweep(self, resolve: JobResolver) -> None:
         """Drop entries whose backing job is gone and which have aged past the horizon;
