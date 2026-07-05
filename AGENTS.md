@@ -50,19 +50,50 @@ independently editable, so bumping remains review policy). Keep the change in `C
 - Semantic Versioning. **Pre-1.0:** a minor bump may change the agent-visible surface (a breaking
   change is a minor, not a major); a patch is a bug fix or internal change. Post-1.0, breaking
   changes are majors.
-- A change to the agent-visible surface (tool names, params, error codes, value enums) bumps
-  `FINGERPRINT` and is flagged as a breaking change (commit `!`/`BREAKING CHANGE:` footer, plus the
-  `breaking-change` label on the PR).
+- Every change is judged on **two independent questions**:
+  - **Bumps `FINGERPRINT`?** Yes for any *externally observable* change to a category in
+    `FINGERPRINT_COVERS` (`src/codex_in_claude/schemas.py`) — the discovered value, shape, or
+    documented meaning of a tool/resource/prompt schema, description, annotation, error code, value
+    enum, the initialize response, or the `codex_capabilities` payload. Reference that tuple rather
+    than re-listing it here (the re-listing drifting out of sync with the code is the exact bug this
+    section exists to prevent); a refactor that leaves the discovered surface byte-identical does not
+    bump it.
+  - **Breaking?** Flag it breaking (commit `!`/`BREAKING CHANGE:` footer + the `breaking-change` PR
+    label) only when the change is *backward-incompatible* for a client: removing or renaming a
+    field/tool/resource/prompt, retyping a field, adding a required input, narrowing an accepted
+    value set or enum, changing an output field's meaning under a closed schema, or weakening a
+    documented guarantee (an annotation or a promised semantic). Backward-compatible additions and
+    wording-only rewords are not breaking.
+  - Every breaking change is also a `FINGERPRINT` bump; not every bump is breaking (so #198, a
+    wording-only reword, correctly bumped `FINGERPRINT` with no `!`, and #193's `!` was over-flagging
+    — the safe direction). Quick reference:
+
+    | Change | Bumps `FINGERPRINT` | Breaking |
+    |---|---|---|
+    | Add/rename/remove/retype a tool, param, resource, prompt, field, error code, or enum value | Yes | Yes — except a backward-compatible addition |
+    | Reword a description/instruction, no guarantee change | Yes | No |
+    | Reword text that weakens a documented guarantee | Yes | Yes |
+    | Change a `_REPAIR_BY_CODE` machine field (`next_step`'s `RepairStep`, `repair.tool`, `temporary`) | Yes | Per the rules above |
+    | Change human-readable `_REPAIR_BY_CODE`/`error.message` prose only | No | No |
+    | Internal refactor, discovered surface unchanged | No | No |
+
+    The last two rows are why #197 (repair-hint prose only) bumped neither: that prose ships fresh in
+    each error envelope and is absent from the manifest snapshot, so no cached discovery surface
+    changed. The exemption is *only* for the human-readable message/prose text — the co-located
+    machine-readable repair fields remain part of the discovered surface.
 - `CHANGELOG.md` follows Keep a Changelog: land every notable change under `## [Unreleased]`; cutting
   a release moves those entries into a new dated version section and leaves a fresh, empty
   `## [Unreleased]` on top. See Release coordination for the version-bump set.
 
 ## Release coordination
 
-Bump together: `pyproject.toml` version, `.claude-plugin/plugin.json`, the `codex-in-claude==X.Y.Z`
-PyPI pin in `.mcp.json`, `CHANGELOG.md`, and `FINGERPRINT` when the surface changed. (`README.md` carries no
-pinned version literal — it uses a dynamic PyPI badge and marketplace install — so it needs no bump.)
-See `docs/RELEASING.md` for the full release procedure and the one-time PyPI/GitHub setup.
+The release PR bumps three version literals in lockstep — `pyproject.toml` version,
+`.claude-plugin/plugin.json`, and the `codex-in-claude==X.Y.Z` PyPI pin in `.mcp.json` — and rolls
+`CHANGELOG.md`'s `## [Unreleased]` into a dated section. `FINGERPRINT` is **not** part of the release
+bump: it moves in the feature/fix PRs that change the agent-visible surface (see Versioning), and the
+release PR only verifies it already reflects everything shipping. (`README.md` carries no pinned
+version literal — it uses a dynamic PyPI badge and marketplace install — so it needs no bump.) See
+`docs/RELEASING.md` for the full release procedure and the one-time PyPI/GitHub setup.
 
 **The lockstep version bump belongs only in the dedicated `chore: release X.Y.Z` PR — never in a
 feature/fix PR.** Feature and fix PRs change `FINGERPRINT` (when the surface changed) and add their
