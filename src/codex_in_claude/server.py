@@ -2149,6 +2149,15 @@ def _mark_replayed(env: dict) -> dict:
 _PENDING_START_CLEANUPS: set[asyncio.Future] = set()
 
 
+def _swallow_future_result(fut: asyncio.Future) -> None:
+    """Done-callback that retrieves a fire-and-forget future's outcome so a failure isn't
+    reported as an unretrieved-future warning. A cancelled future (e.g. loop teardown) has
+    nothing to retrieve and ``.exception()`` would re-raise ``CancelledError`` from the
+    callback, so skip it — the callback must always be safe."""
+    if not fut.cancelled():
+        fut.exception()
+
+
 def _stop_orphaned_start(store: JobStore, cwd: str) -> Callable[[asyncio.Future], None]:
     """Build a done-callback for a shielded unkeyed start whose awaiter was cancelled
     mid-spawn (#199). Moving the spawn off-loop made it cancellable, so a client Esc during
@@ -2172,7 +2181,7 @@ def _stop_orphaned_start(store: JobStore, cwd: str) -> Callable[[asyncio.Future]
             cancel_fut = asyncio.get_running_loop().run_in_executor(None, store.cancel, cwd, job_id)
             # Retrieve the fire-and-forget result so a store.cancel failure doesn't surface
             # as an unretrieved-future warning; cleanup failures are best-effort here.
-            cancel_fut.add_done_callback(lambda f: f.exception())
+            cancel_fut.add_done_callback(_swallow_future_result)
 
     return _cb
 

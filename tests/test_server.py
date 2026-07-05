@@ -2982,6 +2982,22 @@ async def test_unkeyed_start_cancel_during_failed_spawn_cancels_nothing(
     assert cancels == []
 
 
+async def test_swallow_future_result_is_safe_on_cancelled_and_failed():
+    # The fire-and-forget cleanup callback must never re-raise: a cancelled future (loop
+    # teardown) is skipped, and a failed future has its exception retrieved (no warning).
+    loop = asyncio.get_running_loop()
+
+    cancelled = loop.create_future()
+    cancelled.cancel()
+    await asyncio.sleep(0)  # let the cancellation settle
+    server._swallow_future_result(cancelled)  # must not raise CancelledError
+
+    failed = loop.create_future()
+    failed.set_exception(RuntimeError("cancel failed"))
+    server._swallow_future_result(failed)  # retrieves the exception; no raise
+    assert failed.exception() is not None  # still readable after retrieval
+
+
 # --- structured repair fields for size/workspace errors (#95) ----------------
 async def test_input_too_large_carries_size_fields_consult(monkeypatch, clean_env, tmp_path):
     """input_too_large exposes the byte limit and the offending input's actual size in
