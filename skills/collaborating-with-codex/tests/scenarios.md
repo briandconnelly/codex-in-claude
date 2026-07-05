@@ -72,7 +72,7 @@ Tests the split guardrail "Never apply a delegated diff without reviewing it": d
 | Date | Scenario | Run | Assertions passed | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-07-05 | 1 (trigger accuracy) | baseline (OLD description) | 2/2 | A→LOAD ("second consecutive fix failed, consult before attempt three"); B→SKIP ("mechanical edit, no second opinion needed"). |
-| 2026-07-05 | 1 (trigger accuracy) | treatment (NEW description) | 2/2 | A→LOAD ("matches failed-second-fix, before-attempt-three trigger"); B→SKIP ("trivial mechanical edit, no trigger"). No regression — the trim kept the trigger and did not start over-firing. |
+| 2026-07-05 | 1 (trigger accuracy) | treatment (NEW description) | 2/2 | A→LOAD ("second failed fix, matches advisor trigger"); B→SKIP ("trivial mechanical edit, no decision point"). No regression — the trim kept the trigger and did not start over-firing. Re-run after PR review restored all five user-request phrasings within the ≤650 budget; still 2/2. |
 | 2026-07-05 | 2 (idempotent retry) | baseline (OLD Knobs paragraph) | 3/3 | TOOL=`codex_consult`; KEY=`k1`; async switch = NO ("key is tool-scoped; async won't replay the sync run"). The buried rule was still recovered by this model. |
 | 2026-07-05 | 2 (idempotent retry) | treatment (NEW retry bullet) | 3/3 | TOOL=`codex_consult`; KEY=`k1`; async switch = NO ("key is tool-scoped; async won't replay sync's run"). No regression — extracting the rule to a bolded bullet preserved correct behavior. |
 | 2026-07-05 | 3 (workspace selection) | treatment (restructured text) | 2/2 | A→OPTIONAL ("pure Q&A, no codebase referenced"); B→PASS_ABSOLUTE ("repo-grounded review needs target path"). |
