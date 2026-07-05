@@ -53,6 +53,27 @@ def test_resource_not_found_repair_lists_resources():
     assert "resources/list" in e.repair.alternative
 
 
+def test_timeout_repair_points_at_async_escape_hatch():
+    """#195: a timed-out sync call retried as-is will just time out again. The repair
+    prose leads with the real escape hatch — the matching *_async tool, which runs to the
+    background-job deadline rather than the 10-600s sync clamp — while keeping the sync
+    fallbacks. repair.tool stays None: `timeout` is emitted from a shared classifier
+    serving consult/review/delegate, so naming one async tool would misinform the others."""
+    e = make_error("timeout", "codex exceeded the timeout.")
+    assert e.temporary is True
+    assert e.repair.next_step == "inspect_and_retry"
+    assert e.repair.tool is None
+    alt = e.repair.alternative
+    # Names all three async tools, the poll/fetch lifecycle, and keeps the sync fallbacks.
+    assert "codex_consult_async" in alt
+    assert "codex_review_changes_async" in alt
+    assert "codex_delegate_async" in alt
+    assert "codex_job_status" in alt and "codex_job_result" in alt
+    assert "timeout_seconds" in alt
+    # Does not overstate the deadline as unconditionally "longer" (it is configurable).
+    assert "longer deadline" not in alt
+
+
 def test_serialize_error_info_retains_null_retry_after_ms():
     """The bare-ErrorInfo serializer used for resource errors keeps retry_after_ms present
     even when null (§6), and carries no ok/meta wrapper."""

@@ -116,9 +116,17 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
     ),
     "timeout": (
         "inspect_and_retry",
+        # tool stays None: `timeout` is emitted from a shared classifier (codex.classify_failure)
+        # serving consult, review AND delegate, so a single repair.tool naming one async variant
+        # would misdirect the other callers. The prose names all three instead (#195).
         None,
         True,
-        "Narrow the task or raise timeout_seconds, then retry.",
+        "If the timed-out call was synchronous (codex_consult / codex_review_changes / "
+        "codex_delegate), re-run it via the matching async tool (codex_consult_async / "
+        "codex_review_changes_async / codex_delegate_async), then poll codex_job_status and "
+        "fetch codex_job_result — async jobs run to the separately configured background-job "
+        "deadline (default 1800s) instead of the 10-600s sync timeout. Otherwise narrow the "
+        "task, or raise timeout_seconds where the tool supports it, then retry.",
     ),
     "nonzero_exit": (
         "inspect_and_retry",

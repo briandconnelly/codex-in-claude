@@ -5,6 +5,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `timeout` error's repair hint now points at the async escape hatch** (#195). An MCP error
+  audit found `timeout` was the only recurring real-friction error, and its hint (`"Narrow the task
+  or raise timeout_seconds, then retry."`) only steered the agent to retry the *same* synchronous
+  call — which, having just hit the 10-600s sync clamp, will likely time out again. The hint now
+  leads with the real recovery: re-run the timed-out call via its matching `*_async` tool
+  (`codex_consult_async` / `codex_review_changes_async` / `codex_delegate_async`), then poll
+  `codex_job_status` and fetch `codex_job_result` — async jobs run to the separately configured
+  background-job deadline (default 1800s) rather than the sync timeout — while keeping the sync
+  fallbacks (narrow the task, or raise `timeout_seconds`). Repair prose only, gated on the failed
+  call being synchronous; `repair.tool` stays `None` because `timeout` is emitted from a shared
+  classifier serving consult/review/delegate. No wire-shape change → no `fingerprint` bump.
+
 ### Added
 
 - **`codex_capabilities` now discloses what the fingerprint covers** (#178, audit F6). The result
