@@ -23,8 +23,10 @@ fields). Failure is uniform: an `error` object built for machine-driven recovery
   label you branch on (e.g. `poll_job_status`, `correct_arguments`); `tool`/`arguments` name a
   tool to call to recover; `alternative` is prose fallback. Omitted only when no corrective
   path exists.
-- `details` — `{field, reason, allowed_values}` for a single offending field. The rejected
-  `value` is deliberately never echoed (it may be a secret).
+- `details` — `{field, fields, reason, allowed_values}`: `field` names a single offending input;
+  `fields` (mutually exclusive with `field`; non-empty, unique) names inputs whose *combination* is
+  invalid (e.g. a combined-size limit where no single input is at fault). The rejected `value` is
+  deliberately never echoed (it may be a secret).
 - `invalid_arguments` — set when `code` is `invalid_arguments`: a list of
   `{field, reason, allowed_values}` per offending argument; `details` mirrors the first.
 - `limit_bytes`/`actual_bytes`/`candidate_roots` — size/roots context for the relevant codes.
@@ -55,6 +57,23 @@ may read or act on during a run. The schema is unchanged; the inline marker is t
 
 An unrecognized value is rejected with `unsupported_detail`. For async work the worker always stores
 the full envelope, so a later `codex_job_result(..., detail="full")` can still recover the raw text.
+
+## Idempotency
+
+The six spend-committing tools — `codex_consult`, `codex_review_changes`, `codex_delegate` and their
+`_async` variants — take an optional `idempotency_key`. Reusing a key on the **same tool** with the
+same arguments replays the existing run instead of starting (and paying for) a duplicate Codex call:
+a sync call reattaches to the in-flight run and returns its result; an `_async` call returns the same
+`job_id`. The key is scoped to the concrete tool — the sync and `_async` variants are different tools
+and never share a key's run. Reuse with different arguments (including a different `timeout_seconds`)
+is refused with `idempotency_conflict`; a key whose prior result was already consumed/evicted is
+`idempotency_result_unavailable`; a still-publishing reservation is `idempotency_in_progress`
+(retryable). Omit the key for the prior no-dedup behavior.
+
+- `meta.idempotency_replayed` — `true` only on a replayed response, marking that no new Codex spend
+  occurred; omitted otherwise.
+- `meta.job_kind` — set on a lifecycle (`codex_job_*`) error envelope when it resolved an existing
+  job record, naming that job's kind (e.g. `codex_delegate`); omitted for not-found/pre-lookup errors.
 
 ## Workspace selection
 
