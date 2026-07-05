@@ -100,7 +100,7 @@ jobs are read-only.
 Every tool returns an envelope:
 
 - Branch on `ok`. On `ok: false`, read `error.code` and follow `error.repair`;
-  `error.details.field` (or `details.fields`, when a combination of inputs is at fault) names the bad input(s), `error.repair.next_step` gives the symbolic recovery action, and `error.temporary` signals whether the condition is transient.
+  `error.details.field` (or `error.details.fields`, when a combination of inputs is at fault) names the bad input(s), `error.repair.next_step` gives the symbolic recovery action, and `error.temporary` signals whether the condition is transient.
   Do not blindly retry.
 - On `ok: true`: `summary` is Codex's headline and `findings[]` carry the detail
   (each tied to evidence — `file`/`line`). Only `codex_review_changes` adds a

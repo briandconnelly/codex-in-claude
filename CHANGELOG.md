@@ -105,7 +105,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `meta.idempotency_replayed`, and `meta.job_kind`. The bundled `collaborating-with-codex` skill's
   Knobs list under-reported `model`/`isolation` scope (both are also accepted on
   `codex_consult_async`/`codex_review_changes_async`) and omitted `idempotency_key`; both are
-  fixed, and its `error.details` note now mentions `details.fields`. Documentation only — no tool,
+  fixed, and its `error.details` note now mentions `error.details.fields`. Documentation only — no tool,
   schema, or `fingerprint` change.
 
 - **Keyed sync-timeout recovery no longer steers agents into a second paid run; the
