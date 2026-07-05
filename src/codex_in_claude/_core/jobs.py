@@ -845,7 +845,6 @@ class JobStore:
                         if outcome.kind == idempotency.REPLAY:
                             return {"kind": "replay", "job_id": outcome.job_id}
                         return {"kind": outcome.kind}  # conflict | unavailable | in_progress
-                    assert outcome.path is not None
                     try:
                         job_id, started_at = self.start(
                             cmd_factory,

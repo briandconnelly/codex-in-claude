@@ -108,15 +108,16 @@ def key_digest(tool: str, key: str) -> str:
 @dataclass
 class Outcome:
     """Classification of a reserve()/lookup. ``kind`` is one of the module constants.
-    ``path`` is set on every reserve() outcome (it is the entry's path), but only a WON
-    entry may be mutated by the caller — publish() or remove() it; the others are read-only
-    classifications. ``job_id`` is set for WON-after-publish and REPLAY. ``record`` is the
-    reserved record the winner just wrote — carried on a WON so :meth:`publish` can rewrite
-    a complete active record without re-reading the file (see #200)."""
+    ``path`` is the entry's path — always set (every reserve() outcome carries it), so it is
+    a required, non-optional field; only a WON entry may be *mutated* by the caller
+    (publish() or remove() it), the others are read-only classifications. ``job_id`` is set
+    for WON-after-publish and REPLAY. ``record`` is the reserved record the winner just
+    wrote — carried on a WON so :meth:`publish` can rewrite a complete active record without
+    re-reading the file (see #200)."""
 
     kind: str
+    path: Path
     job_id: str | None = None
-    path: Path | None = None
     record: dict | None = None
 
 
@@ -385,8 +386,7 @@ class IdempotencyIndex:
         Rewriting the full record instead self-heals both cases. If ``_atomic_write``
         itself fails, the original reserved record stays on disk and the entry fails
         closed (in-progress until the horizon) for other callers."""
-        assert outcome.path is not None  # invariant of a WON outcome
-        assert outcome.record is not None  # invariant of a WON outcome
+        assert outcome.record is not None  # invariant of a WON outcome (path is always set)
         record = {**outcome.record, "job_id": job_id, "state": "active"}
         self._atomic_write(outcome.path, record)
 
