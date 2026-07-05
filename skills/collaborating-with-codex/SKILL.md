@@ -100,7 +100,7 @@ jobs are read-only.
 Every tool returns an envelope:
 
 - Branch on `ok`. On `ok: false`, read `error.code` and follow `error.repair`;
-  `error.details.field` names the bad input, `error.repair.next_step` gives the symbolic recovery action, and `error.temporary` signals whether the condition is transient.
+  `error.details.field` (or `details.fields`, when a combination of inputs is at fault) names the bad input(s), `error.repair.next_step` gives the symbolic recovery action, and `error.temporary` signals whether the condition is transient.
   Do not blindly retry.
 - On `ok: true`: `summary` is Codex's headline and `findings[]` carry the detail
   (each tied to evidence — `file`/`line`). Only `codex_review_changes` adds a
@@ -180,14 +180,19 @@ If a tool call fails with a transport error (e.g. `Connection closed`, or
 ## Knobs (optional params / env)
 
 Optional per-call params (not every tool takes every one): `model` (override the
-Codex model) — on the active tools `codex_consult`, `codex_review_changes`,
-`codex_delegate`, and `codex_delegate_async`, plus the free `codex_delegate_dry_run`
+Codex model) — on all six active tools (`codex_consult`, `codex_review_changes`,
+`codex_delegate` and their `_async` variants), plus the free `codex_delegate_dry_run`
 preview; `isolation` (`inherit`, `ignore-config`, or `ignore-rules`; omit for the
 server's configured default — `codex_status` reports the resolved value) — on
-those four plus `codex_dry_run` and `codex_delegate_dry_run`; and
+those six plus `codex_dry_run` and `codex_delegate_dry_run`;
 `timeout_seconds` (clamped 10–600; default 180) — only on the synchronous active
 calls (`codex_consult`, `codex_review_changes`, `codex_delegate`), as
 `codex_delegate_async` is bounded by the background-job deadline
-(`CODEX_IN_CLAUDE_JOB_MAX_SECONDS`) instead. For env vars (including the
+(`CODEX_IN_CLAUDE_JOB_MAX_SECONDS`) instead; and `idempotency_key` — on the six
+spend-committing tools (`codex_consult`/`codex_review_changes`/`codex_delegate` and
+their `_async` variants): pass the same key when retrying the SAME tool after a
+transport drop to replay the existing run instead of paying for a duplicate; the key
+is scoped to the concrete tool (a sync call's key never replays via the `_async`
+variant, and vice versa). For env vars (including the
 background-job knobs), see the README configuration table; use `codex_status` for the
 resolved defaults and `codex_capabilities` for the tool params and error codes.

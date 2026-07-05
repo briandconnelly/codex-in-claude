@@ -5,7 +5,108 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_capabilities` now discloses what the fingerprint covers** (#178, audit F6). The result
+  gains a `fingerprint_covers` field — a list of granular, machine-readable identifiers naming
+  exactly the categories a change to the `fingerprint` may signal (`tool_names`,
+  `tool_input_schemas`, `tool_output_schemas`, `tool_descriptions`, `tool_annotations`,
+  `error_codes`, `value_enums`, `resource_metadata`, `resource_templates`, `prompts`,
+  `initialize_response`, `error_envelope_schema`, `result_meta_schema`, `capabilities_payload`,
+  `capability_guarantees`). Previously that coverage lived only in a `schemas.py` source comment and
+  `AGENTS.md`, so a client could see the fingerprint change but not reason about *what* invalidated
+  its cache without reading source. The field derives from a new authoritative `FINGERPRINT_COVERS`
+  tuple (now the single source of truth; the `FINGERPRINT` comment points to it rather than
+  duplicating the list). The token set is kept complete relative to the actual guard — the manifest
+  surface — by a structural test that maps every manifest section to a coverage token, so the
+  disclosure can neither drift from the constant nor silently under-report a guarded surface.
+  Agent-visible surface change → new `fingerprint_covers` capability field; fingerprint
+  `codex-in-claude/0.1/schema-25` → `codex-in-claude/0.1/schema-26`.
+
+- **Advertised output schemas now declare their JSON Schema dialect** (#185, audit N4). Every tool's
+  `outputSchema` gains a root `$schema` of `https://json-schema.org/draft/2020-12/schema`, matching
+  the dialect already stamped on input schemas — so both directions of a tool's contract are
+  self-describing and a strict client knows which draft to validate a result against. The dialect is
+  now a single shared `JSON_SCHEMA_DIALECT` constant referenced by the input-schema middleware, every
+  published output schema, and the two resource schemas, so the two directions cannot drift. Part of the schema-26 → schema-27 fingerprint bump.
+
+- **MCP resources now advertise an explicit `name` and `title`** (#182, audit N1). The three
+  `codex://` resources (`models`, `error-envelope`, `result-meta`) carried function-derived names
+  (`codex_models_resource`, …) and no `title`; they now expose intent-revealing identifiers
+  (`codex-models` / "Codex model catalog", etc.) so a resource-browsing agent sees purpose, not
+  internals. (`size` is left unset: FastMCP's resource decorator exposes no `size` field to populate.) Part of the schema-26 → schema-27 fingerprint bump.
+
+- **The tool-failure carrier is now named before the first failure** (#175, audit F3).
+  `codex_capabilities` gains a `tool_error_carrier` field, and the capability summary (served as MCP
+  `instructions`) gains one sentence, both stating that a tool failure comes back as the tool result
+  itself (`isError: true`) with the error envelope in `structuredContent` (and `content[0].text`
+  mirroring it) — so a discovery-only client need not infer the carrier from the `outputSchema`
+  union. Scoped deliberately to *tool* calls: resource-read failures use the JSON-RPC error carrier
+  (tracked separately as audit F9, #181). Agent-visible surface change → new
+  `tool_error_carrier` capability field and instructions prose. Part of the schema-22 → schema-23
+  fingerprint bump.
+
+- **Optional `idempotency_key` on the six spend-committing tools** (`codex_consult`,
+  `codex_review_changes`, `codex_delegate` and their `_async` variants) so a retry after a
+  transport drop **replays** the existing run instead of starting — and paying for — a duplicate
+  Codex call (#176, audit F4). Dedup is scoped to (resolved workspace, exact tool, argument hash)
+  and backed by a disk-backed, `O_EXCL`-guarded index beside the job store, so it holds within and
+  across server processes for the job-TTL window. A sync retry awaits/returns the in-flight run's
+  result; an `_async` retry returns the existing job's real handle. Reuse with **different**
+  arguments is refused (`idempotency_conflict`); a key whose prior result was already
+  consumed/evicted is `idempotency_result_unavailable`; a still-publishing reservation is
+  `idempotency_in_progress` (retryable). A replayed response carries `meta.idempotency_replayed:
+  true`, and a run started with a key is treated as durable — a single waiter's timeout or
+  cancellation no longer cancels it (only `codex_job_cancel` does). Omit the param for the prior
+  no-dedup behavior. Agent-visible surface change → three new error codes, one new repair step, a
+  new `meta.idempotency_replayed` field, and per-tool advertised `error_codes`; fingerprint
+  `codex-in-claude/0.1/schema-20` → `codex-in-claude/0.1/schema-21`.
+
+- **`codex_capabilities(include_schemas=[...])`** — an opt-in, tool-reachable fallback that embeds
+  the full `error-envelope` and/or `result-meta` schemas in the response for resource-blind
+  clients (#179, audit F7; the shared mechanism the #173 opaque-`meta` caveat requires). Omitted
+  from the default payload, so it does not re-bloat discovery. Covered by `schema-20`.
+
+- **Wire-size budget** — the `tools/list` catalog size is now pinned in CI (`test_wire_catalog_under_cap`,
+  cap 64 KB with headroom) so serialized weight, not just content, is guarded; the manifest snapshot
+  additionally captures the `codex://result-meta` content so Meta-contract changes move the guard.
+
+### Changed
+
+- **The capability summary (MCP `instructions`) is restructured as rules-then-context** (#180, audit
+  F8). The first-read instructions were a single run-on paragraph that interleaved background (the
+  `rate_limit` block field semantics) between the binding routing and safety rules. They are now
+  ordered: a does/does-not lead, each routing and safety rule as its own imperative sentence, then
+  discovery rules, and finally a single background paragraph carrying the async-job mechanics and the
+  cached rate-limit semantics — so an agent that skims reaches the actionable rules first. No rule or
+  fact was dropped; only the ordering and sentence boundaries changed. Part of the schema-26 → schema-27 fingerprint bump.
+
+- **`tools/list` wire response shrunk ~44% (real MCP catalog ~103.5 KB → ~57.6 KB)** by
+  advertising an opaque `meta` branch (#173, audit F1). Every success envelope's `meta` was the
+  full `Meta` model inlined per tool (~3.5 KB × 6 tools ≈ 21 KB, since FastMCP dereferences
+  `$defs` on the wire); success schemas now carry a compact `{"type": "object"}` pointer — the
+  server still emits the full `Meta`, so strict clients validating `structuredContent` against the
+  advertised schema still pass. The full contract is published once at the new
+  **`codex://result-meta`** resource, mirroring `codex://error-envelope`, with a
+  `result_meta_resource` pointer in `codex_capabilities`. The now-orphaned `$defs` closure
+  (`RateLimit`/`RateLimitWindow`/`Usage`/`ContextSummary`) is pruned per-schema by reachability, so
+  definitions still referenced outside `Meta` (e.g. `codex_status` → `RateLimit`, `codex_dry_run`
+  → `ContextSummary`) are retained. The near-verbatim "Progress & recovery" docstring paragraph
+  (3×) is collapsed to one binding sentence. Agent-visible surface change → fingerprint
+  `codex-in-claude/0.1/schema-19` → `codex-in-claude/0.1/schema-20`.
+
 ### Fixed
+
+- **Integration docs corrected for the `details.fields` carrier and the idempotency surface**
+  (#206, #207). `COMPATIBILITY.md`, `docs/REFERENCE.md`, and `README.md` still described the
+  pre-#191 `details{field,reason,allowed_values}` shape; they now document `field` XOR `fields`
+  (the carrier that names inputs whose *combination* is invalid, e.g. a combined-size limit).
+  `docs/REFERENCE.md` gains an Idempotency section covering the `idempotency_key` param,
+  `meta.idempotency_replayed`, and `meta.job_kind`. The bundled `collaborating-with-codex` skill's
+  Knobs list under-reported `model`/`isolation` scope (both are also accepted on
+  `codex_consult_async`/`codex_review_changes_async`) and omitted `idempotency_key`; both are
+  fixed, and its `error.details` note now mentions `details.fields`. Documentation only — no tool,
+  schema, or `fingerprint` change.
 
 - **Keyed sync-timeout recovery no longer steers agents into a second paid run; the
   `idempotency_key` description no longer over-promises cross-variant reuse** (#201). Two
@@ -100,50 +201,6 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `None` because `timeout` is emitted from a shared classifier serving consult/review/delegate. No
   wire-shape change → no `fingerprint` bump.
 
-### Added
-
-- **`codex_capabilities` now discloses what the fingerprint covers** (#178, audit F6). The result
-  gains a `fingerprint_covers` field — a list of granular, machine-readable identifiers naming
-  exactly the categories a change to the `fingerprint` may signal (`tool_names`,
-  `tool_input_schemas`, `tool_output_schemas`, `tool_descriptions`, `tool_annotations`,
-  `error_codes`, `value_enums`, `resource_metadata`, `resource_templates`, `prompts`,
-  `initialize_response`, `error_envelope_schema`, `result_meta_schema`, `capabilities_payload`,
-  `capability_guarantees`). Previously that coverage lived only in a `schemas.py` source comment and
-  `AGENTS.md`, so a client could see the fingerprint change but not reason about *what* invalidated
-  its cache without reading source. The field derives from a new authoritative `FINGERPRINT_COVERS`
-  tuple (now the single source of truth; the `FINGERPRINT` comment points to it rather than
-  duplicating the list). The token set is kept complete relative to the actual guard — the manifest
-  surface — by a structural test that maps every manifest section to a coverage token, so the
-  disclosure can neither drift from the constant nor silently under-report a guarded surface.
-  Agent-visible surface change → new `fingerprint_covers` capability field; fingerprint
-  `codex-in-claude/0.1/schema-25` → `codex-in-claude/0.1/schema-26`.
-- **Advertised output schemas now declare their JSON Schema dialect** (#185, audit N4). Every tool's
-  `outputSchema` gains a root `$schema` of `https://json-schema.org/draft/2020-12/schema`, matching
-  the dialect already stamped on input schemas — so both directions of a tool's contract are
-  self-describing and a strict client knows which draft to validate a result against. The dialect is
-  now a single shared `JSON_SCHEMA_DIALECT` constant referenced by the input-schema middleware, every
-  published output schema, and the two resource schemas, so the two directions cannot drift.
-- **MCP resources now advertise an explicit `name` and `title`** (#182, audit N1). The three
-  `codex://` resources (`models`, `error-envelope`, `result-meta`) carried function-derived names
-  (`codex_models_resource`, …) and no `title`; they now expose intent-revealing identifiers
-  (`codex-models` / "Codex model catalog", etc.) so a resource-browsing agent sees purpose, not
-  internals. (`size` is left unset: FastMCP's resource decorator exposes no `size` field to populate.)
-
-### Changed
-
-- **The capability summary (MCP `instructions`) is restructured as rules-then-context** (#180, audit
-  F8). The first-read instructions were a single run-on paragraph that interleaved background (the
-  `rate_limit` block field semantics) between the binding routing and safety rules. They are now
-  ordered: a does/does-not lead, each routing and safety rule as its own imperative sentence, then
-  discovery rules, and finally a single background paragraph carrying the async-job mechanics and the
-  cached rate-limit semantics — so an agent that skims reaches the actionable rules first. No rule or
-  fact was dropped; only the ordering and sentence boundaries changed.
-
-The three changes above share one agent-visible surface bump: fingerprint
-`codex-in-claude/0.1/schema-26` → `codex-in-claude/0.1/schema-27`.
-
-### Fixed
-
 - **`isolation` param no longer advertises `'inherit'` as the unconditional default** (#183, audit
   N2). The `isolation` schema description hardcoded `"'inherit' (default)"`, but the default is
   env-configurable via `CODEX_IN_CLAUDE_ISOLATION`. Because `isolation` is behavior-bearing (it
@@ -156,6 +213,7 @@ The three changes above share one agent-visible surface bump: fingerprint
   unchanged (it correctly documents `inherit` as the env var's *built-in fallback*). Agent-visible
   surface change → `isolation` description reworded; fingerprint `codex-in-claude/0.1/schema-24` →
   `codex-in-claude/0.1/schema-25`.
+
 - **Resource-read failures now carry the §6 error envelope in JSON-RPC `error.data`** (#181, audit
   F9). A `resources/read` of an unknown or disabled URI returned a bare JSON-RPC error with
   `error.data: null` — no symbolic `code`, `temporary`, or `repair` — making resource reads the one
@@ -173,6 +231,7 @@ The three changes above share one agent-visible surface bump: fingerprint
   surface change → new `resource_not_found` error code, new `list_resources` repair step, new
   `resource_error_carrier` capability field; fingerprint `codex-in-claude/0.1/schema-23` →
   `codex-in-claude/0.1/schema-24`.
+
 - **Combined-size (`input_too_large`) failures on `codex_consult`/`codex_consult_async` now name
   every offending input** (#174, audit F2). The byte limit applies to `question` +
   `extra_context` *together*, but the envelope hardcoded `details.field: "extra_context"` even when
@@ -183,6 +242,7 @@ The three changes above share one agent-visible surface bump: fingerprint
   `fields: ["question", "extra_context"]` when both contribute and `field: "question"` when it was
   sent alone. Agent-visible surface change → new `error.details.fields` field. Part of the
   schema-22 → schema-23 fingerprint bump.
+
 - **`invalid_arguments` repair now names the failing tool** (#184, audit N3). The repair guidance
   identified the tool only in prose; `error.repair.tool` was left null though the called tool's name
   is known and non-sensitive. It is now set. Because the rejected argument *values* are never echoed,
@@ -210,60 +270,6 @@ The three changes above share one agent-visible surface bump: fingerprint
   worst-case `propose` fallback for unknown-kind lookups is removed. Agent-visible surface change →
   new `meta.job_kind` field, documented `meta.tier`/`sandbox` semantics; fingerprint
   `codex-in-claude/0.1/schema-21` → `codex-in-claude/0.1/schema-22`.
-
-### Added
-
-- **The tool-failure carrier is now named before the first failure** (#175, audit F3).
-  `codex_capabilities` gains a `tool_error_carrier` field, and the capability summary (served as MCP
-  `instructions`) gains one sentence, both stating that a tool failure comes back as the tool result
-  itself (`isError: true`) with the error envelope in `structuredContent` (and `content[0].text`
-  mirroring it) — so a discovery-only client need not infer the carrier from the `outputSchema`
-  union. Scoped deliberately to *tool* calls: resource-read failures use the JSON-RPC error carrier
-  (tracked separately as audit F9, #181). Agent-visible surface change → new
-  `tool_error_carrier` capability field and instructions prose. Part of the schema-22 → schema-23
-  fingerprint bump.
-
-- **Optional `idempotency_key` on the six spend-committing tools** (`codex_consult`,
-  `codex_review_changes`, `codex_delegate` and their `_async` variants) so a retry after a
-  transport drop **replays** the existing run instead of starting — and paying for — a duplicate
-  Codex call (#176, audit F4). Dedup is scoped to (resolved workspace, exact tool, argument hash)
-  and backed by a disk-backed, `O_EXCL`-guarded index beside the job store, so it holds within and
-  across server processes for the job-TTL window. A sync retry awaits/returns the in-flight run's
-  result; an `_async` retry returns the existing job's real handle. Reuse with **different**
-  arguments is refused (`idempotency_conflict`); a key whose prior result was already
-  consumed/evicted is `idempotency_result_unavailable`; a still-publishing reservation is
-  `idempotency_in_progress` (retryable). A replayed response carries `meta.idempotency_replayed:
-  true`, and a run started with a key is treated as durable — a single waiter's timeout or
-  cancellation no longer cancels it (only `codex_job_cancel` does). Omit the param for the prior
-  no-dedup behavior. Agent-visible surface change → three new error codes, one new repair step, a
-  new `meta.idempotency_replayed` field, and per-tool advertised `error_codes`; fingerprint
-  `codex-in-claude/0.1/schema-20` → `codex-in-claude/0.1/schema-21`.
-
-### Changed
-
-- **`tools/list` wire response shrunk ~44% (real MCP catalog ~103.5 KB → ~57.6 KB)** by
-  advertising an opaque `meta` branch (#173, audit F1). Every success envelope's `meta` was the
-  full `Meta` model inlined per tool (~3.5 KB × 6 tools ≈ 21 KB, since FastMCP dereferences
-  `$defs` on the wire); success schemas now carry a compact `{"type": "object"}` pointer — the
-  server still emits the full `Meta`, so strict clients validating `structuredContent` against the
-  advertised schema still pass. The full contract is published once at the new
-  **`codex://result-meta`** resource, mirroring `codex://error-envelope`, with a
-  `result_meta_resource` pointer in `codex_capabilities`. The now-orphaned `$defs` closure
-  (`RateLimit`/`RateLimitWindow`/`Usage`/`ContextSummary`) is pruned per-schema by reachability, so
-  definitions still referenced outside `Meta` (e.g. `codex_status` → `RateLimit`, `codex_dry_run`
-  → `ContextSummary`) are retained. The near-verbatim "Progress & recovery" docstring paragraph
-  (3×) is collapsed to one binding sentence. Agent-visible surface change → fingerprint
-  `codex-in-claude/0.1/schema-19` → `codex-in-claude/0.1/schema-20`.
-
-### Added
-
-- **`codex_capabilities(include_schemas=[...])`** — an opt-in, tool-reachable fallback that embeds
-  the full `error-envelope` and/or `result-meta` schemas in the response for resource-blind
-  clients (#179, audit F7; the shared mechanism the #173 opaque-`meta` caveat requires). Omitted
-  from the default payload, so it does not re-bloat discovery. Covered by `schema-20`.
-- **Wire-size budget** — the `tools/list` catalog size is now pinned in CI (`test_wire_catalog_under_cap`,
-  cap 64 KB with headroom) so serialized weight, not just content, is guarded; the manifest snapshot
-  additionally captures the `codex://result-meta` content so Meta-contract changes move the guard.
 
 ### Security
 

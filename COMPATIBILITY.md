@@ -96,9 +96,12 @@ read that resource rather than hard-code the shape.
   (e.g. `poll_job_status`, `correct_arguments`) that callers branch on in code; `tool`/`arguments`
   name a recovery tool call; `alternative` is prose fallback. The `repair` field is omitted only
   when no corrective path exists.
-- `details{field,reason,allowed_values}` describes a single offending field. The rejected `value`
-  is deliberately never echoed — a parameter can accept arbitrary input that may be a secret.
-  `field` + `reason` + `allowed_values` are sufficient to repair the call.
+- `details{field,fields,reason,allowed_values}` describes the offending input(s): `field` names a
+  single input; `fields` (mutually exclusive with `field`; non-empty, unique) names inputs whose
+  *combination* is invalid (e.g. a combined-size limit where no single input is at fault). The
+  rejected `value` is deliberately never echoed — a parameter can accept arbitrary input that may be
+  a secret. Neither carrier is required; whichever is present (`field`, `fields`, or neither) plus
+  `reason`/`allowed_values` is sufficient to repair the call.
 - Absent optional fields are **omitted** from the payload (no placeholder nulls), except
   `retry_after_ms` which is always present.
 
