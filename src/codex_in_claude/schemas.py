@@ -45,7 +45,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-26"
+FINGERPRINT = "codex-in-claude/0.1/schema-27"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -979,6 +979,14 @@ def _prune_defs(doc: dict) -> dict:  # type: ignore[type-arg]
     return doc
 
 
+# The JSON Schema draft every schema in this server is authored against. Pydantic v2
+# (which builds the tool schemas) targets this dialect; we advertise it so both input
+# AND output schemas are self-describing — a client knows which draft to validate
+# against (audit N4, #185). Single source of truth: the input-schema middleware, every
+# published output schema, and the two resource schemas all reference this constant.
+JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
+
+
 def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[type-arg]
     """Build a tool's advertised outputSchema: the success branch(es) plus ONE fully
     opaque error branch. The opaque branch references no $def, so $defs is exactly the
@@ -996,6 +1004,10 @@ def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[
     else:
         branches = [{k: v for k, v in raw.items() if k != "$defs"}]
     doc = {
+        # Advertise the dialect so the output schema is self-describing, symmetric with
+        # the stamped input schemas (audit N4, #185). Kept through the transforms below,
+        # none of which touch ``$schema``.
+        "$schema": JSON_SCHEMA_DIALECT,
         "type": "object",
         "properties": {
             "ok": {"type": "boolean", "description": "true = success result, false = error result"},
@@ -1042,6 +1054,7 @@ _OPAQUE_JOB_SUCCESS_BRANCH = {
     },
 }
 JOB_RESULT_SCHEMA = {
+    "$schema": JSON_SCHEMA_DIALECT,
     "type": "object",
     "properties": {
         "ok": {"type": "boolean", "description": "true = success result, false = error result"},
@@ -1080,7 +1093,7 @@ def _harden_error_envelope_schema(schema: dict) -> dict:  # type: ignore[type-ar
     """
 
     s = copy.deepcopy(schema)
-    s["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    s["$schema"] = JSON_SCHEMA_DIALECT
     # 1. Require ok at the root.
     required = s.setdefault("required", [])
     if "ok" not in required:
@@ -1102,7 +1115,7 @@ ERROR_ENVELOPE_SCHEMA = _harden_error_envelope_schema(
 # success envelope carries the opaque `meta` pointer above instead of inlining this ~3.5KB
 # object per tool; this is the canonical, discoverable full shape (audit F1, #173).
 RESULT_META_SCHEMA = TypeAdapter(Meta).json_schema(ref_template="#/$defs/{model}")
-RESULT_META_SCHEMA["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+RESULT_META_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via
 # `codex exec --output-schema FILE`). It mirrors the agent-visible result fields we

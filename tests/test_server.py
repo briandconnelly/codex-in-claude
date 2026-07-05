@@ -1623,7 +1623,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_schema_26():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-26"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-27"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2145,6 +2145,47 @@ async def test_dialect_middleware_overwrites_existing_schema():
     assert result[1].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
     assert result[2].parameters["$schema"] == server.INPUT_SCHEMA_DIALECT
     assert result[3].parameters is None
+
+
+def test_input_dialect_is_the_shared_constant():
+    """The input dialect is sourced from the one shared constant, so it can't drift from
+    the output-schema dialect (audit N4, #185)."""
+    from codex_in_claude import schemas
+
+    assert server.INPUT_SCHEMA_DIALECT == schemas.JSON_SCHEMA_DIALECT
+
+
+async def test_all_tool_output_schemas_declare_dialect():
+    """Every advertised outputSchema declares its JSON Schema dialect, symmetric with the
+    input schemas, so a client knows which draft to validate a tool result against
+    (audit N4, #185)."""
+    tools = await server.mcp.list_tools()
+    assert tools
+    for tool in tools:
+        schema = tool.output_schema
+        assert schema is not None, f"{tool.name} advertises no output schema"
+        assert schema.get("$schema") == server.JSON_SCHEMA_DIALECT, (
+            f"{tool.name} output schema declares no dialect"
+        )
+
+
+async def test_resources_declare_explicit_name_and_title():
+    """Resources advertise an explicit agent-facing name + title rather than the
+    function-derived name, so a resource-browsing agent sees intent, not internals
+    (audit N1, #182)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        resources = {str(r.uri): r for r in await client.list_resources()}
+    expected = {
+        "codex://models": ("codex-models", "Codex model catalog"),
+        "codex://error-envelope": ("codex-error-envelope", "Codex error envelope schema"),
+        "codex://result-meta": ("codex-result-meta", "Codex result metadata schema"),
+    }
+    for uri, (name, title) in expected.items():
+        r = resources[uri]
+        assert r.name == name, f"{uri}: name {r.name!r} != {name!r}"
+        assert r.title == title, f"{uri}: title {r.title!r} != {title!r}"
 
 
 async def test_unknown_tool_argument_is_rejected():

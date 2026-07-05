@@ -22,6 +22,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   disclosure can neither drift from the constant nor silently under-report a guarded surface.
   Agent-visible surface change → new `fingerprint_covers` capability field; fingerprint
   `codex-in-claude/0.1/schema-25` → `codex-in-claude/0.1/schema-26`.
+- **Advertised output schemas now declare their JSON Schema dialect** (#185, audit N4). Every tool's
+  `outputSchema` gains a root `$schema` of `https://json-schema.org/draft/2020-12/schema`, matching
+  the dialect already stamped on input schemas — so both directions of a tool's contract are
+  self-describing and a strict client knows which draft to validate a result against. The dialect is
+  now a single shared `JSON_SCHEMA_DIALECT` constant referenced by the input-schema middleware, every
+  published output schema, and the two resource schemas, so the two directions cannot drift.
+- **MCP resources now advertise an explicit `name` and `title`** (#182, audit N1). The three
+  `codex://` resources (`models`, `error-envelope`, `result-meta`) carried function-derived names
+  (`codex_models_resource`, …) and no `title`; they now expose intent-revealing identifiers
+  (`codex-models` / "Codex model catalog", etc.) so a resource-browsing agent sees purpose, not
+  internals. (`size` is left unset: FastMCP's resource decorator exposes no `size` field to populate.)
+
+### Changed
+
+- **The capability summary (MCP `instructions`) is restructured as rules-then-context** (#180, audit
+  F8). The first-read instructions were a single run-on paragraph that interleaved background (the
+  `rate_limit` block field semantics) between the binding routing and safety rules. They are now
+  ordered: a does/does-not lead, each routing and safety rule as its own imperative sentence, then
+  discovery rules, and finally a single background paragraph carrying the async-job mechanics and the
+  cached rate-limit semantics — so an agent that skims reaches the actionable rules first. No rule or
+  fact was dropped; only the ordering and sentence boundaries changed.
+
+The three changes above share one agent-visible surface bump: fingerprint
+`codex-in-claude/0.1/schema-26` → `codex-in-claude/0.1/schema-27`.
 
 ### Fixed
 

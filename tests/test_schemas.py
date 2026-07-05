@@ -474,6 +474,23 @@ def test_error_envelope_schema_has_dialect():
     assert ERROR_ENVELOPE_SCHEMA["$schema"] == "https://json-schema.org/draft/2020-12/schema"
 
 
+def test_json_schema_dialect_constant_is_2020_12():
+    """The shared dialect constant is the single source of truth for both the input-schema
+    middleware and every advertised output schema (audit N4, #185)."""
+    assert s.JSON_SCHEMA_DIALECT == "https://json-schema.org/draft/2020-12/schema"
+
+
+# Every advertised outputSchema — the published_schema()-built ones AND the hand-built
+# JOB_RESULT_SCHEMA — must declare the dialect at its root, symmetric with the input
+# schemas (audit N4, #185). Without a declared draft a client can't know how to validate.
+_ALL_OUTPUT_SCHEMAS = {**_ALL_SCHEMAS, "JOB_RESULT_SCHEMA": s.JOB_RESULT_SCHEMA}
+
+
+@pytest.mark.parametrize("name,sch", _ALL_OUTPUT_SCHEMAS.items())
+def test_output_schema_declares_dialect(name, sch):
+    assert sch.get("$schema") == s.JSON_SCHEMA_DIALECT, f"{name} declares no dialect"
+
+
 # ---------------------------------------------------------------------------
 # Task 4: CI catalog-size gate
 # ---------------------------------------------------------------------------
@@ -493,10 +510,11 @@ def _wire_catalog_bytes() -> int:
 
 # Serialized-size budget for the tools/list wire response (audit F1, #173) — a weight
 # gate the content-only manifest snapshot does not provide. Cap = real MCP wire catalog
-# (~57,570 bytes, incl. annotations/_meta) + ~11% headroom. History: ~180,266 → ~103,526
-# (JOB_RESULT slim) → ~57,570 (opaque meta branch + docstring dedup). Tighten deliberately
-# when the surface legitimately shrinks; a bump means the wire response grew — justify it.
-CATALOG_BYTE_CAP = 64_000
+# (~64,211 bytes, incl. annotations/_meta) + ~11% headroom. History: ~180,266 → ~103,526
+# (JOB_RESULT slim) → ~57,570 (opaque meta branch + docstring dedup) → ~64,211 (output-schema
+# `$schema` dialect, audit N4/#185: ~54 B x 16 tools). Tighten deliberately when the surface
+# legitimately shrinks; a bump means the wire response grew — justify it.
+CATALOG_BYTE_CAP = 72_000
 
 
 def test_wire_catalog_under_cap():
@@ -624,7 +642,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_bumped_to_schema_26():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-26"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-27"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

@@ -916,7 +916,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-26",
+                "default": "codex-in-claude/0.1/schema-27",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1502,7 +1502,7 @@
         "listChanged": true
       }
     },
-    "instructions": "Call OpenAI Codex (a different model) from Claude Code. Tools by task: codex_consult — read-only second opinion or Q&A; codex_review_changes — structured review of your git changes (working_tree, branch, or commit); codex_delegate — implement a task in a throwaway git worktree and return a reviewable diff it does NOT apply to your working tree; codex_consult_async / codex_review_changes_async / codex_delegate_async (+ codex_job_status/result/consume_result/cancel/list) — run any of the above as a background job you poll. Sync consult/review/delegate record their run as a job too (meta.job_id), so a dropped connection can be recovered the same way. Run codex_status first (free) to confirm the codex CLI is installed and authenticated and to see how much Codex rate-limit quota remains (its rate_limit block: status available|limited|exhausted|unknown, where unknown means no fresh reading yet, not a problem); use codex_capabilities for the full inventory, codex_models (or the codex://models resource) to discover valid model slugs before overriding the model, and, to preview a call without spending, codex_dry_run (for a review) or codex_delegate_dry_run (for a delegate's worktree baseline). This plugin does not bypass Codex's sandbox or approvals, and delegate never edits your working tree. A tool failure comes back as the tool result itself (isError: true) with the error envelope in structuredContent (content[0].text mirrors it); branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands.",
+    "instructions": "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Use codex_consult for a read-only second opinion or Q&A. Use codex_review_changes for a structured review of your git changes (working_tree, branch, or commit). Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Run codex_status first (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it); branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory, and codex_models (or the codex://models resource) to discover valid model slugs before overriding the model. To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|unknown, where unknown means no fresh reading yet, not a problem) showing how much Codex quota remains.",
     "protocolVersion": "2025-11-25",
     "serverInfo": {
       "name": "codex-in-claude"
@@ -1514,19 +1514,22 @@
     {
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
       "mimeType": "application/schema+json",
-      "name": "error_envelope_resource",
+      "name": "codex-error-envelope",
+      "title": "Codex error envelope schema",
       "uri": "codex://error-envelope"
     },
     {
       "description": "Advisory Codex model catalog (same payload as the codex_models tool).",
       "mimeType": "application/json",
-      "name": "codex_models_resource",
+      "name": "codex-models",
+      "title": "Codex model catalog",
       "uri": "codex://models"
     },
     {
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
       "mimeType": "application/schema+json",
-      "name": "result_meta_resource",
+      "name": "codex-result-meta",
+      "title": "Codex result metadata schema",
       "uri": "codex://result-meta"
     }
   ],
@@ -1878,7 +1881,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-26",
+            "default": "codex-in-claude/0.1/schema-27",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2134,6 +2137,7 @@
       },
       "name": "codex_capabilities",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -2568,6 +2572,7 @@
       },
       "name": "codex_consult",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -2839,6 +2844,7 @@
       },
       "name": "codex_consult_async",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -3035,6 +3041,7 @@
       },
       "name": "codex_delegate",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -3304,6 +3311,7 @@
       },
       "name": "codex_delegate_async",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -3463,6 +3471,7 @@
       },
       "name": "codex_delegate_dry_run",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -3726,6 +3735,7 @@
       },
       "name": "codex_dry_run",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -3959,6 +3969,7 @@
       },
       "name": "codex_job_cancel",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -4175,6 +4186,7 @@
       },
       "name": "codex_job_consume_result",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "properties": {
@@ -4256,6 +4268,7 @@
       },
       "name": "codex_job_list",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -4431,6 +4444,7 @@
       },
       "name": "codex_job_result",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "properties": {
@@ -4519,6 +4533,7 @@
       },
       "name": "codex_job_status",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -4704,6 +4719,7 @@
       },
       "name": "codex_models",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -4974,6 +4990,7 @@
       },
       "name": "codex_review_changes",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -5304,6 +5321,7 @@
       },
       "name": "codex_review_changes_async",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -5414,6 +5432,7 @@
       },
       "name": "codex_status",
       "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "anyOf": [
           {
             "additionalProperties": false,
