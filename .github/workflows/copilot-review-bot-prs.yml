@@ -14,22 +14,23 @@ on:
 
 # Least privilege: requesting a reviewer needs pull-requests: write; nothing else.
 permissions:
-  contents: read
   pull-requests: write
 
 jobs:
   request-copilot-review:
     name: request-copilot-review
     runs-on: ubuntu-latest
-    # Only the bot's own non-draft PRs. Same-repo branches (the bot pushes to this
-    # repo, not a fork) get a write-scoped token, so the request below succeeds.
+    # Only the bot's own non-draft PRs, and only when the PR branch lives in this
+    # repo (not a fork) — a fork PR gets a read-only token that can't request a
+    # reviewer, so the head-repo check keeps this from failing avoidably.
     if: >-
       github.event.pull_request.user.login == 'briandconnelly-agent[bot]' &&
-      github.event.pull_request.draft == false
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Request Copilot review
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           # Bind untrusted event data through env rather than interpolating it
           # into the run script.
           PR_NUMBER: ${{ github.event.pull_request.number }}
