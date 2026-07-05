@@ -108,6 +108,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- Corrected factual overclaims in the collaborating-with-codex skill (workspace_root scope, timeout
+  default, codex_status repair field, error.details presence, slash-command parity) (#220).
+
 - **Integration docs corrected for the `details.fields` carrier and the idempotency surface**
   (#206, #207). `COMPATIBILITY.md`, `docs/REFERENCE.md`, and `README.md` still described the
   pre-#191 `details{field,reason,allowed_values}` shape; they now document `field` XOR `fields`
