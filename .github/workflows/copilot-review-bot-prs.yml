@@ -1,0 +1,43 @@
+name: Copilot review for bot PRs
+
+# GitHub's automatic Copilot code review (the copilot_code_review ruleset rule)
+# skips pull requests authored by bots/GitHub Apps that hold no Copilot seat, to
+# avoid burning premium requests on automation floods. Our agent identity,
+# briandconnelly-agent[bot], is exactly such an author, so its PRs never get the
+# automatic review that human-authored PRs do. This workflow closes that gap by
+# explicitly requesting the copilot-pull-request-reviewer[bot] reviewer on the
+# bot's own PRs, mirroring the ruleset's "no drafts" behavior.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+# Least privilege: requesting a reviewer needs pull-requests: write; nothing else.
+permissions:
+  pull-requests: write
+
+jobs:
+  request-copilot-review:
+    name: request-copilot-review
+    runs-on: ubuntu-latest
+    # Only the bot's own non-draft PRs, and only when the PR branch lives in this
+    # repo (not a fork) — a fork PR gets a read-only token that can't request a
+    # reviewer, so the head-repo check keeps this from failing avoidably.
+    if: >-
+      github.event.pull_request.user.login == 'briandconnelly-agent[bot]' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Request Copilot review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Bind untrusted event data through env rather than interpolating it
+          # into the run script.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f "reviewers[]=copilot-pull-request-reviewer[bot]"
