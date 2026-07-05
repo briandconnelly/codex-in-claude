@@ -1622,8 +1622,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_28():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-28"
+def test_fingerprint_is_schema_29():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-29"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4298,6 +4298,74 @@ async def test_unkeyed_await_timeout_cancels_job(monkeypatch, clean_env, tmp_pat
     )
     assert res["error"]["code"] == "timeout"
     assert store.cancelled == ["job-abc"]
+
+
+async def test_keyed_await_timeout_repair_does_not_invite_duplicate_paid_run(
+    monkeypatch, clean_env, tmp_path
+):
+    """A keyed sync timeout's repair must NOT direct the agent to the async variant —
+    that starts a second paid run while the first continues unobserved (#201). It must
+    point at codex_job_status / codex_job_result instead."""
+    monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0)
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._await_job_result(
+        str(tmp_path),
+        "job-abc",
+        "codex_consult",
+        _consult_meta(str(tmp_path)),
+        "summary",
+        0,
+        None,
+        keyed=True,
+    )
+    assert res["error"]["code"] == "timeout"
+    alt = res["error"]["repair"]["alternative"]
+    assert "_async" not in alt
+    assert "codex_job_status" in alt
+    assert "codex_job_result" in alt
+    assert "do not re-run" in alt or "new paid run" in alt
+
+
+async def test_unkeyed_await_timeout_repair_keeps_async_table_default(
+    monkeypatch, clean_env, tmp_path
+):
+    """The unkeyed branch keeps the table repair (job WAS cancelled; re-running via the
+    matching async tool is the right call). Regression guard for #201 Change 1."""
+    monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0)
+    store = _FakeStore(status_dict=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._await_job_result(
+        str(tmp_path),
+        "job-abc",
+        "codex_consult",
+        _consult_meta(str(tmp_path)),
+        "summary",
+        0,
+        None,
+    )
+    assert res["error"]["code"] == "timeout"
+    alt = res["error"]["repair"]["alternative"]
+    assert "_async" in alt  # table default preserved
+
+
+def test_idempotency_key_description_scoped_to_concrete_tool():
+    """The idempotency_key description must scope dedup to the concrete tool (sync and
+    async variants never share a key's run) and replace the understated 'TTL window'
+    wording with the real fail-closed horizon (#201 Change 2)."""
+    field_info = get_args(server.IdempotencyKeyParam)[1]
+    desc = field_info.description
+    # Per-concrete-tool scoping is stated...
+    assert "concrete tool" in desc or "different tools" in desc
+    # ...and sync/async non-sharing is stated.
+    assert "sync" in desc and "async" in desc
+    assert "never share" in desc or "do not share" in desc
+    # The understated 'TTL window' phrasing is gone...
+    assert "TTL window" not in desc
+    # ...replaced by the real horizon (max runtime + grace + TTL).
+    assert "max runtime" in desc or "grace" in desc
+    # The replay marker sentence is retained.
+    assert "idempotency_replayed=true" in desc
 
 
 async def test_consult_sync_conflict_maps_to_error(monkeypatch, clean_env, tmp_path):

@@ -614,14 +614,19 @@ IdempotencyKeyParam = Annotated[
     Field(
         min_length=1,
         max_length=200,
-        description="Optional client-supplied dedup key. Reusing it (same workspace, same "
-        "tool, same arguments) replays the existing run instead of starting — and paying "
-        "for — a duplicate Codex call: a sync call returns the in-flight run's result, an "
-        "_async call returns the same job_id. Reuse with DIFFERENT arguments is refused "
-        "(idempotency_conflict); a key whose prior result was already consumed/evicted is "
-        "idempotency_result_unavailable; a still-publishing reservation is "
-        "idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup "
-        "holds for the job TTL window. meta.idempotency_replayed=true marks a replayed "
+        description="Optional client-supplied dedup key. The key is scoped to the "
+        "concrete tool on the same workspace: reusing it on the same tool with the same "
+        "arguments replays the existing run instead of starting — and paying for — a "
+        "duplicate Codex call. The sync and async variants are different tools and never "
+        "share a key's run (a key used on codex_consult then codex_consult_async starts a "
+        "second paid run, by design). Reuse with DIFFERENT arguments — including a "
+        "different timeout_seconds or other server execution settings covered by the "
+        "argument hash — is refused (idempotency_conflict); a key whose prior result was "
+        "already consumed/evicted is idempotency_result_unavailable; a still-publishing "
+        "reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup "
+        "behavior. Replay works while the job record lives (its TTL); the fail-closed "
+        "conflict/in-progress window can last longer (up to the job max runtime + "
+        "terminate grace + TTL). meta.idempotency_replayed=true marks a replayed "
         "(unpaid) response.",
     ),
 ]
@@ -2062,7 +2067,10 @@ _IDEM_SYNC_INPROGRESS_POLL_S = 0.05
 _IDEM_LOCK_ACQUIRE_TIMEOUT_S = 0.5
 
 _IDEM_MESSAGES = {
-    "idempotency_conflict": "idempotency_key already used with different arguments.",
+    "idempotency_conflict": (
+        "idempotency_key already used with different effective arguments or server "
+        "execution settings."
+    ),
     "idempotency_result_unavailable": (
         "A prior run for this idempotency_key already completed; its result is no longer available."
     ),
@@ -2355,13 +2363,34 @@ async def _await_job_result(
                 if not keyed:
                     await asyncio.to_thread(store.cancel, cwd, job_id)
                     tail = "job cancelled."
-                else:
-                    tail = "the job continues in the background; fetch it via codex_job_result."
+                    return serialize_error(
+                        ErrorResult(
+                            error=make_error(
+                                "timeout",
+                                f"codex run exceeded {timeout}s and the grace window; {tail}",
+                            ),
+                            meta=meta,
+                        )
+                    )
+                # Keyed: the job continues to its own deadline and must NOT be cancelled
+                # — another idempotent caller may be awaiting it. The table repair
+                # directs agents to the async variant, but for a keyed call that is the
+                # expensive wrong path: the async variant cannot replay this running job
+                # (different concrete-tool namespace + different hashed timeout), so
+                # following it pays for a second run while the first completes unobserved
+                # (#201). Override the repair prose to point at the job tools instead.
+                tail = "the job continues in the background; fetch it via codex_job_result."
                 return serialize_error(
                     ErrorResult(
                         error=make_error(
                             "timeout",
                             f"codex run exceeded {timeout}s and the grace window; {tail}",
+                            repair_alternative=(
+                                "This keyed run continues in the background to its own "
+                                "deadline. Poll codex_job_status with meta.job_id and "
+                                "fetch codex_job_result; do not re-run the call — a re-run "
+                                "(sync or async) starts a new paid run."
+                            ),
                         ),
                         meta=meta,
                     )
