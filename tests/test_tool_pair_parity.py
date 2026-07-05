@@ -167,7 +167,9 @@ async def test_sync_tool_uses_one_defaults_snapshot(
 ):
     # A sync invocation resolves config.defaults() once and threads that single snapshot
     # through preparation, so a request cannot mix a timeout from one snapshot with
-    # model/isolation from another (Codex review of #204).
+    # model/isolation from another (Codex + Copilot review of #204). `isolation` is left
+    # to default so the isolation-fallback path (which would otherwise re-read
+    # config.defaults() inside _resolve_isolation) is exercised.
     _no_git_preflight(monkeypatch)
     calls = {"n": 0}
     real_defaults = server.config.defaults
@@ -177,7 +179,7 @@ async def test_sync_tool_uses_one_defaults_snapshot(
         return real_defaults()
 
     monkeypatch.setattr(server.config, "defaults", counting_defaults)
-    await getattr(server, tool)(*args, workspace_root=str(tmp_path), isolation="inherit")
+    await getattr(server, tool)(*args, workspace_root=str(tmp_path))
     assert calls["n"] == 1
 
 

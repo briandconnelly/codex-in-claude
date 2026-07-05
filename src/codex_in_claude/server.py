@@ -1523,7 +1523,9 @@ async def _prepare_consult(
 ) -> tuple[Meta, str, dict, str | None] | dict:
     """Shared preparation for codex_consult / codex_consult_async."""
     d = defaults
-    isolation_v, iso_err = _resolve_isolation(isolation)
+    # `isolation or d.isolation` keeps the default-isolation fallback on this one
+    # snapshot; _resolve_isolation(None) would otherwise read config.defaults() again.
+    isolation_v, iso_err = _resolve_isolation(isolation or d.isolation)
     cwd_guess = workspace.server_cwd()
     if iso_err is not None:
         meta = _base_meta(
@@ -1628,7 +1630,8 @@ async def _prepare_review(
     No input_too_large pre-check: the diff is gathered in the worker, which enforces
     max_bytes (and bounds extra_context)."""
     d = defaults
-    isolation_v, iso_err = _resolve_isolation(isolation)
+    # See _prepare_consult: fall back to this snapshot's isolation, not a fresh read.
+    isolation_v, iso_err = _resolve_isolation(isolation or d.isolation)
     cwd_guess = workspace.server_cwd()
     if iso_err is not None:
         meta = _base_meta(
@@ -1720,7 +1723,8 @@ async def _prepare_delegate(
     resolution, and a synchronous git preflight (`ensure_repo_with_head`) fails fast —
     no spend, no record — if this is not a git repo with a commit to base on."""
     d = defaults
-    isolation_v, iso_err = _resolve_isolation(isolation)
+    # See _prepare_consult: fall back to this snapshot's isolation, not a fresh read.
+    isolation_v, iso_err = _resolve_isolation(isolation or d.isolation)
     cwd_guess = workspace.server_cwd()
     if iso_err is not None:
         meta = _base_meta(
