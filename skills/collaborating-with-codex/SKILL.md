@@ -66,8 +66,9 @@ review–revise loop), see the `deliberating-with-codex` skill.
   Use it before delegating to confirm scope and repo before committing to cost. The
   uncommitted-replay count is advisory (see `worktree_plan.note`).
 
-For repo-grounded calls — `codex_review_changes`, `codex_delegate`, both dry-runs,
-the job lifecycle tools, and any `codex_consult` about a codebase — pass an absolute
+For repo-grounded calls — `codex_review_changes`, `codex_delegate`, their `_async`
+variants, both dry-runs, the job lifecycle tools, and any
+`codex_consult`/`codex_consult_async` about a codebase — pass an absolute
 `workspace_root` (or rely on the MCP root) so Codex targets the intended repository;
 otherwise the call may resolve to the server's own cwd (you'll see
 `meta.workspace_warning`). It is optional for a pure-Q&A consult that needs no
