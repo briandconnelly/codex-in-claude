@@ -1622,8 +1622,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_28():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-28"
+def test_fingerprint_is_schema_29():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-29"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4282,8 +4282,46 @@ async def test_keyed_await_timeout_leaves_shared_job_running(monkeypatch, clean_
     assert "continues in the background" in res["error"]["message"]
 
 
+async def test_keyed_await_timeout_repair_points_at_polling(monkeypatch, clean_env, tmp_path):
+    """The keyed-timeout repair must steer the agent to POLL the still-running shared
+    job, NOT re-run via the async variant. Sync and async are different dedup
+    identities, so following the table's async escape hatch would start a second paid
+    run while the first completes unobserved (#201)."""
+    monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0)
+    rec = _ok_record("running")
+    rec["poll_after_ms"] = 4000  # the store's grown backoff for a long-running job
+    store = _FakeStore(status_dict=rec)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server._await_job_result(
+        str(tmp_path),
+        "job-abc",
+        "codex_consult",
+        _consult_meta(str(tmp_path)),
+        "summary",
+        0,
+        None,
+        keyed=True,
+    )
+    err = res["error"]
+    assert err["code"] == "timeout"
+    repair = err["repair"]
+    # Machine-actionable repair matches the still-running job_running shape: poll the
+    # existing run, don't retry. Prose alone would contradict next_step=inspect_and_retry.
+    assert repair["next_step"] == "poll_job_status"
+    assert repair["tool"] == "codex_job_status"
+    assert repair["arguments"] == {"job_id": "job-abc", "workspace_root": str(tmp_path)}
+    assert err["retry_after_ms"] == 4000  # echoed from the record's poll_after_ms
+    alt = repair["alternative"]
+    assert "codex_job_status" in alt and "codex_job_result" in alt
+    # Must NOT push toward the async variants — that double-pays for a keyed run.
+    for async_tool in ("codex_consult_async", "codex_review_changes_async", "codex_delegate_async"):
+        assert async_tool not in alt
+
+
 async def test_unkeyed_await_timeout_cancels_job(monkeypatch, clean_env, tmp_path):
-    """The prior (no-key) behavior is preserved: a timed-out unkeyed waiter cancels."""
+    """The prior (no-key) behavior is preserved: a timed-out unkeyed waiter cancels,
+    and keeps the table repair pointing at the async escape hatch — re-running there is
+    correct because the job WAS cancelled (#201)."""
     monkeypatch.setattr(server, "_SYNC_AWAIT_GRACE_S", 0)
     store = _FakeStore(status_dict=_ok_record("running"))
     monkeypatch.setattr(server.config, "job_store", lambda: store)
@@ -4298,6 +4336,23 @@ async def test_unkeyed_await_timeout_cancels_job(monkeypatch, clean_env, tmp_pat
     )
     assert res["error"]["code"] == "timeout"
     assert store.cancelled == ["job-abc"]
+    # Unkeyed keeps the static timeout-table repair (async re-run is the right recovery).
+    assert res["error"]["repair"]["next_step"] == "inspect_and_retry"
+    assert "codex_consult_async" in res["error"]["repair"]["alternative"]
+
+
+async def test_idempotency_key_description_scopes_to_concrete_tool():
+    """The idempotency_key description states per-concrete-tool scoping, drops the
+    misleading 'TTL window' single-horizon phrasing, and describes the true fail-closed
+    horizon (#201)."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    desc = tools["codex_consult"].parameters["properties"]["idempotency_key"]["description"]
+    assert "concrete tool" in desc
+    assert "different tools" in desc.lower()  # sync and async never share a key's run
+    assert "TTL window" not in desc  # the misleading single-horizon phrase is gone
+    # the real fail-closed horizon (max runtime + grace + TTL) is described
+    assert "termination grace" in desc
+    assert "idempotency_replayed=true" in desc
 
 
 async def test_consult_sync_conflict_maps_to_error(monkeypatch, clean_env, tmp_path):

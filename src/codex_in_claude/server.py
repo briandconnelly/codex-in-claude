@@ -614,15 +614,20 @@ IdempotencyKeyParam = Annotated[
     Field(
         min_length=1,
         max_length=200,
-        description="Optional client-supplied dedup key. Reusing it (same workspace, same "
-        "tool, same arguments) replays the existing run instead of starting — and paying "
-        "for — a duplicate Codex call: a sync call returns the in-flight run's result, an "
-        "_async call returns the same job_id. Reuse with DIFFERENT arguments is refused "
-        "(idempotency_conflict); a key whose prior result was already consumed/evicted is "
-        "idempotency_result_unavailable; a still-publishing reservation is "
-        "idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup "
-        "holds for the job TTL window. meta.idempotency_replayed=true marks a replayed "
-        "(unpaid) response.",
+        description="Optional client-supplied dedup key, scoped to THIS concrete tool on "
+        "the same workspace. Reusing it on the same tool with the same arguments replays "
+        "the existing run instead of starting — and paying for — a duplicate Codex call "
+        "(a sync call reattaches to the in-flight run and returns its result; an _async "
+        "call returns the same job_id). The sync and _async variants are DIFFERENT tools "
+        "and never share a key's run. Reuse with different arguments — including a "
+        "different timeout_seconds — is refused (idempotency_conflict); a key whose prior "
+        "result was already consumed/evicted is idempotency_result_unavailable; a "
+        "still-publishing reservation is idempotency_in_progress (retry). Omit it for the "
+        "prior no-dedup behavior. A completed result stays replayable while its job record "
+        "lives (its TTL), subject to consumption or count-eviction; the fail-closed "
+        "conflict/in-progress window can last longer — up to the job's max runtime + "
+        "termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) "
+        "response.",
     ),
 ]
 IncludeSchemasParam = Annotated[
@@ -2062,7 +2067,10 @@ _IDEM_SYNC_INPROGRESS_POLL_S = 0.05
 _IDEM_LOCK_ACQUIRE_TIMEOUT_S = 0.5
 
 _IDEM_MESSAGES = {
-    "idempotency_conflict": "idempotency_key already used with different arguments.",
+    "idempotency_conflict": (
+        "idempotency_key already used with different effective arguments or server "
+        "execution settings."
+    ),
     "idempotency_result_unavailable": (
         "A prior run for this idempotency_key already completed; its result is no longer available."
     ),
@@ -2353,15 +2361,48 @@ async def _await_job_result(
                     )
             if time.monotonic() > deadline:
                 if not keyed:
+                    # Unkeyed: cancel to stop spend, and keep the static timeout-table
+                    # repair — re-running via the async variant is the right recovery
+                    # because this run is now gone.
                     await asyncio.to_thread(store.cancel, cwd, job_id)
-                    tail = "job cancelled."
-                else:
-                    tail = "the job continues in the background; fetch it via codex_job_result."
+                    return serialize_error(
+                        ErrorResult(
+                            error=make_error(
+                                "timeout",
+                                f"codex run exceeded {timeout}s and the grace window; "
+                                "job cancelled.",
+                            ),
+                            meta=meta,
+                        )
+                    )
+                # Keyed: the shared run was NOT cancelled — it continues to its own
+                # deadline. Steer the agent to POLL that run (as job_running does) rather
+                # than the table's async escape hatch: sync and async are different dedup
+                # identities, so re-running would start a SECOND paid run while this one
+                # completes unobserved (#201). Echo the record's grown poll_after_ms so
+                # the backoff matches codex_job_status's own hint.
+                poll_params: dict[str, Any] = {"job_id": job_id}
+                if cwd:
+                    poll_params["workspace_root"] = cwd
                 return serialize_error(
                     ErrorResult(
                         error=make_error(
                             "timeout",
-                            f"codex run exceeded {timeout}s and the grace window; {tail}",
+                            f"codex run exceeded {timeout}s and the grace window; the job "
+                            "continues in the background; fetch it via codex_job_result.",
+                            repair_next_step="poll_job_status",
+                            repair_tool="codex_job_status",
+                            repair_arguments=poll_params,
+                            retry_after_ms=rec.get("poll_after_ms"),
+                            repair_alternative=(
+                                "This keyed run continues in the background to its own "
+                                "deadline. Poll codex_job_status with the job_id above, "
+                                "then read the result with codex_job_result. Do not switch "
+                                "to the async variant or drop the idempotency_key — either "
+                                "starts a new paid run under a different dedup identity. "
+                                "Repeating this exact keyed call reattaches to the same run "
+                                "without new spend (it may hit the same local wait deadline)."
+                            ),
                         ),
                         meta=meta,
                     )

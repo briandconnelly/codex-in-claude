@@ -194,8 +194,9 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "use_new_idempotency_key",
         None,
         False,
-        "This idempotency_key was already used with different arguments; resend the"
-        " original arguments to replay, or pass a new idempotency_key to run again.",
+        "This idempotency_key was already used with different effective arguments or"
+        " server execution settings; resend the original arguments to replay, or pass a"
+        " new idempotency_key to run again.",
     ),
     "idempotency_result_unavailable": (
         "use_new_idempotency_key",
@@ -220,6 +221,7 @@ def make_error(
     *,
     retry_after_ms: int | None = None,
     temporary: bool | None = None,
+    repair_next_step: RepairStep | None = None,
     repair_tool: str | None = None,
     repair_arguments: dict[str, Any] | None = None,
     repair_alternative: str | None = None,
@@ -233,8 +235,13 @@ def make_error(
     per-code table. `temporary` defaults to the table's value; pass it to override.
     `retry_after_ms` is honored only when the result is temporary. `repair_tool` overrides
     the table's repair tool when the failing tool is known at the call site but not fixed
-    per code (e.g. invalid_arguments names the tool that was called — #184/N3)."""
+    per code (e.g. invalid_arguments names the tool that was called — #184/N3).
+    `repair_next_step` likewise overrides the table's symbolic step when one code's
+    recovery differs by call site (e.g. a KEYED sync timeout leaves a still-running job
+    to poll rather than retry — #201)."""
     next_step, tool, temp_default, alt_default = _REPAIR_BY_CODE[code]
+    if repair_next_step is not None:
+        next_step = repair_next_step
     if repair_tool is not None:
         tool = repair_tool
     is_temp = temp_default if temporary is None else temporary

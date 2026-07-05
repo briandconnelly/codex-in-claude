@@ -916,7 +916,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-28",
+                "default": "codex-in-claude/0.1/schema-29",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1881,7 +1881,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-28",
+            "default": "codex-in-claude/0.1/schema-29",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2505,7 +2505,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -2789,7 +2789,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -2974,7 +2974,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -3256,7 +3256,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -4905,7 +4905,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
@@ -5248,7 +5248,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key. Reusing it (same workspace, same tool, same arguments) replays the existing run instead of starting — and paying for — a duplicate Codex call: a sync call returns the in-flight run's result, an _async call returns the same job_id. Reuse with DIFFERENT arguments is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. Dedup holds for the job TTL window. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
           },
           "isolation": {
             "anyOf": [
