@@ -38,6 +38,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   Copilot-review obligations — are standalone bullets; compound bullets were split and the
   coverage-floor guidance deduplicated into Testing.
 
+### Fixed
+
+- **Exception-derived `internal_error` messages no longer leave a dangling separator** (#203).
+  Empty or fully redacted exception text now renders as just the exception class name in the
+  generic tool boundary, background-job spawn failure, and worker crash sinks instead of ending
+  with `": "`. Existing per-sink truncation and redaction behavior is unchanged. Runtime
+  error-message prose only — not manifest-covered, so no `fingerprint` bump.
+
 ## [0.8.0] - 2026-07-05
 
 An agent-friendliness and spend-safety release. It completes the 2026-07 agent-friendliness audit
