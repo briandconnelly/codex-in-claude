@@ -7,6 +7,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Keyed sync-timeout recovery no longer steers agents into a second paid run; the
+  `idempotency_key` description no longer over-promises cross-variant reuse** (#201). Two
+  agent-facing surfaces contradicted the dedup contract (identity is `(workspace, concrete
+  tool, arg_hash)`, so `codex_consult` and `codex_consult_async` never share a key's run).
+  (1) When a *keyed* synchronous call hit its local wait deadline, the run was correctly
+  left alive in the background — but the envelope's `error.repair` came from the static
+  `timeout` table, which points at the matching `_async` tool. Following it started a second
+  paid run under a different dedup identity while the first completed unobserved. The
+  keyed-timeout envelope now emits a `poll_job_status` repair (`next_step`,
+  `tool=codex_job_status`, `arguments={job_id, workspace_root}`, and the record's grown
+  `poll_after_ms` as `retry_after_ms`) and prose that says to poll the existing run — noting
+  that repeating the *exact* keyed call reattaches without new spend, while the async variant
+  or an unkeyed call starts a new one. The unkeyed branch (which *does* cancel the run) keeps
+  the table's async-escape-hatch repair unchanged. (2) The `idempotency_key` param
+  description now states the key is scoped to the concrete tool (sync and `_async` are
+  different tools and never share a key's run), that a different `timeout_seconds` conflicts,
+  and replaces the misleading "Dedup holds for the job TTL window" with the true fail-closed
+  horizon (replay lives while the job record does, subject to consumption/eviction; the
+  conflict/in-progress window can extend to max runtime + termination grace + TTL). The
+  `idempotency_conflict` message and repair prose now say "different effective arguments or
+  server execution settings" (the arg hash also covers config-derived fields). The
+  description change is FINGERPRINT-covered surface, so `fingerprint` bumps schema-28 →
+  schema-29; the repair-content change is runtime error text (not manifest-covered).
+
 - **Idempotent job starts no longer strand a reservation on a partial failure** (#200). Two
   paths in the `reserve → spawn → publish` cycle left the per-workspace idempotency index in
   a state that denied the key (with no job running) until the ~24.5h horizon sweep. (1) In
