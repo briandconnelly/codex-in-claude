@@ -1622,8 +1622,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_27():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-27"
+def test_fingerprint_is_schema_28():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-28"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():

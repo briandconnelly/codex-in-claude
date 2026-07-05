@@ -7,6 +7,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Agent-facing instructions separate binding rules from context more cleanly** (#198). A
+  rules-vs-context audit (cross-checked with Codex) found four spots where the server
+  instructions or a tool description blurred a rule into background prose. Fixes, all
+  wording-only: the `codex_status` rate-limit note now states its strength explicitly —
+  *prefer* to defer non-urgent calls when quota is `limited`/`exhausted` (urgent ones may
+  still proceed) — instead of the ambiguous "are reasons to defer"; the server-instruction
+  routing line now gives `codex_consult` vs `codex_review_changes` a real tiebreaker
+  (consult for a diff you paste inline, review for changes already in git) rather than both
+  branding themselves a "second opinion"; the discovery sentence is split so the
+  `codex_capabilities` inventory rule and the "discover slugs before overriding `model`"
+  prerequisite are separately checkable; and `codex_dry_run` no longer claims it can
+  "confirm ... secrets are redacted" — it now frames the preview as a best-effort scope/redaction
+  check, not proof that no secret remains, matching the best-effort framing used elsewhere.
+  Tool-description and initialize-response text only (no tool/param/enum/error-code change), so
+  the callable contract is unchanged; still an agent-visible surface change, so the result
+  `fingerprint` bumps `codex-in-claude/0.1/schema-27` → `codex-in-claude/0.1/schema-28`.
+
 - **The `timeout` error's repair hint now points at the async escape hatch** (#195). An MCP error
   audit found `timeout` was the only recurring real-friction error, and its hint (`"Narrow the task
   or raise timeout_seconds, then retry."`) only steered the agent to retry the *same* synchronous
