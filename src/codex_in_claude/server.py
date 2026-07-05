@@ -1492,6 +1492,329 @@ def result_meta_resource() -> dict:
 # --------------------------------------------------------------------------- #
 # Active tools
 # --------------------------------------------------------------------------- #
+# --- shared per-pair input preparation (#204) --------------------------------
+# Each active tool and its `_async` twin share the same preparation: resolve
+# isolation (and, for the sync twin, `detail`), the workspace, build `meta`, run the
+# placeholder + input-size pre-flights, and assemble the run `spec`. These helpers
+# hold that once so the sync/async pair cannot drift. They return either
+# `(meta, cwd, spec, detail_v)` on success or a ready error envelope (a dict), so the
+# caller branches on `isinstance(prep, dict)`. `timeout_seconds` is the sync per-call
+# timeout or the async job deadline — the only field that legitimately differs between
+# a pair's two specs, and it is the sole hash-affecting difference (parity is pinned in
+# tests/test_tool_pair_parity.py). Byte-identical behavior is required: the spec keys
+# feed the idempotency arg hash, so changing them would invalidate live dedup entries.
+#
+# `include_detail` (not a nullable `detail`) selects the sync twin: `_resolve_detail`
+# maps None to "summary", so None cannot double as an "async, skip detail" sentinel.
+
+
+async def _prepare_consult(
+    *,
+    question: str,
+    workspace_root: str | None,
+    extra_context: str | None,
+    model: str | None,
+    isolation: str | None,
+    timeout_seconds: int,
+    ctx: Context | None,
+    defaults: config.Defaults,
+    include_detail: bool,
+    detail: str | None = None,
+) -> tuple[Meta, str, dict, str | None] | dict:
+    """Shared preparation for codex_consult / codex_consult_async."""
+    d = defaults
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=timeout_seconds,
+        )
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
+    assert isolation_v is not None
+
+    detail_v: str | None = None
+    if include_detail:
+        detail_v, detail_err = _resolve_detail(detail)
+        if detail_err is not None:
+            meta = _base_meta(
+                cwd_guess,
+                None,
+                tier="consult",
+                sandbox="read-only",
+                isolation=isolation_v,
+                model=model or d.model,
+                timeout_seconds=timeout_seconds,
+            )
+            return serialize_error(ErrorResult(error=detail_err, meta=meta))
+        assert detail_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    # On a resolve error `wres.path`/`wres.source` are None, so `cwd_guess`/None — the
+    # same meta the sync twin used to build separately for its error path.
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="consult",
+        sandbox="read-only",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=timeout_seconds,
+    )
+    if wres.error_code is not None:
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    limit = config.max_input_bytes()
+    combined = (question or "") + (extra_context or "")
+    combined_bytes = len(combined.encode("utf-8"))
+    if combined_bytes > limit:
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"question + extra_context exceeds {limit} bytes.",
+                    details=_combined_input_detail(extra_context),
+                    limit_bytes=limit,
+                    actual_bytes=combined_bytes,
+                ),
+                meta=meta,
+            )
+        )
+
+    spec = {
+        "kind": "codex_consult",
+        "question": question,
+        "extra_context": extra_context or "",
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": timeout_seconds,
+    }
+    return meta, cwd, spec, detail_v
+
+
+async def _prepare_review(
+    *,
+    workspace_root: str | None,
+    scope: str,
+    base: str | None,
+    commit: str | None,
+    paths: list[str] | None,
+    extra_context: str | None,
+    model: str | None,
+    isolation: str | None,
+    timeout_seconds: int,
+    ctx: Context | None,
+    defaults: config.Defaults,
+    include_detail: bool,
+    detail: str | None = None,
+) -> tuple[Meta, str, dict, str | None] | dict:
+    """Shared preparation for codex_review_changes / codex_review_changes_async.
+
+    No input_too_large pre-check: the diff is gathered in the worker, which enforces
+    max_bytes (and bounds extra_context)."""
+    d = defaults
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=timeout_seconds,
+        )
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
+    assert isolation_v is not None
+
+    detail_v: str | None = None
+    if include_detail:
+        detail_v, detail_err = _resolve_detail(detail)
+        if detail_err is not None:
+            meta = _base_meta(
+                cwd_guess,
+                None,
+                tier="consult",
+                sandbox="read-only",
+                isolation=isolation_v,
+                model=model or d.model,
+                timeout_seconds=timeout_seconds,
+            )
+            return serialize_error(ErrorResult(error=detail_err, meta=meta))
+        assert detail_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="consult",
+        sandbox="read-only",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=timeout_seconds,
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
+    )
+    if wres.error_code is not None:
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    spec = {
+        "kind": "codex_review_changes",
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": timeout_seconds,
+        "scope": scope,
+        "base": base,
+        "commit": commit,
+        "paths": paths,
+        "extra_context": extra_context or "",
+        "git_timeout": config.git_timeout_seconds(),
+        "max_bytes": config.max_input_bytes(),
+    }
+    return meta, cwd, spec, detail_v
+
+
+async def _prepare_delegate(
+    *,
+    task: str,
+    workspace_root: str | None,
+    model: str | None,
+    isolation: str | None,
+    timeout_seconds: int,
+    ctx: Context | None,
+    defaults: config.Defaults,
+    include_detail: bool,
+    detail: str | None = None,
+) -> tuple[Meta, str, dict, str | None] | dict:
+    """Shared preparation for codex_delegate / codex_delegate_async.
+
+    Distinct pre-flight order from consult/review: the task-size check precedes `detail`
+    resolution, and a synchronous git preflight (`ensure_repo_with_head`) fails fast —
+    no spend, no record — if this is not a git repo with a commit to base on."""
+    d = defaults
+    isolation_v, iso_err = _resolve_isolation(isolation)
+    cwd_guess = workspace.server_cwd()
+    if iso_err is not None:
+        meta = _base_meta(
+            cwd_guess,
+            None,
+            tier="propose",
+            sandbox="workspace-write",
+            isolation=d.isolation,
+            model=model or d.model,
+            timeout_seconds=timeout_seconds,
+        )
+        return serialize_error(ErrorResult(error=iso_err, meta=meta))
+    assert isolation_v is not None
+
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="propose",
+        sandbox="workspace-write",
+        isolation=isolation_v,
+        model=model or d.model,
+        timeout_seconds=timeout_seconds,
+    )
+    if wres.error_code is not None:
+        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
+
+    placeholder = _placeholder_error(meta)
+    if placeholder is not None:
+        return placeholder
+
+    limit = config.max_input_bytes()
+    task_bytes = len((task or "").encode("utf-8"))
+    if task_bytes > limit:
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"task exceeds {limit} bytes.",
+                    details=ErrorDetail(field="task"),
+                    limit_bytes=limit,
+                    actual_bytes=task_bytes,
+                ),
+                meta=meta,
+            )
+        )
+
+    detail_v: str | None = None
+    if include_detail:
+        detail_v, detail_err = _resolve_detail(detail)
+        if detail_err is not None:
+            return serialize_error(ErrorResult(error=detail_err, meta=meta))
+        assert detail_v is not None
+
+    git_timeout = config.git_timeout_seconds()
+    try:
+        worktree.ensure_repo_with_head(cwd, timeout=git_timeout)
+    except worktree.NotAGitRepoError as exc:
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "not_a_git_repo",
+                    str(exc),
+                    details=ErrorDetail(field="workspace_root"),
+                ),
+                meta=meta,
+            )
+        )
+    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
+        return serialize_error(
+            ErrorResult(
+                error=make_error("worktree_error", str(exc)[:300]),
+                meta=meta,
+            )
+        )
+
+    spec = {
+        "kind": "codex_delegate",
+        "task": task,
+        "cwd": cwd,
+        "workspace_source": wres.source,
+        "tier": "propose",
+        "sandbox": "workspace-write",
+        "isolation": isolation_v,
+        "model": model or d.model,
+        "timeout_seconds": timeout_seconds,
+        "git_timeout": git_timeout,
+        "max_diff_bytes": config.max_delegate_diff_bytes(),
+    }
+    return meta, cwd, spec, detail_v
+
+
 # _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
 # via the detached worker, so it can't advertise readOnlyHint (issue #138).
 @mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=CONSULT_RESULT_SCHEMA)
@@ -1533,94 +1856,22 @@ async def codex_consult(
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
     )
-    isolation_v, iso_err = _resolve_isolation(isolation)
-    cwd_guess = workspace.server_cwd()
-
-    if iso_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=d.isolation,
-            model=model or d.model,
-            timeout_seconds=timeout,
-        )
-        return serialize_error(ErrorResult(error=iso_err, meta=meta))
-    assert isolation_v is not None  # narrowed: iso_err was None
-
-    detail_v, detail_err = _resolve_detail(detail)
-    if detail_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=isolation_v,
-            model=model or d.model,
-            timeout_seconds=timeout,
-        )
-        return serialize_error(ErrorResult(error=detail_err, meta=meta))
-    assert detail_v is not None
-
-    roots = await _roots_from_ctx(ctx)
-    res = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
-    if res.error_code is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=isolation_v,
-            model=model or d.model,
-            timeout_seconds=timeout,
-        )
-        return _workspace_error_result(res.error_code, res.error_detail, roots, meta)
-
-    cwd = res.path or cwd_guess
-    meta = _base_meta(
-        cwd,
-        res.source,
-        tier="consult",
-        sandbox="read-only",
-        isolation=isolation_v,
-        model=model or d.model,
+    prep = await _prepare_consult(
+        question=question,
+        workspace_root=workspace_root,
+        extra_context=extra_context,
+        model=model,
+        isolation=isolation,
         timeout_seconds=timeout,
+        ctx=ctx,
+        defaults=d,
+        include_detail=True,
+        detail=detail,
     )
-
-    placeholder = _placeholder_error(meta)
-    if placeholder is not None:
-        return placeholder
-
-    limit = config.max_input_bytes()
-    combined = (question or "") + (extra_context or "")
-    combined_bytes = len(combined.encode("utf-8"))
-    if combined_bytes > limit:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "input_too_large",
-                    f"question + extra_context exceeds {limit} bytes.",
-                    details=_combined_input_detail(extra_context),
-                    limit_bytes=limit,
-                    actual_bytes=combined_bytes,
-                ),
-                meta=meta,
-            )
-        )
-
-    spec = {
-        "kind": "codex_consult",
-        "question": question,
-        "extra_context": extra_context or "",
-        "cwd": cwd,
-        "workspace_source": res.source,
-        "tier": "consult",
-        "sandbox": "read-only",
-        "isolation": isolation_v,
-        "model": model or d.model,
-        "timeout_seconds": timeout,
-    }
+    if isinstance(prep, dict):
+        return prep
+    meta, cwd, spec, detail_v = prep
+    assert detail_v is not None  # include_detail=True always resolves a detail
     return await _run_sync(
         meta,
         cwd,
@@ -1685,77 +1936,25 @@ async def codex_review_changes(
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
     )
-    isolation_v, iso_err = _resolve_isolation(isolation)
-    cwd_guess = workspace.server_cwd()
-    if iso_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=d.isolation,
-            model=model or d.model,
-            timeout_seconds=timeout,
-        )
-        return serialize_error(ErrorResult(error=iso_err, meta=meta))
-    assert isolation_v is not None
-
-    detail_v, detail_err = _resolve_detail(detail)
-    if detail_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=isolation_v,
-            model=model or d.model,
-            timeout_seconds=timeout,
-        )
-        return serialize_error(ErrorResult(error=detail_err, meta=meta))
-    assert detail_v is not None
-
-    roots = await _roots_from_ctx(ctx)
-    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
-    cwd = wres.path or cwd_guess
-    meta = _base_meta(
-        cwd,
-        wres.source,
-        tier="consult",
-        sandbox="read-only",
-        isolation=isolation_v,
-        model=model or d.model,
-        timeout_seconds=timeout,
+    prep = await _prepare_review(
+        workspace_root=workspace_root,
         scope=scope,
         base=base,
         commit=commit,
         paths=paths,
+        extra_context=extra_context,
+        model=model,
+        isolation=isolation,
+        timeout_seconds=timeout,
+        ctx=ctx,
+        defaults=d,
+        include_detail=True,
+        detail=detail,
     )
-    if wres.error_code is not None:
-        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
-
-    placeholder = _placeholder_error(meta)
-    if placeholder is not None:
-        return placeholder
-
-    # No input_too_large pre-check here: the diff is gathered in the worker, which
-    # enforces max_bytes (and bounds extra_context) — same as codex_review_changes_async.
-    spec = {
-        "kind": "codex_review_changes",
-        "cwd": cwd,
-        "workspace_source": wres.source,
-        "tier": "consult",
-        "sandbox": "read-only",
-        "isolation": isolation_v,
-        "model": model or d.model,
-        "timeout_seconds": timeout,
-        "scope": scope,
-        "base": base,
-        "commit": commit,
-        "paths": paths,
-        "extra_context": extra_context or "",
-        "git_timeout": config.git_timeout_seconds(),
-        "max_bytes": config.max_input_bytes(),
-    }
+    if isinstance(prep, dict):
+        return prep
+    meta, cwd, spec, detail_v = prep
+    assert detail_v is not None  # include_detail=True always resolves a detail
     return await _run_sync(
         meta,
         cwd,
@@ -1807,98 +2006,21 @@ async def codex_delegate(
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
     )
-    isolation_v, iso_err = _resolve_isolation(isolation)
-    cwd_guess = workspace.server_cwd()
-    if iso_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="propose",
-            sandbox="workspace-write",
-            isolation=d.isolation,
-            model=model or d.model,
-            timeout_seconds=timeout,
-        )
-        return serialize_error(ErrorResult(error=iso_err, meta=meta))
-    assert isolation_v is not None
-
-    roots = await _roots_from_ctx(ctx)
-    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
-    cwd = wres.path or cwd_guess
-    meta = _base_meta(
-        cwd,
-        wres.source,
-        tier="propose",
-        sandbox="workspace-write",
-        isolation=isolation_v,
-        model=model or d.model,
+    prep = await _prepare_delegate(
+        task=task,
+        workspace_root=workspace_root,
+        model=model,
+        isolation=isolation,
         timeout_seconds=timeout,
+        ctx=ctx,
+        defaults=d,
+        include_detail=True,
+        detail=detail,
     )
-    if wres.error_code is not None:
-        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
-
-    placeholder = _placeholder_error(meta)
-    if placeholder is not None:
-        return placeholder
-
-    limit = config.max_input_bytes()
-    task_bytes = len((task or "").encode("utf-8"))
-    if task_bytes > limit:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "input_too_large",
-                    f"task exceeds {limit} bytes.",
-                    details=ErrorDetail(field="task"),
-                    limit_bytes=limit,
-                    actual_bytes=task_bytes,
-                ),
-                meta=meta,
-            )
-        )
-
-    detail_v, detail_err = _resolve_detail(detail)
-    if detail_err is not None:
-        return serialize_error(ErrorResult(error=detail_err, meta=meta))
-    assert detail_v is not None
-
-    # Fail fast (no spend, no record) if this is not a git repo with a commit to base
-    # on — same synchronous preflight as codex_delegate_async.
-    git_timeout = config.git_timeout_seconds()
-    try:
-        worktree.ensure_repo_with_head(cwd, timeout=git_timeout)
-    except worktree.NotAGitRepoError as exc:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "not_a_git_repo",
-                    str(exc),
-                    details=ErrorDetail(field="workspace_root"),
-                ),
-                meta=meta,
-            )
-        )
-    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
-        return serialize_error(
-            ErrorResult(
-                error=make_error("worktree_error", str(exc)[:300]),
-                meta=meta,
-            )
-        )
-
-    spec = {
-        "kind": "codex_delegate",
-        "task": task,
-        "cwd": cwd,
-        "workspace_source": wres.source,
-        "tier": "propose",
-        "sandbox": "workspace-write",
-        "isolation": isolation_v,
-        "model": model or d.model,
-        "timeout_seconds": timeout,
-        "git_timeout": git_timeout,
-        "max_diff_bytes": config.max_delegate_diff_bytes(),
-    }
+    if isinstance(prep, dict):
+        return prep
+    meta, cwd, spec, detail_v = prep
+    assert detail_v is not None  # include_detail=True always resolves a detail
     return await _run_sync(
         meta,
         cwd,
@@ -1940,95 +2062,21 @@ async def codex_delegate_async(
     machine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex
     read tracked files in the worktree and send their content. Secret redaction is
     best-effort and does not cover your `task` or files Codex reads itself."""
-    d = config.defaults()
     # Background jobs are bounded by the wall-clock deadline, not the sync timeout.
     deadline = config.job_max_seconds()
-    isolation_v, iso_err = _resolve_isolation(isolation)
-    cwd_guess = workspace.server_cwd()
-    if iso_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="propose",
-            sandbox="workspace-write",
-            isolation=d.isolation,
-            model=model or d.model,
-            timeout_seconds=deadline,
-        )
-        return serialize_error(ErrorResult(error=iso_err, meta=meta))
-    assert isolation_v is not None
-
-    roots = await _roots_from_ctx(ctx)
-    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
-    cwd = wres.path or cwd_guess
-    meta = _base_meta(
-        cwd,
-        wres.source,
-        tier="propose",
-        sandbox="workspace-write",
-        isolation=isolation_v,
-        model=model or d.model,
+    prep = await _prepare_delegate(
+        task=task,
+        workspace_root=workspace_root,
+        model=model,
+        isolation=isolation,
         timeout_seconds=deadline,
+        ctx=ctx,
+        defaults=config.defaults(),
+        include_detail=False,
     )
-    if wres.error_code is not None:
-        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
-
-    placeholder = _placeholder_error(meta)
-    if placeholder is not None:
-        return placeholder
-
-    limit = config.max_input_bytes()
-    task_bytes = len((task or "").encode("utf-8"))
-    if task_bytes > limit:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "input_too_large",
-                    f"task exceeds {limit} bytes.",
-                    details=ErrorDetail(field="task"),
-                    limit_bytes=limit,
-                    actual_bytes=task_bytes,
-                ),
-                meta=meta,
-            )
-        )
-
-    # Fail fast (no spend) if this is not a git repo with a commit to base on.
-    git_timeout = config.git_timeout_seconds()
-    try:
-        worktree.ensure_repo_with_head(cwd, timeout=git_timeout)
-    except worktree.NotAGitRepoError as exc:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "not_a_git_repo",
-                    str(exc),
-                    details=ErrorDetail(field="workspace_root"),
-                ),
-                meta=meta,
-            )
-        )
-    except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
-        return serialize_error(
-            ErrorResult(
-                error=make_error("worktree_error", str(exc)[:300]),
-                meta=meta,
-            )
-        )
-
-    spec = {
-        "kind": "codex_delegate",
-        "task": task,
-        "cwd": cwd,
-        "workspace_source": wres.source,
-        "tier": "propose",
-        "sandbox": "workspace-write",
-        "isolation": isolation_v,
-        "model": model or d.model,
-        "timeout_seconds": deadline,
-        "git_timeout": git_timeout,
-        "max_diff_bytes": config.max_delegate_diff_bytes(),
-    }
+    if isinstance(prep, dict):
+        return prep
+    meta, cwd, spec, _ = prep
     return await _start_async(
         meta,
         cwd,
@@ -2115,6 +2163,24 @@ def _idem_error(code: str, meta: Meta, *, retry_after_ms: int | None = None) -> 
             meta=meta,
         )
     )
+
+
+# The terminal (non-created/replay) outcomes of a keyed `start_idempotent`, mapped to
+# their error-envelope inputs. Shared by _start_async and _run_sync so the two return
+# paths cannot drift (#204). Any unexpected outcome degrades to in_progress (retryable),
+# preserving both callers' prior "anything else -> in_progress" fallthrough.
+_IDEM_TERMINAL_ERRORS: dict[str, tuple[str, int | None]] = {
+    "conflict": ("idempotency_conflict", None),
+    "unavailable": ("idempotency_result_unavailable", None),
+    "in_progress": ("idempotency_in_progress", _IDEM_IN_PROGRESS_RETRY_MS),
+}
+
+
+def _idem_terminal_error(result_kind: str, meta: Meta) -> dict:
+    code, retry_after_ms = _IDEM_TERMINAL_ERRORS.get(
+        result_kind, _IDEM_TERMINAL_ERRORS["in_progress"]
+    )
+    return _idem_error(code, meta, retry_after_ms=retry_after_ms)
 
 
 def _job_started_handle(
@@ -2287,11 +2353,8 @@ async def _start_async(
             expires_at=snap["expires_at"],
             meta=meta,
         )
-    if result_kind == "conflict":
-        return _idem_error("idempotency_conflict", meta)
-    if result_kind == "unavailable":
-        return _idem_error("idempotency_result_unavailable", meta)
-    return _idem_error("idempotency_in_progress", meta, retry_after_ms=_IDEM_IN_PROGRESS_RETRY_MS)
+    # conflict / unavailable / in_progress (and any unexpected kind) -> error envelope.
+    return _idem_terminal_error(result_kind, meta)
 
 
 # Local poll cadence for a sync handler awaiting its own detached job: in-process
@@ -2482,16 +2545,13 @@ async def _run_sync(
                 cwd, outcome["job_id"], kind, meta, detail_v, timeout, ctx, keyed=True
             )
             return _mark_replayed(env)
-        if result_kind == "conflict":
-            return _idem_error("idempotency_conflict", meta)
-        if result_kind == "unavailable":
-            return _idem_error("idempotency_result_unavailable", meta)
-        # in_progress: a concurrent reservation is still publishing. Wait briefly for it
-        # to resolve to replay rather than bouncing the caller.
+        if result_kind in ("conflict", "unavailable"):
+            return _idem_terminal_error(result_kind, meta)
+        # in_progress (or any unexpected kind): a concurrent reservation is still
+        # publishing. Wait briefly for it to resolve to replay rather than bouncing the
+        # caller, then return the same in_progress envelope async returns immediately.
         if time.monotonic() >= wait_deadline:
-            return _idem_error(
-                "idempotency_in_progress", meta, retry_after_ms=_IDEM_IN_PROGRESS_RETRY_MS
-            )
+            return _idem_terminal_error("in_progress", meta)
         await asyncio.sleep(_IDEM_SYNC_INPROGRESS_POLL_S)
 
 
@@ -2518,71 +2578,21 @@ async def codex_consult_async(
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
     (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
     resolved working directory (`workspace_root`, your MCP roots, or the server cwd)."""
-    d = config.defaults()
     deadline = config.job_max_seconds()
-    isolation_v, iso_err = _resolve_isolation(isolation)
-    cwd_guess = workspace.server_cwd()
-    if iso_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=d.isolation,
-            model=model or d.model,
-            timeout_seconds=deadline,
-        )
-        return serialize_error(ErrorResult(error=iso_err, meta=meta))
-    assert isolation_v is not None
-
-    roots = await _roots_from_ctx(ctx)
-    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
-    cwd = wres.path or cwd_guess
-    meta = _base_meta(
-        cwd,
-        wres.source,
-        tier="consult",
-        sandbox="read-only",
-        isolation=isolation_v,
-        model=model or d.model,
+    prep = await _prepare_consult(
+        question=question,
+        workspace_root=workspace_root,
+        extra_context=extra_context,
+        model=model,
+        isolation=isolation,
         timeout_seconds=deadline,
+        ctx=ctx,
+        defaults=config.defaults(),
+        include_detail=False,
     )
-    if wres.error_code is not None:
-        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
-
-    placeholder = _placeholder_error(meta)
-    if placeholder is not None:
-        return placeholder
-
-    limit = config.max_input_bytes()
-    combined = (question or "") + (extra_context or "")
-    combined_bytes = len(combined.encode("utf-8"))
-    if combined_bytes > limit:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "input_too_large",
-                    f"question + extra_context exceeds {limit} bytes.",
-                    details=_combined_input_detail(extra_context),
-                    limit_bytes=limit,
-                    actual_bytes=combined_bytes,
-                ),
-                meta=meta,
-            )
-        )
-
-    spec = {
-        "kind": "codex_consult",
-        "question": question,
-        "extra_context": extra_context or "",
-        "cwd": cwd,
-        "workspace_source": wres.source,
-        "tier": "consult",
-        "sandbox": "read-only",
-        "isolation": isolation_v,
-        "model": model or d.model,
-        "timeout_seconds": deadline,
-    }
+    if isinstance(prep, dict):
+        return prep
+    meta, cwd, spec, _ = prep
     return await _start_async(
         meta,
         cwd,
@@ -2622,63 +2632,24 @@ async def codex_review_changes_async(
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
     your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
     read other repo files. Redaction is best-effort, not a guarantee."""
-    d = config.defaults()
     deadline = config.job_max_seconds()
-    isolation_v, iso_err = _resolve_isolation(isolation)
-    cwd_guess = workspace.server_cwd()
-    if iso_err is not None:
-        meta = _base_meta(
-            cwd_guess,
-            None,
-            tier="consult",
-            sandbox="read-only",
-            isolation=d.isolation,
-            model=model or d.model,
-            timeout_seconds=deadline,
-        )
-        return serialize_error(ErrorResult(error=iso_err, meta=meta))
-    assert isolation_v is not None
-
-    roots = await _roots_from_ctx(ctx)
-    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
-    cwd = wres.path or cwd_guess
-    meta = _base_meta(
-        cwd,
-        wres.source,
-        tier="consult",
-        sandbox="read-only",
-        isolation=isolation_v,
-        model=model or d.model,
-        timeout_seconds=deadline,
+    prep = await _prepare_review(
+        workspace_root=workspace_root,
         scope=scope,
         base=base,
         commit=commit,
         paths=paths,
+        extra_context=extra_context,
+        model=model,
+        isolation=isolation,
+        timeout_seconds=deadline,
+        ctx=ctx,
+        defaults=config.defaults(),
+        include_detail=False,
     )
-    if wres.error_code is not None:
-        return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
-
-    placeholder = _placeholder_error(meta)
-    if placeholder is not None:
-        return placeholder
-
-    spec = {
-        "kind": "codex_review_changes",
-        "cwd": cwd,
-        "workspace_source": wres.source,
-        "tier": "consult",
-        "sandbox": "read-only",
-        "isolation": isolation_v,
-        "model": model or d.model,
-        "timeout_seconds": deadline,
-        "scope": scope,
-        "base": base,
-        "commit": commit,
-        "paths": paths,
-        "extra_context": extra_context or "",
-        "git_timeout": config.git_timeout_seconds(),
-        "max_bytes": config.max_input_bytes(),
-    }
+    if isinstance(prep, dict):
+        return prep
+    meta, cwd, spec, _ = prep
     return await _start_async(
         meta,
         cwd,

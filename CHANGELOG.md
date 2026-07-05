@@ -73,6 +73,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Internal: shared preparation and idempotency-outcome mapping extracted for the sync/async tool
+  pairs** (#204). Each active tool and its `_async` twin (`codex_consult`, `codex_review_changes`,
+  `codex_delegate`) duplicated ~50 lines of isolation/detail resolution, workspace resolution, meta
+  construction, placeholder + input-size pre-flight, and spec assembly; that shape now lives in one
+  `_prepare_*` helper per pair called by both twins. The `conflict`/`unavailable`/`in_progress`
+  outcome→envelope mapping shared by `_start_async` and `_run_sync` is likewise consolidated in
+  `_idem_terminal_error`. Behavior is byte-identical — the run `spec` keys feed the idempotency
+  argument hash, so they are unchanged, and the manifest snapshot and `fingerprint` are unchanged.
+  New `tests/test_tool_pair_parity.py` pins sync/async spec parity (identical except
+  `timeout_seconds`), pre-flight error-envelope parity, and competing-error precedence.
+
 - **The capability summary (MCP `instructions`) is restructured as rules-then-context** (#180, audit
   F8). The first-read instructions were a single run-on paragraph that interleaved background (the
   `rate_limit` block field semantics) between the binding routing and safety rules. They are now
