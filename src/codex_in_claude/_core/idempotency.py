@@ -108,10 +108,11 @@ def key_digest(tool: str, key: str) -> str:
 @dataclass
 class Outcome:
     """Classification of a reserve()/lookup. ``kind`` is one of the module constants.
-    ``path`` is set only for WON (so the caller can publish/remove it); ``job_id`` is
-    set for WON-after-publish and REPLAY. ``record`` is the reserved record the winner
-    just wrote — carried on a WON so :meth:`publish` can rewrite a complete active record
-    without re-reading the file (see #200)."""
+    ``path`` is set on every reserve() outcome (it is the entry's path), but only a WON
+    entry may be mutated by the caller — publish() or remove() it; the others are read-only
+    classifications. ``job_id`` is set for WON-after-publish and REPLAY. ``record`` is the
+    reserved record the winner just wrote — carried on a WON so :meth:`publish` can rewrite
+    a complete active record without re-reading the file (see #200)."""
 
     kind: str
     job_id: str | None = None
