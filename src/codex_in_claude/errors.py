@@ -170,6 +170,28 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         True,
         "Wait retry_after_ms before retrying; reduce concurrent codex calls.",
     ),
+    "transfer_unsupported": (
+        "install_codex",
+        None,
+        False,
+        "This codex is too old to import a Claude session. Update codex to the latest "
+        "version (e.g. `npm install -g @openai/codex@latest`), then retry codex_transfer.",
+    ),
+    "transfer_failed": (
+        "inspect_and_retry",
+        None,
+        False,
+        "Codex could not import this session; inspect the message, confirm the transcript "
+        "is a complete Claude session, and retry.",
+    ),
+    "transfer_incomplete": (
+        "inspect_and_retry",
+        None,
+        False,
+        "Codex reported the import completed but recorded no thread. Retry codex_transfer; "
+        "if it persists, open the imported session manually with `codex resume` (its "
+        "interactive picker).",
+    ),
     "job_not_found": (
         "list_jobs",
         "codex_job_list",

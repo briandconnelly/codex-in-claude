@@ -45,7 +45,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-29"
+FINGERPRINT = "codex-in-claude/0.1/schema-30"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -148,6 +148,15 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
+    # Session transfer (codex_transfer via `codex app-server`):
+    # the installed codex is too old to support the session-import method (-32601).
+    "transfer_unsupported",
+    # the import ran but Codex reported the session item itself failed (carries the
+    # upstream failure message).
+    "transfer_failed",
+    # the import reported completed but Codex recorded no imported thread (the
+    # not-importable / #417 case); the message names the ledger it checked.
+    "transfer_incomplete",
     # codex hit a usage/rate limit (ChatGPT window or API-key 429). Transient and
     # retryable; the error carries retry_after_ms as the suggested backoff.
     "codex_rate_limited",
@@ -722,6 +731,44 @@ class ModelCatalogResult(BaseModel):
     fingerprint: str = FINGERPRINT
 
 
+ThreadIdSource = Literal["import_notification", "ledger"]
+
+
+class TransferMeta(BaseModel):
+    """Operational detail for a codex_transfer run (a local file conversion, no model
+    call). Kept separate from the heavyweight `Meta` (tier/sandbox/usage) since a
+    transfer runs no Codex tier and spends no tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+    codex_home: str  # absolute $CODEX_HOME the app-server reported (where the thread lives)
+    # The async import's correlation id, when a fresh import ran; None on a ledger replay.
+    import_id: str | None = None
+    # Where the thread id came from: the completed notification's success `target`
+    # (a fresh import) or the import ledger (a byte-identical re-import Codex deduped).
+    thread_id_source: ThreadIdSource
+    elapsed_ms: int
+    request_id: str = Field(default_factory=lambda: uuid4().hex)
+
+
+class TransferResult(BaseModel):
+    """codex_transfer: a Claude Code session handed off to a resumable Codex thread.
+
+    No model call and no token spend — a local conversion via `codex app-server`. The
+    thread already exists in `$CODEX_HOME`; run `resume_command` to continue it. Note:
+    transferring a still-growing (live) session creates a NEW thread each call — Codex
+    dedups only a byte-identical transcript — so this is not idempotent for an active
+    session."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: Literal[True] = True
+    tool: Literal["codex_transfer"] = "codex_transfer"
+    thread_id: str
+    resume_command: str  # "codex resume <thread_id>"
+    source_path: str  # realpath of the transferred transcript
+    meta: TransferMeta
+    fingerprint: str = FINGERPRINT
+
+
 class JobStarted(BaseModel):
     """Returned by the *_async tools: a handle to poll, not a result."""
 
@@ -1069,6 +1116,7 @@ JOB_RESULT_SCHEMA = {
 # declared output schema for strict MCP clients.
 STATUS_SCHEMA = published_schema(StatusResult)
 CAPABILITIES_SCHEMA = published_schema(CapabilitiesResult)
+TRANSFER_SCHEMA = published_schema(TransferResult)
 MODEL_CATALOG_SCHEMA = published_schema(ModelCatalogResult)
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate
 # result is fetched separately via codex_job_result (DELEGATE_RESULT_SCHEMA).

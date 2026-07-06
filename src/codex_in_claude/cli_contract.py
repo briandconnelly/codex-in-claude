@@ -30,6 +30,65 @@ VERSION_ARGS = ("--version",)
 LOGIN_STATUS_ARGS = ("login", "status")
 EXEC_HELP_ARGS = ("exec", "--help")
 
+# --- app-server (session transfer) ----------------------------------------------
+# `codex app-server` speaks newline-delimited JSON-RPC 2.0 over stdio (one JSON object
+# per line, no Content-Length framing). We drive it for ONE thing only — importing a
+# Claude Code session transcript into a resumable Codex thread (codex_transfer). The
+# whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
+# [experimental] and the import method rides behind the `experimentalApi` capability),
+# so every wire assumption lives here; see COMPATIBILITY.md. Verified against
+# codex-cli 0.142.5 on 2026-07-05 via `codex app-server generate-json-schema`.
+APP_SERVER_SUBCOMMAND = ("app-server",)
+# JSON-RPC handshake (v1) + the experimental import request/notifications (v2).
+APP_SERVER_INITIALIZE_METHOD = "initialize"
+APP_SERVER_INITIALIZED_NOTIFICATION = "initialized"
+APP_SERVER_IMPORT_METHOD = "externalAgentConfig/import"
+APP_SERVER_IMPORT_PROGRESS_NOTIFICATION = "externalAgentConfig/import/progress"
+APP_SERVER_IMPORT_COMPLETED_NOTIFICATION = "externalAgentConfig/import/completed"
+# We opt into experimental methods/fields; without it the import method is absent and
+# the success `target` (imported thread id) is filtered out of the completed
+# notification. Value True is sent in initialize `capabilities`.
+APP_SERVER_EXPERIMENTAL_CAPABILITY = "experimentalApi"
+# The migration item type for a whole-session transfer, and the JSON field names we
+# read tolerantly (.get()) off the wire. Listing them keeps the consumed surface
+# greppable and anchors the fake-app-server tests.
+IMPORT_SESSION_ITEM_TYPE = "SESSIONS"
+# initialize response → absolute $CODEX_HOME (so we never guess where the ledger lives).
+APP_SERVER_CODEX_HOME_KEY = "codexHome"
+# import response → the async import's correlation id (echoed by the notifications).
+IMPORT_ID_KEY = "importId"
+# completed/progress notification payload → per-item-type success/failure buckets.
+IMPORT_ITEM_RESULTS_KEY = "itemTypeResults"
+IMPORT_ITEM_TYPE_KEY = "itemType"
+IMPORT_SUCCESSES_KEY = "successes"
+IMPORT_FAILURES_KEY = "failures"
+# A success entry carries {source: <abs transcript path>, target: <imported thread id>};
+# a failure entry carries {message, failureStage, errorType}. `target` is the PRIMARY,
+# schema-emitted thread-id source (present only on a FRESH import, since Codex dedups a
+# byte-identical transcript to a silent no-op with no success entry).
+IMPORT_SOURCE_KEY = "source"
+IMPORT_TARGET_KEY = "target"
+IMPORT_MESSAGE_KEY = "message"
+# JSON-RPC error code Codex returns when the import method is absent (older CLI): the
+# hard backstop behind the advisory SUPPORTED_VERSIONS gate.
+JSONRPC_METHOD_NOT_FOUND = -32601
+
+# --- Import ledger (undocumented dedup fallback) ---------------------------------
+# $CODEX_HOME/external_agent_session_imports.json maps an imported transcript to its
+# thread id: {"records": [{source_path, content_sha256, imported_thread_id}]}. Same
+# drift class as models_cache.json — an UNDOCUMENTED internal file — so we read it only
+# as the FALLBACK when a re-import of a byte-identical transcript produced no fresh
+# `target` in the completed notification, and always tolerantly (bounds below). The
+# notification `target` is the primary path; this is best-effort recovery.
+IMPORT_LEDGER_FILENAME = "external_agent_session_imports.json"
+IMPORT_LEDGER_RECORDS_KEY = "records"
+IMPORT_LEDGER_SOURCE_PATH_KEY = "source_path"
+IMPORT_LEDGER_CONTENT_SHA_KEY = "content_sha256"
+IMPORT_LEDGER_THREAD_ID_KEY = "imported_thread_id"
+# Defensive bounds for that env-controlled file (real file is a few KB/record).
+IMPORT_LEDGER_MAX_BYTES = 5_000_000
+IMPORT_LEDGER_MAX_RECORDS = 10_000
+
 # --- Sandbox modes (security boundary) ------------------------------------------
 # The `--sandbox` value is the capability boundary for a run. read-only is the safe
 # default; workspace-write is used only for the propose/apply tiers. We NEVER pass

@@ -55,6 +55,37 @@ The final answer is read from the `--output-last-message` file (stable). The `--
 stream is parsed **tolerantly** for optional metadata only (token usage, session id, error events),
 so an event-schema change degrades metadata rather than breaking a run.
 
+## Session transfer (`codex app-server`)
+
+`codex_transfer` imports a Claude Code session transcript into a resumable Codex thread by driving
+`codex app-server` — a newline-delimited JSON-RPC 2.0 stream over stdio (one JSON object per line, no
+`Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
+labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
+every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
+`appserver.py`. Verified against `codex-cli 0.142.5` via `codex app-server generate-json-schema`.
+
+The flow: `initialize` (with `capabilities.experimentalApi=true`) → `initialized` notification → one
+`externalAgentConfig/import` request carrying a single `SESSIONS` migration item → wait for the
+matching `externalAgentConfig/import/completed` notification → terminate the child. The client is
+deliberately single-request (no broker, no session reuse).
+
+**Thread-id discovery.** Two sources, in order:
+
+1. **The completed notification** (`itemTypeResults[SESSIONS].successes[].target`) — the imported
+   thread id, present on a **fresh** import. This is part of the app-server's *emitted* JSON schema
+   (`generate-json-schema`), so it is the primary, versioned surface.
+2. **The import ledger** `$CODEX_HOME/external_agent_session_imports.json` (undocumented — same drift
+   class as `models_cache.json`) — read tolerantly and bounded, only as a fallback. Codex deduplicates
+   a byte-identical transcript to a silent no-op (empty `successes` **and** `failures`), so a
+   re-import's thread id is recoverable only here, matched on `source_path` + `content_sha256`.
+
+Because a live Claude session transcript grows on every turn, re-transferring it is **not** idempotent
+— the changed bytes are a fresh import with a new thread; the ledger fallback only fires for a
+genuinely unchanged (typically closed) transcript. An old CLI without the import method returns
+JSON-RPC `-32601` (method-not-found) → `transfer_unsupported` (the hard backstop behind the advisory
+version gate). A completed import with no `target` and no ledger record → `transfer_incomplete`, naming
+the ledger it checked.
+
 ## Failure classification
 
 A non-success `codex exec` run is classified from its stderr/stdout and JSONL `error` events against

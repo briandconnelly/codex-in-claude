@@ -5,6 +5,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_transfer` tool: hand off the current Claude Code session to a resumable Codex thread**
+  (#230). Imports a Claude Code session transcript (`.jsonl`) into a persistent Codex thread via the
+  experimental `codex app-server` `externalAgentConfig/import` protocol and returns
+  `resume_command` (`codex resume <thread_id>`) so the user can continue that exact conversation in
+  Codex. Free — no model call or token spend (a local file conversion) — but it does create a thread
+  in `$CODEX_HOME`. The thread id is read from the import-completed notification's `target` (the
+  versioned, schema-emitted surface), falling back to the undocumented import ledger only for a
+  byte-identical re-import; transferring a live, growing session is intentionally not idempotent (a
+  new thread per call). New error codes `transfer_unsupported` (codex too old — JSON-RPC `-32601`),
+  `transfer_failed` (import item failed), and `transfer_incomplete` (completed but no thread
+  recorded). Ships the `/codex:transfer` slash command. Backward-compatible addition; result
+  `fingerprint` `codex-in-claude/0.1/schema-29` → `codex-in-claude/0.1/schema-30`. Every
+  `app-server` wire assumption lives in `cli_contract.py`; see `COMPATIBILITY.md`.
+
 ### Changed
 
 - **Docs: README restructured for accuracy and audience** (#227). The quick start separates
