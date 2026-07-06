@@ -2734,6 +2734,14 @@ def test_internal_error_result_redacts_secret_in_exception_text(clean_env, tmp_p
     assert "RuntimeError" in msg
 
 
+def test_internal_error_result_omits_empty_exception_detail(clean_env, tmp_path):
+    exc = RuntimeError()
+    res = server._internal_error_result("codex_consult", exc, tier="consult", sandbox="read-only")
+    msg = res["error"]["message"]
+    assert msg == "codex_consult failed unexpectedly: RuntimeError"
+    assert not msg.endswith(": ")
+
+
 def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_path):
     # F10: the spawn-failure internal_error is a second exception-text sink.
     exc = OSError("cannot exec /home/AKIAIOSFODNN7EXAMPLE/worker")
@@ -2743,6 +2751,14 @@ def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_
     assert "[redacted: secret value]" in msg
     # The safe exception class name is preserved, consistent with the other sinks.
     assert "OSError" in msg
+
+
+def test_spawn_failure_envelope_omits_empty_exception_detail(clean_env, tmp_path):
+    exc = OSError()
+    res = server._spawn_failure_envelope(exc, _meta_for(tmp_path))
+    msg = res["error"]["message"]
+    assert msg == "failed to start background job: OSError"
+    assert not msg.endswith(": ")
 
 
 def test_job_result_corrupt_redacts_secret_in_detail(clean_env, tmp_path):

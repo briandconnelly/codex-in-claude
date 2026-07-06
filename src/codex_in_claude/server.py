@@ -821,10 +821,7 @@ def _internal_error_result(
         ErrorResult(
             error=make_error(
                 "internal_error",
-                (
-                    f"{tool_name} failed unexpectedly: {type(exc).__name__}: "
-                    f"{redaction.redact_text(str(exc)) or ''}"
-                )[:300],
+                f"{tool_name} failed unexpectedly: {redaction.exc_summary(exc)}"[:300],
                 repair_alternative=(
                     "Server-side error; retry. If it persists, run codex_status and inspect "
                     "the server's stderr log (set CODEX_IN_CLAUDE_LOG_LEVEL=DEBUG for detail)."
@@ -2378,10 +2375,7 @@ def _spawn_failure_envelope(exc: Exception, meta: Meta) -> dict:
         ErrorResult(
             error=make_error(
                 "internal_error",
-                (
-                    f"failed to start background job: {type(exc).__name__}: "
-                    f"{redaction.redact_text(str(exc)) or ''}"
-                )[:300],
+                f"failed to start background job: {redaction.exc_summary(exc)}"[:300],
                 repair_alternative=(
                     "Check the job state-dir permissions (CODEX_IN_CLAUDE_STATE_DIR) and retry."
                 ),
