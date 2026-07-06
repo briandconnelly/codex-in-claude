@@ -39,12 +39,22 @@ logger = logging.getLogger(__name__)
 _RECORD_VERSION = 1
 
 # Outcome kinds the store maps onto the result envelope. "won" is internal: the caller
-# that reserved must spawn the job and then publish() the job_id.
+# that reserved must spawn the job and then publish() the job_id. "io_error" is a
+# transient read failure (OSError other than FileNotFoundError): the record may be
+# intact, so callers retry the same key rather than fail closed to a fresh one.
 WON = "won"
 REPLAY = "replay"
 CONFLICT = "conflict"
 UNAVAILABLE = "unavailable"
 IN_PROGRESS = "in_progress"
+IO_ERROR = "io_error"
+
+# A transient read failure (io_error) may clear in moments, so sweep() gives such
+# entries a generous multiple of the horizon before reclaiming them — long enough that
+# a momentary blip never deletes a replayable record, but bounded so a persistently
+# unreadable entry (e.g. a permission error) cannot wedge its key behind an
+# infinitely-retryable "temporary" error forever (#202).
+_IO_ERROR_SWEEP_MULT = 3
 
 # Backoff between non-blocking flock retries while a bounded acquire waits for the
 # cross-process lock. Small enough that a lock freed mid-wait is taken promptly.
@@ -150,6 +160,10 @@ class IdempotencyIndex:
     or result-gone entry is honored (in-progress / unavailable) until it has aged past
     the horizon, and only then is it swept — never reclaimed early (a re-stat is not a
     compare-and-delete, so an early reclaim could double-spend against a paused owner).
+
+    Horizon arithmetic uses wall-clock time (``time.time()``/``st_mtime``), consistent
+    with the job store; a large clock step can shorten or extend the window —
+    cross-process on-disk expiry has no monotonic alternative.
     """
 
     def __init__(self, idem_dir: Path, *, horizon_seconds: float) -> None:
@@ -191,16 +205,20 @@ class IdempotencyIndex:
         return True
 
     def _read(self, path: Path) -> tuple[str, dict | None]:
-        """(status, record). status: 'ok' | 'empty' | 'corrupt' | 'missing'. 'empty'
-        is a placeholder mid-setup (transient); 'corrupt' is a non-empty file that is
-        unparseable OR structurally invalid — either way fail closed (never reclaimed
-        as a fresh miss within the window)."""
+        """(status, record). status: 'ok' | 'empty' | 'corrupt' | 'missing' | 'io_error'.
+        'empty' is a placeholder mid-setup (transient); 'corrupt' is a non-empty file that
+        is undecodable, unparseable, or structurally invalid — either way fail closed (never
+        reclaimed as a fresh miss within the window). 'io_error' is a transient read failure
+        (OSError other than FileNotFoundError); the record may be intact, so callers retry
+        the same key rather than fail closed."""
         try:
             text = path.read_text()
         except FileNotFoundError:
             return "missing", None
-        except OSError:
+        except UnicodeDecodeError:
             return "corrupt", None
+        except OSError:
+            return "io_error", None
         if text == "":
             return "empty", None
         try:
@@ -279,7 +297,8 @@ class IdempotencyIndex:
     def reserve(self, tool: str, key: str, arg_hash_: str, resolve: JobResolver) -> Outcome:
         """Reserve (tool, key) or classify an existing entry. Returns an :class:`Outcome`
         whose kind is WON (caller must spawn then :meth:`publish`), REPLAY, CONFLICT,
-        UNAVAILABLE, or IN_PROGRESS."""
+        UNAVAILABLE, IN_PROGRESS, or IO_ERROR (a transient read failure — retry the same
+        key)."""
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self._path(tool, key)
         for attempt in (0, 1):
@@ -350,6 +369,13 @@ class IdempotencyIndex:
             return (_SWEEP if age > self.horizon_seconds else IN_PROGRESS), None
         if status == "corrupt":
             return UNAVAILABLE, None  # non-empty but unparseable -> fail closed
+        if status == "io_error":
+            # Transient read failure (OSError other than FileNotFoundError): the record
+            # may be intact. Surface a temporary error so the caller retries the same key
+            # instead of starting a new paid run under a fresh key. sweep() reclaims the
+            # entry only past a generous multiple of the horizon, so a persistent read
+            # failure cannot wedge the key forever (#202).
+            return IO_ERROR, None
         assert rec is not None
         reserved_epoch = rec.get("reserved_epoch") or 0.0
         within = (now - reserved_epoch) <= self.horizon_seconds
@@ -403,6 +429,17 @@ class IdempotencyIndex:
             if status in ("empty", "corrupt"):
                 age = self._mtime_age(p, now)
                 if age is not None and age > self.horizon_seconds:
+                    self.remove(p)
+                continue
+            if status == "io_error":
+                # Transient read failure: the record may be intact, so give it a
+                # generous multiple of the horizon to clear before reclaiming. The bound
+                # stops a persistently unreadable entry (e.g. a permission error) from
+                # wedging its key behind an infinitely-retryable "temporary" error;
+                # unlink needs directory write permission, not file read permission, so
+                # remove() succeeds on an unreadable file (#202).
+                age = self._mtime_age(p, now)
+                if age is not None and age > self.horizon_seconds * _IO_ERROR_SWEEP_MULT:
                     self.remove(p)
                 continue
             if status != "ok" or rec is None:

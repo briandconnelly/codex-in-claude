@@ -8,6 +8,7 @@ duplicate. It is _core machinery: stdlib only, no parent-package imports.
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import pytest
@@ -124,6 +125,15 @@ def test_corrupt_record_fails_closed_unavailable(tmp_path):
     assert out.kind == idem.UNAVAILABLE
 
 
+def test_undecodable_record_fails_closed_unavailable(tmp_path):
+    idx = _idx(tmp_path)
+    d = tmp_path / "ws" / ".idem"
+    d.mkdir(parents=True)
+    (d / f"{idem.key_digest('codex_consult', 'k1')}.json").write_bytes(b"\xff\xfe\xfa")
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    assert out.kind == idem.UNAVAILABLE
+
+
 def test_stale_reservation_past_horizon_is_swept_and_rewon(tmp_path):
     idx = _idx(tmp_path, horizon=0.0)  # everything is immediately past horizon
     idx.reserve("codex_consult", "k1", "AH1", _resolver())  # won, unpublished, stale
@@ -139,6 +149,19 @@ def test_sweep_removes_past_horizon_entries(tmp_path):
     time.sleep(0.01)
     idx.sweep(_resolver())  # job-1 gone, past horizon
     assert not out.path.exists()
+
+
+def test_sweep_removes_undecodable_record_past_horizon(tmp_path):
+    idx = _idx(tmp_path, horizon=0.0)
+    d = tmp_path / "ws" / ".idem"
+    d.mkdir(parents=True)
+    path = d / f"{idem.key_digest('codex_consult', 'k1')}.json"
+    path.write_bytes(b"\xff\xfe\xfa")
+
+    time.sleep(0.01)
+    idx.sweep(_resolver())
+
+    assert not path.exists()
 
 
 def _write_raw(tmp_path, text):
@@ -370,3 +393,69 @@ def test_publish_writes_full_active_record_without_reread(tmp_path):
     idx.publish(out, "job-1")
     rec = json.loads(out.path.read_text())
     assert rec["state"] == "active" and rec["job_id"] == "job-1" and rec["arg_hash"] == "AH1"
+
+
+# ---------------------------------------------- transient read OSError (#202)
+def test_transient_read_oserror_is_io_error_not_unavailable(tmp_path, monkeypatch):
+    # A momentary OSError (EIO on flaky/network storage, a permissions race) while
+    # reading the record of a healthy, replayable completed run must NOT be mapped to
+    # UNAVAILABLE ("permanent, use a new key") — that invites a duplicate paid run.
+    # It must surface as IO_ERROR (temporary, retry the same key), and a subsequent
+    # read with the error cleared must replay the stored result.
+    idx = _idx(tmp_path)
+    live = _resolver(**{"job-1": {"exists": True, "terminal": True}})
+    out = idx.reserve("codex_consult", "k1", "AH1", live)
+    assert out.kind == idem.WON
+    _publish(idx, out, "job-1")
+
+    # Make the next read_text on the record file raise OSError once, then pass through.
+    real_read_text = idem.Path.read_text
+    calls = {"n": 0}
+
+    def flaky_read_text(self, *args, **kwargs):
+        if self == out.path:  # pin to this exact record, not a parent/suffix filter
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("transient EIO")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(idem.Path, "read_text", flaky_read_text)
+
+    out2 = idx.reserve("codex_consult", "k1", "AH1", live)
+    assert out2.kind == idem.IO_ERROR  # not UNAVAILABLE — the key is preserved
+
+    # After the transient error clears, the same key replays the stored result.
+    out3 = idx.reserve("codex_consult", "k1", "AH1", live)
+    assert out3.kind == idem.REPLAY
+    assert out3.job_id == "job-1"
+
+
+def test_sweep_keeps_io_error_entry_within_grace(tmp_path, monkeypatch):
+    # Within a generous multiple of the horizon, a transient read failure is NOT
+    # reclaimed — the record may be intact and a retry could replay it (#202).
+    idx = _idx(tmp_path, horizon=100.0)  # grace window = 3 * 100 = 300s
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    _publish(idx, out, "job-1")
+
+    monkeypatch.setattr(idem.Path, "read_text", _raise(OSError("transient EIO")))
+    idx.sweep(_resolver())  # job-1 gone, but well within the 300s grace window
+
+    assert out.path.exists()  # survives: a transient read failure is not corruption
+
+
+def test_sweep_reclaims_io_error_entry_past_grace(tmp_path, monkeypatch):
+    # Past the generous grace window, a still-unreadable entry IS reclaimed (unlink
+    # needs directory write permission, not file read permission, so it succeeds on an
+    # unreadable file) — un-wedging the key for a fresh reservation. Without this bound,
+    # a persistent read failure (e.g. a permission error) would wedge the key behind an
+    # infinitely-retryable "temporary" error forever (#202).
+    idx = _idx(tmp_path, horizon=0.0)  # grace window = 3 * 0 = 0s
+    out = idx.reserve("codex_consult", "k1", "AH1", _resolver())
+    _publish(idx, out, "job-1")
+    # Backdate the record so it is unambiguously past the 0s grace window.
+    os.utime(out.path, (time.time() - 10, time.time() - 10))
+
+    monkeypatch.setattr(idem.Path, "read_text", _raise(OSError("persistent EIO")))
+    idx.sweep(_resolver())  # job-1 gone, past grace, read still failing
+
+    assert not out.path.exists()  # reclaimed: the key is un-wedged

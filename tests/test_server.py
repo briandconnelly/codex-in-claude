@@ -4261,6 +4261,22 @@ async def test_consult_async_in_progress_is_temporary(monkeypatch, clean_env, tm
     assert res["error"]["retry_after_ms"] == server._IDEM_IN_PROGRESS_RETRY_MS
 
 
+async def test_consult_async_io_error_is_temporary(monkeypatch, clean_env, tmp_path):
+    # The agent-visible contract for a transient read failure (#202): the existing
+    # internal_error code (reused, so no fingerprint bump), temporary, a 1s backoff, and
+    # repair prose that steers to the SAME key — not a fresh paid run. A typo like
+    # "ioerror" would fall through to the idempotency_in_progress envelope and this test
+    # would fail, pinning the mapping the CHANGELOG promises.
+    store = _FakeIdemStore({"kind": "io_error"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["temporary"] is True
+    assert res["error"]["retry_after_ms"] == server._IDEM_IO_ERROR_RETRY_MS
+    assert "same idempotency_key" in res["error"]["repair"]["alternative"]
+
+
 async def test_delegate_async_replay_returns_real_handle(monkeypatch, clean_env, tmp_path):
     monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
     snap = _ok_record("done")  # a replayed job may already be terminal
@@ -4440,6 +4456,22 @@ async def test_consult_sync_in_progress_after_wait(monkeypatch, clean_env, tmp_p
     res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
     assert res["ok"] is False and res["error"]["code"] == "idempotency_in_progress"
     assert res["error"]["temporary"] is True
+
+
+async def test_consult_sync_io_error_is_temporary_after_wait(monkeypatch, clean_env, tmp_path):
+    # The sync path waits briefly for a transient read failure to self-heal into a
+    # replay; only past the wait deadline does it surface the io_error envelope. With the
+    # wait budget zeroed, a persistent io_error surfaces the same contract as the async
+    # path (#202).
+    monkeypatch.setattr(server, "_IDEM_SYNC_INPROGRESS_WAIT_S", 0.0)  # don't actually block
+    store = _FakeIdemStore({"kind": "io_error"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["temporary"] is True
+    assert res["error"]["retry_after_ms"] == server._IDEM_IO_ERROR_RETRY_MS
+    assert "same idempotency_key" in res["error"]["repair"]["alternative"]
 
 
 async def test_consult_sync_in_progress_then_created_loops(monkeypatch, clean_env, tmp_path):

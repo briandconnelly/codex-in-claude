@@ -2339,6 +2339,9 @@ _ARG_HASH_EXCLUDE = frozenset({"cwd", "workspace_source", "kind"})
 _IDEM_IN_PROGRESS_RETRY_MS = 250
 _IDEM_SYNC_INPROGRESS_WAIT_S = 1.0
 _IDEM_SYNC_INPROGRESS_POLL_S = 0.05
+# Backoff hint for a transient read failure on an idempotency record (#202): the
+# record may be intact, so the caller retries the same key after a short pause.
+_IDEM_IO_ERROR_RETRY_MS = 1000
 
 # Bound on acquiring the idempotency coordination locks (the per-process lock and the
 # cross-process index flock) for a keyed start. A sibling stuck mid-critical-section (or a
@@ -2412,6 +2415,24 @@ def _idem_terminal_error(result_kind: str, meta: Meta) -> dict:
         result_kind, _IDEM_TERMINAL_ERRORS["in_progress"]
     )
     return _idem_error(code, meta, retry_after_ms=retry_after_ms)
+
+
+def _idem_io_error(meta: Meta) -> dict:
+    """Retryable internal_error envelope for a transient read failure on an
+    idempotency record (#202). Uses the existing internal_error code (temporary:
+    True) with repair prose that tells the agent to retry the same call with the
+    same idempotency_key, not start a new paid run."""
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "internal_error",
+                "Transient storage error reading the idempotency record.",
+                retry_after_ms=_IDEM_IO_ERROR_RETRY_MS,
+                repair_alternative=("Retry the same call with the same idempotency_key."),
+            ),
+            meta=meta,
+        )
+    )
 
 
 def _job_started_handle(
@@ -2584,6 +2605,8 @@ async def _start_async(
             expires_at=snap["expires_at"],
             meta=meta,
         )
+    if result_kind == "io_error":
+        return _idem_io_error(meta)
     # conflict / unavailable / in_progress (and any unexpected kind) -> error envelope.
     return _idem_terminal_error(result_kind, meta)
 
@@ -2778,10 +2801,15 @@ async def _run_sync(
             return _mark_replayed(env)
         if result_kind in ("conflict", "unavailable"):
             return _idem_terminal_error(result_kind, meta)
-        # in_progress (or any unexpected kind): a concurrent reservation is still
-        # publishing. Wait briefly for it to resolve to replay rather than bouncing the
-        # caller, then return the same in_progress envelope async returns immediately.
+        # in_progress OR io_error: a transient state. Wait briefly for it to resolve
+        # (a concurrent reservation finishing publish, or a flaky read clearing) rather
+        # than bouncing the caller — a momentary blip can self-heal into a clean replay
+        # within the wait budget. Only past the deadline do we surface the specific
+        # envelope: io_error for a persistent read failure, idempotency_in_progress for
+        # a still-publishing reservation (#202).
         if time.monotonic() >= wait_deadline:
+            if result_kind == "io_error":
+                return _idem_io_error(meta)
             return _idem_terminal_error("in_progress", meta)
         await asyncio.sleep(_IDEM_SYNC_INPROGRESS_POLL_S)
 

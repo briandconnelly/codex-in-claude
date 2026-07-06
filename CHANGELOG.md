@@ -53,6 +53,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   with `": "`. Existing per-sink truncation and redaction behavior is unchanged. Runtime
   error-message prose only — not manifest-covered, so no `fingerprint` bump.
 
+- **A transient read `OSError` on an idempotency record no longer classifies as a
+  permanent result-unavailable** (#202). `IdempotencyIndex._read` mapped any `OSError`
+  (e.g. EIO on flaky/network storage, a permissions race) to `"corrupt"`, and
+  `_classify` mapped `"corrupt"` to `UNAVAILABLE` — `temporary: false`, repair
+  `use_new_idempotency_key`. So a momentary I/O blip while reading the record of a
+  healthy, replayable completed run told the agent, permanently and non-retryably, to
+  start a new paid run under a fresh key — duplicate spend when a retry one second
+  later would have replayed the stored result. `_read` now distinguishes a transient
+  I/O failure (`"io_error"`) from genuinely malformed content (`"corrupt"`): corrupt
+  records still fail closed (`UNAVAILABLE`), while an I/O error surfaces as a new
+  `IO_ERROR` outcome kind that the server maps to a retryable `internal_error` envelope
+  (`temporary: true`, repair: "retry the same call with the same idempotency_key").
+  `sweep()` gives an `io_error` entry a generous multiple of the horizon to clear
+  before reclaiming it (the record may be intact), but bounds the wait so a
+  persistently unreadable entry cannot wedge its key behind an infinitely-retryable
+  "temporary" error. No new error code is advertised (the existing `internal_error`
+  code is reused), so no `fingerprint` bump.
+
 ## [0.8.0] - 2026-07-05
 
 An agent-friendliness and spend-safety release. It completes the 2026-07 agent-friendliness audit
