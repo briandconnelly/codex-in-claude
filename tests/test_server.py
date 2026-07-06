@@ -1676,8 +1676,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_29():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-29"
+def test_fingerprint_is_schema_30():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-30"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4482,3 +4482,182 @@ def test_capabilities_advertise_idempotency_on_spend_committing_tools(clean_env)
     ):
         assert "idempotency_key" in by_name[name]["key_optional_params"], name
         assert "idempotency_conflict" in by_name[name]["error_codes"], name
+
+
+# --- codex_transfer -------------------------------------------------------------
+
+
+def _ready_codex(monkeypatch):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.5")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+
+
+def _patch_validation(monkeypatch, realpath="/home/u/.claude/projects/s/x.jsonl", reason=None):
+    monkeypatch.setattr(
+        server.appserver,
+        "validate_transcript_path",
+        lambda _p: server.appserver.PathValidation(realpath, reason),
+    )
+
+
+def _patch_transfer(monkeypatch, outcome):
+    monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: outcome)
+
+
+async def test_transfer_success_notification(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="t9",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            import_id="imp-7",
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is True
+    assert result["tool"] == "codex_transfer"
+    assert result["thread_id"] == "t9"
+    assert result["resume_command"] == "codex resume t9"
+    assert result["source_path"] == "/home/u/.claude/projects/s/x.jsonl"
+    assert result["meta"]["thread_id_source"] == "import_notification"
+    assert result["meta"]["import_id"] == "imp-7"
+    assert result["meta"]["codex_home"] == "/home/u/.codex"
+    assert result["fingerprint"].endswith("schema-30")
+
+
+async def test_transfer_success_from_ledger(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="t-led",
+            thread_id_source=server.appserver.ThreadIdSource.LEDGER,
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is True
+    assert result["meta"]["thread_id_source"] == "ledger"
+    assert result["meta"]["import_id"] is None
+
+
+async def test_transfer_invalid_path_no_spawn(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(
+        monkeypatch, realpath=None, reason="transcript_path must be a .jsonl session transcript."
+    )
+    called = []
+    monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: called.append(1))
+    result = await server.codex_transfer(transcript_path="/x.txt")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["details"]["field"] == "transcript_path"
+    assert not called  # no subprocess attempted
+
+
+async def test_transfer_codex_not_found(monkeypatch):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    _patch_validation(monkeypatch)
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_not_found"
+
+
+async def test_transfer_unauthenticated(monkeypatch):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.5")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
+    _patch_validation(monkeypatch)
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_auth_required"
+
+
+async def test_transfer_unsupported(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=server.appserver.TransferStatus.UNSUPPORTED),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "transfer_unsupported"
+    assert result["error"]["temporary"] is False
+
+
+async def test_transfer_item_failure(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.ITEM_FAILURE,
+            message="could not parse session",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "transfer_failed"
+    assert "could not parse session" in result["error"]["message"]
+
+
+async def test_transfer_incomplete_names_ledger(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.INCOMPLETE,
+            ledger_path="/home/u/.codex/external_agent_session_imports.json",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "transfer_incomplete"
+    assert "external_agent_session_imports.json" in result["error"]["message"]
+
+
+async def test_transfer_timeout(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=server.appserver.TransferStatus.TIMED_OUT),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "timeout"
+    assert result["error"]["temporary"] is True
+
+
+async def test_transfer_protocol_error(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.PROTOCOL_ERROR,
+            message="codex app-server exited before the import completed.",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "cli_contract_changed"
+
+
+async def test_transfer_spawn_failed(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=server.appserver.TransferStatus.SPAWN_FAILED),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_not_found"

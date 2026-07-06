@@ -13,11 +13,13 @@ import functools
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
 from urllib.parse import unquote, urlparse
 
+import anyio.to_thread
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import DisabledError, NotFoundError, ResourceError
 from fastmcp.server.middleware import Middleware
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
 
 from codex_in_claude import (
     __version__,
+    appserver,
     codex,
     config,
     delegate,
@@ -64,6 +67,7 @@ from codex_in_claude.schemas import (
     RESULT_META_SCHEMA,
     REVIEW_RESULT_SCHEMA,
     STATUS_SCHEMA,
+    TRANSFER_SCHEMA,
     AsyncLifecycle,
     CapabilitiesResult,
     ConsultResult,
@@ -92,6 +96,8 @@ from codex_in_claude.schemas import (
     StatusResult,
     Tier,
     ToolCapability,
+    TransferMeta,
+    TransferResult,
     Workspace,
     WorktreePlan,
     apply_detail,
@@ -115,6 +121,8 @@ CAPABILITY_SUMMARY = (
     "already live in git. "
     "Use codex_delegate to implement a task in a throwaway git worktree and get back a "
     "reviewable diff. "
+    "Use codex_transfer (free) to hand off the current Claude Code session transcript to a "
+    "resumable Codex thread when the user wants to continue this conversation inside Codex. "
     # Preflight and failure-handling rules.
     "Run codex_status first (free) to confirm the codex CLI is installed and authenticated. "
     "On a tool failure the tool result itself is the error (isError: true) with the error "
@@ -180,6 +188,17 @@ _JOB_MUTATE = {
     "idempotentHint": False,
 }
 _JOB_CANCEL = {**_JOB_MUTATE, "idempotentHint": True}
+# codex_transfer: no model call (free), but NOT read-only — it creates a persistent
+# Codex thread in $CODEX_HOME, a side effect that outlives the response. Non-destructive
+# (it only adds a thread; it never mutates the source transcript or existing threads) and
+# not idempotent (a live/growing transcript yields a new thread per call). The import is
+# a local file conversion — no model turn, no network egress — so openWorldHint is False.
+_FREE_WRITE = {
+    "readOnlyHint": False,
+    "openWorldHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+}
 
 mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=__version__)
 
@@ -538,6 +557,15 @@ WorkspaceRootParam = Annotated[
         description="Absolute path to the target repository root. Pass it (or rely on an "
         "MCP root) so the call targets the intended repo; otherwise it falls back to the "
         "server's own cwd and meta.workspace_warning is set."
+    ),
+]
+TranscriptPathParam = Annotated[
+    str,
+    Field(
+        description="Absolute path to the Claude Code session transcript (.jsonl) to hand "
+        "off to Codex. Must be an existing, non-empty .jsonl file under "
+        "~/.claude/projects. Find the current session's transcript as the newest *.jsonl "
+        "under ~/.claude/projects/<cwd-slug>/; ask the user if ambiguous."
     ),
 ]
 ExtraContextParam = Annotated[
@@ -928,6 +956,184 @@ def codex_status() -> dict:
     ).model_dump(mode="json")
 
 
+# Session transfer is a local file conversion (seconds); 120s mirrors upstream's cap.
+_TRANSFER_TIMEOUT_SECONDS = 120
+
+
+def _transfer_outcome_envelope(
+    outcome: appserver.TransferOutcome,
+    *,
+    source_path: str,
+    meta_for: Callable[[], Meta],
+    elapsed_ms: Callable[[], int],
+) -> dict:
+    """Map an appserver TransferOutcome to the result/error envelope."""
+    status = outcome.status
+    if status is appserver.TransferStatus.OK:
+        thread_id = outcome.thread_id or ""
+        source = outcome.thread_id_source or appserver.ThreadIdSource.IMPORT_NOTIFICATION
+        return TransferResult(
+            thread_id=thread_id,
+            resume_command=f"codex resume {thread_id}",
+            source_path=source_path,
+            meta=TransferMeta(
+                codex_home=outcome.codex_home or "",
+                import_id=outcome.import_id,
+                thread_id_source=source.value,
+                elapsed_ms=elapsed_ms(),
+            ),
+        ).model_dump(mode="json")
+
+    code: ErrorCode
+    message: str
+    temporary: bool | None = None
+    alt: str | None = None
+    if status is appserver.TransferStatus.UNSUPPORTED:
+        code = "transfer_unsupported"
+        message = "This codex version does not support importing a Claude session."
+    elif status is appserver.TransferStatus.ITEM_FAILURE:
+        code = "transfer_failed"
+        message = f"Codex could not import the session: {outcome.message}"
+    elif status is appserver.TransferStatus.INCOMPLETE:
+        code = "transfer_incomplete"
+        message = (
+            "Codex reported the import completed but recorded no thread (checked "
+            f"{outcome.ledger_path})."
+        )
+    elif status is appserver.TransferStatus.SPAWN_FAILED:
+        code = "codex_not_found"
+        message = "codex CLI not found on PATH."
+    elif status is appserver.TransferStatus.TIMED_OUT:
+        code = "timeout"
+        temporary = True
+        message = f"codex app-server did not finish importing within {_TRANSFER_TIMEOUT_SECONDS}s."
+        alt = (
+            "The import took too long; retry codex_transfer. If it persists, check the "
+            "codex app-server logs."
+        )
+    else:  # PROTOCOL_ERROR
+        code = "cli_contract_changed"
+        message = outcome.message or "codex app-server returned an unexpected response."
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                code,
+                message,
+                temporary=temporary,
+                repair_alternative=alt,
+            ),
+            meta=meta_for(),
+        )
+    )
+
+
+@mcp.tool(annotations=_FREE_WRITE, output_schema=TRANSFER_SCHEMA)
+@_guard(tier="consult", sandbox="read-only")
+async def codex_transfer(
+    transcript_path: TranscriptPathParam,
+    ctx: Context | None = None,
+    workspace_root: WorkspaceRootParam = None,
+) -> dict:
+    """Hand off the current Claude Code session to a resumable Codex thread.
+
+    Imports a Claude session transcript (.jsonl) into a persistent Codex thread via
+    `codex app-server` and returns `resume_command` (`codex resume <thread_id>`) to
+    continue that exact conversation in Codex (TUI or App). FREE — no model call and no
+    token spend; it is a local file conversion, typically seconds. It does create a
+    thread in $CODEX_HOME (so it is not read-only) but never edits your working tree.
+
+    Pass `transcript_path`: the current session's transcript is the newest *.jsonl under
+    ~/.claude/projects/<cwd-slug>/ (ask the user if ambiguous). Transferring a still-live
+    session creates a NEW thread each call — Codex dedups only a byte-identical
+    transcript — so this is not idempotent for an active session. Run codex_status first
+    if unsure Codex is installed and authenticated."""
+    start = time.monotonic()
+    d = config.defaults()
+    cwd_guess = workspace.server_cwd()
+
+    def _elapsed() -> int:
+        return int((time.monotonic() - start) * 1000)
+
+    def _meta(cwd: str, source: str | None) -> Meta:
+        meta = _base_meta(
+            cwd,
+            source,
+            tier="consult",
+            sandbox="read-only",
+            isolation=d.isolation,
+            model=None,
+            timeout_seconds=_TRANSFER_TIMEOUT_SECONDS,
+        )
+        meta.elapsed_ms = _elapsed()
+        return meta
+
+    # 1. Validate the transcript path before spawning anything (zero side effects).
+    validation = appserver.validate_transcript_path(transcript_path)
+    if validation.realpath is None:
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "invalid_arguments",
+                    validation.reason or "invalid transcript_path.",
+                    details=ErrorDetail(field="transcript_path"),
+                    repair_tool="codex_transfer",
+                ),
+                meta=_meta(cwd_guess, None),
+            )
+        )
+    # 2. Readiness (free either way): codex present AND authenticated.
+    if codex.codex_version() is None:
+        return serialize_error(
+            ErrorResult(
+                error=make_error("codex_not_found", "codex CLI not found on PATH."),
+                meta=_meta(cwd_guess, None),
+            )
+        )
+    authenticated, _ = codex.login_status()
+    if authenticated is False:
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "codex_auth_required", "codex is not authenticated; run `codex login`."
+                ),
+                meta=_meta(cwd_guess, None),
+            )
+        )
+    # 3. Resolve the workspace (labels the imported thread's origin cwd).
+    roots = await _roots_from_ctx(ctx)
+    wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
+    cwd = wres.path or cwd_guess
+    if wres.error_code is not None:
+        return _workspace_error_result(
+            wres.error_code, wres.error_detail, roots, _meta(cwd_guess, None)
+        )
+    # 4. Run the import off the event loop (blocking subprocess I/O). abandon_on_cancel
+    #    lets an MCP cancellation return promptly; the stop_event tells the abandoned
+    #    worker to tear down its app-server process group instead of running the full
+    #    deadline (mirrors runtime.run_async's cancel-then-kill semantics, #39).
+    stop = threading.Event()
+    try:
+        outcome = await anyio.to_thread.run_sync(
+            functools.partial(
+                appserver.transfer_session,
+                transcript_realpath=validation.realpath,
+                cwd=cwd,
+                timeout_seconds=_TRANSFER_TIMEOUT_SECONDS,
+                stop_event=stop,
+            ),
+            abandon_on_cancel=True,
+        )
+    except anyio.get_cancelled_exc_class():
+        stop.set()
+        raise
+    return _transfer_outcome_envelope(
+        outcome,
+        source_path=validation.realpath,
+        meta_for=lambda: _meta(cwd, wres.source),
+        elapsed_ms=_elapsed,
+    )
+
+
 # Error codes each tool may return, advertised per-tool in codex_capabilities so
 # agents can branch/recover without triggering the error first. Advisory, not a
 # closed contract. Composed from shared groups to keep the lists from drifting;
@@ -1050,6 +1256,20 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
     "codex_models": [],
     "codex_status": [],
     "codex_capabilities": [],
+    "codex_transfer": _err_codes(
+        _WORKSPACE_ERRORS,
+        (
+            "invalid_arguments",
+            "codex_not_found",
+            "codex_auth_required",
+            "transfer_unsupported",
+            "transfer_failed",
+            "transfer_incomplete",
+            "timeout",
+            "cli_contract_changed",
+            "internal_error",
+        ),
+    ),
     "codex_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
@@ -1122,6 +1342,7 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
         free_tools=[
             "codex_models",
             "codex_status",
+            "codex_transfer",
             "codex_dry_run",
             "codex_delegate_dry_run",
             "codex_capabilities",
@@ -1327,6 +1548,18 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 cost="free",
                 use_when="Before active calls, to confirm codex is installed and authenticated.",
                 returns="Readiness, version, auth, and resolved defaults.",
+            ),
+            ToolCapability(
+                name="codex_transfer",
+                cost="free",
+                stability="experimental",
+                use_when="To continue the current Claude Code session inside Codex — hand off "
+                "the session transcript to a resumable Codex thread. No model call/token spend "
+                "(a local file conversion), but it does create a thread in $CODEX_HOME.",
+                required_params=["transcript_path"],
+                key_optional_params=["workspace_root"],
+                returns="thread_id and resume_command (`codex resume <thread_id>`) for the "
+                "imported thread. Not idempotent for a live session (a new thread per call).",
             ),
             ToolCapability(
                 name="codex_dry_run",

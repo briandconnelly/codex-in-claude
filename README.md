@@ -128,6 +128,12 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
   (remaining Codex quota for the 5-hour/weekly windows, captured from your last paid call;
   `status` is `available`/`limited`/`exhausted`/`unknown`). Advisory — informs whether to
   spend; `unknown` just means no fresh reading yet.
+- `codex_transfer(transcript_path, …)` — hand off the current Claude Code session to a resumable
+  Codex thread; returns `resume_command` (`codex resume <thread_id>`) to continue that exact
+  conversation in Codex. No model call or token spend (a local file conversion via the experimental
+  `codex app-server`), but it does create a thread in `$CODEX_HOME`. Not idempotent for a live
+  session — Codex dedups only a byte-identical transcript, so re-running mid-session makes a new
+  thread. Experimental.
 - `codex_dry_run(scope, …)` — preview a review's scope/diff size/redactions before spending.
 - `codex_delegate_dry_run(task, …)` — preview a delegate's seeded baseline (HEAD commit, plus
   tracked, uncommitted, and untracked counts and size) and prompt size before spending; no worktree
@@ -142,7 +148,7 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
   eviction, and result retention are covered in
   [`docs/REFERENCE.md`](docs/REFERENCE.md#background-jobs).
 
-Slash commands wrap these: `/codex:status`, `/codex:consult`, `/codex:review`,
+Slash commands wrap these: `/codex:status`, `/codex:transfer`, `/codex:consult`, `/codex:review`,
 `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
 
 Active tools send the prompt and relevant context/diffs to OpenAI through the `codex` CLI. Treat
