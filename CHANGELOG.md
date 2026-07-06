@@ -23,6 +23,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Bundled skills now cover `codex_transfer`** (#234). `collaborating-with-codex` gains a
+  "Choosing a tool" row, `/codex:transfer` in the slash-command list, a per-tool bullet (free but
+  not read-only — creates a persistent thread in `$CODEX_HOME`; `transcript_path` discovery; not
+  idempotent for a live session), and a common-mistakes entry; `deliberating-with-codex` gets a
+  one-line boundary note that a session hand-off is not a deliberation pattern. Skill markdown
+  only — no fingerprint change.
+
 - **Docs: README restructured for accuracy and audience** (#227). The quick start separates
   terminal commands from Claude Code input (the old single `sh` block was not pasteable); the
   `propose`-tier / `delegate`-tool naming is reconciled at first use; the configuration table

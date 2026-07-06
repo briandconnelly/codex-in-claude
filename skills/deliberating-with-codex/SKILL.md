@@ -12,6 +12,7 @@ It assumes you've read the tool reference; it does not repeat the per-tool contr
 The scope is a deliberate ceiling: **two models, not an N-model panel.**
 This plugin's server can only drive the `codex` CLI — it cannot invoke Claude — so the only source of cross-architecture diversity is *you*, by bringing your own attempt to the table.
 Everything below is built from the existing tools; nothing here adds MCP surface.
+A session hand-off (`codex_transfer`) is **not** a deliberation pattern — it moves the conversation to Codex instead of composing two models; see `collaborating-with-codex` for it.
 
 ## Default: don't orchestrate
 
