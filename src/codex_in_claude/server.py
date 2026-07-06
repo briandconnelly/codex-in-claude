@@ -13,6 +13,7 @@ import functools
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
@@ -1106,15 +1107,25 @@ async def codex_transfer(
         return _workspace_error_result(
             wres.error_code, wres.error_detail, roots, _meta(cwd_guess, None)
         )
-    # 4. Run the import off the event loop (blocking subprocess I/O).
-    outcome = await anyio.to_thread.run_sync(
-        functools.partial(
-            appserver.transfer_session,
-            transcript_realpath=validation.realpath,
-            cwd=cwd,
-            timeout_seconds=_TRANSFER_TIMEOUT_SECONDS,
+    # 4. Run the import off the event loop (blocking subprocess I/O). abandon_on_cancel
+    #    lets an MCP cancellation return promptly; the stop_event tells the abandoned
+    #    worker to tear down its app-server process group instead of running the full
+    #    deadline (mirrors runtime.run_async's cancel-then-kill semantics, #39).
+    stop = threading.Event()
+    try:
+        outcome = await anyio.to_thread.run_sync(
+            functools.partial(
+                appserver.transfer_session,
+                transcript_realpath=validation.realpath,
+                cwd=cwd,
+                timeout_seconds=_TRANSFER_TIMEOUT_SECONDS,
+                stop_event=stop,
+            ),
+            abandon_on_cancel=True,
         )
-    )
+    except anyio.get_cancelled_exc_class():
+        stop.set()
+        raise
     return _transfer_outcome_envelope(
         outcome,
         source_path=validation.realpath,

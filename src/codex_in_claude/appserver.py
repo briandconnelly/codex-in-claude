@@ -20,7 +20,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import queue
+import signal
 import subprocess
 import threading
 import time
@@ -30,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from codex_in_claude import __version__, cli_contract
-from codex_in_claude._core.runtime import BINARY_NOT_FOUND, kill_process_tree
+from codex_in_claude._core.runtime import BINARY_NOT_FOUND
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -47,6 +49,28 @@ _CLIENT_NAME = "codex-in-claude"
 _MAX_LINE_BYTES = 8 * 1024 * 1024
 # Bounded stderr tail retained for diagnostics on an error path.
 _MAX_STDERR_BYTES = 64 * 1024
+# Max blocking-read slice: caps how long the loop waits before re-checking the deadline
+# and the cooperative-cancellation stop flag, so a cancelled call tears down promptly.
+_POLL_SECONDS = 0.25
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """Close stdin, SIGKILL the whole process group, then reap the leader.
+
+    Mirrors ``runtime._kill_group``: signals by ``proc.pid`` (== pgid, since the child
+    is spawned with ``start_new_session=True``) and does NOT early-return when the direct
+    child has already exited — a descendant that inherited a pipe must still be killed
+    after the leader becomes a zombie (``kill_process_tree`` would skip it)."""
+    with contextlib.suppress(OSError):
+        if proc.stdin is not None:
+            proc.stdin.close()
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:  # pragma: no cover - non-POSIX fallback
+            proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=5)
 
 
 class TransferStatus(StrEnum):
@@ -330,11 +354,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     cwd: str,
     command: list[str] | None = None,
     timeout_seconds: float,
+    stop_event: threading.Event | None = None,
 ) -> TransferOutcome:
     """Import a (pre-validated) Claude transcript into a Codex thread via app-server.
 
     ``command`` is the argv to spawn (defaults to ``codex app-server``); it is
-    injectable so tests can drive a scripted fake app-server. Never raises for a
+    injectable so tests can drive a scripted fake app-server. ``stop_event`` lets a
+    caller request cooperative cancellation: when set, the loop stops within
+    ``_POLL_SECONDS`` and the ``finally`` kills the process group. Never raises for a
     subprocess failure — every path returns a :class:`TransferOutcome`."""
     argv = command or [cli_contract.CODEX_BIN, *cli_contract.APP_SERVER_SUBCOMMAND]
     try:
@@ -379,6 +406,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             }
         )
         while True:
+            if stop_event is not None and stop_event.is_set():
+                # Cooperative cancellation: the caller abandoned this run. The value is
+                # discarded (the caller re-raises), but the finally still kills the child.
+                return TransferOutcome(
+                    status=TransferStatus.TIMED_OUT,
+                    import_id=import_id,
+                    codex_home=codex_home,
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return TransferOutcome(
@@ -388,8 +423,9 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     stderr_tail=stderr_tail() or None,
                 )
             try:
-                msg = messages.get(timeout=remaining)
-            except queue.Empty:  # pragma: no cover - loop re-checks the deadline
+                # Cap each wait so the deadline and the stop flag are re-checked promptly.
+                msg = messages.get(timeout=min(remaining, _POLL_SECONDS))
+            except queue.Empty:
                 continue
             if msg is _EOF:
                 return TransferOutcome(
@@ -408,13 +444,34 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 )
             if not isinstance(msg, dict):
                 continue
+            # initialize error → the handshake itself failed (protocol drift).
+            if msg.get("id") == 1 and "error" in msg:
+                error = msg.get("error")
+                detail = error.get("message") if isinstance(error, dict) else None
+                return TransferOutcome(
+                    status=TransferStatus.PROTOCOL_ERROR,
+                    message=f"codex app-server initialize failed: {detail}"
+                    if detail
+                    else "codex app-server rejected initialize.",
+                    stderr_tail=stderr_tail() or None,
+                )
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
                 result = msg.get("result")
-                if isinstance(result, dict):
-                    home = result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
-                    if isinstance(home, str):
-                        codex_home = home
+                home = (
+                    result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
+                    if isinstance(result, dict)
+                    else None
+                )
+                if not isinstance(home, str) or not home:
+                    # No codexHome means we can't locate the ledger nor trust the
+                    # handshake — fail fast instead of importing into the dark.
+                    return TransferOutcome(
+                        status=TransferStatus.PROTOCOL_ERROR,
+                        message="codex app-server initialize response omitted codexHome.",
+                        stderr_tail=stderr_tail() or None,
+                    )
+                codex_home = home
                 _send(
                     {"jsonrpc": "2.0", "method": cli_contract.APP_SERVER_INITIALIZED_NOTIFICATION}
                 )
@@ -470,9 +527,4 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             # Everything else (progress notifications, unknown methods, extra fields):
             # ignore and keep reading (tolerant decoding).
     finally:
-        with contextlib.suppress(OSError):
-            if proc.stdin is not None:
-                proc.stdin.close()
-        kill_process_tree(proc)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=5)
+        _terminate(proc)

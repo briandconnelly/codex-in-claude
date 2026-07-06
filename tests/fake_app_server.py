@@ -76,6 +76,12 @@ def main() -> None:
                 sys.stdout.write("this is not json\n")
                 sys.stdout.flush()
                 return
+            if scenario == "init_error":
+                _emit({"id": 1, "error": {"code": -32000, "message": "bad init"}})
+                return
+            if scenario == "init_no_home":
+                _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
+                return
             _emit(_init_response(codex_home))
             if scenario == "eof_after_init":
                 return

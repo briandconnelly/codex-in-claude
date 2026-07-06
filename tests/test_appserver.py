@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -323,6 +324,65 @@ def test_ledger_last_match_wins(tmp_path):
         )
     )
     assert appserver._lookup_ledger(str(tmp_path), source) == "last"
+
+
+def test_initialize_error_is_protocol_error(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("init_error", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "initialize failed" in outcome.message
+
+
+def test_initialize_without_codex_home_is_protocol_error(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("init_no_home", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "codexHome" in outcome.message
+
+
+def test_stop_event_cancels_promptly(tmp_path):
+    """A set stop_event tears the run down well before the deadline, and the child
+    process is reaped (cooperative cancellation)."""
+    import threading
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    stop = threading.Event()
+    result: list = []
+
+    def _run() -> None:
+        result.append(
+            transfer_session(
+                transcript_realpath=str(t.resolve()),
+                cwd=str(tmp_path),
+                command=_command("timeout", home),  # hangs, never completes
+                timeout_seconds=30,
+                stop_event=stop,
+            )
+        )
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    time.sleep(0.5)  # let it reach the read loop
+    stop.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()  # returned well before the 30s deadline
+    assert result and result[0].status is TransferStatus.TIMED_OUT
 
 
 # --- completed-notification resolver unit cases ---------------------------------
