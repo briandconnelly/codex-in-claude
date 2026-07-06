@@ -5,6 +5,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs: README restructured for accuracy and audience** (#227). The quick start separates
+  terminal commands from Claude Code input (the old single `sh` block was not pasteable); the
+  `propose`-tier / `delegate`-tool naming is reconciled at first use; the configuration table
+  gains the previously undocumented `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` and
+  `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS` and a note that `TIER_DEFAULT`/`SANDBOX_DEFAULT`
+  only affect `codex_status` reporting; background-job and rate-limit reference detail moved to
+  new `docs/REFERENCE.md` sections ("Background jobs", "Rate-limit reporting"); a contents line
+  was added and duplicated safety prose removed.
+- **Docs: AGENTS.md rules separated from context** (#227). "The result contract" no longer
+  re-lists the `FINGERPRINT_COVERS` categories (the prose copy had already drifted from the
+  code) and now points at the tuple; rules previously buried in prose — the
+  `check_commit_message.py`/Git-PRs sync obligation, the `_core` import ban, and the
+  Copilot-review obligations — are standalone bullets; compound bullets were split and the
+  coverage-floor guidance deduplicated into Testing.
+
 ## [0.8.0] - 2026-07-05
 
 An agent-friendliness and spend-safety release. It completes the 2026-07 agent-friendliness audit
