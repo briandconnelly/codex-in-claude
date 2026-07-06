@@ -7,22 +7,25 @@ Conventions for any agent (or human) working in this repository.
 A Claude Code plugin that calls the OpenAI Codex CLI via a FastMCP server. The Python package
 is `codex_in_claude` under `src/`. Generic, CLI-agnostic machinery lives in
 `codex_in_claude/_core/` and is designed for later extraction into a shared `agent-bridge`
-package — **`_core` must never import from its parent package** (one-way dependency).
+package.
+
+- **Rule:** `_core` must never import from its parent package (one-way dependency; this is what
+  keeps it extractable).
 
 ## Tooling
 
 - Use `uv` for everything: `uv sync`, `uv run pytest`, `uv run <cmd>`. Never pip/poetry.
 - Lint/format with `ruff`; type-check with `ty`. All three must pass before a change is done:
   `uv run ruff check . && uv run ruff format --check . && uv run ty check`.
-- Tests use `pytest` with a **95% coverage floor**. Live tests that call the real `codex` CLI are
-  marked `integration` and excluded by default; run them with `uv run pytest -m integration --no-cov`.
+- Tests use `pytest`; the coverage floor and integration-test markers are defined in Testing below.
 - Local Git hooks are configured in `prek.toml` and run via [`prek`](https://prek.j178.dev) (a dev
   dependency). One-time setup: `uv run prek install --prepare-hooks`. Hooks mirror the CI gate —
   pre-commit runs file hygiene + `ruff`/`ty`/Actions-pinning/`uv lock --check`; pre-push runs
-  `pytest`; commit-msg validates Conventional Commits via `scripts/check_commit_message.py` (its
-  allowed types/scopes mirror the Git/PRs section — change both together). prek is a local
-  convenience; CI (`test.yml`) remains the authoritative gate and does not run the builtin
-  file-hygiene hooks.
+  `pytest`; commit-msg validates Conventional Commits via `scripts/check_commit_message.py`. prek
+  is a local convenience; CI (`test.yml`) remains the authoritative gate and does not run the
+  builtin file-hygiene hooks.
+- When changing the allowed commit types or scopes, update `scripts/check_commit_message.py` and
+  the Git/PRs section below in the same change — they mirror each other.
 
 ## The CLI contract
 
@@ -35,15 +38,15 @@ changes, update that one file; see `COMPATIBILITY.md`.
 ## The result contract
 
 All tools return the envelope in `src/codex_in_claude/schemas.py`. Bump `FINGERPRINT` whenever the
-agent-visible surface changes (tool names, params/schemas, descriptions, annotations, error codes,
-value enums, the initialize response, resource metadata, or the `codex_capabilities` payload). A
+agent-visible surface changes — any externally observable change to a category in
+`FINGERPRINT_COVERS` (same file; the Versioning section has the decision rules). A
 committed manifest snapshot (`tests/fixtures/manifest_snapshot.json`, guarded by
 `tests/test_manifest.py`) fails CI on any covered change, so the change can't land unreviewed: the
 failure directs you to regenerate the fixture
 (`uv run python -m codex_in_claude.manifest > tests/fixtures/manifest_snapshot.json`) and bump
 `FINGERPRINT` in the same commit. The snapshot is an **acknowledgment guard** — it surfaces the
 drift for review; it does not mechanically force the bump (the snapshot and `FINGERPRINT` are
-independently editable, so bumping remains review policy). Keep the change in `CHANGELOG.md`.
+independently editable, so bumping remains review policy). Record the change in `CHANGELOG.md`.
 
 ## Versioning
 
@@ -53,11 +56,10 @@ independently editable, so bumping remains review policy). Keep the change in `C
 - Every change is judged on **two independent questions**:
   - **Bumps `FINGERPRINT`?** Yes for any *externally observable* change to a category in
     `FINGERPRINT_COVERS` (`src/codex_in_claude/schemas.py`) — the discovered value, shape, or
-    documented meaning of a tool/resource/prompt schema, description, annotation, error code, value
-    enum, the initialize response, or the `codex_capabilities` payload. Reference that tuple rather
-    than re-listing it here (the re-listing drifting out of sync with the code is the exact bug this
-    section exists to prevent); a refactor that leaves the discovered surface byte-identical does not
-    bump it.
+    documented meaning of anything in that tuple. Reference the tuple rather than re-listing its
+    categories in prose anywhere in this document (a re-listing drifting out of sync with the code
+    is the exact bug this rule exists to prevent); a refactor that leaves the discovered surface
+    byte-identical does not bump it.
   - **Breaking?** Flag it breaking (commit `!`/`BREAKING CHANGE:` footer + the `breaking-change` PR
     label) only when the change is *backward-incompatible* for a client: removing or renaming a
     field/tool/resource/prompt, retyping a field, adding a required input, narrowing an accepted
@@ -124,9 +126,9 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 ## Testing
 
 - TDD: write the failing test first, then the minimal code to pass it.
-- Test files mirror the module under test (`tests/test_<module>.py`); every bug fix lands with a
-  regression test that fails before the fix.
-- The 95% coverage floor is enforced in CI. Live tests that hit the real `codex` CLI are marked
+- Test files mirror the module under test (`tests/test_<module>.py`).
+- Every bug fix lands with a regression test that fails before the fix.
+- The **95% coverage floor** is enforced in CI. Live tests that hit the real `codex` CLI are marked
   `integration` and excluded by default (`uv run pytest -m integration --no-cov`).
 
 ## Git / PRs
@@ -137,19 +139,24 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   (e.g. `feat(jobs): add async lifecycle`). Subject is imperative, lowercase, no trailing period.
   Mark breaking changes with `!` (`feat!:`) or a `BREAKING CHANGE:` footer (see Versioning).
 - **Squash-merge only.** A PR becomes a single commit whose subject is the PR title, so **the PR
-  title must itself be a valid Conventional Commit**. Keep PRs focused on one logical change.
+  title must itself be a valid Conventional Commit**. Keep each PR to one logical change — if the
+  title needs an "and", split the PR.
 - Branch names are `<type>/<slug>` matching the commit type (e.g. `feat/async-jobs`, `docs/conventions`).
 - Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
   body (`Closes #N`); label the PR with a type and (for issues) a priority.
 - Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
 - **Agents never merge PRs; the maintainer merges.** An agent may merge only on an explicit,
   in-session instruction to merge that specific PR. Open the PR, get checks green, and stop.
-- Don't add `pull_request_target` workflows or self-approve reviews. After pushing new commits to a
-  PR that was already reviewed, request fresh review rather than relying on the stale approval.
+- Don't add `pull_request_target` workflows.
+- Don't self-approve reviews.
+- After pushing new commits to a PR that was already reviewed, request fresh review rather than
+  relying on the stale approval.
 - **Copilot reviews each PR on open and on every push** — the repo enables Copilot review-on-push
   (a `copilot_code_review` ruleset rule), and merging requires every review thread resolved
-  (`required_review_thread_resolution`). Treat that feedback like any review: evaluate each comment on
-  its merits — verify it against the code, don't blindly implement — fix what's valid, and reply to
-  each comment noting the resolution. Because each push re-triggers a review, iterate until it reports
-  no new actionable comments, then resolve the threads before merging. A comment you decline (e.g. a
-  false positive) still gets a reply explaining why, and its thread still needs resolving.
+  (`required_review_thread_resolution`). Treat that feedback like any review:
+  - Evaluate each comment on its merits — verify it against the code, don't blindly implement.
+  - Fix what's valid, and reply to each comment noting the resolution.
+  - A comment you decline (e.g. a false positive) still gets a reply explaining why, and its
+    thread still needs resolving.
+  - Because each push re-triggers a review, iterate until it reports no new actionable comments,
+    then resolve the threads before merging.

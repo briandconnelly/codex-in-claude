@@ -75,6 +75,28 @@ is refused with `idempotency_conflict`; a key whose prior result was already con
 - `meta.job_kind` — set on a lifecycle (`codex_job_*`) error envelope when it resolved an existing
   job record, naming that job's kind (e.g. `codex_delegate`); omitted for not-found/pre-lookup errors.
 
+## Background jobs
+
+The `codex_job_*` lifecycle tools manage detached runs started by the `_async` tools (and the job
+records that sync runs also create). Operational semantics:
+
+- **Backoff.** Every polling response carries `poll_after_ms`; honor it rather than polling in a
+  tight loop. It grows with a running job's elapsed runtime (bounded), so you back off
+  automatically on long runs.
+- **Deadline.** A job is bounded by a wall-clock cap (`CODEX_IN_CLAUDE_JOB_MAX_SECONDS`); a poll
+  past the deadline reaps the job.
+- **Retention.** Results are retained `ttl_seconds` **after** a job completes, so `expires_at` is
+  `null` while it runs and is set once it finishes. Records are also evicted oldest-terminal-first
+  past a per-workspace count cap (`CODEX_IN_CLAUDE_JOB_MAX_COUNT`).
+
+## Rate-limit reporting
+
+Each active call's `meta.rate_limit` carries the live snapshot captured from that run
+(`source: current_run`); `codex_status` reports the cached one from your last paid call
+(`source: plugin_cache`), including whether it has gone stale
+(`CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS`). The block is advisory — it informs whether to spend;
+`status: unknown` just means no fresh reading yet.
+
 ## Workspace selection
 
 When calling the MCP tools directly, pass `workspace_root` as an absolute path to the repository you

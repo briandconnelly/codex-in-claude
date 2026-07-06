@@ -9,8 +9,14 @@ Call **OpenAI Codex** from **Claude Code** — an independent second opinion, st
 review, and delegated coding tasks (**cross-model review**) — through a FastMCP plugin that drives
 the `codex` CLI safely.
 
-> **Status:** alpha. The agent-visible surface is versioned by a `fingerprint`; pre-1.0 minor
-> releases may change it.
+> **Status:** alpha. The agent-visible surface is versioned by a `fingerprint` — a surface-version
+> string reported in every result and by `codex_capabilities`; pre-1.0 minor releases may change it.
+
+**Contents:** [Why](#why) · [Quick start](#quick-start) · [Example](#example) ·
+[Requirements](#requirements) · [Tools](#tools) · [Skills](#skills) ·
+[Result envelopes](#result-envelopes) · [Safety](#safety) ·
+[Configuration](#configuration-env-codex_in_claude_) · [Troubleshooting](#troubleshooting) ·
+[Local development](#local-development)
 
 ## Why
 
@@ -22,18 +28,22 @@ Codex a question, a diff to review, or a task to implement — and get back a st
 |------|---------------|----------------|---------|
 | `consult` | `read-only` | nothing — text/findings only | questions, second opinions |
 | `review` | `read-only` | nothing — structured findings | reviewing your git changes |
-| `propose` | `workspace-write` (temp git **worktree**) | isolated worktree → returns a **reviewable diff, never auto-applied** | delegating a coding task |
+| `propose` (the `delegate` tools) | `workspace-write` (temp git **worktree**) | isolated worktree → returns a **reviewable diff, never auto-applied** | delegating a coding task |
 
 Planned later milestone: an explicit opt-in `apply` tier for live-tree edits. It is not exposed by
 the current tool set.
 
 ## Quick start
 
-```sh
-# 1. Confirm Codex itself is installed and authenticated.
-codex login
+First, in a terminal, make sure the `codex` CLI is installed and log in (a no-op if you already are):
 
-# 2. Add the marketplace, then install the plugin in Claude Code:
+```sh
+codex login
+```
+
+Then, inside a Claude Code session, add the marketplace and install the plugin:
+
+```text
 /plugin marketplace add briandconnelly/codex-in-claude
 /plugin install codex-in-claude
 ```
@@ -85,8 +95,7 @@ Codex inspects the diff **read-only** and returns a structured result envelope (
 `high`; every finding carries a `severity` (`critical` … `nit`) plus `evidence`, `risk`, and
 `recommendation`. The envelope above is abridged — `meta` (always present, with `cwd`, `tier`,
 `sandbox`, `isolation`, and timing), `request_id`, `raw_response`, and other fields are trimmed for
-brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape. Treat the output as
-claims to verify, not instructions to follow blindly.
+brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
 
 ## Requirements
 
@@ -129,10 +138,9 @@ claims to verify, not instructions to follow blindly.
   stays pass-through, so an unlisted slug still works and `codex exec` validates it.
 - `codex_job_status(job_id, …)` / `codex_job_result` / `codex_job_consume_result` /
   `codex_job_cancel` / `codex_job_list` — background-job lifecycle. State is disk-backed and
-  survives server restarts; jobs are bounded by a wall-clock deadline with TTL + count-cap
-  eviction. Honor `poll_after_ms` (it grows with a running job's elapsed runtime, bounded, so you
-  back off automatically); don't poll in a tight loop. Results are retained `ttl_seconds` **after**
-  a job completes, so `expires_at` is null while it runs and is set once it finishes.
+  survives server restarts. Honor `poll_after_ms` rather than polling in a tight loop; deadlines,
+  eviction, and result retention are covered in
+  [`docs/REFERENCE.md`](docs/REFERENCE.md#background-jobs).
 
 Slash commands wrap these: `/codex:status`, `/codex:consult`, `/codex:review`,
 `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
@@ -154,16 +162,13 @@ The plugin ships two Claude Code skills (auto-discovered from `skills/`):
 ## Result envelopes
 
 Every tool returns a discriminated envelope keyed by `ok`. Success carries `summary`/`findings`/`meta`
-(plus review-only `verdict`/`confidence`, or a proposed `diff` for delegate); failure is a uniform,
-machine-actionable `error` — a stable `code`, `temporary`/`retry_after_ms`, a symbolic
-`repair{next_step,tool,arguments,alternative}`, and `details{field|fields,reason,allowed_values}`
-for automated recovery (full schema at the `codex://error-envelope` resource). The shape is versioned by `fingerprint`.
-Each active call's `meta.rate_limit` carries the live snapshot from that call (`source: current_run`);
-`codex_status` reports the cached one (`source: plugin_cache`).
+(plus review-only `verdict`/`confidence`, or a proposed `diff` for delegate). Failure is a uniform,
+machine-actionable `error` with a stable `code` and a symbolic `repair` hint, built for automated
+recovery. The shape is versioned by `fingerprint`.
 
 Calling the MCP tools directly instead of through the `/codex:*` commands? See
-[`docs/REFERENCE.md`](docs/REFERENCE.md) for the full envelope contract and workspace selection
-(`workspace_root`).
+[`docs/REFERENCE.md`](docs/REFERENCE.md) for the full contract — every error field, rate-limit
+reporting (`meta.rate_limit`), background-job semantics, and workspace selection (`workspace_root`).
 
 ## Safety
 
@@ -190,7 +195,7 @@ Calling the MCP tools directly instead of through the `/codex:*` commands? See
 | `CODEX_IN_CLAUDE_MODEL` | unset | Codex model override |
 | `CODEX_IN_CLAUDE_TIMEOUT_SECONDS` | 180 | per-call timeout (clamped 10–600) |
 | `CODEX_IN_CLAUDE_ISOLATION` | `inherit` | `inherit` \| `ignore-config` \| `ignore-rules` |
-| `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` | 200000 | byte cap on author input. The gathered diff is truncated to it; author text above it is rejected with `input_too_large` — `codex_consult` counts `question`+`extra_context` together, while `codex_review_changes`/`codex_delegate` count each input on its own |
+| `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` | 200000 | byte cap on author input: gathered diffs are truncated to it, author text above it is rejected with `input_too_large` (consult counts `question`+`extra_context` together; review/delegate cap each input separately) |
 | `CODEX_IN_CLAUDE_MAX_DELEGATE_DIFF_BYTES` | 200000 | cap on the inline diff a delegate run returns; larger diffs are truncated with `meta.truncated`/`meta.truncation_hint` (min 1000) |
 | `CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES` | 10485760 | byte cap for captured stdout (head+tail window; run not killed); stderr is bounded to a separate ~1 MiB reserve |
 | `CODEX_IN_CLAUDE_GIT_TIMEOUT_SECONDS` | 60 | git command timeout |
@@ -198,9 +203,15 @@ Calling the MCP tools directly instead of through the `/codex:*` commands? See
 | `CODEX_IN_CLAUDE_JOB_TTL` | 86400 | seconds a finished job record is kept (min 60) |
 | `CODEX_IN_CLAUDE_JOB_MAX_SECONDS` | 1800 | background-job wall-clock cap (clamped 60–7200) |
 | `CODEX_IN_CLAUDE_JOB_MAX_COUNT` | 50 | retained jobs per workspace (clamped 1–1000) |
+| `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` | `rate_limit_snapshot.json` next to the jobs state dir | where the cached rate-limit snapshot is stored |
+| `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS` | 1800 | snapshot age beyond which `codex_status` reports the reading as stale |
 | `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` | built-in tested set | comma-separated `codex` `major.minor` versions to treat as supported |
 | `CODEX_IN_CLAUDE_LOG_LEVEL` | `WARNING` | server diagnostic log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`\|`CRITICAL`); logs go to **stderr** (never stdout) |
 | `CODEX_IN_CLAUDE_LOG_FILE` | unset | also mirror diagnostic logs to this file path |
+
+Two further variables, `CODEX_IN_CLAUDE_TIER_DEFAULT` and `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`, exist
+ahead of the planned `apply` tier. They only change the defaults `codex_status` reports — every
+shipped tool pins its own tier and sandbox and ignores them.
 
 ## Troubleshooting
 
