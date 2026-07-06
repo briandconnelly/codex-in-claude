@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,6 +77,7 @@ def build_exec_command(
     add_dirs: tuple[str, ...] = (),
     skip_git_repo_check: bool = False,
     ephemeral: bool = True,
+    extra_args: tuple[str, ...] = (),
     flag_support: FlagSupport | None = None,
 ) -> tuple[list[str], list[str]]:
     """Build the `codex exec` invocation. Returns (cmd, dropped_optional_flags).
@@ -83,7 +85,13 @@ def build_exec_command(
     The prompt is supplied over stdin (the trailing ``-`` sentinel) by the runner,
     keeping gathered context/diffs out of argv and local process listings.
     Guarantee-bearing flags are sent unconditionally; HELP_GATED (depth) flags are
-    dropped when the installed CLI does not list them."""
+    dropped when the installed CLI does not list them.
+
+    ``extra_args`` are the operator's allowlist-validated CODEX_IN_CLAUDE_EXTRA_ARGS
+    tokens (#231). They are appended AFTER help-gating the plugin-owned tokens — so a
+    profile/feature value can never be mistaken for a gated flag's value and dropped —
+    and before the stdin ``-`` sentinel, so they can add config/profile/feature options
+    without displacing the envelope-bearing flags."""
     fs = flag_support if flag_support is not None else preflight.flag_support()
     tokens = [cli_contract.CODEX_BIN, *cli_contract.EXEC_SUBCOMMAND]
     tokens += ["--json"]
@@ -102,6 +110,9 @@ def build_exec_command(
     if model:
         tokens += [cli_contract.MODEL_FLAG, model]
     cmd, dropped = _gate_optional(tokens, fs)
+    # Operator passthrough goes in AFTER gating (never gated/dropped) and before the
+    # stdin sentinel; already allowlist-validated in config.extra_args().
+    cmd += list(extra_args)
     # Prompt comes from stdin; the trailing sentinel tells codex exec to read it.
     cmd += [cli_contract.STDIN_PROMPT]
     return cmd, dropped
@@ -143,6 +154,10 @@ async def run_codex_exec(
             add_dirs=add_dirs,
             skip_git_repo_check=skip_git_repo_check,
             ephemeral=ephemeral,
+            # Read from the (worker-inherited) env here rather than threading raw tokens
+            # through the call chain / persisted job spec — keeps secret -c values off
+            # disk (#231). Already validated at the tool boundary before any spend.
+            extra_args=config.extra_args().tokens,
             flag_support=flag_support,
         )
         run = await runtime.run_async(
@@ -226,14 +241,70 @@ def contract_changed_error() -> ErrorInfo:
     )
 
 
+def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
+    """Error for a drift that codex attributes to an operator-supplied extra arg (#231).
+
+    `matched` are the sanitized descriptors (allowlisted flag names / config keys /
+    profile/feature names — never a secret `-c` VALUE) whose text appeared in codex's
+    rejection, so the repair can name what to fix without echoing input."""
+    named = ", ".join(matched) if matched else config.EXTRA_ARGS_ENV
+    return make_error(
+        "extra_args_rejected",
+        f"codex rejected an argument from {config.EXTRA_ARGS_ENV} ({named}) — the "
+        "passthrough option/config key/profile is not accepted by your installed codex.",
+        repair_alternative=(
+            f"Fix or remove the offending entry ({named}) in {config.EXTRA_ARGS_ENV}; "
+            "this is operator config, NOT a plugin contract drift. Verify the option "
+            "against `codex --help` / `codex exec --help` for your installed version."
+        ),
+    )
+
+
+def _descriptor_in_blob(descriptor: str, blob: str) -> bool:
+    """Whether `descriptor` appears in `blob` at flag/token boundaries.
+
+    A bare substring test is too loose: a short descriptor (e.g. a one-char feature
+    name "a") would match INSIDE an unrelated word ("--s**a**ndbox"), so a genuine
+    plugin-flag drift would be misattributed to the operator's passthrough. clap quotes
+    the offending token (`'--profile'`, `'model_provider'`), so we require the
+    descriptor to be delimited by non-word / non-hyphen characters (quotes, spaces,
+    line ends) on both sides — matching how codex names it, while ignoring incidental
+    substring hits."""
+    pattern = rf"(?<![\w-]){re.escape(descriptor)}(?![\w-])"
+    return re.search(pattern, blob, re.IGNORECASE) is not None
+
+
+def _extra_args_drift_match(extra: config.ExtraArgs | None, *texts: str | None) -> list[str] | None:
+    """Descriptors of `extra` codex named in a rejection blob (token-bounded), or None.
+
+    Returns None when no extra args are configured/valid — so a genuine plugin-flag
+    drift (e.g. codex dropping --sandbox) stays cli_contract_changed and the fail-loud
+    guarantee holds. A match means codex named one of the operator's passthrough
+    entries, so the drift is attributed to CODEX_IN_CLAUDE_EXTRA_ARGS instead."""
+    ea = config.extra_args() if extra is None else extra
+    if not ea.configured or not ea.valid or not ea.descriptors:
+        return None
+    blob = "\n".join(t for t in texts if t)
+    matched = [d for d in ea.descriptors if _descriptor_in_blob(d, blob)]
+    return matched or None
+
+
 def classify_failure(
-    run: CommandRun, *, last_message: str | None = None, events: str | None = None
+    run: CommandRun,
+    *,
+    last_message: str | None = None,
+    events: str | None = None,
+    extra_args: config.ExtraArgs | None = None,
 ) -> ErrorInfo:
     """Classify a non-success `codex exec` run into a recoverable ErrorInfo.
 
     Codex reports request/turn failures as JSONL `error`/`turn.failed` events on
     stdout, so we extract that message (when present) for both classification and
-    the surfaced text — it is cleaner than the truncated raw stream."""
+    the surfaced text — it is cleaner than the truncated raw stream.
+
+    `extra_args` (defaulting to a fresh env read) lets a drift codex attributes to an
+    operator's CODEX_IN_CLAUDE_EXTRA_ARGS entry be reported as `extra_args_rejected`
+    rather than `cli_contract_changed` (#231)."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
@@ -244,6 +315,11 @@ def classify_failure(
     # Drift before rate-limit so a genuine contract change is never masked as a
     # transient (retryable) rate limit.
     if cli_contract.is_contract_drift(run.stderr, run.stdout, event_error):
+        # Only re-attribute to the operator's passthrough when codex actually named one
+        # of its descriptors; otherwise a real plugin-flag drift must stay fail-loud.
+        matched = _extra_args_drift_match(extra_args, run.stderr, run.stdout, event_error)
+        if matched is not None:
+            return _extra_args_rejected_error(matched)
         return contract_changed_error()
     if cli_contract.is_rate_limited(run.stderr, run.stdout, last_message, event_error):
         retry_after = cli_contract.parse_retry_after_ms(

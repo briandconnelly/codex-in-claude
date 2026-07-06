@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from codex_in_claude import cli_contract
-from codex_in_claude._core import worktree
+from codex_in_claude._core import redaction, worktree
 from codex_in_claude._core.jobs import JobStore
 
 ENV_PREFIX = "CODEX_IN_CLAUDE_"
@@ -116,6 +117,151 @@ ENV_PLACEHOLDER_REPAIR = (
     "These env vars are literal ${...}; your MCP host is not expanding env "
     "substitutions. Use an env_vars passthrough list, or set literal values."
 )
+
+
+# --- Opt-in extra `codex` args passthrough (CODEX_IN_CLAUDE_EXTRA_ARGS, #231) ----
+# An operator-only knob to add extra global `codex` options to every PAID exec
+# invocation (consult/review/delegate) — its motivating use is selecting a
+# model_provider/profile when isolation sends --ignore-user-config (which drops the
+# user's config.toml, leaving CLI -c overrides the only lever). Deliberately an
+# allowlist, not arbitrary argv: a bare positional or unknown flag could clobber the
+# envelope-bearing plugin flags (--json/--cd/--sandbox/--output-schema/…) or smuggle a
+# prompt, hollowing out the fail-loud CLI contract.
+EXTRA_ARGS_ENV = f"{ENV_PREFIX}EXTRA_ARGS"
+
+# The allowlisted global options. All four are verified `codex` global+exec options
+# (codex-cli 0.142.5). Value-taking; a bare/unknown flag is rejected. Short `-c`/`-p`
+# are accepted only space-separated (an attached `-cKEY=VAL` is undocumented and
+# rejected); the long forms accept both `--config VAL` and `--config=VAL`.
+_EXTRA_CONFIG_FLAGS = ("-c", "--config")  # -c KEY=VALUE  (a dotted-path config override)
+_EXTRA_PROFILE_FLAGS = ("-p", "--profile")  # -p NAME       (layer a named config profile)
+_EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE
+
+# Config-key roots refused even though `-c/--config` is allowlisted: a `-c` value can
+# override ANY dotted config path, and these would weaken a guarantee this server
+# advertises — the sandbox capability boundary and the no-network-egress promise
+# (sandbox_workspace_write.network_access lives under `sandbox`), the approval posture,
+# or the host-env isolation of commands codex runs (shell_environment_policy.inherit
+# could expose the server's environment, secrets included). Refused at parse time so
+# they never reach codex. NOTE: `--profile` layers an opaque on-disk TOML this parser
+# cannot inspect, so a profile remains a documented operator-trust boundary (see
+# COMPATIBILITY.md); this denylist covers only the inspectable `-c` surface.
+_DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_environment_policy"})
+
+
+@dataclass(frozen=True)
+class ExtraArgs:
+    """Parsed CODEX_IN_CLAUDE_EXTRA_ARGS. `tokens` is the validated argv to inject
+    (may carry secret `-c` VALUES — never echo it). `descriptors` are sanitized
+    identifiers (allowlisted flag names, config KEYS, profile/feature NAMES — never a
+    `-c` value) safe to surface in codex_status / an error envelope and to match against
+    a codex drift stderr. `error` is a value-free 'why invalid' string set only when the
+    knob is present but failed to parse/validate; `configured` is True whenever the env
+    var is set to a non-blank value."""
+
+    tokens: tuple[str, ...] = ()
+    descriptors: tuple[str, ...] = ()
+    option_count: int = 0
+    configured: bool = False
+    error: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        """True when the knob is unset, or set and parsed/validated cleanly."""
+        return self.error is None
+
+
+def _extra_args_flag_kind(flag: str) -> str | None:
+    if flag in _EXTRA_CONFIG_FLAGS:
+        return "config"
+    if flag in _EXTRA_PROFILE_FLAGS:
+        return "profile"
+    if flag in _EXTRA_FEATURE_FLAGS:
+        return "feature"
+    return None
+
+
+def _safe_token(token: str) -> str:
+    """A bounded, secret-redacted echo of an offending token for an error message."""
+    return (redaction.redact_text(token) or "")[:60]
+
+
+def _parse_extra_args(raw: str) -> ExtraArgs:
+    """Tokenize + allowlist-validate a non-blank CODEX_IN_CLAUDE_EXTRA_ARGS value."""
+    try:
+        toks = shlex.split(raw)
+    except ValueError:
+        return ExtraArgs(configured=True, error="could not tokenize (unbalanced quotes?)")
+    tokens: list[str] = []
+    descriptors: list[str] = []
+    count = 0
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        # Long `--flag=value` attached form → one token; split on the FIRST `=`.
+        attached = tok.startswith("--") and "=" in tok
+        if attached:
+            flag, value = tok.split("=", 1)
+        else:
+            flag = tok
+        kind = _extra_args_flag_kind(flag)
+        if kind is None:
+            return ExtraArgs(configured=True, error=f"unsupported argument: {_safe_token(tok)}")
+        if not attached:
+            if i + 1 >= len(toks):
+                return ExtraArgs(configured=True, error=f"{flag} requires a value")
+            value = toks[i + 1]
+            i += 1
+        # A value that itself looks like a flag is a smuggled option, not a value.
+        if value.startswith("-"):
+            return ExtraArgs(configured=True, error=f"{flag} value looks like a flag")
+        if kind == "config":
+            if "=" not in value:
+                return ExtraArgs(configured=True, error=f"{flag} expects KEY=VALUE")
+            key = value.split("=", 1)[0]
+            if not key.strip():
+                return ExtraArgs(configured=True, error=f"{flag} has an empty config key")
+            # Normalize the root segment the way codex's own `-c` parser does (it trims
+            # keys), so a leading/segment space can't slip a denied key past the check.
+            root = key.split(".", 1)[0].strip().lower()
+            if any(root == d or root.startswith(f"{d}_") for d in _DENIED_CONFIG_KEY_ROOTS):
+                return ExtraArgs(
+                    configured=True,
+                    error=(
+                        f"config key '{key.strip()}' is refused: it could weaken the sandbox / "
+                        "network / approval / host-env-isolation guarantees this server advertises"
+                    ),
+                )
+            tokens += [flag, value]
+            # Record the flag too (not just the key), so a drift where codex rejects the
+            # `-c`/`--config` flag token itself is still attributed to the passthrough.
+            # The key is a config-path name (not a secret); the `-c` VALUE is never added.
+            descriptors += [flag, key]
+        else:  # profile / feature — the value is a non-secret NAME
+            if not value:
+                return ExtraArgs(configured=True, error=f"{flag} requires a non-empty value")
+            tokens += [flag, value]
+            descriptors += [flag, value]
+        count += 1
+        i += 1
+    # De-dupe descriptors while preserving order (a stable, small match/echo set).
+    seen: dict[str, None] = {}
+    for d in descriptors:
+        seen.setdefault(d, None)
+    return ExtraArgs(
+        tokens=tuple(tokens),
+        descriptors=tuple(seen),
+        option_count=count,
+        configured=True,
+    )
+
+
+def extra_args() -> ExtraArgs:
+    """Resolve CODEX_IN_CLAUDE_EXTRA_ARGS. Blank/unset → an empty, valid ExtraArgs."""
+    raw = os.environ.get(EXTRA_ARGS_ENV)
+    if raw is None or not raw.strip():
+        return ExtraArgs()
+    return _parse_extra_args(raw)
 
 
 def clamp_timeout(value: int) -> int:

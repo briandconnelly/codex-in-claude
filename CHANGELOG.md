@@ -7,6 +7,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Opt-in extra `codex` args passthrough via `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#231). An operator-only
+  env knob adds allowlisted global `codex` options to every paid `exec` call (consult/review/delegate)
+  — `-c`/`--config KEY=VALUE`, `-p`/`--profile NAME`, `--enable`/`--disable FEATURE` — so a
+  `model_provider`/profile can be selected even under `ignore-config` isolation (which drops
+  `config.toml`, leaving `-c` the only lever). It is an allowlist, not arbitrary argv: anything else is
+  refused **before any spend** with a new `extra_args_rejected` error code, and `-c` keys under
+  `sandbox`/`approval_policy`/`shell_environment_policy` are refused because they would weaken the
+  advertised sandbox / no-network / approval / host-env-isolation guarantees. Tokens are appended after the plugin's help-gated flags (never displacing the
+  envelope-bearing `--json`/`--sandbox`/`--output-schema`/… flags) and are read from the
+  worker-inherited env rather than persisted to any job spec, so a secret `-c` value never lands on
+  disk and is never echoed in `codex_status` or an error envelope. When `codex` rejects a passthrough
+  entry the failure is classified `extra_args_rejected` (operator config to fix) rather than
+  `cli_contract_changed` — but only when the rejection names one of the injected descriptors, so a
+  genuine plugin-flag drift still fails loudly. `codex_status` reports `extra_args_configured`/
+  `extra_args_count`/`extra_args_valid` (never the raw values). A `--profile` layers an opaque on-disk
+  TOML this server cannot inspect — a documented operator-trust boundary (see `COMPATIBILITY.md`).
+  Backward-compatible addition; result `fingerprint` `codex-in-claude/0.1/schema-30` →
+  `codex-in-claude/0.1/schema-31`.
+
 - **`codex_transfer` tool: hand off the current Claude Code session to a resumable Codex thread**
   (#230). Imports a Claude Code session transcript (`.jsonl`) into a persistent Codex thread via the
   experimental `codex app-server` `externalAgentConfig/import` protocol and returns

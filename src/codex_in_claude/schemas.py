@@ -45,7 +45,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-30"
+FINGERPRINT = "codex-in-claude/0.1/schema-31"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -148,6 +148,11 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
+    # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
+    # (an unaccepted option / config key / profile). Operator config to fix, NOT a
+    # plugin contract drift — kept distinct from cli_contract_changed so the fail-loud
+    # contract signal is not muddied by user-owned passthrough (#231).
+    "extra_args_rejected",
     # Session transfer (codex_transfer via `codex app-server`):
     # the installed codex is too old to support the session-import method (-32601).
     "transfer_unsupported",
@@ -471,6 +476,7 @@ RepairStep = Literal[
     "install_git",
     "init_git_repo",
     "update_plugin",
+    "correct_config",
     "inspect_and_retry",
     "retry_then_report",
     "use_new_idempotency_key",
@@ -581,6 +587,13 @@ class StatusResult(BaseModel):
     flags_warning: str | None = None  # a guarantee-bearing flag missing from --help
     ready: bool = False  # found AND authenticated
     readiness_detail: str
+    # Operator passthrough (CODEX_IN_CLAUDE_EXTRA_ARGS, #231). Presence + option count +
+    # validity ONLY — never the raw tokens/values (a `-c` value can hold a secret).
+    # extra_args_valid is False when the knob is set but fails parse/allowlist, so every
+    # paid call is guaranteed to preflight-fail even though `ready` may be True.
+    extra_args_configured: bool = False
+    extra_args_count: int = 0
+    extra_args_valid: bool = True
     raw_defaults: RawDefaults
     resolved_defaults: ResolvedDefaults
     rate_limit: RateLimit = Field(  # always present; status 'unknown' when no cache

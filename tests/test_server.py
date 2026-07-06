@@ -1676,8 +1676,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_30():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-30"
+def test_fingerprint_is_schema_31():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-31"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4574,7 +4574,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-30")
+    assert result["fingerprint"].endswith("schema-31")
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
@@ -4709,3 +4709,77 @@ async def test_transfer_spawn_failed(monkeypatch):
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "codex_not_found"
+
+
+# --- CODEX_IN_CLAUDE_EXTRA_ARGS: status + preflight before spend (#231) -----------
+
+
+def test_status_reports_valid_extra_args(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=litellm --profile work")
+    res = server.codex_status()
+    assert res["extra_args_configured"] is True
+    assert res["extra_args_count"] == 2
+    assert res["extra_args_valid"] is True
+
+
+def test_status_reports_invalid_extra_args(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")  # not allowlisted
+    res = server.codex_status()
+    assert res["extra_args_configured"] is True
+    assert res["extra_args_valid"] is False
+
+
+def test_status_unset_extra_args_defaults(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
+    res = server.codex_status()
+    assert res["extra_args_configured"] is False
+    assert res["extra_args_valid"] is True
+
+
+async def _assert_extra_args_rejected(res):
+    assert res["ok"] is False
+    assert res["error"]["code"] == "extra_args_rejected"
+    assert res["error"]["repair"]["next_step"] == "correct_config"
+
+
+async def test_consult_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    called = False
+
+    async def fake(*a, **k):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+    assert called is False  # rejected before any spend
+
+
+async def test_review_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "bare-positional")
+    res = await server.codex_review_changes(workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+
+
+async def test_delegate_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c sandbox_mode=danger-full-access")
+    res = await server.codex_delegate("do a thing", workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+
+
+async def test_dry_run_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    res = await server.codex_dry_run(workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+
+
+async def test_delegate_dry_run_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    res = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)

@@ -773,6 +773,27 @@ def _placeholder_error(meta: Meta) -> dict | None:
     )
 
 
+def _extra_args_error(meta: Meta) -> dict | None:
+    """Preflight the CODEX_IN_CLAUDE_EXTRA_ARGS knob before any spend (#231).
+
+    Mirrors _placeholder_error: if the knob is set but fails to parse/allowlist,
+    return a structured extra_args_rejected envelope so the caller never pays for a
+    call codex would reject. The `error` string is value-free (built in config), so no
+    secret `-c` value can leak here."""
+    extra = config.extra_args()
+    if not extra.configured or extra.valid:
+        return None
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "extra_args_rejected",
+                f"{config.EXTRA_ARGS_ENV} is invalid: {extra.error}.",
+            ),
+            meta=meta,
+        )
+    )
+
+
 def _base_meta(
     cwd: str,
     source: str | None,
@@ -917,6 +938,7 @@ def codex_status() -> dict:
         readiness_detail = "Ready: codex is installed and authenticated."
 
     timeout = config.clamp_timeout(d.timeout_seconds)
+    extra = config.extra_args()
     return StatusResult(
         codex_found=found,
         codex_version=version,
@@ -927,6 +949,9 @@ def codex_status() -> dict:
         flags_warning=flags_warning,
         ready=ready,
         readiness_detail=readiness_detail,
+        extra_args_configured=extra.configured,
+        extra_args_count=extra.option_count,
+        extra_args_valid=extra.valid,
         raw_defaults=RawDefaults(
             tier=d.tier,
             sandbox=d.sandbox,
@@ -1145,6 +1170,7 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     "invalid_json",
     "schema_violation",
     "cli_contract_changed",
+    "extra_args_rejected",
     "codex_rate_limited",
     "internal_error",
 )
@@ -1273,6 +1299,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         (
             "input_too_large",
             "unexpanded_env_placeholder",
+            "extra_args_rejected",
             "internal_error",
         ),
     ),
@@ -1280,6 +1307,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         _WORKSPACE_ERRORS,
         (
             "unexpanded_env_placeholder",
+            "extra_args_rejected",
             "input_too_large",
             "not_a_git_repo",
             "worktree_error",
@@ -1806,6 +1834,9 @@ async def _prepare_consult(
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
         return placeholder
+    extra_args_err = _extra_args_error(meta)
+    if extra_args_err is not None:
+        return extra_args_err
 
     limit = config.max_input_bytes()
     combined = (question or "") + (extra_context or "")
@@ -1914,6 +1945,9 @@ async def _prepare_review(
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
         return placeholder
+    extra_args_err = _extra_args_error(meta)
+    if extra_args_err is not None:
+        return extra_args_err
 
     spec = {
         "kind": "codex_review_changes",
@@ -1987,6 +2021,9 @@ async def _prepare_delegate(
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
         return placeholder
+    extra_args_err = _extra_args_error(meta)
+    if extra_args_err is not None:
+        return extra_args_err
 
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))
@@ -2972,23 +3009,25 @@ async def codex_dry_run(
 
     # Mirror codex_review_changes: surface an unexpanded ${...} env placeholder before
     # gathering the diff, so the preview fails exactly where the paid review would (#46).
-    placeholder = _placeholder_error(
-        _base_meta(
-            cwd,
-            wres.source,
-            tier="consult",
-            sandbox="read-only",
-            isolation=isolation_v,
-            model=d.model,
-            timeout_seconds=config.clamp_timeout(d.timeout_seconds),
-            scope=scope,
-            base=base,
-            commit=commit,
-            paths=paths,
-        )
+    dry_meta = _base_meta(
+        cwd,
+        wres.source,
+        tier="consult",
+        sandbox="read-only",
+        isolation=isolation_v,
+        model=d.model,
+        timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+        scope=scope,
+        base=base,
+        commit=commit,
+        paths=paths,
     )
+    placeholder = _placeholder_error(dry_meta)
     if placeholder is not None:
         return placeholder
+    extra_args_err = _extra_args_error(dry_meta)
+    if extra_args_err is not None:
+        return extra_args_err
 
     max_bytes = config.max_input_bytes()
     extra_context_bytes = len((extra_context or "").encode("utf-8"))
@@ -3142,6 +3181,9 @@ async def codex_delegate_dry_run(
     placeholder = _placeholder_error(meta)
     if placeholder is not None:
         return placeholder
+    extra_args_err = _extra_args_error(meta)
+    if extra_args_err is not None:
+        return extra_args_err
 
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))

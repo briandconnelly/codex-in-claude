@@ -89,6 +89,7 @@
           "invalid_json",
           "schema_violation",
           "cli_contract_changed",
+          "extra_args_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -143,6 +144,7 @@
           "invalid_json",
           "schema_violation",
           "cli_contract_changed",
+          "extra_args_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -185,6 +187,7 @@
           "invalid_json",
           "schema_violation",
           "cli_contract_changed",
+          "extra_args_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -246,6 +249,7 @@
           "invalid_json",
           "schema_violation",
           "cli_contract_changed",
+          "extra_args_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -286,6 +290,7 @@
           "invalid_json",
           "schema_violation",
           "cli_contract_changed",
+          "extra_args_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -340,6 +345,7 @@
           "invalid_json",
           "schema_violation",
           "cli_contract_changed",
+          "extra_args_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -517,6 +523,7 @@
           "git_unavailable",
           "input_too_large",
           "unexpanded_env_placeholder",
+          "extra_args_rejected",
           "internal_error",
           "invalid_arguments"
         ],
@@ -540,6 +547,7 @@
           "invalid_workspace_root",
           "workspace_outside_roots",
           "unexpanded_env_placeholder",
+          "extra_args_rejected",
           "input_too_large",
           "not_a_git_repo",
           "worktree_error",
@@ -722,6 +730,7 @@
                   "codex_not_found",
                   "codex_rate_limited",
                   "context_too_large",
+                  "extra_args_rejected",
                   "git_unavailable",
                   "idempotency_conflict",
                   "idempotency_in_progress",
@@ -946,7 +955,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-30",
+                "default": "codex-in-claude/0.1/schema-31",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1396,6 +1405,7 @@
                 "enum": [
                   "authenticate",
                   "correct_arguments",
+                  "correct_config",
                   "init_git_repo",
                   "inspect_and_retry",
                   "install_codex",
@@ -1911,7 +1921,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-30",
+            "default": "codex-in-claude/0.1/schema-31",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2350,6 +2360,7 @@
                           "codex_not_found",
                           "codex_rate_limited",
                           "context_too_large",
+                          "extra_args_rejected",
                           "git_unavailable",
                           "idempotency_conflict",
                           "idempotency_in_progress",
@@ -5505,6 +5516,15 @@
                     "type": "null"
                   }
                 ]
+              },
+              "extra_args_configured": {
+                "type": "boolean"
+              },
+              "extra_args_count": {
+                "type": "integer"
+              },
+              "extra_args_valid": {
+                "type": "boolean"
               },
               "fingerprint": {
                 "type": "string"
