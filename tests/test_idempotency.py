@@ -151,6 +151,19 @@ def test_sweep_removes_past_horizon_entries(tmp_path):
     assert not out.path.exists()
 
 
+def test_sweep_removes_undecodable_record_past_horizon(tmp_path):
+    idx = _idx(tmp_path, horizon=0.0)
+    d = tmp_path / "ws" / ".idem"
+    d.mkdir(parents=True)
+    path = d / f"{idem.key_digest('codex_consult', 'k1')}.json"
+    path.write_bytes(b"\xff\xfe\xfa")
+
+    time.sleep(0.01)
+    idx.sweep(_resolver())
+
+    assert not path.exists()
+
+
 def _write_raw(tmp_path, text):
     d = tmp_path / "ws" / ".idem"
     d.mkdir(parents=True, exist_ok=True)
