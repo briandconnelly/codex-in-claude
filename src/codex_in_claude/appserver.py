@@ -160,10 +160,16 @@ def _session_migration_params(transcript_realpath: str, cwd: str) -> dict[str, A
 
 
 def _sha256_file(path: str) -> str | None:
+    # Stream in chunks rather than slurping the whole transcript into memory — a
+    # session .jsonl can be large, and this runs on the ledger-lookup path.
+    digest = hashlib.sha256()
     try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        with Path(path).open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
     except OSError:  # pragma: no cover - the caller already stat'd the file
         return None
+    return digest.hexdigest()
 
 
 def _lookup_ledger(codex_home: str, transcript_realpath: str) -> str | None:
@@ -495,9 +501,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                         codex_home=codex_home,
                         stderr_tail=stderr_tail() or None,
                     )
+                # Any other JSON-RPC error on the import request is a failed import
+                # (bad params, a transient app-server error, a rejected transcript) —
+                # not protocol drift. Surface it as an item failure carrying the
+                # message; reserve PROTOCOL_ERROR/cli_contract_changed for a broken
+                # stream or handshake (EOF, non-JSON, initialize failure).
                 detail = error.get("message")
                 return TransferOutcome(
-                    status=TransferStatus.PROTOCOL_ERROR,
+                    status=TransferStatus.ITEM_FAILURE,
                     codex_home=codex_home,
                     message=str(detail) if detail else "codex app-server rejected the import.",
                     stderr_tail=stderr_tail() or None,

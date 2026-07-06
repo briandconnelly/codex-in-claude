@@ -55,8 +55,14 @@ def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: st
 # --- validate_transcript_path ---------------------------------------------------
 
 
-def test_validate_rejects_non_string():
+def test_validate_rejects_empty_string():
     assert validate_transcript_path("").reason is not None
+
+
+def test_validate_rejects_non_string():
+    # A genuinely non-string input exercises the isinstance guard (not the empty-string
+    # branch). tests are not type-checked, so passing None here is intentional.
+    assert validate_transcript_path(None).reason is not None  # ty: ignore
 
 
 def test_validate_rejects_non_jsonl(tmp_path, monkeypatch):
@@ -151,7 +157,9 @@ def test_unsupported_method(tmp_path):
     assert outcome.status is TransferStatus.UNSUPPORTED
 
 
-def test_generic_import_error_is_protocol_error(tmp_path):
+def test_generic_import_error_is_item_failure(tmp_path):
+    # A non-(-32601) JSON-RPC error on the import request is a failed import, not
+    # protocol drift — it maps to ITEM_FAILURE (server -> transfer_failed).
     home = tmp_path / "codex_home"
     home.mkdir()
     t = _transcript(tmp_path)
@@ -161,7 +169,7 @@ def test_generic_import_error_is_protocol_error(tmp_path):
         command=_command("import_error", home),
         timeout_seconds=15,
     )
-    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert outcome.status is TransferStatus.ITEM_FAILURE
     assert "boom" in outcome.message
 
 
