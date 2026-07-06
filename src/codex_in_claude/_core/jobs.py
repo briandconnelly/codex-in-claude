@@ -803,6 +803,9 @@ class JobStore:
         - ``{"kind": "in_progress"}`` — a concurrent reservation for this key is still
           being published, OR (with ``lock_timeout``) coordination was contended and the
           bounded lock acquisition timed out; retry either way.
+        - ``{"kind": "io_error"}`` — reading the existing entry raised a transient
+          ``OSError`` (the record may be intact); retry the same key rather than starting
+          a new paid run under a fresh one.
 
         The whole reserve→spawn→publish critical section runs under both the process
         ``_LOCK`` and the index's cross-process flock; cross-process exclusivity on the
@@ -844,7 +847,7 @@ class JobStore:
                     if outcome.kind != idempotency.WON:
                         if outcome.kind == idempotency.REPLAY:
                             return {"kind": "replay", "job_id": outcome.job_id}
-                        return {"kind": outcome.kind}  # conflict | unavailable | in_progress
+                        return {"kind": outcome.kind}  # conflict|unavailable|in_progress|io_error
                     try:
                         job_id, started_at = self.start(
                             cmd_factory,
