@@ -399,3 +399,22 @@ def test_classify_reads_extra_args_from_env_by_default(monkeypatch):
         CommandRun("", "error: unexpected argument '--profile' found", 2, 1, False)
     )
     assert err.code == "extra_args_rejected"
+
+
+def test_classify_short_descriptor_does_not_misattribute_plugin_drift():
+    # Regression (#231 review): a short profile/feature name must not substring-match
+    # inside an unrelated plugin-flag rejection ("a" appears inside "--sandbox").
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--sandbox' found", 2, 1, False),
+        extra_args=_extra(["-p", "a"], tokens=("-p", "a")),
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_classify_quoted_descriptor_still_attributes_to_extra_args():
+    # A genuine extra-arg rejection where codex quotes the profile name still matches.
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--profile' found", 2, 1, False),
+        extra_args=_extra(["--profile", "work"], tokens=("--profile", "work")),
+    )
+    assert err.code == "extra_args_rejected"

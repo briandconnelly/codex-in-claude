@@ -59,10 +59,13 @@ Drift is attributed to the passthrough only when `codex`'s rejection names one o
 descriptors this server injected; a rejection of a plugin-owned guarantee flag still fails loudly as
 `cli_contract_changed`. Two boundaries the allowlist cannot fully police, and why:
 
-- **`-c` values are free-form** and can override any dotted config path. Keys under `sandbox` or
-  `approval_policy` are refused because they would weaken a guarantee this server advertises (the
-  sandbox capability boundary, the delegate no-network-egress promise, the approval posture). A `-c`
-  value may hold a secret, so it is never echoed in `codex_status` or an error envelope.
+- **`-c` values are free-form** and can override any dotted config path. Keys under `sandbox`,
+  `approval_policy`, or `shell_environment_policy` are refused because they would weaken a guarantee
+  this server advertises (the sandbox capability boundary, the delegate no-network-egress promise, the
+  approval posture, or the host-env isolation of commands `codex` runs). The key is normalized the way
+  codex's own `-c` parser trims it before this check, so a leading/segment space cannot slip a denied
+  key past. A `-c` value may hold a secret, so it is never echoed in `codex_status` or an error
+  envelope.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
   **operator-trust boundary** — only enable this knob with profiles you control.

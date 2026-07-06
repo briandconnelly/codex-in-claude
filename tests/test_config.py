@@ -330,3 +330,28 @@ def test_extra_args_error_never_echoes_secret_value(monkeypatch):
     ea = config.extra_args()
     assert ea.valid is False
     assert "sk-supersecretvalue" not in (ea.error or "")
+
+
+def test_extra_args_denies_sandbox_key_with_leading_whitespace(monkeypatch):
+    # Regression (#231 review): codex trims the -c key, so a leading space must not
+    # let a security-sensitive key slip past the denylist.
+    monkeypatch.setenv(
+        "CODEX_IN_CLAUDE_EXTRA_ARGS",
+        '-c " sandbox_workspace_write.network_access=true"',
+    )
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "refused" in ea.error
+
+
+def test_extra_args_denies_sandbox_key_with_space_around_dot(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", '-c "sandbox_mode =danger-full-access"')
+    ea = config.extra_args()
+    assert ea.valid is False
+
+
+def test_extra_args_denies_shell_environment_policy_key(monkeypatch):
+    # host-env exfil vector: exposing the server env to commands codex runs.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c shell_environment_policy.inherit=all")
+    ea = config.extra_args()
+    assert ea.valid is False

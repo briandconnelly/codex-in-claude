@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -259,8 +260,22 @@ def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
     )
 
 
+def _descriptor_in_blob(descriptor: str, blob: str) -> bool:
+    """Whether `descriptor` appears in `blob` at flag/token boundaries.
+
+    A bare substring test is too loose: a short descriptor (e.g. a one-char feature
+    name "a") would match INSIDE an unrelated word ("--s**a**ndbox"), so a genuine
+    plugin-flag drift would be misattributed to the operator's passthrough. clap quotes
+    the offending token (`'--profile'`, `'model_provider'`), so we require the
+    descriptor to be delimited by non-word / non-hyphen characters (quotes, spaces,
+    line ends) on both sides — matching how codex names it, while ignoring incidental
+    substring hits."""
+    pattern = rf"(?<![\w-]){re.escape(descriptor)}(?![\w-])"
+    return re.search(pattern, blob, re.IGNORECASE) is not None
+
+
 def _extra_args_drift_match(extra: config.ExtraArgs | None, *texts: str | None) -> list[str] | None:
-    """Descriptors of `extra` whose text appears in a codex rejection blob, or None.
+    """Descriptors of `extra` codex named in a rejection blob (token-bounded), or None.
 
     Returns None when no extra args are configured/valid — so a genuine plugin-flag
     drift (e.g. codex dropping --sandbox) stays cli_contract_changed and the fail-loud
@@ -269,8 +284,8 @@ def _extra_args_drift_match(extra: config.ExtraArgs | None, *texts: str | None) 
     ea = config.extra_args() if extra is None else extra
     if not ea.configured or not ea.valid or not ea.descriptors:
         return None
-    blob = "\n".join(t for t in texts if t).lower()
-    matched = [d for d in ea.descriptors if d.lower() in blob]
+    blob = "\n".join(t for t in texts if t)
+    matched = [d for d in ea.descriptors if _descriptor_in_blob(d, blob)]
     return matched or None
 
 

@@ -140,12 +140,13 @@ _EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE
 # Config-key roots refused even though `-c/--config` is allowlisted: a `-c` value can
 # override ANY dotted config path, and these would weaken a guarantee this server
 # advertises — the sandbox capability boundary and the no-network-egress promise
-# (sandbox_workspace_write.network_access lives under `sandbox`), or the approval
-# posture. Refused at parse time so they never reach codex. NOTE: `--profile` layers an
-# opaque on-disk TOML this parser cannot inspect, so a profile remains a documented
-# operator-trust boundary (see COMPATIBILITY.md); this denylist covers only the
-# inspectable `-c` surface.
-_DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy"})
+# (sandbox_workspace_write.network_access lives under `sandbox`), the approval posture,
+# or the host-env isolation of commands codex runs (shell_environment_policy.inherit
+# could expose the server's environment, secrets included). Refused at parse time so
+# they never reach codex. NOTE: `--profile` layers an opaque on-disk TOML this parser
+# cannot inspect, so a profile remains a documented operator-trust boundary (see
+# COMPATIBILITY.md); this denylist covers only the inspectable `-c` surface.
+_DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_environment_policy"})
 
 
 @dataclass(frozen=True)
@@ -218,9 +219,11 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
             if "=" not in value:
                 return ExtraArgs(configured=True, error=f"{flag} expects KEY=VALUE")
             key = value.split("=", 1)[0]
-            if not key:
+            if not key.strip():
                 return ExtraArgs(configured=True, error=f"{flag} has an empty config key")
-            root = key.split(".", 1)[0].lower()
+            # Normalize the root segment the way codex's own `-c` parser does (it trims
+            # keys), so a leading/segment space can't slip a denied key past the check.
+            root = key.split(".", 1)[0].strip().lower()
             if any(root == d or root.startswith(f"{d}_") for d in _DENIED_CONFIG_KEY_ROOTS):
                 return ExtraArgs(
                     configured=True,
