@@ -418,3 +418,18 @@ def test_classify_quoted_descriptor_still_attributes_to_extra_args():
         extra_args=_extra(["--profile", "work"], tokens=("--profile", "work")),
     )
     assert err.code == "extra_args_rejected"
+
+
+def test_classify_attributes_config_flag_token_drift_to_extra_args():
+    # Copilot #237: a rejection of the `--config` FLAG token itself (not the key) is
+    # still the operator's passthrough, so descriptors include the flag.
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--config' found", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("--config", "model_provider=x"),
+            descriptors=("--config", "model_provider"),
+            option_count=1,
+            configured=True,
+        ),
+    )
+    assert err.code == "extra_args_rejected"

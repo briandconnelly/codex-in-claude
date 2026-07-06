@@ -228,12 +228,15 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key}' is refused: it could weaken the sandbox / "
-                        "network / approval guarantees this server advertises"
+                        f"config key '{key.strip()}' is refused: it could weaken the sandbox / "
+                        "network / approval / host-env-isolation guarantees this server advertises"
                     ),
                 )
             tokens += [flag, value]
-            descriptors.append(key)
+            # Record the flag too (not just the key), so a drift where codex rejects the
+            # `-c`/`--config` flag token itself is still attributed to the passthrough.
+            # The key is a config-path name (not a secret); the `-c` VALUE is never added.
+            descriptors += [flag, key]
         else:  # profile / feature — the value is a non-secret NAME
             if not value:
                 return ExtraArgs(configured=True, error=f"{flag} requires a non-empty value")

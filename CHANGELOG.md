@@ -13,8 +13,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `model_provider`/profile can be selected even under `ignore-config` isolation (which drops
   `config.toml`, leaving `-c` the only lever). It is an allowlist, not arbitrary argv: anything else is
   refused **before any spend** with a new `extra_args_rejected` error code, and `-c` keys under
-  `sandbox`/`approval_policy` are refused because they would weaken the advertised sandbox/no-network/
-  approval guarantees. Tokens are appended after the plugin's help-gated flags (never displacing the
+  `sandbox`/`approval_policy`/`shell_environment_policy` are refused because they would weaken the
+  advertised sandbox / no-network / approval / host-env-isolation guarantees. Tokens are appended after the plugin's help-gated flags (never displacing the
   envelope-bearing `--json`/`--sandbox`/`--output-schema`/… flags) and are read from the
   worker-inherited env rather than persisted to any job spec, so a secret `-c` value never lands on
   disk and is never echoed in `codex_status` or an error envelope. When `codex` rejects a passthrough

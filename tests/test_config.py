@@ -225,8 +225,9 @@ def test_extra_args_config_and_profile(monkeypatch):
     assert ea.valid is True
     assert ea.tokens == ("-c", "model_provider=litellm", "--profile", "work")
     assert ea.option_count == 2
-    # descriptors are the safe config KEY + profile flag/name; never the -c value.
+    # descriptors are the safe config flag+KEY + profile flag/name; never the -c value.
     assert "model_provider" in ea.descriptors
+    assert "-c" in ea.descriptors  # the flag itself, so a flag-token drift is attributable
     assert "--profile" in ea.descriptors
     assert "work" in ea.descriptors
     assert "litellm" not in ea.descriptors
