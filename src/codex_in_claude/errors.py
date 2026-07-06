@@ -164,6 +164,13 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "Update codex-in-claude (the installed codex CLI changed its contract);"
         " or pin codex to a supported version, and run codex_status to check the version.",
     ),
+    "extra_args_rejected": (
+        "correct_config",
+        None,
+        False,
+        "codex rejected an entry in CODEX_IN_CLAUDE_EXTRA_ARGS (operator config, not a "
+        "plugin drift). Fix or remove the offending option/config key/profile and rerun.",
+    ),
     "codex_rate_limited": (
         "retry_after_delay",
         None,

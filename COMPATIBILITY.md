@@ -42,6 +42,31 @@ implies internet access.
 - **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
   `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
 
+## Operator extra-args passthrough (`CODEX_IN_CLAUDE_EXTRA_ARGS`, #231)
+
+An opt-in operator knob adds extra **global** `codex` options to every paid `exec` invocation
+(consult/review/delegate). It is a small allowlist — `-c`/`--config KEY=VALUE`, `-p`/`--profile NAME`,
+`--enable`/`--disable FEATURE` — appended after the plugin's own help-gated tokens and before the
+stdin sentinel, so it can select a `model_provider`/`--profile` (its motivating use is doing so under
+`ignore-config` isolation, which sends `--ignore-user-config` and drops `config.toml`, leaving `-c`
+the only lever) **without** displacing the envelope-bearing flags. Anything outside the allowlist is
+refused at parse time with `extra_args_rejected`, before any spend.
+
+This passthrough is **user-owned surface, not part of the CLI contract**: the option names/config
+keys/profile names an operator supplies are their responsibility, so when `codex` rejects one the
+expected signature is `extra_args_rejected` (operator config to fix) — **not** `cli_contract_changed`.
+Drift is attributed to the passthrough only when `codex`'s rejection names one of the (sanitized)
+descriptors this server injected; a rejection of a plugin-owned guarantee flag still fails loudly as
+`cli_contract_changed`. Two boundaries the allowlist cannot fully police, and why:
+
+- **`-c` values are free-form** and can override any dotted config path. Keys under `sandbox` or
+  `approval_policy` are refused because they would weaken a guarantee this server advertises (the
+  sandbox capability boundary, the delegate no-network-egress promise, the approval posture). A `-c`
+  value may hold a secret, so it is never echoed in `codex_status` or an error envelope.
+- **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
+  re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
+  **operator-trust boundary** — only enable this knob with profiles you control.
+
 ## Version policy
 
 Advisory only. A version outside the tested set warns (`codex_status.version_warning`,
@@ -93,8 +118,10 @@ the signature sets in `cli_contract.py`, checked in order so a more specific cau
 a generic one:
 
 1. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
-2. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`. Checked before
-   rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
+2. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`, **unless** the
+   rejection names an operator `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptor → `extra_args_rejected` instead
+   (user-owned passthrough, not a plugin-contract drift; see the passthrough section above). Checked
+   before rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
 3. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
    `retry-after`, plus `429` matched with word boundaries so an incidental digit run can't fire it)
    → `codex_rate_limited`, `temporary=True` with `retry_after_ms` set from a parsed

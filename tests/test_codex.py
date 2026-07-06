@@ -307,3 +307,95 @@ def test_run_codex_exec_forwards_on_event(monkeypatch):
         )
     )
     assert captured["on_stdout_line"] is sentinel
+
+
+# --- CODEX_IN_CLAUDE_EXTRA_ARGS injection + reclassification (#231) ----------------
+
+from codex_in_claude import config  # noqa: E402
+
+
+def test_build_exec_command_appends_extra_args_before_sentinel(tmp_path):
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="gpt-5.4",
+        extra_args=("-c", "model_provider=litellm", "--profile", "work"),
+        flag_support=_ALL_FLAGS,
+    )
+    # Extra args land after --model, and immediately before the stdin sentinel.
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+    assert cmd[-5:-1] == ["-c", "model_provider=litellm", "--profile", "work"]
+    assert cmd.index("-c") > cmd.index("--model")
+
+
+def test_build_exec_command_extra_args_survive_model_gating(tmp_path):
+    # Even when --model is help-gated away, extra args are never gated/dropped.
+    cmd, dropped = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="gpt-5.4",
+        extra_args=("--profile", "work"),
+        flag_support=_NO_MODEL,
+    )
+    assert "--model" in dropped
+    assert cmd[-3:] == ["--profile", "work", cli_contract.STDIN_PROMPT]
+
+
+def _extra(descriptors, tokens=("-c", "x=y")):
+    return config.ExtraArgs(
+        tokens=tuple(tokens), descriptors=tuple(descriptors), option_count=1, configured=True
+    )
+
+
+def test_classify_drift_attributes_to_extra_args_when_named():
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--profile' found", 2, 1, False),
+        extra_args=_extra(["--profile", "work"]),
+    )
+    assert err.code == "extra_args_rejected"
+    assert "CODEX_IN_CLAUDE_EXTRA_ARGS" in (err.repair.alternative or "")
+
+
+def test_classify_drift_stays_contract_changed_for_plugin_flag():
+    # codex rejected --sandbox (a plugin guarantee flag), NOT any extra-arg descriptor.
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--sandbox' found", 2, 1, False),
+        extra_args=_extra(["--profile", "work"]),
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_classify_drift_contract_changed_when_no_extra_args():
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--zzz' found", 2, 1, False),
+        extra_args=config.ExtraArgs(),  # unconfigured
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_extra_args_rejected_error_hides_secret_value():
+    err = codex.classify_failure(
+        CommandRun("", "error: invalid value for '--profile'", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("-c", "api_key=sk-secret", "--profile", "work"),
+            descriptors=("api_key", "--profile", "work"),
+            option_count=2,
+            configured=True,
+        ),
+    )
+    assert err.code == "extra_args_rejected"
+    assert "sk-secret" not in err.message
+    assert "sk-secret" not in (err.repair.alternative or "")
+
+
+def test_classify_reads_extra_args_from_env_by_default(monkeypatch):
+    # No explicit extra_args -> classify_failure reads config.extra_args() from env.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--profile work")
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '--profile' found", 2, 1, False)
+    )
+    assert err.code == "extra_args_rejected"
