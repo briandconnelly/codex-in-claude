@@ -219,6 +219,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   "temporary" error. No new error code is advertised (the existing `internal_error`
   code is reused), so no `fingerprint` bump.
 
+- **The Copilot-review workflow no longer green-checks when GitHub silently drops the
+  review request** (#236). `request-copilot-review-bot-prs.yml` posted to
+  `requested_reviewers` with `github.token` and treated any 200 as success, but GitHub
+  silently ignores Copilot reviewer requests made with a non-user token — the POST
+  returns 200 with an empty `requested_reviewers` and Copilot never reviews. The step
+  now captures the response and fails loudly (`::error::` + non-zero exit) when
+  `copilot-pull-request-reviewer[bot]` is absent from `requested_reviewers`, so a
+  silent no-op can never pass as a green check. CI-only; no `fingerprint` bump.
+
 ### Security
 
 - **Full gitattributes filter isolation for propose-tier worktree git ops** (#163).

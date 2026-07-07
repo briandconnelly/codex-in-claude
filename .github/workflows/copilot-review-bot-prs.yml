@@ -36,8 +36,20 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          gh api \
+          set -euo pipefail
+          resp=$(gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
             "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f "reviewers[]=copilot-pull-request-reviewer[bot]"
+            -f "reviewers[]=copilot-pull-request-reviewer[bot]")
+          # GitHub silently drops bot reviewer requests made with a non-user
+          # token: the POST returns 200 but requested_reviewers stays empty, so
+          # the job would green-check while Copilot never reviews (#236). Verify
+          # the reviewer actually registered and fail loudly otherwise.
+          if ! printf '%s' "$resp" | jq -e \
+            '[(.requested_reviewers // [])[] | .login] | index("copilot-pull-request-reviewer[bot]") != null' \
+            > /dev/null; then
+            echo "::error::Copilot review request was silently dropped (requested_reviewers is empty). A non-user token (github.token or an App token) cannot request the Copilot reviewer; use a user-scoped PAT such as COPILOT_REVIEW_PAT. See #236."
+            exit 1
+          fi
+          echo "Copilot review requested for PR #${PR_NUMBER}."
