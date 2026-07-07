@@ -45,7 +45,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-31"
+FINGERPRINT = "codex-in-claude/0.1/schema-32"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -944,8 +944,41 @@ _RESULT_META_POINTER_DESC = (
 )
 _OPAQUE_META = {"type": "object", "description": _RESULT_META_POINTER_DESC}
 _META_REF = {"$ref": "#/$defs/Meta"}
-# Descriptions that survive _strip_schema_noise: the two intentional resource pointers.
-_KEPT_DESCRIPTIONS = frozenset({_ERROR_POINTER_DESC, _RESULT_META_POINTER_DESC})
+
+# codex_capabilities/codex_status embed nested payload fields (tool_details, rate_limit,
+# raw_defaults, resolved_defaults) whose $def closures dominate those two tools'
+# advertised outputSchemas (#242). Opaquing them to compact stubs — the same treatment
+# Meta gets (F1/#173) — applies to named top-level fields via published_schema's
+# opaque_fields parameter. The full shapes are published once at codex://capabilities-result
+# and codex://status-result.
+_TOOL_DETAILS_POINTER_DESC = (
+    "Per-tool capability records; full schema at resource codex://capabilities-result"
+)
+_RATE_LIMIT_POINTER_DESC = (
+    "Codex rate-limit snapshot; full schema at resource codex://status-result"
+)
+_RAW_DEFAULTS_POINTER_DESC = (
+    "Raw configured defaults; full schema at resource codex://status-result"
+)
+_RESOLVED_DEFAULTS_POINTER_DESC = (
+    "Resolved effective defaults; full schema at resource codex://status-result"
+)
+_OPAQUE_TOOL_DETAILS = {"type": "array", "description": _TOOL_DETAILS_POINTER_DESC}
+_OPAQUE_RATE_LIMIT = {"type": "object", "description": _RATE_LIMIT_POINTER_DESC}
+_OPAQUE_RAW_DEFAULTS = {"type": "object", "description": _RAW_DEFAULTS_POINTER_DESC}
+_OPAQUE_RESOLVED_DEFAULTS = {"type": "object", "description": _RESOLVED_DEFAULTS_POINTER_DESC}
+
+# Descriptions that survive _strip_schema_noise: the intentional resource pointers.
+_KEPT_DESCRIPTIONS = frozenset(
+    {
+        _ERROR_POINTER_DESC,
+        _RESULT_META_POINTER_DESC,
+        _TOOL_DETAILS_POINTER_DESC,
+        _RATE_LIMIT_POINTER_DESC,
+        _RAW_DEFAULTS_POINTER_DESC,
+        _RESOLVED_DEFAULTS_POINTER_DESC,
+    }
+)
 
 
 # Keys whose VALUES are sub-schema maps (property name → sub-schema).
@@ -1047,10 +1080,19 @@ def _prune_defs(doc: dict) -> dict:  # type: ignore[type-arg]
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 
-def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[type-arg]
+def published_schema(
+    *success_models: type[BaseModel],
+    opaque_fields: dict[str, dict] | None = None,  # type: ignore[type-arg]
+) -> dict:  # type: ignore[type-arg]
     """Build a tool's advertised outputSchema: the success branch(es) plus ONE fully
     opaque error branch. The opaque branch references no $def, so $defs is exactly the
-    success closure (no ErrorInfo, no dangling refs). Generated noise is stripped."""
+    success closure (no ErrorInfo, no dangling refs). Generated noise is stripped.
+
+    ``opaque_fields`` maps a top-level success-branch property name to a compact opaque
+    stub (e.g. ``{"type": "array", "description": "…codex://capabilities-result"}``).
+    Each named property is replaced before $defs pruning, so the closure it referenced is
+    orphaned and dropped — the same shrink the Meta ref gets, applied to named fields (#242).
+    """
     if len(success_models) == 1:
         adapter: TypeAdapter = TypeAdapter(success_models[0])  # type: ignore[type-arg]
     else:
@@ -1076,8 +1118,16 @@ def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[
         "anyOf": [*branches, _OPAQUE_ERROR_BRANCH],
         "$defs": raw.get("$defs", {}),
     }
+    if opaque_fields:
+        for branch in branches:  # success branches only; the error branch is not in `branches`
+            props = branch.get("properties")
+            if not props:
+                continue
+            for field, stub in opaque_fields.items():
+                if field in props:
+                    props[field] = dict(stub)
     # Collapse the inlined Meta object to an opaque pointer, then drop the $defs it (and
-    # its now-unreferenced closure) leaves behind (audit F1, #173).
+    # its now-unreferenced closure) leaves behind (audit F1, #173; #242 for named fields).
     doc = _opaque_meta_refs(doc)
     assert isinstance(doc, dict)
     doc = _prune_defs(doc)
@@ -1127,8 +1177,17 @@ JOB_RESULT_SCHEMA = {
 # argument is re-emitted as an ErrorResult at the call-tool boundary (#136), so each
 # advertises a success|error union — otherwise that envelope would violate the
 # declared output schema for strict MCP clients.
-STATUS_SCHEMA = published_schema(StatusResult)
-CAPABILITIES_SCHEMA = published_schema(CapabilitiesResult)
+STATUS_SCHEMA = published_schema(
+    StatusResult,
+    opaque_fields={
+        "rate_limit": _OPAQUE_RATE_LIMIT,
+        "raw_defaults": _OPAQUE_RAW_DEFAULTS,
+        "resolved_defaults": _OPAQUE_RESOLVED_DEFAULTS,
+    },
+)
+CAPABILITIES_SCHEMA = published_schema(
+    CapabilitiesResult, opaque_fields={"tool_details": _OPAQUE_TOOL_DETAILS}
+)
 TRANSFER_SCHEMA = published_schema(TransferResult)
 MODEL_CATALOG_SCHEMA = published_schema(ModelCatalogResult)
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate
@@ -1177,6 +1236,17 @@ ERROR_ENVELOPE_SCHEMA = _harden_error_envelope_schema(
 # object per tool; this is the canonical, discoverable full shape (audit F1, #173).
 RESULT_META_SCHEMA = TypeAdapter(Meta).json_schema(ref_template="#/$defs/{model}")
 RESULT_META_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
+
+# The full capabilities/status result schemas, published once at codex://capabilities-result
+# and codex://status-result. The wire outputSchemas opaque tool_details / rate_limit /
+# raw_defaults / resolved_defaults and point here for the full shape (#242) — the same
+# opaque-pointer treatment Meta gets (F1/#173).
+CAPABILITIES_RESULT_SCHEMA = TypeAdapter(CapabilitiesResult).json_schema(
+    ref_template="#/$defs/{model}"
+)
+CAPABILITIES_RESULT_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
+STATUS_RESULT_SCHEMA = TypeAdapter(StatusResult).json_schema(ref_template="#/$defs/{model}")
+STATUS_RESULT_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via
 # `codex exec --output-schema FILE`). It mirrors the agent-visible result fields we

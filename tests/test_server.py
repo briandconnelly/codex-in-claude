@@ -1676,8 +1676,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_31():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-31"
+def test_fingerprint_is_schema_32():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-32"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4574,7 +4574,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-31")
+    assert result["fingerprint"].endswith("schema-32")
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
