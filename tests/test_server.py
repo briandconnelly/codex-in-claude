@@ -35,10 +35,9 @@ def _fake_result(last_message, *, exit_code=0, stderr="", events=""):
 # ----------------------------------------------------- platform startup guard
 def test_posix_platform_guard_refuses_native_windows(monkeypatch, capsys):
     """On os.name == 'nt' with no escape hatch, the server refuses to start (#232)."""
-    monkeypatch.setattr(server.os, "name", "nt")
     monkeypatch.delenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", raising=False)
     with pytest.raises(SystemExit) as exc:
-        server._enforce_posix_platform()
+        server._enforce_posix_platform(os_name="nt")
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "requires a POSIX platform" in err
@@ -47,19 +46,37 @@ def test_posix_platform_guard_refuses_native_windows(monkeypatch, capsys):
 
 def test_posix_platform_guard_escape_hatch_warns(monkeypatch, capsys):
     """The escape hatch downgrades the hard exit to a stderr warning (#232)."""
-    monkeypatch.setattr(server.os, "name", "nt")
     monkeypatch.setenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", "1")
-    server._enforce_posix_platform()  # must not raise
+    server._enforce_posix_platform(os_name="nt")  # must not raise
     err = capsys.readouterr().err
     assert "WARNING" in err
     assert "CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM" in err
 
 
+def test_posix_platform_guard_refuses_other_non_posix(monkeypatch, capsys):
+    """The platform contract is POSIX-only, not just native-Windows-only (#232)."""
+    monkeypatch.delenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        server._enforce_posix_platform(os_name="java")
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "requires a POSIX platform" in err
+    assert "os.name=java" in err
+
+
+def test_posix_platform_guard_escape_hatch_reports_actual_os_name(monkeypatch, capsys):
+    """Unsupported-platform warnings name the exact runtime os.name (#232)."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", "1")
+    server._enforce_posix_platform(os_name="java")  # must not raise
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "os.name=java" in err
+
+
 def test_posix_platform_guard_noop_on_posix(monkeypatch, capsys):
     """On a POSIX platform the guard is a no-op (#232)."""
-    monkeypatch.setattr(server.os, "name", "posix")
     monkeypatch.delenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", raising=False)
-    server._enforce_posix_platform()  # must not raise
+    server._enforce_posix_platform(os_name="posix")  # must not raise
     assert capsys.readouterr().err == ""
 
 

@@ -3687,12 +3687,12 @@ def _install_signal_logging(log: logging.Logger) -> None:
             signal.signal(signum, _make_signal_handler(log, previous))
 
 
-def _enforce_posix_platform() -> None:
-    """Refuse to serve on a non-POSIX platform (native Windows).
+def _enforce_posix_platform(os_name: str | None = None) -> None:
+    """Refuse to serve on a non-POSIX platform.
 
     The async-job safety layer — ``fcntl`` advisory locks (pid-reuse / zombie-worker
     guards), process-group teardown (``os.killpg``/``start_new_session``), and
-    ``SIGTERM``-driven graceful cancellation — is POSIX-only; on Windows it silently
+    ``SIGTERM``-driven graceful cancellation — is POSIX-only; elsewhere it silently
     degrades to owned-children-only locking and direct-PID kills that orphan codex's
     child processes. Rather than ship a half-safe server, fail loudly before the
     transport loop starts. WSL2 reports ``os.name == "posix"`` and is unaffected.
@@ -3700,19 +3700,21 @@ def _enforce_posix_platform() -> None:
     ``CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1`` downgrades the hard exit to a
     stderr warning for operators who knowingly accept consult-only, unsupported use
     (#232)."""
-    if os.name != "nt":
+    platform_name = os.name if os_name is None else os_name
+    if platform_name == "posix":
         return
     if os.environ.get("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM") == "1":
         sys.stderr.write(
             "WARNING: CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1 set on a non-POSIX "
-            "platform (os.name=nt); the async-job safety layer (fcntl locks, process "
+            f"platform (os.name={platform_name}); the async-job safety layer (fcntl locks, process "
             "groups, signal handlers) cannot hold. Consult-only, unsupported; do not "
             "use delegate/review against untrusted work.\n"
         )
         return
     sys.stderr.write(
-        "codex-in-claude requires a POSIX platform (macOS or Linux); on Windows, run "
-        "it under WSL2. Set CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1 to override "
+        f"codex-in-claude requires a POSIX platform (macOS or Linux); got os.name={platform_name}. "
+        "On Windows, run it under WSL2. Set "
+        "CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1 to override "
         "(consult-only, unsupported).\n"
     )
     raise SystemExit(1)
