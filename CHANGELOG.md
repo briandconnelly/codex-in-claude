@@ -98,6 +98,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **An omitted `base`/`commit` on a `branch`/`commit` review no longer leaks the Python literal
+  `None` into the error message** (#244). `codex_review_changes`/`codex_dry_run` with `scope="branch"`
+  and no `base` (or `scope="commit"` and no `commit`) previously produced `invalid base ref: None`;
+  the message now distinguishes an omitted input ("base ref is required for a branch diff but was
+  omitted") from a present-but-invalid one (which still keeps its `repr` so stray whitespace/quoting
+  shows). Runtime error-message prose only — not manifest-covered, so no `fingerprint` bump. (The
+  same issue's proposed `ErrorDetail.value` schema change was evaluated and declined: the enum fields
+  it targeted — `scope`/`detail`/`isolation` — surface over MCP as `invalid_arguments`, not
+  `ErrorDetail`; `timeout_seconds` is clamped rather than rejected; and echoing a value the caller
+  just sent is redundant with `field`/`reason`/`allowed_values`. See #244 for the full rationale.)
+
 - **Exception-derived `internal_error` messages no longer leave a dangling separator** (#203).
   Empty or fully redacted exception text now renders as just the exception class name in the
   generic tool boundary, background-job spawn failure, and worker crash sinks instead of ending

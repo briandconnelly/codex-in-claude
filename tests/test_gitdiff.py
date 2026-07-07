@@ -65,6 +65,20 @@ def test_branch_nonexistent_base(repo):
         )
 
 
+@pytest.mark.parametrize("omitted", [None, ""])
+def test_branch_omitted_base_message_says_omitted(repo, omitted):
+    # An omitted base (None or "") reads "omitted" and must not leak its Python repr (F6).
+    with pytest.raises(gitdiff.InvalidBaseError, match="omitted") as exc:
+        gitdiff.gather_diff(str(repo), "branch", base=omitted, timeout=30, max_bytes=200_000)
+    assert repr(omitted) not in str(exc.value)
+
+
+def test_branch_invalid_base_message_keeps_value(repo):
+    # A present-but-invalid base still surfaces its repr so stray whitespace/quoting shows.
+    with pytest.raises(gitdiff.InvalidBaseError, match="-bad"):
+        gitdiff.gather_diff(str(repo), "branch", base="-bad", timeout=30, max_bytes=200_000)
+
+
 def test_commit_scope(repo):
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
@@ -77,6 +91,14 @@ def test_commit_scope(repo):
 def test_commit_invalid(repo):
     with pytest.raises(gitdiff.InvalidCommitError):
         gitdiff.gather_diff(str(repo), "commit", commit="zzzz", timeout=30, max_bytes=200_000)
+
+
+@pytest.mark.parametrize("omitted", [None, ""])
+def test_commit_omitted_message_says_omitted(repo, omitted):
+    # An omitted commit (None or "") reads "omitted" and must not leak its Python repr (F6).
+    with pytest.raises(gitdiff.InvalidCommitError, match="omitted") as exc:
+        gitdiff.gather_diff(str(repo), "commit", commit=omitted, timeout=30, max_bytes=200_000)
+    assert repr(omitted) not in str(exc.value)
 
 
 def test_invalid_scope(repo):
