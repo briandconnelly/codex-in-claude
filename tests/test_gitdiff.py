@@ -65,11 +65,12 @@ def test_branch_nonexistent_base(repo):
         )
 
 
-def test_branch_omitted_base_message_says_omitted(repo):
-    # An omitted base must not leak the Python literal `None`/`''` into the human message (F6).
+@pytest.mark.parametrize("omitted", [None, ""])
+def test_branch_omitted_base_message_says_omitted(repo, omitted):
+    # An omitted base (None or "") reads "omitted" and must not leak its Python repr (F6).
     with pytest.raises(gitdiff.InvalidBaseError, match="omitted") as exc:
-        gitdiff.gather_diff(str(repo), "branch", base=None, timeout=30, max_bytes=200_000)
-    assert "None" not in str(exc.value)
+        gitdiff.gather_diff(str(repo), "branch", base=omitted, timeout=30, max_bytes=200_000)
+    assert repr(omitted) not in str(exc.value)
 
 
 def test_branch_invalid_base_message_keeps_value(repo):
@@ -92,11 +93,12 @@ def test_commit_invalid(repo):
         gitdiff.gather_diff(str(repo), "commit", commit="zzzz", timeout=30, max_bytes=200_000)
 
 
-def test_commit_omitted_message_says_omitted(repo):
-    # An omitted commit must not leak the Python literal `None`/`''` into the human message (F6).
+@pytest.mark.parametrize("omitted", [None, ""])
+def test_commit_omitted_message_says_omitted(repo, omitted):
+    # An omitted commit (None or "") reads "omitted" and must not leak its Python repr (F6).
     with pytest.raises(gitdiff.InvalidCommitError, match="omitted") as exc:
-        gitdiff.gather_diff(str(repo), "commit", commit=None, timeout=30, max_bytes=200_000)
-    assert "None" not in str(exc.value)
+        gitdiff.gather_diff(str(repo), "commit", commit=omitted, timeout=30, max_bytes=200_000)
+    assert repr(omitted) not in str(exc.value)
 
 
 def test_invalid_scope(repo):
