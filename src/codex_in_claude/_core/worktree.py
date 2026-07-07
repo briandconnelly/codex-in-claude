@@ -432,9 +432,13 @@ def capture_diff(wt: str, *, timeout: int) -> str:
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:
-    """Tear down the worktree and its temp parent. Best-effort; never raises."""
-    with contextlib.suppress(subprocess.SubprocessError, OSError):
+    """Tear down the worktree and its temp parent. Best-effort; never raises.
+
+    Also suppress ``WorktreeError``: the git calls route through ``_hardening_flags`` ->
+    filter enumeration, which fails closed on an un-neutralizable driver name. Teardown
+    must never let that (or any git failure) prevent ``shutil.rmtree`` or escape."""
+    with contextlib.suppress(WorktreeError, subprocess.SubprocessError, OSError):
         _git(repo, ["worktree", "remove", "--force", worktree.path], timeout)
     shutil.rmtree(worktree.parent, ignore_errors=True)
-    with contextlib.suppress(subprocess.SubprocessError, OSError):
+    with contextlib.suppress(WorktreeError, subprocess.SubprocessError, OSError):
         _git(repo, ["worktree", "prune"], timeout)

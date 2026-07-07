@@ -260,6 +260,17 @@ def test_remove_is_idempotent(repo):
     worktree.remove(str(repo), wt, timeout=30)
 
 
+def test_remove_survives_unneutralizable_filter_introduced_after_create(repo, tmp_path):
+    # remove() promises best-effort teardown that never raises. Its git calls now route
+    # through filter enumeration, which fails closed (WorktreeError) on an un-neutralizable
+    # driver name. If such config appears AFTER the worktree exists (create() would have
+    # failed closed earlier), teardown must still not raise and must delete the temp parent.
+    wt = worktree.create(str(repo), timeout=30)
+    _git(repo, "config", "filter.ev=il.smudge", "false")
+    worktree.remove(str(repo), wt, timeout=30)  # must not raise
+    assert not Path(wt.parent).exists()
+
+
 def test_ensure_repo_with_head_raises_outside_repo(tmp_path):
     import pytest
 
