@@ -571,6 +571,27 @@ def test_create_does_not_run_required_process_filter(repo, tmp_path):
         worktree.remove(str(repo), wt, timeout=30)
 
 
+def test_create_does_not_run_empty_named_filter(repo, tmp_path):
+    # A driver configured as `[filter ""]` enumerates from git as `filter..smudge` (empty
+    # subsection, two dots) and is selected by a committed `.gitattributes` entry
+    # `path filter=` (empty attribute value). The driver-name regex must still match the
+    # empty name so the driver is neutralized rather than silently left active.
+    sentinel = tmp_path / "empty_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    (repo / ".gitattributes").write_text("* filter=\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add gitattributes")
+    _git(repo, "config", "filter..smudge", str(script))
+    _git(repo, "config", "filter..clean", str(script))
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert not sentinel.exists()
+        assert (Path(wt.path) / "a.py").read_text() == "x = 1\n"
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
 def test_unneutralizable_filter_name_fails_closed(repo, tmp_path):
     # A driver name that can't be safely expressed as a `git -c` override (an `=` splits
     # key from value, so the override would silently miss it) must fail closed with a

@@ -90,8 +90,12 @@ _UNNEUTRALIZABLE_DRIVER_CHARS = re.compile(r"[=\x00-\x1f\x7f]")
 
 # ``git config --name-only --get-regexp ^filter\.`` emits one key per line; the driver
 # name is everything between the ``filter.`` prefix and the trailing ``.<var>``. The
-# name may itself contain dots (a multi-level subsection), so match greedily.
-_FILTER_KEY_RE = re.compile(r"^filter\.(?P<name>.+)\.(?:smudge|clean|process|required)$")
+# name may itself contain dots (a multi-level subsection), so match greedily; it may also
+# be EMPTY -- ``[filter ""]`` enumerates as ``filter..smudge`` and is selectable from a
+# committed ``.gitattributes`` via ``path filter=`` -- so use ``*`` not ``+`` (a ``+``
+# would skip that key and leave the driver ACTIVE). ``*`` still does not match the
+# non-driver key ``filter.smudge`` (a single dot), which has no ``.<var>`` suffix.
+_FILTER_KEY_RE = re.compile(r"^filter\.(?P<name>.*)\.(?:smudge|clean|process|required)$")
 
 
 def _base_hardening_flags() -> list[str]:
@@ -139,8 +143,10 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
             continue
         seen.add(name)
         if _UNNEUTRALIZABLE_DRIVER_CHARS.search(name):
+            # Cap the echoed name (like the [:200] git-stderr truncation elsewhere) so a
+            # pathologically long driver name can't bloat the client-visible envelope.
             raise WorktreeError(
-                f"refusing to run: gitattributes filter driver {name!r} cannot be safely "
+                f"refusing to run: gitattributes filter driver {name[:100]!r} cannot be safely "
                 "neutralized (its name contains '=' or a control character)"
             )
         names.append(name)
