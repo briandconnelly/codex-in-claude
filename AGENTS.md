@@ -142,6 +142,13 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   title must itself be a valid Conventional Commit**. Keep each PR to one logical change — if the
   title needs an "and", split the PR.
 - Branch names are `<type>/<slug>` matching the commit type (e.g. `feat/async-jobs`, `docs/conventions`).
+- **Claim an issue before working it, and never work one assigned to someone else.** Only work an
+  issue that has no assignees or where you are the sole assignee. Before starting, check the
+  assignees (`gh issue view ISSUE_NUMBER --json assignees,title`); if anyone else is assigned, stop — do not
+  start work. To claim an unassigned issue, self-assign (`gh issue edit ISSUE_NUMBER --add-assignee @me`),
+  then re-check (`gh issue view ISSUE_NUMBER --json assignees`) and begin only if you are the sole assignee —
+  `--add-assignee` is additive and will not fail if someone claimed the issue first, so the re-check
+  is what closes that race.
 - Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
   body (`Closes #N`); label the PR with a type and (for issues) a priority.
 - Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
