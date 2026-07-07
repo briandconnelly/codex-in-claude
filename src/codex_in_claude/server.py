@@ -569,7 +569,8 @@ TranscriptPathParam = Annotated[
         "off to Codex. Must be an existing, non-empty .jsonl file under "
         "~/.claude/projects. Find the current session's transcript as the newest *.jsonl "
         "under ~/.claude/projects/<cwd-slug>/. If that is ambiguous — for example, more than "
-        "one recent transcript could be the current session — ask the user which one to transfer."
+        "one recent transcript could be the current session — ask the user which one "
+        "to transfer."
     ),
 ]
 ExtraContextParam = Annotated[

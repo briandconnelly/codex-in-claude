@@ -51,7 +51,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   step yourself") are dropped there and left to `codex_delegate`'s own no-network paragraph, keeping
   the bullet pure fact; and several rules attached as sentence tails or parentheticals
   (`codex_consult` verify-the-claims, `codex_review_changes` redaction, `codex_job_list`
-  read-before-`expires_at`, `codex_transfer` transcript-ambiguity, and the initialize error-carrier
+  read-results-promptly, `codex_transfer` transcript-ambiguity, and the initialize error-carrier
   directive) are split into standalone imperative sentences. Also drops the stale "in-place edits are a
   later milestone" roadmap line from `negative_scope`. No semantic change — every guarantee and caveat
   is preserved (the redaction and job-eviction wordings were kept deliberately broad). Wording-only;
