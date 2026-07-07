@@ -220,7 +220,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   code is reused), so no `fingerprint` bump.
 
 - **The Copilot-review workflow no longer green-checks when GitHub silently drops the
-  review request** (#236). `request-copilot-review-bot-prs.yml` posted to
+  review request** (#236). `.github/workflows/copilot-review-bot-prs.yml` posted to
   `requested_reviewers` with `github.token` and treated any 200 as success, but GitHub
   silently ignores Copilot reviewer requests made with a non-user token — the POST
   returns 200 with an empty `requested_reviewers` and Copilot never reviews. The step

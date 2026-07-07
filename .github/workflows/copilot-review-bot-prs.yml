@@ -49,7 +49,7 @@ jobs:
           if ! printf '%s' "$resp" | jq -e \
             '[(.requested_reviewers // [])[] | .login] | index("copilot-pull-request-reviewer[bot]") != null' \
             > /dev/null; then
-            echo "::error::Copilot review request was silently dropped (requested_reviewers is empty). A non-user token (github.token or an App token) cannot request the Copilot reviewer; use a user-scoped PAT such as COPILOT_REVIEW_PAT. See #236."
+            echo "::error::Copilot review request was silently dropped (copilot-pull-request-reviewer[bot] is absent from requested_reviewers). A non-user token (github.token or an App token) cannot request the Copilot reviewer; use a user-scoped PAT such as COPILOT_REVIEW_PAT. See #236."
             exit 1
           fi
           echo "Copilot review requested for PR #${PR_NUMBER}."
