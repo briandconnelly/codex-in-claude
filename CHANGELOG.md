@@ -42,6 +42,21 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Separate binding rules from facts across instructions, capabilities, and tool descriptions**
+  (#243). A prose-only sweep (from the agent-friendly-mcp audit, `separating-context-from-constraints`
+  lens): the `codex_status`-first rule is now stated at one consistent strength across the three
+  surfaces that carried three (initialize instructions, the `codex_status` docstring, and
+  `codex_transfer` — the last demoted to advisory since transfer is free); the two imperatives that
+  were buried in a `capabilities.negative_scope` fact bullet ("keep it self-contained / do any network
+  step yourself") are dropped there and left to `codex_delegate`'s own no-network paragraph, keeping
+  the bullet pure fact; and several rules attached as sentence tails or parentheticals
+  (`codex_consult` verify-the-claims, `codex_review_changes` redaction, `codex_job_list`
+  read-results-promptly, `codex_transfer` transcript-ambiguity, and the initialize error-carrier
+  directive) are split into standalone imperative sentences. Also drops the stale "in-place edits are a
+  later milestone" roadmap line from `negative_scope`. No semantic change — every guarantee and caveat
+  is preserved (the redaction and job-eviction wordings were kept deliberately broad). Wording-only;
+  result `fingerprint` `codex-in-claude/0.1/schema-32` → `codex-in-claude/0.1/schema-33`. Not breaking.
+
 - **`codex_capabilities` / `codex_status` output schemas now serve their heavy payload
   schemas on demand** (#242). The two free discovery tools were the last outputSchemas still
   inlining their full success closure in `tools/list`; they now opaque their heavy nested
