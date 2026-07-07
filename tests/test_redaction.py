@@ -136,6 +136,14 @@ def test_redact_text_passes_through_none_and_empty():
     assert redaction.redact_text("") == ""
 
 
+def test_exc_summary_preserves_non_empty_exception_detail_whitespace():
+    assert (
+        redaction.exc_summary(RuntimeError("  padded detail  "))
+        == "RuntimeError:   padded detail  "
+    )
+    assert redaction.exc_summary(RuntimeError("   ")) == "RuntimeError"
+
+
 def test_diff_redactor_matches_redact():
     diff = (
         "diff --git a/app.py b/app.py\n"

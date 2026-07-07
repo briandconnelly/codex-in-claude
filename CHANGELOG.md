@@ -5,6 +5,134 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in extra `codex` args passthrough via `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#231). An operator-only
+  env knob adds allowlisted global `codex` options to every paid `exec` call (consult/review/delegate)
+  — `-c`/`--config KEY=VALUE`, `-p`/`--profile NAME`, `--enable`/`--disable FEATURE` — so a
+  `model_provider`/profile can be selected even under `ignore-config` isolation (which drops
+  `config.toml`, leaving `-c` the only lever). It is an allowlist, not arbitrary argv: anything else is
+  refused **before any spend** with a new `extra_args_rejected` error code, and `-c` keys under
+  `sandbox`/`approval_policy`/`shell_environment_policy` are refused because they would weaken the
+  advertised sandbox / no-network / approval / host-env-isolation guarantees. Tokens are appended after the plugin's help-gated flags (never displacing the
+  envelope-bearing `--json`/`--sandbox`/`--output-schema`/… flags) and are read from the
+  worker-inherited env rather than persisted to any job spec, so a secret `-c` value never lands on
+  disk and is never echoed in `codex_status` or an error envelope. When `codex` rejects a passthrough
+  entry the failure is classified `extra_args_rejected` (operator config to fix) rather than
+  `cli_contract_changed` — but only when the rejection names one of the injected descriptors, so a
+  genuine plugin-flag drift still fails loudly. `codex_status` reports `extra_args_configured`/
+  `extra_args_count`/`extra_args_valid` (never the raw values). A `--profile` layers an opaque on-disk
+  TOML this server cannot inspect — a documented operator-trust boundary (see `COMPATIBILITY.md`).
+  Backward-compatible addition; result `fingerprint` `codex-in-claude/0.1/schema-30` →
+  `codex-in-claude/0.1/schema-31`.
+
+- **`codex_transfer` tool: hand off the current Claude Code session to a resumable Codex thread**
+  (#230). Imports a Claude Code session transcript (`.jsonl`) into a persistent Codex thread via the
+  experimental `codex app-server` `externalAgentConfig/import` protocol and returns
+  `resume_command` (`codex resume <thread_id>`) so the user can continue that exact conversation in
+  Codex. Free — no model call or token spend (a local file conversion) — but it does create a thread
+  in `$CODEX_HOME`. The thread id is read from the import-completed notification's `target` (the
+  versioned, schema-emitted surface), falling back to the undocumented import ledger only for a
+  byte-identical re-import; transferring a live, growing session is intentionally not idempotent (a
+  new thread per call). New error codes `transfer_unsupported` (codex too old — JSON-RPC `-32601`),
+  `transfer_failed` (import item failed), and `transfer_incomplete` (completed but no thread
+  recorded). Ships the `/codex:transfer` slash command. Backward-compatible addition; result
+  `fingerprint` `codex-in-claude/0.1/schema-29` → `codex-in-claude/0.1/schema-30`. Every
+  `app-server` wire assumption lives in `cli_contract.py`; see `COMPATIBILITY.md`.
+
+### Changed
+
+- **Separate binding rules from facts across instructions, capabilities, and tool descriptions**
+  (#243). A prose-only sweep (from the agent-friendly-mcp audit, `separating-context-from-constraints`
+  lens): the `codex_status`-first rule is now stated at one consistent strength across the three
+  surfaces that carried three (initialize instructions, the `codex_status` docstring, and
+  `codex_transfer` — the last demoted to advisory since transfer is free); the two imperatives that
+  were buried in a `capabilities.negative_scope` fact bullet ("keep it self-contained / do any network
+  step yourself") are dropped there and left to `codex_delegate`'s own no-network paragraph, keeping
+  the bullet pure fact; and several rules attached as sentence tails or parentheticals
+  (`codex_consult` verify-the-claims, `codex_review_changes` redaction, `codex_job_list`
+  read-results-promptly, `codex_transfer` transcript-ambiguity, and the initialize error-carrier
+  directive) are split into standalone imperative sentences. Also drops the stale "in-place edits are a
+  later milestone" roadmap line from `negative_scope`. No semantic change — every guarantee and caveat
+  is preserved (the redaction and job-eviction wordings were kept deliberately broad). Wording-only;
+  result `fingerprint` `codex-in-claude/0.1/schema-32` → `codex-in-claude/0.1/schema-33`. Not breaking.
+
+- **`codex_capabilities` / `codex_status` output schemas now serve their heavy payload
+  schemas on demand** (#242). The two free discovery tools were the last outputSchemas still
+  inlining their full success closure in `tools/list`; they now opaque their heavy nested
+  fields — `codex_capabilities.tool_details` and `codex_status.rate_limit`/`raw_defaults`/
+  `resolved_defaults` — to compact `{type, description}` pointers and prune the orphaned
+  `$defs` (`ToolCapability`/`AsyncLifecycle`; `RateLimit`/`RateLimitWindow`/`RawDefaults`/
+  `ResolvedDefaults`), the same opaque-pointer treatment `meta` already gets (#173). Every
+  top-level scalar field stays advertised, so first-pass discovery is unchanged. The full
+  schemas are published at two new resources, `codex://capabilities-result` and
+  `codex://status-result`, and are also reachable as a resource-blind fallback via
+  `codex_capabilities(include_schemas=["capabilities-result", "status-result"])`; their
+  content is snapshot-guarded in the manifest under new `FINGERPRINT_COVERS` tokens
+  (`capabilities_result_schema`/`status_result_schema`). Cuts ~4.2KB from cold-start
+  `tools/list`. The emitted payloads are unchanged and the advertised schemas are widened,
+  not narrowed — a backward-compatible change (not breaking). Result `fingerprint`
+  `codex-in-claude/0.1/schema-31` → `codex-in-claude/0.1/schema-32`.
+
+- **Bundled skills now cover `codex_transfer`** (#234). `collaborating-with-codex` gains a
+  "Choosing a tool" row, `/codex:transfer` in the slash-command list, a per-tool bullet (free but
+  not read-only — creates a persistent thread in `$CODEX_HOME`; `transcript_path` discovery; not
+  idempotent for a live session), and a common-mistakes entry; `deliberating-with-codex` gets a
+  one-line boundary note that a session hand-off is not a deliberation pattern. Skill markdown
+  only — no fingerprint change.
+
+- **Docs: README restructured for accuracy and audience** (#227). The quick start separates
+  terminal commands from Claude Code input (the old single `sh` block was not pasteable); the
+  `propose`-tier / `delegate`-tool naming is reconciled at first use; the configuration table
+  gains the previously undocumented `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` and
+  `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS` and a note that `TIER_DEFAULT`/`SANDBOX_DEFAULT`
+  only affect `codex_status` reporting; background-job and rate-limit reference detail moved to
+  new `docs/REFERENCE.md` sections ("Background jobs", "Rate-limit reporting"); a contents line
+  was added and duplicated safety prose removed.
+- **Docs: AGENTS.md rules separated from context** (#227). "The result contract" no longer
+  re-lists the `FINGERPRINT_COVERS` categories (the prose copy had already drifted from the
+  code) and now points at the tuple; rules previously buried in prose — the
+  `check_commit_message.py`/Git-PRs sync obligation, the `_core` import ban, and the
+  Copilot-review obligations — are standalone bullets; compound bullets were split and the
+  coverage-floor guidance deduplicated into Testing.
+
+### Fixed
+
+- **An omitted `base`/`commit` on a `branch`/`commit` review no longer leaks the Python literal
+  `None` into the error message** (#244). `codex_review_changes`/`codex_dry_run` with `scope="branch"`
+  and no `base` (or `scope="commit"` and no `commit`) previously produced `invalid base ref: None`;
+  the message now distinguishes an omitted input ("base ref is required for a branch diff but was
+  omitted") from a present-but-invalid one (which still keeps its `repr` so stray whitespace/quoting
+  shows). Runtime error-message prose only — not manifest-covered, so no `fingerprint` bump. (The
+  same issue's proposed `ErrorDetail.value` schema change was evaluated and declined: the enum fields
+  it targeted — `scope`/`detail`/`isolation` — surface over MCP as `invalid_arguments`, not
+  `ErrorDetail`; `timeout_seconds` is clamped rather than rejected; and echoing a value the caller
+  just sent is redundant with `field`/`reason`/`allowed_values`. See #244 for the full rationale.)
+
+- **Exception-derived `internal_error` messages no longer leave a dangling separator** (#203).
+  Empty or fully redacted exception text now renders as just the exception class name in the
+  generic tool boundary, background-job spawn failure, and worker crash sinks instead of ending
+  with `": "`. Existing per-sink truncation and redaction behavior is unchanged. Runtime
+  error-message prose only — not manifest-covered, so no `fingerprint` bump.
+
+- **A transient read `OSError` on an idempotency record no longer classifies as a
+  permanent result-unavailable** (#202). `IdempotencyIndex._read` mapped any `OSError`
+  (e.g. EIO on flaky/network storage, a permissions race) to `"corrupt"`, and
+  `_classify` mapped `"corrupt"` to `UNAVAILABLE` — `temporary: false`, repair
+  `use_new_idempotency_key`. So a momentary I/O blip while reading the record of a
+  healthy, replayable completed run told the agent, permanently and non-retryably, to
+  start a new paid run under a fresh key — duplicate spend when a retry one second
+  later would have replayed the stored result. `_read` now distinguishes a transient
+  I/O failure (`"io_error"`) from genuinely malformed content (`"corrupt"`): corrupt
+  records still fail closed (`UNAVAILABLE`), while an I/O error surfaces as a new
+  `IO_ERROR` outcome kind that the server maps to a retryable `internal_error` envelope
+  (`temporary: true`, repair: "retry the same call with the same idempotency_key").
+  `sweep()` gives an `io_error` entry a generous multiple of the horizon to clear
+  before reclaiming it (the record may be intact), but bounds the wait so a
+  persistently unreadable entry cannot wedge its key behind an infinitely-retryable
+  "temporary" error. No new error code is advertised (the existing `internal_error`
+  code is reused), so no `fingerprint` bump.
+
 ## [0.8.0] - 2026-07-05
 
 An agent-friendliness and spend-safety release. It completes the 2026-07 agent-friendliness audit

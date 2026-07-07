@@ -1676,8 +1676,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_29():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-29"
+def test_fingerprint_is_schema_33():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-33"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2235,6 +2235,11 @@ async def test_resources_declare_explicit_name_and_title():
         "codex://models": ("codex-models", "Codex model catalog"),
         "codex://error-envelope": ("codex-error-envelope", "Codex error envelope schema"),
         "codex://result-meta": ("codex-result-meta", "Codex result metadata schema"),
+        "codex://capabilities-result": (
+            "codex-capabilities-result",
+            "Codex capabilities result schema",
+        ),
+        "codex://status-result": ("codex-status-result", "Codex status result schema"),
     }
     for uri, (name, title) in expected.items():
         r = resources[uri]
@@ -2734,6 +2739,14 @@ def test_internal_error_result_redacts_secret_in_exception_text(clean_env, tmp_p
     assert "RuntimeError" in msg
 
 
+def test_internal_error_result_omits_empty_exception_detail(clean_env, tmp_path):
+    exc = RuntimeError()
+    res = server._internal_error_result("codex_consult", exc, tier="consult", sandbox="read-only")
+    msg = res["error"]["message"]
+    assert msg == "codex_consult failed unexpectedly: RuntimeError"
+    assert not msg.endswith(": ")
+
+
 def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_path):
     # F10: the spawn-failure internal_error is a second exception-text sink.
     exc = OSError("cannot exec /home/AKIAIOSFODNN7EXAMPLE/worker")
@@ -2743,6 +2756,14 @@ def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_
     assert "[redacted: secret value]" in msg
     # The safe exception class name is preserved, consistent with the other sinks.
     assert "OSError" in msg
+
+
+def test_spawn_failure_envelope_omits_empty_exception_detail(clean_env, tmp_path):
+    exc = OSError()
+    res = server._spawn_failure_envelope(exc, _meta_for(tmp_path))
+    msg = res["error"]["message"]
+    assert msg == "failed to start background job: OSError"
+    assert not msg.endswith(": ")
 
 
 def test_job_result_corrupt_redacts_secret_in_detail(clean_env, tmp_path):
@@ -3627,6 +3648,52 @@ def test_capabilities_include_schemas_single_and_deduped():
     assert list(caps["schemas"]) == ["result-meta"]
 
 
+def test_capabilities_result_resource_returns_full_schema():
+    from codex_in_claude.server import capabilities_result_resource
+
+    schema = capabilities_result_resource()
+    assert "tool_details" in schema["properties"]
+    assert "ToolCapability" in schema["$defs"]
+
+
+def test_status_result_resource_returns_full_schema():
+    from codex_in_claude.server import status_result_resource
+
+    schema = status_result_resource()
+    assert "rate_limit" in schema["properties"]
+    assert "RateLimit" in schema["$defs"]
+
+
+def test_capabilities_include_schemas_covers_all_four_tokens():
+    from codex_in_claude.server import codex_capabilities
+
+    caps = codex_capabilities(
+        include_schemas=["error-envelope", "result-meta", "capabilities-result", "status-result"]
+    )
+    assert set(caps["schemas"]) == {
+        "error-envelope",
+        "result-meta",
+        "capabilities-result",
+        "status-result",
+    }
+    assert "ToolCapability" in caps["schemas"]["capabilities-result"]["$defs"]
+    assert "RateLimit" in caps["schemas"]["status-result"]["$defs"]
+
+
+async def test_include_schemas_input_enum_lists_all_four_tokens():
+    """The MCP-advertised input enum — not just the runtime dict — must carry the new
+    tokens; a direct Python call bypasses FastMCP/Pydantic arg validation, so this is
+    what catches a forgotten IncludeSchemasParam Literal widening."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    schema = tools["codex_capabilities"].parameters
+    prop = schema["properties"]["include_schemas"]
+    # Optional[list[Literal[...]]] renders as a nullable anyOf; find the array branch.
+    branches = prop.get("anyOf", [prop])
+    items_schema = next(branch["items"] for branch in branches if "items" in branch)
+    enum = items_schema["enum"]
+    assert set(enum) == {"error-envelope", "result-meta", "capabilities-result", "status-result"}
+
+
 # --------------------------------------------------------------------------- #
 # destructive/idempotent hints only have MCP-spec meaning when readOnlyHint is
 # false (audit F4) — read-only tools must omit them, not assert them.
@@ -4245,6 +4312,22 @@ async def test_consult_async_in_progress_is_temporary(monkeypatch, clean_env, tm
     assert res["error"]["retry_after_ms"] == server._IDEM_IN_PROGRESS_RETRY_MS
 
 
+async def test_consult_async_io_error_is_temporary(monkeypatch, clean_env, tmp_path):
+    # The agent-visible contract for a transient read failure (#202): the existing
+    # internal_error code (reused, so no fingerprint bump), temporary, a 1s backoff, and
+    # repair prose that steers to the SAME key — not a fresh paid run. A typo like
+    # "ioerror" would fall through to the idempotency_in_progress envelope and this test
+    # would fail, pinning the mapping the CHANGELOG promises.
+    store = _FakeIdemStore({"kind": "io_error"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["temporary"] is True
+    assert res["error"]["retry_after_ms"] == server._IDEM_IO_ERROR_RETRY_MS
+    assert "same idempotency_key" in res["error"]["repair"]["alternative"]
+
+
 async def test_delegate_async_replay_returns_real_handle(monkeypatch, clean_env, tmp_path):
     monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
     snap = _ok_record("done")  # a replayed job may already be terminal
@@ -4426,6 +4509,22 @@ async def test_consult_sync_in_progress_after_wait(monkeypatch, clean_env, tmp_p
     assert res["error"]["temporary"] is True
 
 
+async def test_consult_sync_io_error_is_temporary_after_wait(monkeypatch, clean_env, tmp_path):
+    # The sync path waits briefly for a transient read failure to self-heal into a
+    # replay; only past the wait deadline does it surface the io_error envelope. With the
+    # wait budget zeroed, a persistent io_error surfaces the same contract as the async
+    # path (#202).
+    monkeypatch.setattr(server, "_IDEM_SYNC_INPROGRESS_WAIT_S", 0.0)  # don't actually block
+    store = _FakeIdemStore({"kind": "io_error"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["error"]["temporary"] is True
+    assert res["error"]["retry_after_ms"] == server._IDEM_IO_ERROR_RETRY_MS
+    assert "same idempotency_key" in res["error"]["repair"]["alternative"]
+
+
 async def test_consult_sync_in_progress_then_created_loops(monkeypatch, clean_env, tmp_path):
     """A reservation that is still publishing resolves on a retry within the wait window."""
     monkeypatch.setattr(server, "_IDEM_SYNC_INPROGRESS_POLL_S", 0.0)
@@ -4482,3 +4581,256 @@ def test_capabilities_advertise_idempotency_on_spend_committing_tools(clean_env)
     ):
         assert "idempotency_key" in by_name[name]["key_optional_params"], name
         assert "idempotency_conflict" in by_name[name]["error_codes"], name
+
+
+# --- codex_transfer -------------------------------------------------------------
+
+
+def _ready_codex(monkeypatch):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.5")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+
+
+def _patch_validation(monkeypatch, realpath="/home/u/.claude/projects/s/x.jsonl", reason=None):
+    monkeypatch.setattr(
+        server.appserver,
+        "validate_transcript_path",
+        lambda _p: server.appserver.PathValidation(realpath, reason),
+    )
+
+
+def _patch_transfer(monkeypatch, outcome):
+    monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: outcome)
+
+
+async def test_transfer_success_notification(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="t9",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            import_id="imp-7",
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is True
+    assert result["tool"] == "codex_transfer"
+    assert result["thread_id"] == "t9"
+    assert result["resume_command"] == "codex resume t9"
+    assert result["source_path"] == "/home/u/.claude/projects/s/x.jsonl"
+    assert result["meta"]["thread_id_source"] == "import_notification"
+    assert result["meta"]["import_id"] == "imp-7"
+    assert result["meta"]["codex_home"] == "/home/u/.codex"
+    assert result["fingerprint"].endswith("schema-33")
+
+
+async def test_transfer_success_from_ledger(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="t-led",
+            thread_id_source=server.appserver.ThreadIdSource.LEDGER,
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is True
+    assert result["meta"]["thread_id_source"] == "ledger"
+    assert result["meta"]["import_id"] is None
+
+
+async def test_transfer_invalid_path_no_spawn(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(
+        monkeypatch, realpath=None, reason="transcript_path must be a .jsonl session transcript."
+    )
+    called = []
+    monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: called.append(1))
+    result = await server.codex_transfer(transcript_path="/x.txt")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["details"]["field"] == "transcript_path"
+    assert not called  # no subprocess attempted
+
+
+async def test_transfer_codex_not_found(monkeypatch):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    _patch_validation(monkeypatch)
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_not_found"
+
+
+async def test_transfer_unauthenticated(monkeypatch):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.5")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
+    _patch_validation(monkeypatch)
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_auth_required"
+
+
+async def test_transfer_unsupported(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=server.appserver.TransferStatus.UNSUPPORTED),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "transfer_unsupported"
+    assert result["error"]["temporary"] is False
+
+
+async def test_transfer_item_failure(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.ITEM_FAILURE,
+            message="could not parse session",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "transfer_failed"
+    assert "could not parse session" in result["error"]["message"]
+
+
+async def test_transfer_incomplete_names_ledger(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.INCOMPLETE,
+            ledger_path="/home/u/.codex/external_agent_session_imports.json",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "transfer_incomplete"
+    assert "external_agent_session_imports.json" in result["error"]["message"]
+
+
+async def test_transfer_timeout(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=server.appserver.TransferStatus.TIMED_OUT),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "timeout"
+    assert result["error"]["temporary"] is True
+
+
+async def test_transfer_protocol_error(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.PROTOCOL_ERROR,
+            message="codex app-server exited before the import completed.",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "cli_contract_changed"
+
+
+async def test_transfer_spawn_failed(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=server.appserver.TransferStatus.SPAWN_FAILED),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_not_found"
+
+
+# --- CODEX_IN_CLAUDE_EXTRA_ARGS: status + preflight before spend (#231) -----------
+
+
+def test_status_reports_valid_extra_args(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=litellm --profile work")
+    res = server.codex_status()
+    assert res["extra_args_configured"] is True
+    assert res["extra_args_count"] == 2
+    assert res["extra_args_valid"] is True
+
+
+def test_status_reports_invalid_extra_args(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")  # not allowlisted
+    res = server.codex_status()
+    assert res["extra_args_configured"] is True
+    assert res["extra_args_valid"] is False
+
+
+def test_status_unset_extra_args_defaults(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
+    res = server.codex_status()
+    assert res["extra_args_configured"] is False
+    assert res["extra_args_valid"] is True
+
+
+async def _assert_extra_args_rejected(res):
+    assert res["ok"] is False
+    assert res["error"]["code"] == "extra_args_rejected"
+    assert res["error"]["repair"]["next_step"] == "correct_config"
+
+
+async def test_consult_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    called = False
+
+    async def fake(*a, **k):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(server.codex, "run_codex_exec", fake)
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+    assert called is False  # rejected before any spend
+
+
+async def test_review_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "bare-positional")
+    res = await server.codex_review_changes(workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+
+
+async def test_delegate_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c sandbox_mode=danger-full-access")
+    res = await server.codex_delegate("do a thing", workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+
+
+async def test_dry_run_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    res = await server.codex_dry_run(workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)
+
+
+async def test_delegate_dry_run_preflights_invalid_extra_args(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    res = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
+    await _assert_extra_args_rejected(res)

@@ -87,6 +87,13 @@ def redact_text(text: str | None) -> str | None:
     return out
 
 
+def exc_summary(exc: BaseException) -> str:
+    """Return an exception class plus non-empty redacted detail, if any."""
+    name = type(exc).__name__
+    detail = redact_text(str(exc)) or ""
+    return f"{name}: {detail}" if detail.strip() else name
+
+
 def redact_tree(value: object) -> object:
     """Deep-apply ``redact_text`` to every string *value* in a nested list/dict/str.
 

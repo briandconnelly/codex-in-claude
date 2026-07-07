@@ -30,11 +30,12 @@ Treat it as advisory, and check `is_stale`/`as_of` for freshness.
 | Any of the above as a background job (long-running) | `codex_consult_async` / `codex_review_changes_async` / `codex_delegate_async` | model call |
 | To preview a review's scope/size before spending | `codex_dry_run` | free |
 | To preview a delegate's seeded baseline + prompt size before spending | `codex_delegate_dry_run` | free |
+| To hand off this session to a resumable Codex thread | `codex_transfer` | free |
 | Readiness / version / auth | `codex_status` | free |
 | The tool list + result fingerprint | `codex_capabilities` | free |
 | To discover valid `model` slugs before overriding `model` | `codex_models` (or the `codex://models` resource) | free |
 
-A subset of the tools is also available to users as slash commands: `/codex:status`, `/codex:consult`, `/codex:review`, `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
+A subset of the tools is also available to users as slash commands: `/codex:status`, `/codex:transfer`, `/codex:consult`, `/codex:review`, `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
 
 This skill is the tool reference and guardrail home.
 To **compose** these tools with your own work into a deliberate two-model pattern (Judge / two-member panel / review–revise loop), see the `deliberating-with-codex` skill.
@@ -55,6 +56,12 @@ To **compose** these tools with your own work into a deliberate two-model patter
 - **codex_delegate_dry_run** — free, read-only preview of a `codex_delegate`/`codex_delegate_async` call: the baseline its worktree would seed from (HEAD commit, tracked-file count/size, uncommitted-tracked and untracked counts) plus the prompt size that would be sent — no model call, no spend, no worktree created.
   Use it before delegating to confirm scope and repo before committing to cost.
   The uncommitted-replay count is advisory (see `worktree_plan.note`).
+- **codex_transfer** — hand off the current Claude Code session to a resumable Codex thread; use it when the user wants to **continue this conversation inside Codex** (TUI or App).
+  It imports a Claude session transcript (`.jsonl`) via `codex app-server` and returns `resume_command` (`codex resume <thread_id>`).
+  Free — a local file conversion, no model call or token spend — but **not read-only**: it creates a persistent thread in `$CODEX_HOME` (it never edits your working tree or the source transcript).
+  Pass `transcript_path`: the current session's transcript is the newest `*.jsonl` under `~/.claude/projects/<cwd-slug>/` (ask the user if ambiguous).
+  Not idempotent for a live session — Codex dedups only a byte-identical transcript, so re-running mid-session creates a new thread.
+  Experimental (relies on the experimental `codex app-server`).
 
 ## Background jobs (long runs)
 
@@ -111,6 +118,7 @@ Every tool returns an envelope:
 - **Polling a job in a tight loop** — honor `poll_after_ms` instead of busy-waiting.
 - **Applying a delegated diff without reading it** — the diff is a proposal, not an approved change; review before you apply.
 - **Treating a verdict as ground truth** — verify findings against the code; a different model can be confidently wrong.
+- **Re-running `codex_transfer` mid-session expecting the same thread** — a live transcript keeps growing, so each call imports a new thread; transfer once, when the user is ready to switch.
 - **Assuming the reviewer ran the tests** — `consult`/`review` are read-only and static, not a verify step; the sandbox blocks the writes tests/build/lint usually need, so don't assume a finding was validated by running them.
   Run the checks yourself.
 

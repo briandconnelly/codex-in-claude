@@ -34,6 +34,8 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     "initialize_response",  # serverInfo/protocolVersion/advertised capabilities/instructions
     "error_envelope_schema",  # codex://error-envelope content
     "result_meta_schema",  # codex://result-meta content
+    "capabilities_result_schema",  # codex://capabilities-result content (#242)
+    "status_result_schema",  # codex://status-result content (#242)
     "capabilities_payload",  # the codex_capabilities result body
     "capability_guarantees",  # the semantic promises within it (annotations/tiers/error contracts)
 )
@@ -45,7 +47,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-29"
+FINGERPRINT = "codex-in-claude/0.1/schema-33"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -148,6 +150,20 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
+    # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
+    # (an unaccepted option / config key / profile). Operator config to fix, NOT a
+    # plugin contract drift — kept distinct from cli_contract_changed so the fail-loud
+    # contract signal is not muddied by user-owned passthrough (#231).
+    "extra_args_rejected",
+    # Session transfer (codex_transfer via `codex app-server`):
+    # the installed codex is too old to support the session-import method (-32601).
+    "transfer_unsupported",
+    # the import ran but Codex reported the session item itself failed (carries the
+    # upstream failure message).
+    "transfer_failed",
+    # the import reported completed but Codex recorded no imported thread (the
+    # not-importable / #417 case); the message names the ledger it checked.
+    "transfer_incomplete",
     # codex hit a usage/rate limit (ChatGPT window or API-key 429). Transient and
     # retryable; the error carries retry_after_ms as the suggested backoff.
     "codex_rate_limited",
@@ -462,6 +478,7 @@ RepairStep = Literal[
     "install_git",
     "init_git_repo",
     "update_plugin",
+    "correct_config",
     "inspect_and_retry",
     "retry_then_report",
     "use_new_idempotency_key",
@@ -572,6 +589,13 @@ class StatusResult(BaseModel):
     flags_warning: str | None = None  # a guarantee-bearing flag missing from --help
     ready: bool = False  # found AND authenticated
     readiness_detail: str
+    # Operator passthrough (CODEX_IN_CLAUDE_EXTRA_ARGS, #231). Presence + option count +
+    # validity ONLY — never the raw tokens/values (a `-c` value can hold a secret).
+    # extra_args_valid is False when the knob is set but fails parse/allowlist, so every
+    # paid call is guaranteed to preflight-fail even though `ready` may be True.
+    extra_args_configured: bool = False
+    extra_args_count: int = 0
+    extra_args_valid: bool = True
     raw_defaults: RawDefaults
     resolved_defaults: ResolvedDefaults
     rate_limit: RateLimit = Field(  # always present; status 'unknown' when no cache
@@ -719,6 +743,44 @@ class ModelCatalogResult(BaseModel):
     advisory: str
     # Set only when source == "none" (no cache and no static fallback).
     unavailable_reason: str | None = None
+    fingerprint: str = FINGERPRINT
+
+
+ThreadIdSource = Literal["import_notification", "ledger"]
+
+
+class TransferMeta(BaseModel):
+    """Operational detail for a codex_transfer run (a local file conversion, no model
+    call). Kept separate from the heavyweight `Meta` (tier/sandbox/usage) since a
+    transfer runs no Codex tier and spends no tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+    codex_home: str  # absolute $CODEX_HOME the app-server reported (where the thread lives)
+    # The async import's correlation id, when a fresh import ran; None on a ledger replay.
+    import_id: str | None = None
+    # Where the thread id came from: the completed notification's success `target`
+    # (a fresh import) or the import ledger (a byte-identical re-import Codex deduped).
+    thread_id_source: ThreadIdSource
+    elapsed_ms: int
+    request_id: str = Field(default_factory=lambda: uuid4().hex)
+
+
+class TransferResult(BaseModel):
+    """codex_transfer: a Claude Code session handed off to a resumable Codex thread.
+
+    No model call and no token spend — a local conversion via `codex app-server`. The
+    thread already exists in `$CODEX_HOME`; run `resume_command` to continue it. Note:
+    transferring a still-growing (live) session creates a NEW thread each call — Codex
+    dedups only a byte-identical transcript — so this is not idempotent for an active
+    session."""
+
+    model_config = ConfigDict(extra="forbid")
+    ok: Literal[True] = True
+    tool: Literal["codex_transfer"] = "codex_transfer"
+    thread_id: str
+    resume_command: str  # "codex resume <thread_id>"
+    source_path: str  # realpath of the transferred transcript
+    meta: TransferMeta
     fingerprint: str = FINGERPRINT
 
 
@@ -884,8 +946,41 @@ _RESULT_META_POINTER_DESC = (
 )
 _OPAQUE_META = {"type": "object", "description": _RESULT_META_POINTER_DESC}
 _META_REF = {"$ref": "#/$defs/Meta"}
-# Descriptions that survive _strip_schema_noise: the two intentional resource pointers.
-_KEPT_DESCRIPTIONS = frozenset({_ERROR_POINTER_DESC, _RESULT_META_POINTER_DESC})
+
+# codex_capabilities/codex_status embed nested payload fields (tool_details, rate_limit,
+# raw_defaults, resolved_defaults) whose $def closures dominate those two tools'
+# advertised outputSchemas (#242). Opaquing them to compact stubs — the same treatment
+# Meta gets (F1/#173) — applies to named top-level fields via published_schema's
+# opaque_fields parameter. The full shapes are published once at codex://capabilities-result
+# and codex://status-result.
+_TOOL_DETAILS_POINTER_DESC = (
+    "Per-tool capability records; full schema at resource codex://capabilities-result"
+)
+_RATE_LIMIT_POINTER_DESC = (
+    "Codex rate-limit snapshot; full schema at resource codex://status-result"
+)
+_RAW_DEFAULTS_POINTER_DESC = (
+    "Raw configured defaults; full schema at resource codex://status-result"
+)
+_RESOLVED_DEFAULTS_POINTER_DESC = (
+    "Resolved effective defaults; full schema at resource codex://status-result"
+)
+_OPAQUE_TOOL_DETAILS = {"type": "array", "description": _TOOL_DETAILS_POINTER_DESC}
+_OPAQUE_RATE_LIMIT = {"type": "object", "description": _RATE_LIMIT_POINTER_DESC}
+_OPAQUE_RAW_DEFAULTS = {"type": "object", "description": _RAW_DEFAULTS_POINTER_DESC}
+_OPAQUE_RESOLVED_DEFAULTS = {"type": "object", "description": _RESOLVED_DEFAULTS_POINTER_DESC}
+
+# Descriptions that survive _strip_schema_noise: the intentional resource pointers.
+_KEPT_DESCRIPTIONS = frozenset(
+    {
+        _ERROR_POINTER_DESC,
+        _RESULT_META_POINTER_DESC,
+        _TOOL_DETAILS_POINTER_DESC,
+        _RATE_LIMIT_POINTER_DESC,
+        _RAW_DEFAULTS_POINTER_DESC,
+        _RESOLVED_DEFAULTS_POINTER_DESC,
+    }
+)
 
 
 # Keys whose VALUES are sub-schema maps (property name → sub-schema).
@@ -987,10 +1082,19 @@ def _prune_defs(doc: dict) -> dict:  # type: ignore[type-arg]
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 
-def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[type-arg]
+def published_schema(
+    *success_models: type[BaseModel],
+    opaque_fields: dict[str, dict[str, Any]] | None = None,
+) -> dict:  # type: ignore[type-arg]
     """Build a tool's advertised outputSchema: the success branch(es) plus ONE fully
     opaque error branch. The opaque branch references no $def, so $defs is exactly the
-    success closure (no ErrorInfo, no dangling refs). Generated noise is stripped."""
+    success closure (no ErrorInfo, no dangling refs). Generated noise is stripped.
+
+    ``opaque_fields`` maps a top-level success-branch property name to a compact opaque
+    stub (e.g. ``{"type": "array", "description": "…codex://capabilities-result"}``).
+    Each named property is replaced before $defs pruning, so the closure it referenced is
+    orphaned and dropped — the same shrink the Meta ref gets, applied to named fields (#242).
+    """
     if len(success_models) == 1:
         adapter: TypeAdapter = TypeAdapter(success_models[0])  # type: ignore[type-arg]
     else:
@@ -1016,8 +1120,16 @@ def published_schema(*success_models: type[BaseModel]) -> dict:  # type: ignore[
         "anyOf": [*branches, _OPAQUE_ERROR_BRANCH],
         "$defs": raw.get("$defs", {}),
     }
+    if opaque_fields:
+        for branch in branches:  # success branches only; the error branch is not in `branches`
+            props = branch.get("properties")
+            if not props:
+                continue
+            for field, stub in opaque_fields.items():
+                if field in props:
+                    props[field] = dict(stub)
     # Collapse the inlined Meta object to an opaque pointer, then drop the $defs it (and
-    # its now-unreferenced closure) leaves behind (audit F1, #173).
+    # its now-unreferenced closure) leaves behind (audit F1, #173; #242 for named fields).
     doc = _opaque_meta_refs(doc)
     assert isinstance(doc, dict)
     doc = _prune_defs(doc)
@@ -1067,8 +1179,18 @@ JOB_RESULT_SCHEMA = {
 # argument is re-emitted as an ErrorResult at the call-tool boundary (#136), so each
 # advertises a success|error union — otherwise that envelope would violate the
 # declared output schema for strict MCP clients.
-STATUS_SCHEMA = published_schema(StatusResult)
-CAPABILITIES_SCHEMA = published_schema(CapabilitiesResult)
+STATUS_SCHEMA = published_schema(
+    StatusResult,
+    opaque_fields={
+        "rate_limit": _OPAQUE_RATE_LIMIT,
+        "raw_defaults": _OPAQUE_RAW_DEFAULTS,
+        "resolved_defaults": _OPAQUE_RESOLVED_DEFAULTS,
+    },
+)
+CAPABILITIES_SCHEMA = published_schema(
+    CapabilitiesResult, opaque_fields={"tool_details": _OPAQUE_TOOL_DETAILS}
+)
+TRANSFER_SCHEMA = published_schema(TransferResult)
 MODEL_CATALOG_SCHEMA = published_schema(ModelCatalogResult)
 # codex_delegate_async returns only a job handle (or an error) — the eventual delegate
 # result is fetched separately via codex_job_result (DELEGATE_RESULT_SCHEMA).
@@ -1116,6 +1238,17 @@ ERROR_ENVELOPE_SCHEMA = _harden_error_envelope_schema(
 # object per tool; this is the canonical, discoverable full shape (audit F1, #173).
 RESULT_META_SCHEMA = TypeAdapter(Meta).json_schema(ref_template="#/$defs/{model}")
 RESULT_META_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
+
+# The full capabilities/status result schemas, published once at codex://capabilities-result
+# and codex://status-result. The wire outputSchemas opaque tool_details / rate_limit /
+# raw_defaults / resolved_defaults and point here for the full shape (#242) — the same
+# opaque-pointer treatment Meta gets (F1/#173).
+CAPABILITIES_RESULT_SCHEMA = TypeAdapter(CapabilitiesResult).json_schema(
+    ref_template="#/$defs/{model}"
+)
+CAPABILITIES_RESULT_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
+STATUS_RESULT_SCHEMA = TypeAdapter(StatusResult).json_schema(ref_template="#/$defs/{model}")
+STATUS_RESULT_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
 
 # JSON Schema enforced on Codex's final response for structured findings (passed via
 # `codex exec --output-schema FILE`). It mirrors the agent-visible result fields we

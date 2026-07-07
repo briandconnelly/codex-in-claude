@@ -197,3 +197,162 @@ def test_max_output_bytes_floor(monkeypatch):
 def test_max_output_bytes_bad_value(monkeypatch):
     monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_OUTPUT_BYTES", "notanint")
     assert config.max_output_bytes() == 10 * 1024 * 1024
+
+
+# --- CODEX_IN_CLAUDE_EXTRA_ARGS passthrough (#231) --------------------------------
+
+
+def test_extra_args_unset_is_empty_and_valid(clean_env):
+    ea = config.extra_args()
+    assert ea.tokens == ()
+    assert ea.descriptors == ()
+    assert ea.option_count == 0
+    assert ea.configured is False
+    assert ea.valid is True
+    assert ea.error is None
+
+
+def test_extra_args_blank_is_unconfigured(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "   ")
+    ea = config.extra_args()
+    assert ea.configured is False
+    assert ea.tokens == ()
+
+
+def test_extra_args_config_and_profile(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=litellm --profile work")
+    ea = config.extra_args()
+    assert ea.valid is True
+    assert ea.tokens == ("-c", "model_provider=litellm", "--profile", "work")
+    assert ea.option_count == 2
+    # descriptors are the safe config flag+KEY + profile flag/name; never the -c value.
+    assert "model_provider" in ea.descriptors
+    assert "-c" in ea.descriptors  # the flag itself, so a flag-token drift is attributable
+    assert "--profile" in ea.descriptors
+    assert "work" in ea.descriptors
+    assert "litellm" not in ea.descriptors
+
+
+def test_extra_args_attached_long_forms(monkeypatch):
+    monkeypatch.setenv(
+        "CODEX_IN_CLAUDE_EXTRA_ARGS", "--config=model_provider=x --enable=foo --disable=bar"
+    )
+    ea = config.extra_args()
+    assert ea.valid is True
+    assert ea.tokens == (
+        "--config",
+        "model_provider=x",
+        "--enable",
+        "foo",
+        "--disable",
+        "bar",
+    )
+    assert ea.option_count == 3
+
+
+def test_extra_args_short_profile(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-p work")
+    ea = config.extra_args()
+    assert ea.valid is True
+    assert ea.tokens == ("-p", "work")
+
+
+def test_extra_args_unbalanced_quotes_invalid(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", '-c "model_provider=x')
+    ea = config.extra_args()
+    assert ea.configured is True
+    assert ea.valid is False
+    assert ea.tokens == ()
+    assert "tokenize" in ea.error
+
+
+def test_extra_args_rejects_unknown_flag(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "unsupported" in ea.error
+
+
+def test_extra_args_rejects_bare_positional(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "some-prompt-text")
+    ea = config.extra_args()
+    assert ea.valid is False
+
+
+def test_extra_args_rejects_missing_value(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "requires a value" in ea.error
+
+
+def test_extra_args_rejects_config_without_equals(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "KEY=VALUE" in ea.error
+
+
+def test_extra_args_rejects_value_that_looks_like_flag(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--profile --sandbox")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "looks like a flag" in ea.error
+
+
+def test_extra_args_rejects_attached_short_form(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-cmodel_provider=x")
+    ea = config.extra_args()
+    assert ea.valid is False
+
+
+def test_extra_args_denies_sandbox_key(monkeypatch):
+    monkeypatch.setenv(
+        "CODEX_IN_CLAUDE_EXTRA_ARGS",
+        "-c sandbox_workspace_write.network_access=true",
+    )
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "refused" in ea.error
+
+
+def test_extra_args_denies_approval_policy_key(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c approval_policy=never")
+    ea = config.extra_args()
+    assert ea.valid is False
+
+
+def test_extra_args_error_never_echoes_secret_value(monkeypatch):
+    # An invalid trailing token must not leak a preceding secret -c value.
+    monkeypatch.setenv(
+        "CODEX_IN_CLAUDE_EXTRA_ARGS",
+        "-c model_providers.x.api_key=sk-supersecretvalue --bogus",
+    )
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "sk-supersecretvalue" not in (ea.error or "")
+
+
+def test_extra_args_denies_sandbox_key_with_leading_whitespace(monkeypatch):
+    # Regression (#231 review): codex trims the -c key, so a leading space must not
+    # let a security-sensitive key slip past the denylist.
+    monkeypatch.setenv(
+        "CODEX_IN_CLAUDE_EXTRA_ARGS",
+        '-c " sandbox_workspace_write.network_access=true"',
+    )
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "refused" in ea.error
+
+
+def test_extra_args_denies_sandbox_key_with_space_around_dot(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", '-c "sandbox_mode =danger-full-access"')
+    ea = config.extra_args()
+    assert ea.valid is False
+
+
+def test_extra_args_denies_shell_environment_policy_key(monkeypatch):
+    # host-env exfil vector: exposing the server env to commands codex runs.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c shell_environment_policy.inherit=all")
+    ea = config.extra_args()
+    assert ea.valid is False

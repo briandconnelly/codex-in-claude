@@ -122,6 +122,22 @@ def test_worker_crash_redacts_secret_in_message(tmp_path, monkeypatch):
     assert "RuntimeError" in out["error"]["message"]
 
 
+def test_worker_crash_omits_empty_exception_detail(tmp_path, monkeypatch):
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    async def boom(*a, **k):
+        raise RuntimeError()
+
+    monkeypatch.setattr(delegate, "run_delegate", boom)
+
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    msg = out["error"]["message"]
+    assert msg == "background worker crashed: RuntimeError"
+    assert not msg.endswith(": ")
+
+
 def test_worker_no_args_returns_error_code():
     assert _worker.main([]) == 2
 
