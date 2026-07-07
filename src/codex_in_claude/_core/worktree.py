@@ -83,8 +83,10 @@ def _empty_hooks_dir() -> str:
 # neutralized by emitting ``-c`` overrides for it. Those overrides are ``key=value``
 # argv tokens split on the FIRST ``=``, so a name containing ``=`` (or a control char
 # that cannot round-trip) would corrupt the override and leave the driver ACTIVE. We
-# refuse to run in that case rather than silently fail to neutralize (fail closed).
-_UNNEUTRALIZABLE_DRIVER_CHARS = re.compile(r"[=\x00-\x1f]")
+# refuse to run in that case rather than silently fail to neutralize (fail closed). The
+# rejected set is ``=`` plus every ASCII control character (C0 ``0x00-0x1f`` and DEL
+# ``0x7f``).
+_UNNEUTRALIZABLE_DRIVER_CHARS = re.compile(r"[=\x00-\x1f\x7f]")
 
 # ``git config --name-only --get-regexp ^filter\.`` emits one key per line; the driver
 # name is everything between the ``filter.`` prefix and the trailing ``.<var>``. The
@@ -101,10 +103,12 @@ def _base_hardening_flags() -> list[str]:
 
 
 def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
-    """Every gitattributes filter driver name configured for ``repo`` (system + local
-    config, matching the config surface every other git call here reads via
-    ``_base_env`` -- HOME/global is deliberately excluded from both, so what we
-    enumerate is exactly what those calls would run).
+    """Every gitattributes filter driver name configured for ``repo`` -- from system and
+    repo-local config, but NOT the user's global ``~/.gitconfig``. This runs under
+    ``_base_env()``, which every other git call here also uses; because that is a
+    *complete replacement* environment with no ``HOME``, git cannot locate the global
+    config file, so global drivers are read by neither the enumeration nor the ops it
+    protects. What we enumerate is therefore exactly the driver set those ops would run.
 
     Read with a raw subprocess carrying only ``_base_hardening_flags`` -- NOT ``_git``,
     which would recurse back through ``_hardening_flags`` -> here. Raises WorktreeError
