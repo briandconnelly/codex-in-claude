@@ -2235,6 +2235,11 @@ async def test_resources_declare_explicit_name_and_title():
         "codex://models": ("codex-models", "Codex model catalog"),
         "codex://error-envelope": ("codex-error-envelope", "Codex error envelope schema"),
         "codex://result-meta": ("codex-result-meta", "Codex result metadata schema"),
+        "codex://capabilities-result": (
+            "codex-capabilities-result",
+            "Codex capabilities result schema",
+        ),
+        "codex://status-result": ("codex-status-result", "Codex status result schema"),
     }
     for uri, (name, title) in expected.items():
         r = resources[uri]
@@ -3641,6 +3646,52 @@ def test_capabilities_include_schemas_single_and_deduped():
 
     caps = codex_capabilities(include_schemas=["result-meta", "result-meta"])
     assert list(caps["schemas"]) == ["result-meta"]
+
+
+def test_capabilities_result_resource_returns_full_schema():
+    from codex_in_claude.server import capabilities_result_resource
+
+    schema = capabilities_result_resource()
+    assert "tool_details" in schema["properties"]
+    assert "ToolCapability" in schema["$defs"]
+
+
+def test_status_result_resource_returns_full_schema():
+    from codex_in_claude.server import status_result_resource
+
+    schema = status_result_resource()
+    assert "rate_limit" in schema["properties"]
+    assert "RateLimit" in schema["$defs"]
+
+
+def test_capabilities_include_schemas_covers_all_four_tokens():
+    from codex_in_claude.server import codex_capabilities
+
+    caps = codex_capabilities(
+        include_schemas=["error-envelope", "result-meta", "capabilities-result", "status-result"]
+    )
+    assert set(caps["schemas"]) == {
+        "error-envelope",
+        "result-meta",
+        "capabilities-result",
+        "status-result",
+    }
+    assert "ToolCapability" in caps["schemas"]["capabilities-result"]["$defs"]
+    assert "RateLimit" in caps["schemas"]["status-result"]["$defs"]
+
+
+async def test_include_schemas_input_enum_lists_all_four_tokens():
+    """The MCP-advertised input enum — not just the runtime dict — must carry the new
+    tokens; a direct Python call bypasses FastMCP/Pydantic arg validation, so this is
+    what catches a forgotten IncludeSchemasParam Literal widening."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    schema = tools["codex_capabilities"].parameters
+    prop = schema["properties"]["include_schemas"]
+    # Optional[list[Literal[...]]] renders as a nullable anyOf; find the array branch.
+    branches = prop.get("anyOf", [prop])
+    items_schema = next(branch["items"] for branch in branches if "items" in branch)
+    enum = items_schema["enum"]
+    assert set(enum) == {"error-envelope", "result-meta", "capabilities-result", "status-result"}
 
 
 # --------------------------------------------------------------------------- #

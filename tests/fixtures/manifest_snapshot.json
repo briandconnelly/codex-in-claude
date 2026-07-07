@@ -1552,6 +1552,13 @@
   "resource_templates": [],
   "resources": [
     {
+      "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
+      "mimeType": "application/schema+json",
+      "name": "codex-capabilities-result",
+      "title": "Codex capabilities result schema",
+      "uri": "codex://capabilities-result"
+    },
+    {
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
       "mimeType": "application/schema+json",
       "name": "codex-error-envelope",
@@ -1571,6 +1578,13 @@
       "name": "codex-result-meta",
       "title": "Codex result metadata schema",
       "uri": "codex://result-meta"
+    },
+    {
+      "description": "The canonical full codex_status result schema. The tool's outputSchema opaques\n`rate_limit`/`raw_defaults`/`resolved_defaults` and points here for the full shape (#242).",
+      "mimeType": "application/schema+json",
+      "name": "codex-status-result",
+      "title": "Codex status result schema",
+      "uri": "codex://status-result"
     }
   ],
   "result_meta": [
@@ -2158,8 +2172,10 @@
               {
                 "items": {
                   "enum": [
+                    "capabilities-result",
                     "error-envelope",
-                    "result-meta"
+                    "result-meta",
+                    "status-result"
                   ],
                   "type": "string"
                 },
@@ -2170,7 +2186,7 @@
               }
             ],
             "default": null,
-            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope' and/or 'result-meta' schema in the response (the default payload omits them and points at the codex:// resources instead)."
+            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result' schema in the response (the default payload omits them and points at the codex:// resources instead)."
           }
         },
         "type": "object"
