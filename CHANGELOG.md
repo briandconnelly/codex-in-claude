@@ -143,6 +143,28 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   "temporary" error. No new error code is advertised (the existing `internal_error`
   code is reused), so no `fingerprint` bump.
 
+### Security
+
+- **Full gitattributes filter isolation for propose-tier worktree git ops** (#163).
+  Completes the repo-config hardening started in #156/#162 (which disabled hooks,
+  fsmonitor, and GPG signing). The `propose`-tier worktree git ops run in the *server*
+  process, not Codex's sandbox, so a repo-configured `clean`/`smudge`/`process`
+  gitattributes filter driver was repo-controlled code executing in-process — at
+  checkout (`git worktree add HEAD`), staging (`git add -A`), and working-tree diffs
+  (`git diff HEAD`, including the free `codex_dry_run`/`plan` preview). Every configured
+  filter driver is now neutralized via highest-precedence `git -c` overrides
+  (`filter.<d>.process=`/`.smudge=`/`.clean=` blanked, `.required=false`) enumerated
+  fresh per git call, so no filter command executes anywhere in the worktree lifecycle
+  while git still reconstructs the correct raw file bytes. A driver whose name cannot be
+  safely expressed as a `-c` override (contains `=` or a control char) fails closed with
+  a zero-spend error rather than running unneutralized. Same own-repo trust model as
+  #156 (relevant when `delegate` targets a repo whose git config the user does not fully
+  trust) — hardening, not a live exposure. Internal change to the worktree engine only;
+  no change to any agent-visible tool/resource/prompt surface, so no `fingerprint` bump.
+  A repo using a real filter (e.g. Git LFS) now materializes raw pointer content in the
+  throwaway worktree instead of smudged content — consistent with the review path's
+  existing `--no-filters` posture.
+
 ## [0.8.0] - 2026-07-05
 
 An agent-friendliness and spend-safety release. It completes the 2026-07 agent-friendliness audit

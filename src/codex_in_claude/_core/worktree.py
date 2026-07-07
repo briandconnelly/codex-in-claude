@@ -8,17 +8,17 @@ diff is exactly the agent's changes on top of that baseline. CLI-agnostic.
 
 Repo-config isolation: these porcelain git ops run in the *server process*, not in
 Codex's sandbox, so every invocation is prefixed with ``_hardening_flags`` (see
-there), which disables repo-configured hooks and fsmonitor; the baseline commit also
-passes ``--no-gpg-sign``. What stays disabled vs. what does not is documented on
-``_hardening_flags`` — notably, gitattributes filters still run at
-checkout/staging/diff, a documented residual under the issue's own-repo trust
-model."""
+there), which disables repo-configured hooks, fsmonitor, and every gitattributes
+``clean``/``smudge``/``process`` filter driver; the baseline commit also passes
+``--no-gpg-sign``. That closes the repo-controlled code-execution surface across the
+worktree lifecycle (checkout, staging, and working-tree diffs)."""
 
 from __future__ import annotations
 
 import contextlib
 import functools
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -79,27 +79,118 @@ def _empty_hooks_dir() -> str:
     return tempfile.mkdtemp(prefix="cic-nohooks-")
 
 
-def _hardening_flags() -> list[str]:
+# A configured filter driver's name (the ``<name>`` in ``[filter "<name>"]``) is
+# neutralized by emitting ``-c`` overrides for it. Those overrides are ``key=value``
+# argv tokens split on the FIRST ``=``, so a name containing ``=`` (or a control char
+# that cannot round-trip) would corrupt the override and leave the driver ACTIVE. We
+# refuse to run in that case rather than silently fail to neutralize (fail closed). The
+# rejected set is ``=`` plus every ASCII control character (C0 ``0x00-0x1f`` and DEL
+# ``0x7f``).
+_UNNEUTRALIZABLE_DRIVER_CHARS = re.compile(r"[=\x00-\x1f\x7f]")
+
+# ``git config --name-only --get-regexp ^filter\.`` emits one key per line; the driver
+# name is everything between the ``filter.`` prefix and the trailing ``.<var>``. The
+# name may itself contain dots (a multi-level subsection), so match greedily; it may also
+# be EMPTY -- ``[filter ""]`` enumerates as ``filter..smudge`` and is selectable from a
+# committed ``.gitattributes`` via ``path filter=`` -- so use ``*`` not ``+`` (a ``+``
+# would skip that key and leave the driver ACTIVE). ``*`` still does not match the
+# non-driver key ``filter.smudge`` (a single dot), which has no ``.<var>`` suffix.
+_FILTER_KEY_RE = re.compile(r"^filter\.(?P<name>.*)\.(?:smudge|clean|process|required)$")
+
+
+def _base_hardening_flags() -> list[str]:
+    """The repo-config-independent ``-c`` overrides: ``core.hooksPath`` -> an empty dir
+    (disables every repo hook, including ``post-checkout`` on ``worktree add`` and
+    ``post-commit`` on the baseline commit, which ``--no-verify`` does not suppress) and
+    ``core.fsmonitor=false`` (no fsmonitor program)."""
+    return ["-c", f"core.hooksPath={_empty_hooks_dir()}", "-c", "core.fsmonitor=false"]
+
+
+def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
+    """Every gitattributes filter driver name configured for ``repo`` -- from system and
+    repo-local config, but NOT the user's global ``~/.gitconfig``. This runs under
+    ``_base_env()``, which every other git call here also uses; because that is a
+    *complete replacement* environment with no ``HOME``, git cannot locate the global
+    config file, so global drivers are read by neither the enumeration nor the ops it
+    protects. What we enumerate is therefore exactly the driver set those ops would run.
+
+    Read with a raw subprocess carrying only ``_base_hardening_flags`` -- NOT ``_git``,
+    which would recurse back through ``_hardening_flags`` -> here. Raises WorktreeError
+    if enumeration fails, or if a driver name cannot be safely expressed as a ``-c``
+    override (fail closed; see ``_UNNEUTRALIZABLE_DRIVER_CHARS``)."""
+    proc = subprocess.run(
+        ["git", *_base_hardening_flags(), "config", "--name-only", "--get-regexp", r"^filter\."],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        env=_base_env(),
+    )
+    # returncode 1 is git's "no matching keys" (no filters configured), not an error.
+    if proc.returncode not in (0, 1):
+        raise WorktreeError(
+            f"enumerating filter drivers failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
+        )
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in proc.stdout.splitlines():
+        match = _FILTER_KEY_RE.match(line.strip())
+        if match is None:
+            continue
+        name = match.group("name")
+        if name in seen:
+            continue
+        seen.add(name)
+        if _UNNEUTRALIZABLE_DRIVER_CHARS.search(name):
+            # Cap the echoed name (like the [:200] git-stderr truncation elsewhere) so a
+            # pathologically long driver name can't bloat the client-visible envelope.
+            raise WorktreeError(
+                f"refusing to run: gitattributes filter driver {name[:100]!r} cannot be safely "
+                "neutralized (its name contains '=' or a control character)"
+            )
+        names.append(name)
+    return names
+
+
+def _filter_neutralization_flags(repo: str, timeout: int) -> list[str]:
+    """``-c`` overrides that disable every configured gitattributes filter driver so no
+    ``clean``/``smudge``/``process`` command executes. For each driver we blank the three
+    command hooks (an empty command is a no-op, leaving git to use the raw blob bytes)
+    and force ``required=false`` so a now-disabled ``required`` filter is non-fatal
+    instead of aborting checkout. ``process`` must be blanked explicitly: it takes
+    precedence over ``smudge``/``clean``, so overriding only those would still run it."""
+    flags: list[str] = []
+    for name in _configured_filter_drivers(repo, timeout):
+        flags += [
+            "-c",
+            f"filter.{name}.process=",
+            "-c",
+            f"filter.{name}.smudge=",
+            "-c",
+            f"filter.{name}.clean=",
+            "-c",
+            f"filter.{name}.required=false",
+        ]
+    return flags
+
+
+def _hardening_flags(repo: str, timeout: int) -> list[str]:
     """``git -c`` overrides prepended to every git call here, to neutralize
-    repo-configured code execution in the *server process* (these git ops run here,
-    not in Codex's sandbox): ``core.hooksPath`` -> an empty dir (disables every repo
-    hook, including ``post-checkout`` on ``worktree add`` and ``post-commit`` on the
-    baseline commit, which ``--no-verify`` does not suppress) and
-    ``core.fsmonitor=false`` (no fsmonitor program). The baseline commit additionally
-    passes ``--no-gpg-sign`` to keep a configured signing program from running.
+    repo-configured code execution in the *server process* (these git ops run here, not
+    in Codex's sandbox): repo hooks and fsmonitor (``_base_hardening_flags``) plus every
+    configured gitattributes filter driver (``_filter_neutralization_flags``), which git
+    would otherwise run during checkout (``worktree add``), staging (``git add -A`` in
+    seeding/capture), and working-tree diffs (``git diff HEAD``). The baseline commit
+    additionally passes ``--no-gpg-sign`` to keep a configured signing program from
+    running.
 
     Delivered as command-line ``-c`` (not ``GIT_CONFIG_*`` env, which git honors only
     since 2.31 and would fail *open* on an older binary) at the highest config
     precedence, so it overrides the repo's own local config and reaches even the
-    standalone ``git apply``.
-
-    What this does NOT disable: gitattributes ``clean``/``smudge``/``process``
-    filters, which git still runs during checkout (``worktree add``), staging
-    (``git add -A`` in seeding/capture), and working-tree diffs (``git diff HEAD``).
-    That is documented residual risk under the issue's own-repo trust model; full
-    filter isolation is a separate, larger redesign (no-checkout materialization +
-    plumbing on every diff/add path)."""
-    return ["-c", f"core.hooksPath={_empty_hooks_dir()}", "-c", "core.fsmonitor=false"]
+    standalone ``git apply``. The filter set is enumerated fresh per call (uncached) so a
+    driver added between operations in a long-lived server process is never missed."""
+    return [*_base_hardening_flags(), *_filter_neutralization_flags(repo, timeout)]
 
 
 def _base_env() -> dict[str, str]:
@@ -110,7 +201,7 @@ def _base_env() -> dict[str, str]:
 
 def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *_hardening_flags(), *args],
+        ["git", *_hardening_flags(repo, timeout), *args],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -269,7 +360,7 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     if not diff.stdout.strip():
         return None  # clean tree; HEAD is already the live state
     apply = subprocess.run(
-        ["git", *_hardening_flags(), "apply", "--whitespace=nowarn", "-"],
+        ["git", *_hardening_flags(wt, timeout), "apply", "--whitespace=nowarn", "-"],
         cwd=wt,
         input=diff.stdout,
         capture_output=True,
@@ -351,9 +442,13 @@ def capture_diff(wt: str, *, timeout: int) -> str:
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:
-    """Tear down the worktree and its temp parent. Best-effort; never raises."""
-    with contextlib.suppress(subprocess.SubprocessError, OSError):
+    """Tear down the worktree and its temp parent. Best-effort; never raises.
+
+    Also suppress ``WorktreeError``: the git calls route through ``_hardening_flags`` ->
+    filter enumeration, which fails closed on an un-neutralizable driver name. Teardown
+    must never let that (or any git failure) prevent ``shutil.rmtree`` or escape."""
+    with contextlib.suppress(WorktreeError, subprocess.SubprocessError, OSError):
         _git(repo, ["worktree", "remove", "--force", worktree.path], timeout)
     shutil.rmtree(worktree.parent, ignore_errors=True)
-    with contextlib.suppress(subprocess.SubprocessError, OSError):
+    with contextlib.suppress(WorktreeError, subprocess.SubprocessError, OSError):
         _git(repo, ["worktree", "prune"], timeout)

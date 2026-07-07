@@ -260,6 +260,17 @@ def test_remove_is_idempotent(repo):
     worktree.remove(str(repo), wt, timeout=30)
 
 
+def test_remove_survives_unneutralizable_filter_introduced_after_create(repo, tmp_path):
+    # remove() promises best-effort teardown that never raises. Its git calls now route
+    # through filter enumeration, which fails closed (WorktreeError) on an un-neutralizable
+    # driver name. If such config appears AFTER the worktree exists (create() would have
+    # failed closed earlier), teardown must still not raise and must delete the temp parent.
+    wt = worktree.create(str(repo), timeout=30)
+    _git(repo, "config", "filter.ev=il.smudge", "false")
+    worktree.remove(str(repo), wt, timeout=30)  # must not raise
+    assert not Path(wt.parent).exists()
+
+
 def test_ensure_repo_with_head_raises_outside_repo(tmp_path):
     import pytest
 
@@ -430,3 +441,164 @@ def test_capture_diff_does_not_run_fsmonitor(repo, tmp_path):
         assert not sentinel.exists()
     finally:
         worktree.remove(str(repo), wt, timeout=30)
+
+
+# --- gitattributes clean/smudge/process filter isolation (#163) --------------------
+#
+# git runs a repo-configured filter driver as an external command at several points in
+# the worktree lifecycle: smudge/process on checkout (`worktree add HEAD`), and
+# clean/process on staging + working-tree diffs (`git add`, `git diff HEAD`). Because
+# these ops run in the *server* process (not Codex's sandbox), that is repo-controlled
+# code execution. The hardening neutralizes every configured `filter.<driver>` via
+# highest-precedence `-c` overrides, so no filter command ever executes.
+
+
+def _filter_script(path, sentinel):
+    # A gitattributes filter that proves execution (touches the sentinel) while passing
+    # content through unchanged (`exec cat`), so it works both as a positive control and
+    # as a realistic clean/smudge filter that would not corrupt content when it does run.
+    path.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(sentinel))}\nexec cat\n")
+    path.chmod(0o755)
+
+
+def _install_filter(repo, script, *, process=False, required=False):
+    # Commit an in-tree `.gitattributes` binding every path to the `evil` driver, then
+    # activate the driver's config ONLY afterward so the setup commit itself never fires
+    # it (a false positive). `evil` selects clean+smudge unconditionally; process/required
+    # are opt-in for the harder cases.
+    (repo / ".gitattributes").write_text("* filter=evil\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add gitattributes")
+    _git(repo, "config", "filter.evil.smudge", str(script))
+    _git(repo, "config", "filter.evil.clean", str(script))
+    if process:
+        _git(repo, "config", "filter.evil.process", str(script))
+    if required:
+        _git(repo, "config", "filter.evil.required", "true")
+
+
+def test_smudge_filter_fires_under_plain_git(repo, tmp_path):
+    # Positive control: the sentinel filter really executes under unhardened git, so the
+    # "not sentinel.exists()" assertions below are meaningful and not false negatives.
+    sentinel = tmp_path / "control_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    _install_filter(repo, script)
+    wt = tmp_path / "plain_wt"
+    _git(repo, "worktree", "add", "--detach", str(wt), "HEAD")  # plain git -> smudge fires
+    try:
+        assert sentinel.exists()
+    finally:
+        _git(repo, "worktree", "remove", "--force", str(wt))
+
+
+def test_create_does_not_run_smudge_filter(repo, tmp_path):
+    # `git worktree add HEAD` checks out HEAD and would run the smudge filter; the
+    # neutralization must suppress it and leave the raw committed bytes in the worktree.
+    sentinel = tmp_path / "smudge_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    _install_filter(repo, script)
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert not sentinel.exists()
+        assert (Path(wt.path) / "a.py").read_text() == "x = 1\n"
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_seed_does_not_run_clean_filter(repo, tmp_path):
+    # Seeding uncommitted tracked changes reads `git diff HEAD` (clean filter on the
+    # working-tree->index conversion) and stages with `git add -A`; neither may execute
+    # the filter, and the baseline must still capture the raw dirty content.
+    sentinel = tmp_path / "clean_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    _install_filter(repo, script)
+    (repo / "a.py").write_text("x = 2\n")  # dirty tracked -> exercises _seed_uncommitted
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert wt.baseline_warning is None
+        assert not sentinel.exists()
+        assert (Path(wt.path) / "a.py").read_text() == "x = 2\n"
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_capture_diff_does_not_run_clean_filter(repo, tmp_path):
+    # `git add -A` in capture_diff would run the clean filter on the agent's edits; the
+    # neutralization must suppress it while the edit still appears in the diff.
+    sentinel = tmp_path / "clean_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    _install_filter(repo, script)
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        (Path(wt.path) / "a.py").write_text("x = 99\n")  # agent edit
+        diff = worktree.capture_diff(wt.path, timeout=30)
+        assert not sentinel.exists()
+        assert "x = 99" in diff
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_plan_does_not_run_clean_filter(repo, tmp_path):
+    # plan()'s `git diff --numstat HEAD` counts dirty tracked files and would run the
+    # clean filter during a free, no-spend preview; it must not.
+    sentinel = tmp_path / "clean_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    _install_filter(repo, script)
+    (repo / "a.py").write_text("x = 3\n")  # dirty tracked
+    data = worktree.plan(str(repo), timeout=30)
+    assert not sentinel.exists()
+    assert data.uncommitted_tracked_files == 1
+
+
+def test_create_does_not_run_required_process_filter(repo, tmp_path):
+    # A `filter.<d>.process` driver takes precedence over smudge/clean and, when
+    # `required`, aborts checkout if it does not run; the neutralization must disable the
+    # process filter AND keep checkout succeeding (required=false) without executing it.
+    sentinel = tmp_path / "process_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    _install_filter(repo, script, process=True, required=True)
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert not sentinel.exists()
+        assert (Path(wt.path) / "a.py").read_text() == "x = 1\n"
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_create_does_not_run_empty_named_filter(repo, tmp_path):
+    # A driver configured as `[filter ""]` enumerates from git as `filter..smudge` (empty
+    # subsection, two dots) and is selected by a committed `.gitattributes` entry
+    # `path filter=` (empty attribute value). The driver-name regex must still match the
+    # empty name so the driver is neutralized rather than silently left active.
+    sentinel = tmp_path / "empty_ran"
+    script = tmp_path / "flt.sh"
+    _filter_script(script, sentinel)
+    (repo / ".gitattributes").write_text("* filter=\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add gitattributes")
+    _git(repo, "config", "filter..smudge", str(script))
+    _git(repo, "config", "filter..clean", str(script))
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        assert not sentinel.exists()
+        assert (Path(wt.path) / "a.py").read_text() == "x = 1\n"
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_unneutralizable_filter_name_fails_closed(repo, tmp_path):
+    # A driver name that can't be safely expressed as a `git -c` override (an `=` splits
+    # key from value, so the override would silently miss it) must fail closed with a
+    # zero-spend WorktreeError rather than run the filter unneutralized.
+    (repo / ".gitattributes").write_text("* filter=ev=il\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "attrs")
+    _git(repo, "config", "filter.ev=il.smudge", str(tmp_path / "nope.sh"))
+    with pytest.raises(worktree.WorktreeError, match="cannot be safely neutralized"):
+        worktree.create(str(repo), timeout=30)
