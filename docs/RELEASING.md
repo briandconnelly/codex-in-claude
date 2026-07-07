@@ -12,15 +12,17 @@ publishes to PyPI via Trusted Publishing, and creates a GitHub Release whose bod
    For the very first release (before the project exists on PyPI), use PyPI's *pending publisher*
    flow with the same values.
 2. **GitHub environment.** Create a repository environment named `pypi` (Settings → Environments).
-   Optionally add required reviewers to gate the publish step behind a manual approval.
+   The maintainer (`briandconnelly`) is configured as a **required reviewer**, so the publish step
+   pauses for a manual approval before anything ships to PyPI. Self-review is left enabled, so the
+   maintainer can approve their own release deployment.
 3. **Protect release tags.** A push of any `v*.*.*` tag triggers a real PyPI publish, so tag creation
    is restricted by the active ruleset **`release-tags-protected`** (Settings → Rules → Rulesets;
-   target tags `v*`; blocks creation/update/deletion). Its `bypass_actors` is **empty** — while the
-   agent shares the maintainer's account this ruleset is the load-bearing publish control, so nothing
-   (not even the maintainer or `github-actions[bot]`) can push a `v*` tag without first relaxing it.
-   A dedicated release identity becomes the documented bypass actor once a distinct agent identity
-   exists (#99). Because bypass is empty, this ruleset also blocks the automated tag creation in the
-   manual publish path — see *Cutting a release* below for the temporary-relax step.
+   target tags `v*`; blocks creation/update/deletion). Its `bypass_actors` grants the **Repository
+   admin** role an `always` bypass (#99), so the maintainer can push a `v*` tag directly — no manual
+   toggle needed. The distinct agent identity (`briandconnelly-agent[bot]`) is **not** a bypass actor
+   and holds no admin role, so an agent cannot create a release tag: releases stay human-initiated.
+   `github-actions[bot]` is likewise not a bypass actor, so the workflow-dispatch path's automated
+   tag creation is still blocked by this ruleset (see *Cutting a release*).
 
 No PyPI API token is stored anywhere — publishing uses short-lived OIDC credentials.
 
@@ -38,15 +40,13 @@ No PyPI API token is stored anywhere — publishing uses short-lived OIDC creden
 2. Move the `## [Unreleased]` entries in `CHANGELOG.md` into a new dated section
    `## [X.Y.Z] - YYYY-MM-DD`, and leave a fresh empty `## [Unreleased]` on top.
 3. Open a PR, get CI green, and merge to `main`.
-4. **Temporarily relax tag protection.** Both release paths create a `v*` tag, which the
-   `release-tags-protected` ruleset blocks while its bypass is empty. In Settings → Rules → Rulesets →
-   **`release-tags-protected`**, set *Enforcement status* to **Disabled**, do the release (next step),
-   then set it back to **Active** immediately after the tag exists. (Once a dedicated release identity
-   is added as a bypass actor — see #99 — this manual toggle goes away.)
-5. Release one of two ways:
-   - **Tag push:** `git tag -a vX.Y.Z -m "codex-in-claude vX.Y.Z" && git push origin vX.Y.Z`.
-   - **Manual:** run the **Publish** workflow from `main` with the version as input; its `create-tag`
-     job pushes the tag as `github-actions[bot]` (also subject to the ruleset). If tag creation is
-     blocked, the `publish` job is skipped and nothing ships — zero spend.
-6. The workflow validates that all version references and the `## [X.Y.Z]` CHANGELOG section exist,
+4. Release by pushing the tag as the maintainer — the `always` bypass for the **Repository admin**
+   role on `release-tags-protected` (#99) lets it through with no toggle:
+   `git tag -a vX.Y.Z -m "codex-in-claude vX.Y.Z" && git push origin vX.Y.Z`.
+   (The **Publish** workflow's `workflow_dispatch` path instead creates the tag as
+   `github-actions[bot]`, which is *not* a bypass actor, so that path is still blocked by the ruleset
+   — either temporarily set the ruleset's *Enforcement status* to **Disabled** for that path only, or
+   just use the tag push above. If tag creation is blocked, the `publish` job is skipped and nothing
+   ships — zero spend.)
+5. The workflow validates that all version references and the `## [X.Y.Z]` CHANGELOG section exist,
    then publishes and creates the release. If validation fails, nothing is published (zero spend).
