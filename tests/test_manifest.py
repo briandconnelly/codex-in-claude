@@ -7,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "18d872595e530f7012b65efa1948aed40a2e76089c840ec1b7c95e24ab68e1a2"
+EXPECTED_MANIFEST_HASH = "66c74e0da1a034cee033ad1411b25f2294882081cb5ab275fbcc7ab7b05f42ee"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -48,9 +48,19 @@ async def test_build_manifest_covers_full_surface():
         "initialize",
         "error_envelope",
         "result_meta",
+        "capabilities_result",
+        "status_result",
         "capabilities",
     }
-    for section in ("resources", "initialize", "error_envelope", "result_meta", "capabilities"):
+    for section in (
+        "resources",
+        "initialize",
+        "error_envelope",
+        "result_meta",
+        "capabilities_result",
+        "status_result",
+        "capabilities",
+    ):
         assert m[section], f"manifest section {section} is empty"
 
 
@@ -79,6 +89,8 @@ async def test_fingerprint_covers_accounts_for_every_section():
         "initialize": {"initialize_response"},
         "error_envelope": {"error_envelope_schema"},
         "result_meta": {"result_meta_schema"},
+        "capabilities_result": {"capabilities_result_schema"},
+        "status_result": {"status_result_schema"},
         "capabilities": {"capabilities_payload", "capability_guarantees"},
     }
     m = await manifest.build_manifest()
@@ -138,6 +150,22 @@ async def test_build_manifest_captures_result_meta_schema():
     assert parsed, "result-meta content was not parsed into JSON"
     # The full Meta shape carries the fields the wire stub elides.
     assert any("tier" in block.get("properties", {}) for block in parsed)
+
+
+async def test_build_manifest_captures_capabilities_result_schema():
+    m = await manifest.build_manifest()
+    assert m["capabilities_result"], "capabilities_result section is empty"
+    parsed = [b["text"] for b in m["capabilities_result"] if isinstance(b.get("text"), dict)]
+    assert parsed, "capabilities-result content was not parsed into JSON"
+    assert any("ToolCapability" in block.get("$defs", {}) for block in parsed)
+
+
+async def test_build_manifest_captures_status_result_schema():
+    m = await manifest.build_manifest()
+    assert m["status_result"], "status_result section is empty"
+    parsed = [b["text"] for b in m["status_result"] if isinstance(b.get("text"), dict)]
+    assert parsed, "status-result content was not parsed into JSON"
+    assert any("RateLimit" in block.get("$defs", {}) for block in parsed)
 
 
 async def test_build_manifest_captures_initialize_without_version():

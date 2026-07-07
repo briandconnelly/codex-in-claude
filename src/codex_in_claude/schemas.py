@@ -34,6 +34,8 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     "initialize_response",  # serverInfo/protocolVersion/advertised capabilities/instructions
     "error_envelope_schema",  # codex://error-envelope content
     "result_meta_schema",  # codex://result-meta content
+    "capabilities_result_schema",  # codex://capabilities-result content (#242)
+    "status_result_schema",  # codex://status-result content (#242)
     "capabilities_payload",  # the codex_capabilities result body
     "capability_guarantees",  # the semantic promises within it (annotations/tiers/error contracts)
 )

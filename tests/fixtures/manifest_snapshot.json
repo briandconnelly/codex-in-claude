@@ -24,6 +24,8 @@
       "initialize_response",
       "error_envelope_schema",
       "result_meta_schema",
+      "capabilities_result_schema",
+      "status_result_schema",
       "capabilities_payload",
       "capability_guarantees"
     ],
@@ -592,6 +594,375 @@
     "tool_error_carrier": "tool result with isError: true; the error envelope is in structuredContent, and content[0].text mirrors it as JSON",
     "transport": "stdio"
   },
+  "capabilities_result": [
+    {
+      "mimeType": "application/schema+json",
+      "text": {
+        "$defs": {
+          "AsyncLifecycle": {
+            "additionalProperties": false,
+            "description": "Structured discovery metadata for an *_async tool that runs as a background job\nvia this server's *custom* job lifecycle rather than native MCP tasks/progress (#94).\n\nLets a client that looks specifically for native MCP tasks or `notifications/progress`\ninfer their absence structurally (not just from description prose), and discover the\nexact poll/result/consume/cancel/list tools and the JobStatus fields to branch on.\n\nActivity signal: the server exposes a polled (disk-persisted, poll-read) event-activity\nsignal via `activity_support`/`event_count_field`/`last_event_field`/`event_age_field`.\nThis is SEPARATE from `progress_support` — progress_support denotes native MCP\nnotifications/progress on THIS async/poll path, which has none (the sync await path\nstreams throttled notifications/progress instead), and stays \"none\".",
+            "properties": {
+              "activity_support": {
+                "const": "codex_events",
+                "default": "codex_events",
+                "title": "Activity Support",
+                "type": "string"
+              },
+              "cancel_tool": {
+                "title": "Cancel Tool",
+                "type": "string"
+              },
+              "consume_tool": {
+                "title": "Consume Tool",
+                "type": "string"
+              },
+              "event_age_field": {
+                "title": "Event Age Field",
+                "type": "string"
+              },
+              "event_count_field": {
+                "title": "Event Count Field",
+                "type": "string"
+              },
+              "last_event_field": {
+                "title": "Last Event Field",
+                "type": "string"
+              },
+              "lifecycle": {
+                "const": "codex_job_*",
+                "default": "codex_job_*",
+                "title": "Lifecycle",
+                "type": "string"
+              },
+              "list_tool": {
+                "title": "List Tool",
+                "type": "string"
+              },
+              "native_task_support": {
+                "const": false,
+                "default": false,
+                "title": "Native Task Support",
+                "type": "boolean"
+              },
+              "poll_after_field": {
+                "title": "Poll After Field",
+                "type": "string"
+              },
+              "poll_tool": {
+                "title": "Poll Tool",
+                "type": "string"
+              },
+              "progress_support": {
+                "const": "none",
+                "default": "none",
+                "title": "Progress Support",
+                "type": "string"
+              },
+              "result_ready_field": {
+                "title": "Result Ready Field",
+                "type": "string"
+              },
+              "result_tool": {
+                "title": "Result Tool",
+                "type": "string"
+              },
+              "status_field": {
+                "title": "Status Field",
+                "type": "string"
+              }
+            },
+            "required": [
+              "cancel_tool",
+              "consume_tool",
+              "event_age_field",
+              "event_count_field",
+              "last_event_field",
+              "list_tool",
+              "poll_after_field",
+              "poll_tool",
+              "result_ready_field",
+              "result_tool",
+              "status_field"
+            ],
+            "title": "AsyncLifecycle",
+            "type": "object"
+          },
+          "ToolCapability": {
+            "additionalProperties": false,
+            "properties": {
+              "async_lifecycle": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AsyncLifecycle"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "cost": {
+                "enum": [
+                  "active",
+                  "free"
+                ],
+                "title": "Cost",
+                "type": "string"
+              },
+              "error_codes": {
+                "items": {
+                  "enum": [
+                    "cli_contract_changed",
+                    "codex_auth_required",
+                    "codex_not_found",
+                    "codex_rate_limited",
+                    "context_too_large",
+                    "extra_args_rejected",
+                    "git_unavailable",
+                    "idempotency_conflict",
+                    "idempotency_in_progress",
+                    "idempotency_result_unavailable",
+                    "input_too_large",
+                    "internal_error",
+                    "invalid_arguments",
+                    "invalid_base",
+                    "invalid_commit",
+                    "invalid_json",
+                    "invalid_paths",
+                    "invalid_scope",
+                    "invalid_workspace_root",
+                    "job_cancelled",
+                    "job_failed",
+                    "job_not_found",
+                    "job_running",
+                    "job_timeout",
+                    "nonzero_exit",
+                    "not_a_git_repo",
+                    "resource_not_found",
+                    "schema_violation",
+                    "timeout",
+                    "transfer_failed",
+                    "transfer_incomplete",
+                    "transfer_unsupported",
+                    "unexpanded_env_placeholder",
+                    "unsupported_detail",
+                    "unsupported_isolation",
+                    "unsupported_sandbox",
+                    "unsupported_tier",
+                    "workspace_outside_roots",
+                    "worktree_error"
+                  ],
+                  "type": "string"
+                },
+                "title": "Error Codes",
+                "type": "array"
+              },
+              "key_optional_params": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Key Optional Params",
+                "type": "array"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "required_params": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Required Params",
+                "type": "array"
+              },
+              "returns": {
+                "title": "Returns",
+                "type": "string"
+              },
+              "stability": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "experimental",
+                      "preview",
+                      "stable"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Stability"
+              },
+              "use_when": {
+                "title": "Use When",
+                "type": "string"
+              }
+            },
+            "required": [
+              "cost",
+              "name",
+              "returns",
+              "use_when"
+            ],
+            "title": "ToolCapability",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "active_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Active Tools",
+            "type": "array"
+          },
+          "deprecation_policy": {
+            "title": "Deprecation Policy",
+            "type": "string"
+          },
+          "error_envelope_resource": {
+            "default": "codex://error-envelope",
+            "title": "Error Envelope Resource",
+            "type": "string"
+          },
+          "fingerprint": {
+            "default": "codex-in-claude/0.1/schema-32",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "fingerprint_covers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fingerprint Covers",
+            "type": "array"
+          },
+          "free_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Free Tools",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "negative_scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Negative Scope",
+            "type": "array"
+          },
+          "ok": {
+            "const": true,
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "prerequisites": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Prerequisites",
+            "type": "array"
+          },
+          "resource_error_carrier": {
+            "default": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure)",
+            "title": "Resource Error Carrier",
+            "type": "string"
+          },
+          "result_meta_resource": {
+            "default": "codex://result-meta",
+            "title": "Result Meta Resource",
+            "type": "string"
+          },
+          "sandboxes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sandboxes",
+            "type": "array"
+          },
+          "schemas": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schemas"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          },
+          "stability": {
+            "title": "Stability",
+            "type": "string"
+          },
+          "tiers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tiers",
+            "type": "array"
+          },
+          "tool_details": {
+            "items": {
+              "$ref": "#/$defs/ToolCapability"
+            },
+            "title": "Tool Details",
+            "type": "array"
+          },
+          "tool_error_carrier": {
+            "default": "tool result with isError: true; the error envelope is in structuredContent, and content[0].text mirrors it as JSON",
+            "title": "Tool Error Carrier",
+            "type": "string"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "active_tools",
+          "deprecation_policy",
+          "free_tools",
+          "name",
+          "negative_scope",
+          "prerequisites",
+          "sandboxes",
+          "scope",
+          "stability",
+          "tiers",
+          "transport",
+          "version"
+        ],
+        "title": "CapabilitiesResult",
+        "type": "object"
+      },
+      "uri": "codex://capabilities-result"
+    }
+  ],
   "error_envelope": [
     {
       "mimeType": "application/schema+json",
@@ -2154,6 +2525,457 @@
         "type": "object"
       },
       "uri": "codex://result-meta"
+    }
+  ],
+  "status_result": [
+    {
+      "mimeType": "application/schema+json",
+      "text": {
+        "$defs": {
+          "RateLimit": {
+            "additionalProperties": false,
+            "description": "Agent-facing rate-limit quota. A snapshot captured opportunistically from a\npaid call, interpreted against each window's reset clock. NOT a live query.\n\nAsymmetric by design: `available` is reported only when every binding window is\nobserved and healthy; an unobserved window (reset-passed, missing, or lacking\nresets_at) never yields `available` — it degrades to `unknown`. `limited`/\n`exhausted` come only from still-open windows, so they stay conservative even when\nthe snapshot is stale (captured usage is a lower bound on current usage).\n`unknown` means no fresh/usable reading yet — run any paid Codex call to populate\nit — not that anything is wrong.",
+            "properties": {
+              "age_seconds": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Age Seconds"
+              },
+              "as_of": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "As Of"
+              },
+              "home_unverified": {
+                "default": false,
+                "title": "Home Unverified",
+                "type": "boolean"
+              },
+              "is_stale": {
+                "default": false,
+                "title": "Is Stale",
+                "type": "boolean"
+              },
+              "limiting_window": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "primary",
+                      "secondary"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Limiting Window"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Note"
+              },
+              "plan_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Plan Type"
+              },
+              "primary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RateLimitWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "secondary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RateLimitWindow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "source": {
+                "default": "plugin_cache",
+                "enum": [
+                  "current_run",
+                  "plugin_cache"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "available",
+                  "exhausted",
+                  "limited",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "title": "RateLimit",
+            "type": "object"
+          },
+          "RateLimitWindow": {
+            "additionalProperties": false,
+            "description": "One quota window, interpreted for an agent. used_percent/remaining_percent are\ncurrent-ish (as of `as_of`) for an open window and are NULLED when reset_passed is\ntrue (the window rolled over since capture, so its captured usage is obsolete and\nits post-reset usage is unobserved). One source of truth: a present percentage\nalways means current-ish, never stale.",
+            "properties": {
+              "remaining_percent": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Remaining Percent"
+              },
+              "reset_passed": {
+                "default": false,
+                "title": "Reset Passed",
+                "type": "boolean"
+              },
+              "resets_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Resets At"
+              },
+              "seconds_until_reset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Seconds Until Reset"
+              },
+              "used_percent": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Used Percent"
+              },
+              "window_minutes": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Window Minutes"
+              }
+            },
+            "title": "RateLimitWindow",
+            "type": "object"
+          },
+          "RawDefaults": {
+            "additionalProperties": false,
+            "properties": {
+              "isolation": {
+                "title": "Isolation",
+                "type": "string"
+              },
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Model"
+              },
+              "sandbox": {
+                "title": "Sandbox",
+                "type": "string"
+              },
+              "tier": {
+                "title": "Tier",
+                "type": "string"
+              },
+              "timeout_seconds": {
+                "title": "Timeout Seconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "isolation",
+              "sandbox",
+              "tier",
+              "timeout_seconds"
+            ],
+            "title": "RawDefaults",
+            "type": "object"
+          },
+          "ResolvedDefaults": {
+            "additionalProperties": false,
+            "properties": {
+              "isolation": {
+                "enum": [
+                  "ignore-config",
+                  "ignore-rules",
+                  "inherit"
+                ],
+                "title": "Isolation",
+                "type": "string"
+              },
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Model"
+              },
+              "sandbox": {
+                "enum": [
+                  "danger-full-access",
+                  "read-only",
+                  "workspace-write"
+                ],
+                "title": "Sandbox",
+                "type": "string"
+              },
+              "tier": {
+                "enum": [
+                  "apply",
+                  "consult",
+                  "propose"
+                ],
+                "title": "Tier",
+                "type": "string"
+              },
+              "timeout_bounds": {
+                "items": {
+                  "type": "integer"
+                },
+                "title": "Timeout Bounds",
+                "type": "array"
+              },
+              "timeout_seconds": {
+                "title": "Timeout Seconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "isolation",
+              "sandbox",
+              "tier",
+              "timeout_bounds",
+              "timeout_seconds"
+            ],
+            "title": "ResolvedDefaults",
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "auth_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Auth Detail"
+          },
+          "caveat": {
+            "title": "Caveat",
+            "type": "string"
+          },
+          "codex_authenticated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Codex Authenticated"
+          },
+          "codex_found": {
+            "title": "Codex Found",
+            "type": "boolean"
+          },
+          "codex_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Codex Version"
+          },
+          "extra_args_configured": {
+            "default": false,
+            "title": "Extra Args Configured",
+            "type": "boolean"
+          },
+          "extra_args_count": {
+            "default": 0,
+            "title": "Extra Args Count",
+            "type": "integer"
+          },
+          "extra_args_valid": {
+            "default": true,
+            "title": "Extra Args Valid",
+            "type": "boolean"
+          },
+          "fingerprint": {
+            "default": "codex-in-claude/0.1/schema-32",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "flags_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Flags Warning"
+          },
+          "ok": {
+            "const": true,
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "rate_limit": {
+            "$ref": "#/$defs/RateLimit"
+          },
+          "raw_defaults": {
+            "$ref": "#/$defs/RawDefaults"
+          },
+          "readiness_detail": {
+            "title": "Readiness Detail",
+            "type": "string"
+          },
+          "ready": {
+            "default": false,
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "resolved_defaults": {
+            "$ref": "#/$defs/ResolvedDefaults"
+          },
+          "version_supported": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version Supported"
+          },
+          "version_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version Warning"
+          }
+        },
+        "required": [
+          "caveat",
+          "codex_found",
+          "raw_defaults",
+          "readiness_detail",
+          "resolved_defaults"
+        ],
+        "title": "StatusResult",
+        "type": "object"
+      },
+      "uri": "codex://status-result"
     }
   ],
   "tools": [
