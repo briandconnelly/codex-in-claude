@@ -60,6 +60,26 @@ def _reset_preflight_cache():
     preflight.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _scrub_inherited_git_env(monkeypatch):
+    """Scrub inherited git environment variables so tests that spawn git in
+    temp repos don't operate on (or corrupt) the invoking repository.
+
+    git exports ``GIT_DIR`` (and friends) to hooks. From a linked worktree it
+    is an absolute path into the main checkout's ``.git/worktrees/<name>``, so
+    a test subprocess running ``git`` with ``cwd=<tmp repo>`` resolves the wrong
+    repository — corrupting the invoking repo's index and config (#229).
+    Removing these vars lets each temp repo use its own ``.git``.
+    """
+    for var in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def clean_env(monkeypatch):
     """Strip CODEX_IN_CLAUDE_* env so tests see built-in defaults."""
