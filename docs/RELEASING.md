@@ -21,7 +21,7 @@ publishes to PyPI via Trusted Publishing, and creates a GitHub Release whose bod
    admin** role an `always` bypass (#99), so the maintainer can push a `v*` tag directly — no manual
    toggle needed. The distinct agent identity (`briandconnelly-agent[bot]`) is **not** a bypass actor
    and holds no admin role, so an agent cannot create a release tag: releases stay human-initiated.
-   `github-actions[bot]` is likewise not a bypass actor, so the workflow-dispatch path's automated
+   `github-actions[bot]` is likewise not a bypass actor, so the `workflow_dispatch` path's automated
    tag creation is still blocked by this ruleset (see *Cutting a release*).
 
 No PyPI API token is stored anywhere — publishing uses short-lived OIDC credentials.
@@ -44,9 +44,10 @@ No PyPI API token is stored anywhere — publishing uses short-lived OIDC creden
    role on `release-tags-protected` (#99) lets it through with no toggle:
    `git tag -a vX.Y.Z -m "codex-in-claude vX.Y.Z" && git push origin vX.Y.Z`.
    (The **Publish** workflow's `workflow_dispatch` path instead creates the tag as
-   `github-actions[bot]`, which is *not* a bypass actor, so that path is still blocked by the ruleset
-   — either temporarily set the ruleset's *Enforcement status* to **Disabled** for that path only, or
-   just use the tag push above. If tag creation is blocked, the `publish` job is skipped and nothing
-   ships — zero spend.)
+   `github-actions[bot]`, which is *not* a bypass actor, so that path is still blocked by the ruleset.
+   Enforcement status is global, so to use that path you must temporarily set the ruleset's
+   *Enforcement status* to **Disabled** while running the `workflow_dispatch` release and re-enable it
+   immediately after — or just use the tag push above. If tag creation is blocked, the `publish` job
+   is skipped and nothing ships — zero spend.)
 5. The workflow validates that all version references and the `## [X.Y.Z]` CHANGELOG section exist,
    then publishes and creates the release. If validation fails, nothing is published (zero spend).
