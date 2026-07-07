@@ -186,11 +186,19 @@ def _diff_args(scope: str, base: str | None, commit: str | None) -> list[str]:
     if scope == "working_tree":
         return [*common, "--end-of-options", "HEAD"]
     if scope == "branch":
-        if not base or not _valid_ref(base):
+        # Distinguish an omitted base from a present-but-invalid one: an omitted input
+        # renders as "omitted" rather than leaking the Python literal `None`/`''` into
+        # the human message, while a real bad ref keeps its `repr` (which surfaces
+        # stray whitespace/quoting the caller needs to see).
+        if not base:
+            raise InvalidBaseError("base ref is required for a branch diff but was omitted")
+        if not _valid_ref(base):
             raise InvalidBaseError(f"invalid base ref: {base!r}")
         return [*common, "--end-of-options", f"{base}...HEAD"]
     if scope == "commit":
-        if not commit or not _valid_ref(commit):
+        if not commit:
+            raise InvalidCommitError("commit is required for a commit diff but was omitted")
+        if not _valid_ref(commit):
             raise InvalidCommitError(f"invalid commit: {commit!r}")
         # `git show` (not diff) gives the commit's own change set and handles root
         # commits (which have no parent for a `^!`/`^..` form to resolve against).
