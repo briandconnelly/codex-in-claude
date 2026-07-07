@@ -1084,7 +1084,7 @@ JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 def published_schema(
     *success_models: type[BaseModel],
-    opaque_fields: dict[str, dict] | None = None,  # type: ignore[type-arg]
+    opaque_fields: dict[str, dict[str, Any]] | None = None,
 ) -> dict:  # type: ignore[type-arg]
     """Build a tool's advertised outputSchema: the success branch(es) plus ONE fully
     opaque error branch. The opaque branch references no $def, so $defs is exactly the
