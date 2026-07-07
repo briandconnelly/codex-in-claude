@@ -171,34 +171,41 @@ def _is_meta_bearing(sch) -> bool:
     return False
 
 
+def _annotation_descriptions(node):
+    """Yield object-level ``description`` annotation values (not property NAMES)."""
+    if isinstance(node, dict):
+        _MAPS = frozenset(
+            ("properties", "$defs", "definitions", "patternProperties", "dependentSchemas")
+        )
+        if "description" in node and isinstance(node["description"], str):
+            yield node["description"]
+        for k, v in node.items():
+            if k in _MAPS and isinstance(v, dict):
+                for sub in v.values():
+                    yield from _annotation_descriptions(sub)
+            elif k != "description":
+                yield from _annotation_descriptions(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _annotation_descriptions(v)
+
+
 @pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
 def test_noise_stripped_except_pointers(name, sch):
-    # No schema-object-level ``title`` annotations (generated Pydantic noise).
     assert not _annotation_title_present(sch), f"{name} has a title annotation"
-    # No ``default`` annotations anywhere (a field named ``default`` is fine but
-    # Pydantic models here do not use that name, so _has_key is safe for defaults).
     assert not _has_key(sch, "default"), f"{name} has a default"
     text = json.dumps(sch)
-    # The opaque-error pointer description always survives.
     assert "codex://error-envelope" in text
-    # A meta-bearing schema also keeps its opaque result-meta pointer (audit F1): two
-    # surviving descriptions. A schema without a success-branch meta keeps only one.
+    # Every surviving description is an intentional kept pointer, never generated noise.
+    for desc in _annotation_descriptions(sch):
+        assert desc in s._KEPT_DESCRIPTIONS, f"{name}: unexpected description {desc!r}"
     if _is_meta_bearing(sch):
-        assert text.count('"description"') == 2, f"{name}: expected error + meta pointer"
         assert "codex://result-meta" in text
-        assert '"$defs":{"Meta"' not in text.replace(" ", "")
         assert '"Meta":' not in text, f"{name}: Meta $def should be pruned"
-    else:
-        assert text.count('"description"') == 1, f"{name}: expected only error pointer"
-    # Finding.title property is preserved in schemas that carry findings.
     if "Finding" in sch.get("$defs", {}):
         finding_def = sch["$defs"]["Finding"]
-        assert "title" not in finding_def, (
-            "Finding $def must not have an object-level title annotation"
-        )
-        assert "title" in finding_def.get("properties", {}), (
-            "Finding.title property must be present"
-        )
+        assert "title" not in finding_def
+        assert "title" in finding_def.get("properties", {})
 
 
 @pytest.mark.parametrize("name,sch", _ALL_SCHEMAS.items())
@@ -258,11 +265,76 @@ def test_meta_closure_pruned_from_defs(name, sch):
 
 def test_prune_keeps_defs_referenced_outside_meta():
     """Pruning is per-schema reachability, not a hardcoded drop-list: a def reachable
-    WITHOUT going through Meta must survive.  StatusResult references RateLimit directly
-    (no meta field), and DryRunResult references ContextSummary directly."""
-    assert "RateLimit" in s.STATUS_SCHEMA["$defs"], "RateLimit must survive in STATUS_SCHEMA"
-    assert "RateLimitWindow" in s.STATUS_SCHEMA["$defs"]
+    WITHOUT going through an opaqued field must survive. DryRunResult references
+    ContextSummary directly and keeps it (StatusResult's RateLimit is now opaqued —
+    see test_status_capabilities_closure_pruned_from_defs)."""
     assert "ContextSummary" in s.DRY_RUN_SCHEMA["$defs"], "ContextSummary must survive in dry_run"
+
+
+# ---------------------------------------------------------------------------
+# #242: opaque nested payload fields on the two free discovery tools
+# ---------------------------------------------------------------------------
+
+_OPAQUE_FIELD_SCHEMAS = {
+    "CAPABILITIES_SCHEMA": (s.CAPABILITIES_SCHEMA, {"tool_details": "array"}),
+    "STATUS_SCHEMA": (
+        s.STATUS_SCHEMA,
+        {"rate_limit": "object", "raw_defaults": "object", "resolved_defaults": "object"},
+    ),
+}
+
+
+def _success_branch(sch):
+    return next(
+        b for b in sch["anyOf"] if b.get("properties", {}).get("ok", {}).get("const") is True
+    )
+
+
+@pytest.mark.parametrize("name,pair", _OPAQUE_FIELD_SCHEMAS.items())
+def test_opaque_payload_fields_are_pointers(name, pair):
+    sch, fields = pair
+    props = _success_branch(sch)["properties"]
+    for field, json_type in fields.items():
+        stub = props[field]
+        assert set(stub) == {"type", "description"}, f"{name}.{field} not fully opaque: {stub}"
+        assert stub["type"] == json_type
+        assert stub["description"] in s._KEPT_DESCRIPTIONS
+        assert "codex://" in stub["description"]
+
+
+def test_status_capabilities_closure_pruned_from_defs():
+    """Opaquing the nested fields orphans their whole $def closure, which pruning drops."""
+    assert set(s.CAPABILITIES_SCHEMA.get("$defs", {})) == set()
+    assert set(s.STATUS_SCHEMA.get("$defs", {})) == set()
+
+
+def test_full_result_schemas_are_complete_contracts():
+    """The on-demand full schemas keep every field + the $defs the wire schema drops."""
+    cap = s.CAPABILITIES_RESULT_SCHEMA
+    assert cap["$schema"] == s.JSON_SCHEMA_DIALECT
+    assert "tool_details" in cap["properties"]
+    assert "ToolCapability" in cap["$defs"]
+    st = s.STATUS_RESULT_SCHEMA
+    assert st["$schema"] == s.JSON_SCHEMA_DIALECT
+    assert "rate_limit" in st["properties"]
+    assert "RateLimit" in st["$defs"]
+
+
+def test_loosened_schemas_accept_real_payloads():
+    """Widening must not reject the emitted payload (the core guarantee)."""
+    import jsonschema
+
+    from codex_in_claude.server import codex_capabilities, codex_status
+
+    jsonschema.validate(codex_capabilities(), s.CAPABILITIES_SCHEMA)
+    jsonschema.validate(codex_status(), s.STATUS_SCHEMA)
+
+
+def test_loosened_schemas_stay_under_byte_budget():
+    """A future change must not silently reintroduce the $defs bloat (was 3864/3429 B)."""
+    for name, (sch, _) in _OPAQUE_FIELD_SCHEMAS.items():
+        size = len(json.dumps(sch, separators=(",", ":")))
+        assert size < 2000, f"{name} is {size} B, over the 2000 B budget"
 
 
 def test_result_meta_schema_is_full_meta_contract():
@@ -641,8 +713,8 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     assert lc.activity_support == "codex_events"
 
 
-def test_fingerprint_bumped_to_schema_31():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-31"
+def test_fingerprint_bumped_to_schema_32():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-32"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

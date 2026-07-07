@@ -42,6 +42,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`codex_capabilities` / `codex_status` output schemas now serve their heavy payload
+  schemas on demand** (#242). The two free discovery tools were the last outputSchemas still
+  inlining their full success closure in `tools/list`; they now opaque their heavy nested
+  fields — `codex_capabilities.tool_details` and `codex_status.rate_limit`/`raw_defaults`/
+  `resolved_defaults` — to compact `{type, description}` pointers and prune the orphaned
+  `$defs` (`ToolCapability`/`AsyncLifecycle`; `RateLimit`/`RateLimitWindow`/`RawDefaults`/
+  `ResolvedDefaults`), the same opaque-pointer treatment `meta` already gets (#173). Every
+  top-level scalar field stays advertised, so first-pass discovery is unchanged. The full
+  schemas are published at two new resources, `codex://capabilities-result` and
+  `codex://status-result`, and are also reachable as a resource-blind fallback via
+  `codex_capabilities(include_schemas=["capabilities-result", "status-result"])`; their
+  content is snapshot-guarded in the manifest under new `FINGERPRINT_COVERS` tokens
+  (`capabilities_result_schema`/`status_result_schema`). Cuts ~4.2KB from cold-start
+  `tools/list`. The emitted payloads are unchanged and the advertised schemas are widened,
+  not narrowed — a backward-compatible change (not breaking). Result `fingerprint`
+  `codex-in-claude/0.1/schema-31` → `codex-in-claude/0.1/schema-32`.
+
 - **Bundled skills now cover `codex_transfer`** (#234). `collaborating-with-codex` gains a
   "Choosing a tool" row, `/codex:transfer` in the slash-command list, a per-tool bullet (free but
   not read-only — creates a persistent thread in `$CODEX_HOME`; `transcript_path` discovery; not

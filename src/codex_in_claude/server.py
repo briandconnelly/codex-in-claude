@@ -51,6 +51,7 @@ from codex_in_claude._core import gitdiff, idempotency, redaction, workspace, wo
 from codex_in_claude.codex_models import read_model_catalog
 from codex_in_claude.errors import make_error, serialize_error, serialize_error_info
 from codex_in_claude.schemas import (
+    CAPABILITIES_RESULT_SCHEMA,
     CAPABILITIES_SCHEMA,
     CONSULT_RESULT_SCHEMA,
     DELEGATE_DRY_RUN_SCHEMA,
@@ -66,6 +67,7 @@ from codex_in_claude.schemas import (
     MODEL_CATALOG_SCHEMA,
     RESULT_META_SCHEMA,
     REVIEW_RESULT_SCHEMA,
+    STATUS_RESULT_SCHEMA,
     STATUS_SCHEMA,
     TRANSFER_SCHEMA,
     AsyncLifecycle,
@@ -659,11 +661,12 @@ IdempotencyKeyParam = Annotated[
     ),
 ]
 IncludeSchemasParam = Annotated[
-    list[Literal["error-envelope", "result-meta"]] | None,
+    list[Literal["error-envelope", "result-meta", "capabilities-result", "status-result"]] | None,
     Field(
         description="Opt-in tool-reachable fallback for resource-blind clients: also embed "
-        "the full 'error-envelope' and/or 'result-meta' schema in the response (the default "
-        "payload omits them and points at the codex:// resources instead).",
+        "the full 'error-envelope', 'result-meta', 'capabilities-result', and/or "
+        "'status-result' schema in the response (the default payload omits them and points "
+        "at the codex:// resources instead).",
     ),
 ]
 # codex_delegate_dry_run reuses these params but never calls Codex or returns a diff, so
@@ -1687,6 +1690,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
         available = {
             "error-envelope": ERROR_ENVELOPE_SCHEMA,
             "result-meta": RESULT_META_SCHEMA,
+            "capabilities-result": CAPABILITIES_RESULT_SCHEMA,
+            "status-result": STATUS_RESULT_SCHEMA,
         }
         caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas) if k in available}
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
@@ -1745,6 +1750,30 @@ def result_meta_resource() -> dict:
     """The canonical full result-metadata schema (Meta). Every success envelope carries an
     opaque `meta` pointer instead of inlining this per tool; this is the full shape (F1)."""
     return RESULT_META_SCHEMA
+
+
+@mcp.resource(
+    "codex://capabilities-result",
+    name="codex-capabilities-result",
+    title="Codex capabilities result schema",
+    mime_type="application/schema+json",
+)
+def capabilities_result_resource() -> dict:
+    """The canonical full codex_capabilities result schema. The tool's outputSchema opaques
+    `tool_details` and points here for the full shape (#242)."""
+    return CAPABILITIES_RESULT_SCHEMA
+
+
+@mcp.resource(
+    "codex://status-result",
+    name="codex-status-result",
+    title="Codex status result schema",
+    mime_type="application/schema+json",
+)
+def status_result_resource() -> dict:
+    """The canonical full codex_status result schema. The tool's outputSchema opaques
+    `rate_limit`/`raw_defaults`/`resolved_defaults` and points here for the full shape (#242)."""
+    return STATUS_RESULT_SCHEMA
 
 
 # --------------------------------------------------------------------------- #
