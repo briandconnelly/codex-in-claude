@@ -32,6 +32,37 @@ def _fake_result(last_message, *, exit_code=0, stderr="", events=""):
     )
 
 
+# ----------------------------------------------------- platform startup guard
+def test_posix_platform_guard_refuses_native_windows(monkeypatch, capsys):
+    """On os.name == 'nt' with no escape hatch, the server refuses to start (#232)."""
+    monkeypatch.setattr(server.os, "name", "nt")
+    monkeypatch.delenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        server._enforce_posix_platform()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "requires a POSIX platform" in err
+    assert "WSL2" in err
+
+
+def test_posix_platform_guard_escape_hatch_warns(monkeypatch, capsys):
+    """The escape hatch downgrades the hard exit to a stderr warning (#232)."""
+    monkeypatch.setattr(server.os, "name", "nt")
+    monkeypatch.setenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", "1")
+    server._enforce_posix_platform()  # must not raise
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM" in err
+
+
+def test_posix_platform_guard_noop_on_posix(monkeypatch, capsys):
+    """On a POSIX platform the guard is a no-op (#232)."""
+    monkeypatch.setattr(server.os, "name", "posix")
+    monkeypatch.delenv("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM", raising=False)
+    server._enforce_posix_platform()  # must not raise
+    assert capsys.readouterr().err == ""
+
+
 # The sync consult/review/delegate tools now run the orchestration in a detached
 # worker subprocess (#169), so a monkeypatched `run_codex_exec`/`gather_diff`/worktree
 # seam can no longer be observed *through* the sync tool. These helpers call the same

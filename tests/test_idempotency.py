@@ -315,6 +315,32 @@ def test_lock_zero_timeout_acquires_when_free(tmp_path):
         pass
 
 
+def test_lock_degrades_when_fcntl_unavailable(tmp_path, monkeypatch):
+    """A fcntl-less platform (non-POSIX) degrades to no cross-process lock instead of
+    crashing on `import fcntl` (#232). Mirrors the worker-lock shim in _core/jobs.py
+    and the killpg-less simulation in tests/test_gitdiff.py. The server startup guard
+    rejects native Windows before this path is reached; this keeps _core internally
+    consistent and extractable."""
+    import sys
+
+    # `import fcntl` raises ImportError when None occupies its sys.modules slot.
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    idx = _idx(tmp_path)
+
+    # _acquire_flock no-ops rather than raising ImportError on a fcntl-less platform.
+    fd = os.open(tmp_path / "fd", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        idem._acquire_flock(fd, None)  # must not raise
+    finally:
+        os.close(fd)
+
+    # The lock() contextmanager still yields (no cross-process lock, but no crash) and
+    # its release path skips the LOCK_UN that would otherwise NameError on `fcntl`.
+    with idx.lock():
+        entered = True
+    assert entered
+
+
 @pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
 def test_lock_rejects_non_finite_or_negative_timeout(tmp_path, bad):
     idx = _idx(tmp_path)

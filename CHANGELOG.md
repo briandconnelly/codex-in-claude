@@ -195,6 +195,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `ErrorDetail`; `timeout_seconds` is clamped rather than rejected; and echoing a value the caller
   just sent is redundant with `field`/`reason`/`allowed_values`. See #244 for the full rationale.)
 
+- **Packaging and startup now declare POSIX-only and fail loudly on Windows** (#232). The
+  `Operating System :: OS Independent` trove classifier was incorrect: the async-job safety
+  layer (`fcntl` advisory locks, process-group teardown via `os.killpg`/`start_new_session`,
+  and `SIGTERM`-driven graceful cancellation) is POSIX-only and silently degrades on Windows.
+  The classifier is now `Operating System :: MacOS` + `Operating System :: POSIX :: Linux`;
+  `README.md` and `COMPATIBILITY.md` state the platform contract; the server entrypoint
+  refuses to start on `os.name == "nt"` with a WSL2 pointer before the transport loop runs
+  (overridable to a stderr warning via `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1` for
+  consult-only use); and the bare `import fcntl` in `_core/idempotency.py` is now guarded
+  the same way `_core/jobs.py`'s worker lock already is, so `_core` stays internally
+  consistent on fcntl-less platforms. WSL2 reports `posix` and is unaffected. Not
+  manifest-covered and not backward-incompatible — no `fingerprint` bump.
+
 - **Exception-derived `internal_error` messages no longer leave a dangling separator** (#203).
   Empty or fully redacted exception text now renders as just the exception class name in the
   generic tool boundary, background-job spawn failure, and worker crash sinks instead of ending

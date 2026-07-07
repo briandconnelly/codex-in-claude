@@ -3687,6 +3687,37 @@ def _install_signal_logging(log: logging.Logger) -> None:
             signal.signal(signum, _make_signal_handler(log, previous))
 
 
+def _enforce_posix_platform() -> None:
+    """Refuse to serve on a non-POSIX platform (native Windows).
+
+    The async-job safety layer — ``fcntl`` advisory locks (pid-reuse / zombie-worker
+    guards), process-group teardown (``os.killpg``/``start_new_session``), and
+    ``SIGTERM``-driven graceful cancellation — is POSIX-only; on Windows it silently
+    degrades to owned-children-only locking and direct-PID kills that orphan codex's
+    child processes. Rather than ship a half-safe server, fail loudly before the
+    transport loop starts. WSL2 reports ``os.name == "posix"`` and is unaffected.
+
+    ``CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1`` downgrades the hard exit to a
+    stderr warning for operators who knowingly accept consult-only, unsupported use
+    (#232)."""
+    if os.name != "nt":
+        return
+    if os.environ.get("CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM") == "1":
+        sys.stderr.write(
+            "WARNING: CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1 set on a non-POSIX "
+            "platform (os.name=nt); the async-job safety layer (fcntl locks, process "
+            "groups, signal handlers) cannot hold. Consult-only, unsupported; do not "
+            "use delegate/review against untrusted work.\n"
+        )
+        return
+    sys.stderr.write(
+        "codex-in-claude requires a POSIX platform (macOS or Linux); on Windows, run "
+        "it under WSL2. Set CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1 to override "
+        "(consult-only, unsupported).\n"
+    )
+    raise SystemExit(1)
+
+
 def main() -> None:
     """Console-script entrypoint: run the MCP server over stdio.
 
@@ -3695,6 +3726,7 @@ def main() -> None:
     fatal error out of the transport loop leaves an actionable stderr breadcrumb
     (name, version, reconnect hint) instead of a silent exit, and clean disconnects
     are logged as shutdown rather than crashes (#76)."""
+    _enforce_posix_platform()
     log = obs.configure()
     _install_signal_logging(log)
     log.info("codex-in-claude %s starting (stdio)", __version__)

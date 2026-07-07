@@ -6,6 +6,24 @@ Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
 Verified against `codex-cli 0.142`.
 
+## Platform support
+
+**macOS or Linux (POSIX) only.** The async-job safety layer — `fcntl` advisory locks
+(pid-reuse / zombie-worker guards), process-group teardown (`os.killpg` /
+`start_new_session`), and `SIGTERM`-driven graceful cancellation — is POSIX-only. On a
+non-POSIX platform these guarantees quietly degrade to owned-children-only locking and
+direct-PID kills that orphan `codex`'s child processes, so the server refuses to start
+there instead of shipping a half-safe process model.
+
+- [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) reports `os.name == "posix"` and
+  is unaffected (it *is* Linux).
+- `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1` downgrades the startup refusal to a
+  stderr warning for operators who knowingly accept consult-only, unsupported use; do not
+  use `codex_delegate`/`codex_review_changes` against untrusted work in that mode.
+
+The `pyproject.toml` trove classifiers declare `Operating System :: MacOS` and
+`Operating System :: POSIX :: Linux` (not `OS Independent`) so PyPI reflects this.
+
 ## What we invoke
 
 - `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]

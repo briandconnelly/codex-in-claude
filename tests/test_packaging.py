@@ -73,6 +73,16 @@ def test_requires_python_floor_is_lowest_declared():
     assert floor.group(1) == lowest
 
 
+def test_operating_system_classifiers_declare_posix_only():
+    """The async-job safety layer is POSIX-only, so the trove classifiers must not
+    advertise `OS Independent` and must name the supported POSIX platforms (#232)."""
+    classifiers = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["classifiers"]
+    os_classifiers = {c for c in classifiers if c.startswith("Operating System ::")}
+    assert "Operating System :: OS Independent" not in os_classifiers
+    assert "Operating System :: MacOS" in os_classifiers
+    assert "Operating System :: POSIX :: Linux" in os_classifiers
+
+
 def test_plugin_manifest_valid_and_versioned():
     manifest = _load_json(".claude-plugin/plugin.json")
     assert manifest["name"] == "codex-in-claude"
