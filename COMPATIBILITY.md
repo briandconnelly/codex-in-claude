@@ -6,6 +6,17 @@ Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
 Verified against `codex-cli 0.142`.
 
+## Platform support
+
+`codex-in-claude` targets **POSIX** platforms (Linux and macOS). Cross-process safety
+for the async job store and idempotency index relies on `fcntl` advisory locks,
+`os.killpg`/`os.getpgid` for process-group teardown, and `start_new_session=True` for
+session isolation — none of which exist on Windows. On Windows the idempotency lock
+raises a clear `RuntimeError` rather than an opaque `ImportError`; other POSIX-only
+guarantees (worker PID-reuse protection, full child-process teardown) degrade
+gracefully where guarded. The trove classifiers reflect this (`POSIX`, not
+`OS Independent`).
+
 ## What we invoke
 
 - `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]

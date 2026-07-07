@@ -73,7 +73,13 @@ def _acquire_flock(fd: int, timeout: float | None) -> None:
     :class:`LockTimeout` on expiry; ``0`` is a single non-blocking attempt. A non-finite
     or negative ``timeout`` is a ``ValueError``. Only contention (``BlockingIOError``) is
     retried — any other ``OSError`` propagates so a real filesystem fault is not masked."""
-    import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
+    try:
+        import fcntl  # noqa: PLC0415 - platform-guarded lazy import (POSIX only)
+    except ImportError:  # pragma: no cover - non-POSIX
+        raise RuntimeError(
+            "cross-process idempotency locking requires POSIX fcntl, which is "
+            "unavailable on this platform; see COMPATIBILITY.md"
+        ) from None
 
     if timeout is None:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -249,7 +255,13 @@ class IdempotencyIndex:
           instead of an indefinite hang. ``0`` makes a single non-blocking attempt. A
           non-finite or negative value is a ``ValueError``.
         """
-        import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
+        try:
+            import fcntl  # noqa: PLC0415 - platform-guarded lazy import (POSIX only)
+        except ImportError:  # pragma: no cover - non-POSIX
+            raise RuntimeError(
+                "cross-process idempotency locking requires POSIX fcntl, which is "
+                "unavailable on this platform; see COMPATIBILITY.md"
+            ) from None
 
         self.dir.mkdir(parents=True, exist_ok=True)
         # Not a ``*.json`` record, so sweep()/reserve() never treat it as an entry.
