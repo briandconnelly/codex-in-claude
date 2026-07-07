@@ -10,10 +10,11 @@ import pytest
 
 from codex_in_claude._core import gitdiff, streamcap
 from codex_in_claude._core.redaction import DiffRedactor
+from conftest import run_git
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    run_git(cwd, *args)
 
 
 @pytest.fixture

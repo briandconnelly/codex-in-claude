@@ -98,6 +98,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **The test suite no longer corrupts the invoking repository when run with an inherited `GIT_DIR`**
+  (#229). Under a pre-push hook launched from a linked worktree, `GIT_DIR` (and friends) are exported;
+  the fixtures' `git add`/`commit`/`config` calls then operated on the *real* repo with a temp dir as
+  the working tree — staging every tracked file as deleted and rewriting the real repo's config
+  (`core.bare`, `core.worktree`, test identity). The shared test helpers now scrub the git-location
+  vars (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`) so
+  every git subprocess a test spawns is anchored purely by `cwd`, via both a per-call scrub (`run_git`)
+  and an autouse blanket fixture. Test-infrastructure only — production `_core` git subprocesses
+  already pass a fresh, non-inherited environment and were never exposed; no `fingerprint` bump.
+
 - **An omitted `base`/`commit` on a `branch`/`commit` review no longer leaks the Python literal
   `None` into the error message** (#244). `codex_review_changes`/`codex_dry_run` with `scope="branch"`
   and no `base` (or `scope="commit"` and no `commit`) previously produced `invalid base ref: None`;

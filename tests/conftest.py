@@ -2,10 +2,54 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import pytest
 
 from codex_in_claude import preflight
 from codex_in_claude._core.runtime import CommandRun
+
+# Git environment variables that redirect where git reads/writes its object store,
+# index, and repo config. If pytest is invoked with any of these exported (e.g. by a
+# pre-push hook running from a linked worktree, where GIT_DIR is set), the fixtures'
+# `git add`/`commit`/`config` calls would operate on the *invoking* repo with a temp
+# dir as the working tree -- staging every real file as deleted and rewriting the real
+# repo's config. Scrub them so every git subprocess a test spawns is anchored purely by
+# `cwd`. See #229.
+GIT_ISOLATION_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+)
+
+
+def scrubbed_git_env() -> dict[str, str]:
+    """A copy of the current environment with the git-location vars removed."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_ISOLATION_VARS}
+
+
+def run_git(cwd, *args, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run a git command anchored to ``cwd`` alone, never an inherited GIT_DIR."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=check,
+        capture_output=True,
+        text=True,
+        env=scrubbed_git_env(),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_git_env(monkeypatch):
+    """Blanket protection: strip inherited git-location vars from every test's
+    environment so even ad-hoc ``subprocess.run(["git", ...])`` calls stay anchored to
+    their ``cwd``. Complements the per-call scrubbing in `run_git`. See #229."""
+    for var in GIT_ISOLATION_VARS:
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture(autouse=True)
