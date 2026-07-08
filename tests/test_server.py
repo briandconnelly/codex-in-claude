@@ -4682,11 +4682,20 @@ async def test_transfer_invalid_path_no_spawn(monkeypatch):
 
 
 async def test_transfer_codex_not_found(monkeypatch):
+    """A missing binary is codex_not_found, and the auth probe is never even reached.
+
+    The ordering is load-bearing, not incidental: `login_status()` returns None for a
+    missing binary *and* for an unanswered probe, but codex_auth_indeterminate promises
+    `temporary=True`, which is false for a missing binary. This gate absorbing the
+    missing-binary cause is what makes that promise honest (#252)."""
+    probed = []
     monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    monkeypatch.setattr(server.codex, "login_status", lambda: probed.append(1) or (None, None))
     _patch_validation(monkeypatch)
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "codex_not_found"
+    assert not probed  # codex_version() must gate ahead of login_status()
 
 
 async def test_transfer_unauthenticated(monkeypatch):

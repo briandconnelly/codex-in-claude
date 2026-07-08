@@ -113,10 +113,11 @@ ErrorCode = Literal[
     # Setup / auth
     "codex_not_found",
     "codex_auth_required",
-    # The auth probe itself could not run (`codex login status` timed out), so the
-    # session state is UNKNOWN rather than known-absent. Distinct from
-    # codex_auth_required so a slow probe never tells an authenticated caller to log
-    # in, and so the condition is marked temporary (#252).
+    # The auth probe returned no verdict — `codex.login_status()` yields None when the
+    # `codex login status` child never reported (it timed out, or the binary was gone) —
+    # so the session state is UNKNOWN rather than known-absent. Distinct from
+    # codex_auth_required so an unanswered probe never tells an authenticated caller to
+    # log in, and so the condition is marked temporary (#252).
     "codex_auth_indeterminate",
     "unexpanded_env_placeholder",
     # Configuration

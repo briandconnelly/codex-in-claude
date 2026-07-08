@@ -1112,8 +1112,11 @@ async def codex_transfer(
             )
         )
     # 2. Readiness (free either way): fail closed unless codex is present AND *confirmed*
-    #    authenticated. login_status() is tri-state — None means the probe could not run,
-    #    which is not the same as a known-absent session, so it gets its own code (#252).
+    #    authenticated. login_status() is tri-state — None means the probe returned no
+    #    verdict, which is not the same as a known-absent session, so it gets its own code
+    #    (#252). The codex_version() check MUST stay ahead of it: it absorbs the
+    #    missing-binary cause of that None, which is what lets codex_auth_indeterminate
+    #    promise temporary=True (see _REPAIR_BY_CODE).
     if codex.codex_version() is None:
         return serialize_error(
             ErrorResult(
