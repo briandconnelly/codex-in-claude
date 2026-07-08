@@ -32,6 +32,15 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         False,
         "Run `codex login` (ChatGPT or API key), then rerun codex_status.",
     ),
+    "codex_auth_indeterminate": (
+        # NOT `authenticate`: the caller may well be logged in — the probe, not the
+        # session, is what failed. temporary=True because a probe timeout clears itself.
+        "inspect_and_retry",
+        None,
+        True,
+        "The `codex login status` probe did not complete, so auth could not be confirmed. "
+        "Run codex_status to check, then retry.",
+    ),
     "unexpanded_env_placeholder": (
         "update_plugin",
         None,
