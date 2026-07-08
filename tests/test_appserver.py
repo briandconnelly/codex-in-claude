@@ -157,9 +157,9 @@ def test_unsupported_method(tmp_path):
     assert outcome.status is TransferStatus.UNSUPPORTED
 
 
-def test_generic_import_error_is_item_failure(tmp_path):
-    # A non-(-32601) JSON-RPC error on the import request is a failed import, not
-    # protocol drift — it maps to ITEM_FAILURE (server -> transfer_failed).
+def test_application_import_error_is_item_failure(tmp_path):
+    # An application-range JSON-RPC error code on the import request is a genuine import
+    # rejection → ITEM_FAILURE (server -> transfer_failed).
     home = tmp_path / "codex_home"
     home.mkdir()
     t = _transcript(tmp_path)
@@ -171,6 +171,78 @@ def test_generic_import_error_is_item_failure(tmp_path):
     )
     assert outcome.status is TransferStatus.ITEM_FAILURE
     assert "boom" in outcome.message
+
+
+def test_invalid_params_import_error_is_protocol_error(tmp_path):
+    # A reserved-range code (-32602 invalid params) means our request drifted →
+    # PROTOCOL_ERROR (server -> cli_contract_changed), not a transcript failure.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("invalid_params", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "invalid params" in outcome.message
+
+
+def test_malformed_import_error_is_protocol_error(tmp_path):
+    # An error object with no integer code is treated as protocol drift.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("malformed_error", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+
+
+@pytest.mark.parametrize("scenario", ["float_method_not_found", "bool_code"])
+def test_non_integer_import_error_code_is_protocol_error(tmp_path, scenario):
+    """A JSON number that decodes to float, or a JSON `true`, is not an integer code.
+
+    Python makes both dangerous: `-32601.0 == -32601` is True (so a float would reach the
+    method-not-found branch and be reported as `transfer_unsupported` — "update codex" —
+    for what is really a malformed response), and `bool` is a subclass of `int` (so `True`
+    would satisfy an isinstance check and fall through to `transfer_failed`, blaming the
+    transcript). Both are malformed responses: protocol drift, nothing else."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (-32601, TransferStatus.UNSUPPORTED),  # method-not-found wins over the range
+        (-32768, TransferStatus.PROTOCOL_ERROR),  # reserved, inclusive lower bound
+        (-32602, TransferStatus.PROTOCOL_ERROR),  # invalid params
+        (-32000, TransferStatus.PROTOCOL_ERROR),  # reserved, inclusive upper bound
+        (-31999, TransferStatus.ITEM_FAILURE),  # first application-range code below
+        (42, TransferStatus.ITEM_FAILURE),
+        (0, TransferStatus.ITEM_FAILURE),
+        (-32601.0, TransferStatus.PROTOCOL_ERROR),  # float, not an int code
+        (True, TransferStatus.PROTOCOL_ERROR),  # bool is a subclass of int
+        (None, TransferStatus.PROTOCOL_ERROR),  # absent code
+        ("-32601", TransferStatus.PROTOCOL_ERROR),  # string, not an int code
+    ],
+)
+def test_classify_import_error_boundaries(code, expected):
+    """Pin the reserved/application split at its exact inclusive bounds (#256)."""
+    assert appserver.classify_import_error(code) is expected
 
 
 def test_item_failure_carries_message(tmp_path):
