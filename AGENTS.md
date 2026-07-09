@@ -158,12 +158,21 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 - Don't self-approve reviews.
 - After pushing new commits to a PR that was already reviewed, request fresh review rather than
   relying on the stale approval.
-- **Copilot reviews each PR on open and on every push** — the repo enables Copilot review-on-push
-  (a `copilot_code_review` ruleset rule), and merging requires every review thread resolved
-  (`required_review_thread_resolution`). Treat that feedback like any review:
+- **Whether Copilot reviews a PR depends on who authored it**, but merging always requires every
+  review thread resolved (`required_review_thread_resolution`).
+  - **Human-authored PRs** get an automatic Copilot review on open and on every push (the
+    `copilot_code_review` ruleset rule).
+  - **Bot-authored PRs** — including every PR opened under the `briandconnelly-agent[bot]` identity
+    — get **no automatic review**: the ruleset rule skips authors that hold no Copilot seat. The
+    workflow that exists to close that gap, `.github/workflows/copilot-review-bot-prs.yml`, does
+    not currently work (it silently no-ops; see #236) and would not fire on a push even if it did.
+    So until #236 lands, ask the maintainer to request Copilot review on a bot PR, and ask again
+    after each push you want re-reviewed.
+
+  Treat Copilot's feedback like any review:
   - Evaluate each comment on its merits — verify it against the code, don't blindly implement.
   - Fix what's valid, and reply to each comment noting the resolution.
   - A comment you decline (e.g. a false positive) still gets a reply explaining why, and its
     thread still needs resolving.
-  - Because each push re-triggers a review, iterate until it reports no new actionable comments,
-    then resolve the threads before merging.
+  - Iterate until the review reports no new actionable comments, then resolve every thread before
+    merging.
