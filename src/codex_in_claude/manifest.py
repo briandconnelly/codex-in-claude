@@ -7,8 +7,8 @@ anywhere else, or the copy drifts as the tuple grows. This is an *acknowledgment
 guard: the snapshot test fails on any covered change so it cannot ship
 unreviewed, and its message directs the author to bump ``FINGERPRINT``; it does
 not mechanically force the integer bump (the snapshot and ``FINGERPRINT`` are
-independently editable). See
-``docs/superpowers/specs/2026-06-27-fingerprint-manifest-guard-design.md``.
+independently editable). The rules for both questions — bump? breaking? — live
+in ``AGENTS.md`` under Versioning.
 """
 
 from __future__ import annotations
