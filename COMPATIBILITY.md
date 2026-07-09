@@ -11,12 +11,22 @@ Verified against `codex-cli 0.142`.
 - `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]
   [--ephemeral] [--ignore-user-config] [--ignore-rules] [--skip-git-repo-check] [--add-dir <dir>]
   [--model <m>] -` — prompt delivered on **stdin** (the trailing `-`), keeping context out of argv.
+- `codex app-server` — one short-lived JSON-RPC session, driven **only** by `codex_transfer`. See
+  "Session transfer" below.
 - `codex --version`, `codex login status`, `codex exec --help` — free local probes.
 
-Notably we do **not** use the `app-server` JSON-RPC/broker protocol (the source of most of the
-upstream `codex-plugin-cc` reliability issues) nor the native `codex review`/`codex exec review`
-subcommand (its `--output-schema` is not honored for the final message, and its output depends on
-the user's Codex MCP fleet). Reviews use `codex exec` with a diff we gather ourselves.
+Every paid call family — `codex_consult[_async]`, `codex_review_changes[_async]`, and
+`codex_delegate[_async]` — runs its model work on `codex exec` alone. None uses the native
+`codex review`/`codex exec review` subcommand (its `--output-schema` is not honored for the final
+message, and its output depends on the user's Codex MCP fleet), and none uses the `app-server`
+JSON-RPC/broker protocol, which was the source of most of the upstream `codex-plugin-cc`
+reliability issues. Reviews use `codex exec` with a diff we gather ourselves.
+
+`codex_transfer` is the single, deliberate exception: this plugin reaches Codex's transcript-import
+surface only through `app-server`. That surface is experimental upstream, so it is quarantined —
+every assumption lives in `cli_contract.py` and `appserver.py`, the call spends nothing
+(`schemas.py`: "No model call and no token spend"), and no paid call depends on it. See "Session
+transfer" below.
 
 ## Sandbox modes
 
