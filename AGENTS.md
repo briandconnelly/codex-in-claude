@@ -56,10 +56,12 @@ independently editable, so bumping remains review policy). Record the change in 
 - Every change is judged on **two independent questions**:
   - **Bumps `FINGERPRINT`?** Yes for any *externally observable* change to a category in
     `FINGERPRINT_COVERS` (`src/codex_in_claude/schemas.py`) — the discovered value, shape, or
-    documented meaning of anything in that tuple. Reference the tuple rather than re-listing its
-    categories in prose anywhere in this document (a re-listing drifting out of sync with the code
-    is the exact bug this rule exists to prevent); a refactor that leaves the discovered surface
-    byte-identical does not bump it.
+    documented meaning of anything in that tuple. Reference the tuple by name rather than
+    re-listing its categories in prose — in this document or **any other doc, template, or comment
+    in the repo** (a re-listing drifting out of sync with the code is the exact bug this rule
+    exists to prevent, and it has happened: #227 removed one such copy here, while copies in
+    `CONTRIBUTING.md`, `docs/UPGRADING-CODEX.md`, and the PR template survived and went stale).
+    A refactor that leaves the discovered surface byte-identical does not bump it.
   - **Breaking?** Flag it breaking (commit `!`/`BREAKING CHANGE:` footer + the `breaking-change` PR
     label) only when the change is *backward-incompatible* for a client: removing or renaming a
     field/tool/resource/prompt, retyping a field, adding a required input, narrowing an accepted
