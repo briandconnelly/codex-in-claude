@@ -42,6 +42,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`fastmcp` 3.4.2 → 3.4.4** (supersedes the Dependabot bump in #260, which targeted 3.4.3 and could
+  not pass CI on its own). Picks up upstream's SSRF and OAuth hardening — NAT64/6to4/Teredo/ISATAP
+  transition addresses can no longer smuggle private IPv4 targets past the allow-list, Streamable HTTP
+  validates `Host`/`Origin` against DNS rebinding, and OAuth redirect validation rejects unsafe schemes
+  and unregistered DCR redirect URIs — plus proxy session-teardown and JSON-schema conversion fixes. The
+  argument-validation rewrap this release also carries is handled under Fixed below.
+
 - **Separate binding rules from facts across instructions, capabilities, and tool descriptions**
   (#243). A prose-only sweep (from the agent-friendly-mcp audit, `separating-context-from-constraints`
   lens): the `codex_status`-first rule is now stated at one consistent strength across the three
@@ -97,6 +104,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   coverage-floor guidance deduplicated into Testing.
 
 ### Fixed
+
+- **The `invalid_arguments` envelope survives fastmcp >= 3.4.3's exception rewrap.** Since fastmcp
+  3.4.3, a bad tool call no longer raises Pydantic's `ValidationError` at the call-tool boundary:
+  `FunctionTool._execute` catches it and re-raises `fastmcp.exceptions.ValidationError(str(e))`,
+  which is not a Pydantic subclass and exposes no `.errors()`. `_ArgumentValidationMiddleware`
+  caught only the Pydantic class, so on 3.4.3+ every bad-argument call bypassed the result contract
+  — no symbolic `code`, `repair`, `request_id`, or `fingerprint`, just raw validator prose (the
+  regression #136 exists to prevent). Because that prose interpolates Pydantic's `input_value`, it
+  also echoed the rejected argument value back to the caller and reflected an oversized unknown
+  argument name verbatim, undoing the never-echo and no-amplification guarantees. The middleware now
+  accepts both exception shapes and reads the structured errors off the wrapper's `__cause__`,
+  re-raising anything whose cause is not a Pydantic error. Compatible with the whole supported
+  `fastmcp>=3.4` range; the emitted envelope is unchanged, so no `fingerprint` bump.
 
 - **`codex_transfer` now fails closed when the auth probe is indeterminate** (#252). Its readiness
   gate rejected only a *known-absent* session (`login_status()` returning `False`), so a

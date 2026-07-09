@@ -22,6 +22,7 @@ from urllib.parse import unquote, urlparse
 import anyio.to_thread
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import DisabledError, NotFoundError, ResourceError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
 from mcp import McpError
@@ -447,12 +448,20 @@ class _ArgumentValidationMiddleware(Middleware):
 
     Only argument-validation failures are mapped: ``_invalid_arguments_envelope`` returns
     None for a ValidationError whose locations are not request arguments (e.g. an
-    output-schema failure raised inside ``call_next``), and we re-raise that untouched."""
+    output-schema failure raised inside ``call_next``), and we re-raise that untouched.
+
+    Since fastmcp 3.4.3, a bad call surfaces as ``fastmcp.exceptions.ValidationError``
+    (not a Pydantic subclass) carrying only ``str(e)``; the structured errors survive on
+    its ``__cause__``. We accept both shapes so the envelope holds across the whole
+    supported fastmcp range, and re-raise anything whose cause is not a Pydantic error."""
 
     async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
         try:
             return await call_next(context)
-        except ValidationError as exc:
+        except (ValidationError, FastMCPValidationError) as exc:
+            cause = exc if isinstance(exc, ValidationError) else exc.__cause__
+            if not isinstance(cause, ValidationError):
+                raise
             name = context.message.name
             try:
                 tool = await mcp.get_tool(name)
@@ -466,7 +475,7 @@ class _ArgumentValidationMiddleware(Middleware):
                 name,
                 param_names=set(props),
                 property_schemas=props,
-                errors=exc.errors(),
+                errors=cause.errors(),
             )
             if envelope is None:
                 raise

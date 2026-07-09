@@ -9,6 +9,7 @@ import time
 from typing import get_args
 
 import pytest
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
 from codex_in_claude import codex, delegate, orchestration, server
@@ -2271,12 +2272,17 @@ async def test_resources_declare_explicit_name_and_title():
 async def test_unknown_tool_argument_is_rejected():
     """An unknown argument fails validation rather than being silently ignored.
 
-    This pins the raw Tool-level boundary: `Tool.run` still raises a Pydantic
-    `ValidationError`. The MCP call-tool boundary re-emits that as the structured
-    `invalid_arguments` envelope — see the tests below (#136)."""
+    This pins the raw Tool-level boundary. Since fastmcp 3.4.3 `Tool.run` raises fastmcp's
+    own `ValidationError`, which is not a Pydantic subclass and carries only `str(e)` — the
+    structured Pydantic error survives as its `__cause__`. `_ArgumentValidationMiddleware`
+    reads `.errors()` off that cause, so pin the chain here: if a future fastmcp drops it,
+    the envelope silently degrades to raw prose (#136)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
-    with pytest.raises(ValidationError):
+    with pytest.raises(FastMCPValidationError) as excinfo:
         await tools["codex_status"].run({"definitely_not_a_param": 1})
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, ValidationError)
+    assert cause.errors()[0]["type"] == "unexpected_keyword_argument"
 
 
 # --- invalid-argument envelope at the MCP call-tool boundary (#136) -----------
@@ -2452,6 +2458,35 @@ async def test_middleware_reraises_non_argument_validation_error():
 
     with pytest.raises(ValidationError):
         await mw.on_call_tool(_FakeCallCtx("codex_status"), call_next)
+
+
+async def test_middleware_reraises_fastmcp_validation_error_without_pydantic_cause():
+    """fastmcp raises its own ValidationError for argument failures, chaining the Pydantic
+    error as __cause__. Without that cause there are no structured errors to classify, so
+    the failure propagates rather than being guessed at as invalid_arguments."""
+    mw = server._ArgumentValidationMiddleware()
+
+    async def call_next(_ctx):
+        raise FastMCPValidationError("no structured cause")
+
+    with pytest.raises(FastMCPValidationError):
+        await mw.on_call_tool(_FakeCallCtx("codex_status"), call_next)
+
+
+async def test_middleware_maps_fastmcp_validation_error_via_pydantic_cause():
+    """A fastmcp ValidationError chaining a Pydantic argument error still becomes the
+    documented invalid_arguments envelope (fastmcp >= 3.4.3 wrapping)."""
+    mw = server._ArgumentValidationMiddleware()
+    pydantic_err = ValidationError.from_exception_data(
+        "X", [{"type": "unexpected_keyword_argument", "loc": ("bogus_arg",), "input": 1}]
+    )
+
+    async def call_next(_ctx):
+        raise FastMCPValidationError(str(pydantic_err)) from pydantic_err
+
+    res = await mw.on_call_tool(_FakeCallCtx("codex_status"), call_next)
+    assert res.is_error is True
+    assert res.structured_content["error"]["code"] == "invalid_arguments"
 
 
 async def test_middleware_reraises_when_tool_introspection_fails(monkeypatch):
