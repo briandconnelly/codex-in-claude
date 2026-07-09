@@ -252,9 +252,11 @@ for the full fallback guidance.
 uv sync
 uv run pytest                       # unit tests (95% coverage floor)
 uv run pytest -m integration --no-cov   # live tests; needs codex installed + logged in
-uv run ruff check . && uv run ruff format --check . && uv run ty check
 uv run codex-in-claude-mcp          # run the MCP server over stdio
 ```
+
+The full pre-PR gate — lint, format, types, tests — is defined once in
+[`AGENTS.md` → Tooling](AGENTS.md#tooling).
 
 To test the plugin from a local checkout, point `.mcp.json` at
 `uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the version-pinned
@@ -266,8 +268,9 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch, commit, and PR conventions.
 
 - [`claude-in-codex`](https://github.com/briandconnelly/claude-in-codex) — the mirror image: lets
   **Codex** call **Claude Code**.
-- Inspired by [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), rebuilt around `codex exec` (not the experimental
-  app-server protocol) for robustness.
+- Inspired by [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), rebuilt around
+  `codex exec` for robustness: every paid call goes through it, and only `codex_transfer` touches
+  the experimental app-server protocol.
 
 ## License
 
