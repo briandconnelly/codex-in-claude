@@ -45,11 +45,14 @@ uv run pytest -m integration --no-cov
   Conventional Commit. Keep PRs to one logical change.
 - **Branches:** `<type>/<slug>` (e.g. `feat/async-jobs`); never commit directly to `main`.
   The maintainer merges — agents do not merge their own PRs.
-- **Versioning:** SemVer; pre-1.0 a minor may change the agent-visible surface. Such a change bumps
-  `FINGERPRINT` and is labeled `breaking-change`.
+- **Versioning:** SemVer; pre-1.0 a minor may change the agent-visible surface. Whether a change
+  bumps `FINGERPRINT` and whether it is `breaking-change` are **two independent questions** — most
+  surface changes bump the fingerprint without being breaking. Don't infer one from the other;
+  [AGENTS.md](AGENTS.md) → Versioning carries the decision table.
 - **The CLI contract** lives in `src/codex_in_claude/cli_contract.py`; see `COMPATIBILITY.md`.
-- **The result contract** lives in `src/codex_in_claude/schemas.py`; bump `FINGERPRINT` when the
-  agent-visible surface changes and note it in `CHANGELOG.md`.
+- **The result contract** lives in `src/codex_in_claude/schemas.py`; the categories whose change
+  triggers a `FINGERPRINT` bump are the `FINGERPRINT_COVERS` tuple in that file. Note every bump in
+  `CHANGELOG.md`.
 - `_core/` must not import from its parent package (one-way dependency / extraction seam).
 
 ## Reporting issues
