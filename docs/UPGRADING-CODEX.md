@@ -119,16 +119,22 @@ the usual ones, but treat the grep as authoritative: a stale enumerated list *wi
 Do **not** touch the package-release version set (`pyproject.toml`, `.claude-plugin/plugin.json`,
 `.mcp.json` pin) here — those move only when cutting a release per `docs/RELEASING.md`.
 
-## 5. Breaking vs. non-breaking
+## 5. `FINGERPRINT` and breaking changes
 
-- **Non-breaking** (a codex bump usually is): adding/replacing a verified codex minor, refreshing
-  advisory warnings, adding signatures for *existing* error codes, test/doc updates. No `FINGERPRINT`
-  change.
-- **Breaking** — bump `FINGERPRINT` in `schemas.py`, update the fingerprint test, note it in
-  `CHANGELOG.md`, and follow the pre-1.0 minor-version release rules — when the **agent-visible
-  surface** changes: tool names, params, result fields, value enums, error codes, schema shape; or
-  any change that **weakens a documented guarantee** (sandbox/isolation, `--output-last-message`,
-  structured-output enforcement). A codex change only forces this if you propagate it to our surface.
+A codex upgrade usually changes nothing an MCP client can observe. Adding or replacing a verified
+codex minor, refreshing advisory warnings, adding signatures for *existing* error codes, and
+test/doc updates all leave the plugin's discovered surface byte-identical — no `FINGERPRINT` change.
+
+A codex change forces a bump only when you **propagate it to our surface**: when it produces an
+externally observable change to a category in `FINGERPRINT_COVERS` (`src/codex_in_claude/schemas.py`).
+Then, in the same commit, bump `FINGERPRINT`, regenerate the manifest snapshot, update the tests
+that pin the old value (the `FINGERPRINT` assertions and `EXPECTED_MANIFEST_HASH` — the failures
+name themselves), and note it in `CHANGELOG.md`.
+
+Whether that same change is *also* **breaking** is a separate question, and most surface changes are
+not. Don't infer one from the other — `AGENTS.md` → Versioning carries the decision table for both,
+including the guarantee-weakening cases (sandbox/isolation, `--output-last-message`,
+structured-output enforcement) that a codex upgrade is most likely to trip.
 
 ## 6. Verify before shipping
 
