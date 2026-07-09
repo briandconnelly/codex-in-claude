@@ -98,6 +98,21 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_transfer` now fails closed when the auth probe is indeterminate** (#252). Its readiness
+  gate rejected only a *known-absent* session (`login_status()` returning `False`), so a
+  `codex login status` probe that timed out — reported as `None`, meaning "could not determine" —
+  fell through the gate and let the tool spawn `codex app-server` and issue a side-effecting
+  `externalAgentConfig/import`, contradicting the handler's own "codex present AND authenticated"
+  contract. `codex_status` already treated `None` as not-ready, so the two tools disagreed about
+  what an unanswered probe meant. The gate now requires a confirmed `True`, and the indeterminate
+  case gets its own error code, **`codex_auth_indeterminate`** (`next_step: inspect_and_retry`,
+  `temporary: true`), rather than being collapsed into `codex_auth_required` — which would tell an
+  already-authenticated caller to run `codex login` and mark a transient probe timeout as permanent.
+  `codex_capabilities` advertises the new code on `codex_transfer` alongside `codex_auth_required`,
+  so an agent branching on the discovered surface learns of it without first triggering it.
+  Backward-compatible addition of an error code; result `fingerprint`
+  `codex-in-claude/0.1/schema-33` → `codex-in-claude/0.1/schema-34`. Not breaking.
+
 - **The test suite no longer corrupts the invoking repository when run with an inherited `GIT_DIR`**
   (#229). Under a pre-push hook launched from a linked worktree, `GIT_DIR` (and friends) are exported;
   the fixtures' `git add`/`commit`/`config` calls then operated on the *real* repo with a temp dir as
@@ -764,6 +779,21 @@ The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/sch
   behavior is unchanged (no `paths` ⇒ tracked changes only). Gathering is filter-free and writes no
   objects into the repo's own store, preserving the read-only/redacted posture.
   ([#74](https://github.com/briandconnelly/codex-in-claude/issues/74))
+
+- **`codex_transfer` no longer blames the transcript for a drifted import request** (#256). Every
+  non-`-32601` JSON-RPC error on the `externalAgentConfig/import` request mapped to `transfer_failed`,
+  whose repair hint says to inspect the message and confirm the transcript is a complete Claude
+  session — advice that can never succeed when the real cause is that the plugin's request params no
+  longer match the CLI's schema. JSON-RPC 2.0 already partitions the space: codes in the reserved
+  `-32768..-32000` range (invalid params/request, parse/internal error, and the server-defined
+  `-32000..-32099` band), and errors carrying no integer `code` at all — absent, `null`, a string, a
+  JSON float (`-32601.0 == -32601` in Python, so a float would otherwise be read as method-not-found
+  and wrongly advise updating codex), or a JSON `true` (`bool` is a subclass of `int`) — are
+  protocol/request-level faults and now surface as `cli_contract_changed` — restoring the fail-loud
+  contract that a drifted request is the plugin's problem, not the user's. An application-range code
+  remains a genuine import rejection (`transfer_failed`), and `-32601` still means the installed codex
+  is too old (`transfer_unsupported`). No `FINGERPRINT` bump: both codes were already advertised on
+  `codex_transfer` and the discovered surface is unchanged.
 
 ### Security
 

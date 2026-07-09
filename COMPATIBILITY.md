@@ -114,6 +114,14 @@ JSON-RPC `-32601` (method-not-found) → `transfer_unsupported` (the hard backst
 version gate). A completed import with no `target` and no ledger record → `transfer_incomplete`, naming
 the ledger it checked.
 
+Any other error on the import *request* is classified by its JSON-RPC code, because the two cases have
+opposite owners. A code in the reserved `-32768..-32000` range (invalid params/request, parse/internal
+error, plus the server-defined `-32000..-32099` band) — or an error malformed enough to carry no integer
+`code` — means **our request** drifted from the CLI's schema, so it fails loudly as
+`cli_contract_changed`. An application-range code is Codex rejecting **this transcript**, so it surfaces
+as `transfer_failed` carrying the app-server's message. Broken stream or handshake (EOF, a non-JSON
+line, an `initialize` error, a missing `codexHome`) remains `cli_contract_changed`.
+
 ## Failure classification
 
 A non-success `codex exec` run is classified from its stderr/stdout and JSONL `error` events against
