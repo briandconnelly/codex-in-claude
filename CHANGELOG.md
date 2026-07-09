@@ -780,6 +780,21 @@ The agent-visible surface changed (result `fingerprint` `codex-in-claude/0.1/sch
   objects into the repo's own store, preserving the read-only/redacted posture.
   ([#74](https://github.com/briandconnelly/codex-in-claude/issues/74))
 
+- **`codex_transfer` no longer blames the transcript for a drifted import request** (#256). Every
+  non-`-32601` JSON-RPC error on the `externalAgentConfig/import` request mapped to `transfer_failed`,
+  whose repair hint says to inspect the message and confirm the transcript is a complete Claude
+  session — advice that can never succeed when the real cause is that the plugin's request params no
+  longer match the CLI's schema. JSON-RPC 2.0 already partitions the space: codes in the reserved
+  `-32768..-32000` range (invalid params/request, parse/internal error, and the server-defined
+  `-32000..-32099` band), and errors carrying no integer `code` at all — absent, `null`, a string, a
+  JSON float (`-32601.0 == -32601` in Python, so a float would otherwise be read as method-not-found
+  and wrongly advise updating codex), or a JSON `true` (`bool` is a subclass of `int`) — are
+  protocol/request-level faults and now surface as `cli_contract_changed` — restoring the fail-loud
+  contract that a drifted request is the plugin's problem, not the user's. An application-range code
+  remains a genuine import rejection (`transfer_failed`), and `-32601` still means the installed codex
+  is too old (`transfer_unsupported`). No `FINGERPRINT` bump: both codes were already advertised on
+  `codex_transfer` and the discovered surface is unchanged.
+
 ### Security
 
 - **Broader best-effort secret redaction.** The diff/prose redactor now also catches shape-only
