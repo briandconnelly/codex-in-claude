@@ -1,15 +1,14 @@
 """Canonical manifest of the full agent-visible MCP surface (issue #140).
 
-Snapshotting this manifest guards ``FINGERPRINT``: any change to the
-client-visible surface — tool/resource/template/prompt wire shapes, the
-initialize response (serverInfo, protocolVersion, advertised capabilities,
-instructions), the ``codex://error-envelope`` content, or the
-``codex_capabilities`` payload — moves the snapshot. This is an *acknowledgment*
+Snapshotting this manifest guards ``FINGERPRINT``: any externally observable
+change to a category in ``FINGERPRINT_COVERS`` (``schemas.py``) moves the
+snapshot. That tuple is the authority — do not re-list its categories here or
+anywhere else, or the copy drifts as the tuple grows. This is an *acknowledgment*
 guard: the snapshot test fails on any covered change so it cannot ship
 unreviewed, and its message directs the author to bump ``FINGERPRINT``; it does
 not mechanically force the integer bump (the snapshot and ``FINGERPRINT`` are
-independently editable). See
-``docs/superpowers/specs/2026-06-27-fingerprint-manifest-guard-design.md``.
+independently editable). The rules for both questions — bump? breaking? — live
+in ``AGENTS.md`` under Versioning.
 """
 
 from __future__ import annotations
