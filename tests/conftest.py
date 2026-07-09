@@ -76,6 +76,8 @@ def _scrub_inherited_git_env(monkeypatch):
         "GIT_WORK_TREE",
         "GIT_INDEX_FILE",
         "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ):
         monkeypatch.delenv(var, raising=False)
 
