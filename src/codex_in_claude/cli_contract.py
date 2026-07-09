@@ -72,6 +72,14 @@ IMPORT_MESSAGE_KEY = "message"
 # JSON-RPC error code Codex returns when the import method is absent (older CLI): the
 # hard backstop behind the advisory SUPPORTED_VERSIONS gate.
 JSONRPC_METHOD_NOT_FOUND = -32601
+# JSON-RPC 2.0 reserves -32768..-32000 for protocol/framework errors (parse error,
+# invalid request, invalid params, internal error, and server-defined -32000..-32099).
+# An import-request error in this range — or a malformed error with no integer code —
+# means our REQUEST or the app-server framework is at fault (contract drift), so it maps
+# to cli_contract_changed. An application-range code is a genuine import rejection and
+# maps to transfer_failed instead. (JSONRPC_METHOD_NOT_FOUND is handled separately.)
+JSONRPC_RESERVED_ERROR_MIN = -32768
+JSONRPC_RESERVED_ERROR_MAX = -32000
 
 # --- Import ledger (undocumented dedup fallback) ---------------------------------
 # $CODEX_HOME/external_agent_session_imports.json maps an imported transcript to its

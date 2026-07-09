@@ -96,7 +96,25 @@ def main() -> None:
                 _emit({"id": 2, "error": {"code": -32601, "message": "method not found"}})
                 return
             if scenario == "import_error":
-                _emit({"id": 2, "error": {"code": -32000, "message": "boom"}})
+                # Application-range code → a genuine import rejection (transfer_failed).
+                _emit({"id": 2, "error": {"code": 42, "message": "boom"}})
+                return
+            if scenario == "invalid_params":
+                # Reserved-range code → request/protocol drift (cli_contract_changed).
+                _emit({"id": 2, "error": {"code": -32602, "message": "invalid params"}})
+                return
+            if scenario == "malformed_error":
+                # Error object with no integer code → treated as protocol drift.
+                _emit({"id": 2, "error": {"message": "weird"}})
+                return
+            if scenario == "float_method_not_found":
+                # -32601.0 is `== -32601` in Python but is NOT an integer code. A
+                # non-integer code is malformed → protocol drift, never UNSUPPORTED.
+                _emit({"id": 2, "error": {"code": -32601.0, "message": "floaty"}})
+                return
+            if scenario == "bool_code":
+                # JSON `true` decodes to bool, a subclass of int → still malformed.
+                _emit({"id": 2, "error": {"code": True, "message": "booly"}})
                 return
             if scenario == "fresh":
                 _emit(_import_response())
