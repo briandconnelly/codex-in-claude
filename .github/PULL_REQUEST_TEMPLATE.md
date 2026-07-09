@@ -9,8 +9,8 @@ Closes #
 ## Checklist
 
 - [ ] Conventional commit title (`feat:` / `fix:` / `chore:` …).
-- [ ] `uv run ruff check . && uv run ruff format --check . && uv run ty check` passes.
-- [ ] `uv run pytest` passes (≥95% coverage).
+- [ ] The gate passes — see [AGENTS.md → Tooling](../AGENTS.md#tooling). (If this PR touches
+      `.github/workflows/`, the Actions-pinning check too.)
 - [ ] If the agent-visible MCP surface changed — any category in `FINGERPRINT_COVERS`
       (`src/codex_in_claude/schemas.py`) — `FINGERPRINT` was bumped, the manifest snapshot
       regenerated, and `CHANGELOG.md` updated. Whether the change is *also* breaking is a separate

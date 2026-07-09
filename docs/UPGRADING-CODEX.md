@@ -138,11 +138,11 @@ structured-output enforcement) that a codex upgrade is most likely to trip.
 
 ## 6. Verify before shipping
 
+Run the fast contract-adjacent suites first, then [the gate](../AGENTS.md#tooling), then the two
+codex-specific checks below:
+
 ```sh
-# fast contract-adjacent suites first, then the full gate
 uv run pytest tests/test_cli_contract.py tests/test_preflight.py tests/test_codex.py tests/test_config.py
-uv run pytest                                   # full suite, 95% coverage floor
-uv run ruff check . && uv run ruff format --check . && uv run ty check
 uv run python scripts/check_codex_contract.py   # mechanical drift check is green
 uv run pytest -m integration --no-cov           # LIVE — hits the real codex CLI (spends tokens)
 ```

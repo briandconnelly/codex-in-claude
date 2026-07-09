@@ -15,8 +15,17 @@ package.
 ## Tooling
 
 - Use `uv` for everything: `uv sync`, `uv run pytest`, `uv run <cmd>`. Never pip/poetry.
-- Lint/format with `ruff`; type-check with `ty`. All three must pass before a change is done:
-  `uv run ruff check . && uv run ruff format --check . && uv run ty check`.
+- **The gate.** This is the repo's single definition of it; every other doc links here rather than
+  restating it. A change is not done until it passes:
+
+  ```sh
+  uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+  ```
+
+  If you touched `.github/workflows/`, also run `uv run python scripts/check_github_actions_pinning.py`
+  — CI runs it ahead of the four above, and the `prek` pre-commit hook runs it too once installed
+  (see below). CI (`.github/workflows/test.yml`) is the authoritative gate and runs all of this on
+  every supported Python version.
 - Tests use `pytest`; the coverage floor and integration-test markers are defined in Testing below.
 - Local Git hooks are configured in `prek.toml` and run via [`prek`](https://prek.j178.dev) (a dev
   dependency). One-time setup: `uv run prek install --prepare-hooks`. Hooks mirror the CI gate —

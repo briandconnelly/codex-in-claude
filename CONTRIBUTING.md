@@ -20,13 +20,10 @@ convenience — CI remains the authoritative gate.
 
 ## Before you open a PR
 
-Run the full gate locally — CI runs the same across every supported Python version (the
-matrix in [`.github/workflows/test.yml`](.github/workflows/test.yml), kept in lockstep with the
-trove classifiers in [`pyproject.toml`](pyproject.toml)):
-
-```bash
-uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
-```
+Run the gate locally — it is defined once in [AGENTS.md → Tooling](AGENTS.md#tooling). CI runs the
+same across every supported Python version (the matrix in
+[`.github/workflows/test.yml`](.github/workflows/test.yml), kept in lockstep with the trove
+classifiers in [`pyproject.toml`](pyproject.toml)).
 
 Integration tests that call the real `codex` CLI are excluded by default; run them with:
 
