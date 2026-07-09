@@ -256,7 +256,7 @@ uv run codex-in-claude-mcp          # run the MCP server over stdio
 ```
 
 The full pre-PR gate — lint, format, types, tests — is defined once in
-[`AGENTS.md`](AGENTS.md) under Tooling.
+[`AGENTS.md` → Tooling](AGENTS.md#tooling).
 
 To test the plugin from a local checkout, point `.mcp.json` at
 `uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the version-pinned

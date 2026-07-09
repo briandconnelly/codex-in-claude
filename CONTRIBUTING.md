@@ -20,8 +20,8 @@ convenience — CI remains the authoritative gate.
 
 ## Before you open a PR
 
-Run the gate locally — it is defined once in [AGENTS.md](AGENTS.md) under Tooling. CI runs the same
-across every supported Python version (the matrix in
+Run the gate locally — it is defined once in [AGENTS.md → Tooling](AGENTS.md#tooling). CI runs the
+same across every supported Python version (the matrix in
 [`.github/workflows/test.yml`](.github/workflows/test.yml), kept in lockstep with the trove
 classifiers in [`pyproject.toml`](pyproject.toml)).
 
