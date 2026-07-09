@@ -20,13 +20,10 @@ convenience — CI remains the authoritative gate.
 
 ## Before you open a PR
 
-Run the full gate locally — CI runs the same across every supported Python version (the
-matrix in [`.github/workflows/test.yml`](.github/workflows/test.yml), kept in lockstep with the
-trove classifiers in [`pyproject.toml`](pyproject.toml)):
-
-```bash
-uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
-```
+Run the gate locally — it is defined once in [AGENTS.md → Tooling](AGENTS.md#tooling). CI runs the
+same across every supported Python version (the matrix in
+[`.github/workflows/test.yml`](.github/workflows/test.yml), kept in lockstep with the trove
+classifiers in [`pyproject.toml`](pyproject.toml)).
 
 Integration tests that call the real `codex` CLI are excluded by default; run them with:
 
@@ -45,11 +42,14 @@ uv run pytest -m integration --no-cov
   Conventional Commit. Keep PRs to one logical change.
 - **Branches:** `<type>/<slug>` (e.g. `feat/async-jobs`); never commit directly to `main`.
   The maintainer merges — agents do not merge their own PRs.
-- **Versioning:** SemVer; pre-1.0 a minor may change the agent-visible surface. Such a change bumps
-  `FINGERPRINT` and is labeled `breaking-change`.
+- **Versioning:** SemVer; pre-1.0 a minor may change the agent-visible surface. Whether a change
+  bumps `FINGERPRINT` and whether it is `breaking-change` are **two independent questions** — most
+  surface changes bump the fingerprint without being breaking. Don't infer one from the other;
+  [AGENTS.md](AGENTS.md) → Versioning carries the decision table.
 - **The CLI contract** lives in `src/codex_in_claude/cli_contract.py`; see `COMPATIBILITY.md`.
-- **The result contract** lives in `src/codex_in_claude/schemas.py`; bump `FINGERPRINT` when the
-  agent-visible surface changes and note it in `CHANGELOG.md`.
+- **The result contract** lives in `src/codex_in_claude/schemas.py`; the categories whose change
+  triggers a `FINGERPRINT` bump are the `FINGERPRINT_COVERS` tuple in that file. Note every bump in
+  `CHANGELOG.md`.
 - `_core/` must not import from its parent package (one-way dependency / extraction seam).
 
 ## Reporting issues

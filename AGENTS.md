@@ -15,8 +15,17 @@ package.
 ## Tooling
 
 - Use `uv` for everything: `uv sync`, `uv run pytest`, `uv run <cmd>`. Never pip/poetry.
-- Lint/format with `ruff`; type-check with `ty`. All three must pass before a change is done:
-  `uv run ruff check . && uv run ruff format --check . && uv run ty check`.
+- **The gate.** This is the repo's single definition of it; every other doc links here rather than
+  restating it. A change is not done until it passes:
+
+  ```sh
+  uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+  ```
+
+  If you touched `.github/workflows/`, also run `uv run python scripts/check_github_actions_pinning.py`
+  — CI runs it ahead of the four above, and the `prek` pre-commit hook runs it too once installed
+  (see below). CI (`.github/workflows/test.yml`) is the authoritative gate and runs all of this on
+  every supported Python version.
 - Tests use `pytest`; the coverage floor and integration-test markers are defined in Testing below.
 - Local Git hooks are configured in `prek.toml` and run via [`prek`](https://prek.j178.dev) (a dev
   dependency). One-time setup: `uv run prek install --prepare-hooks`. Hooks mirror the CI gate —
@@ -56,10 +65,12 @@ independently editable, so bumping remains review policy). Record the change in 
 - Every change is judged on **two independent questions**:
   - **Bumps `FINGERPRINT`?** Yes for any *externally observable* change to a category in
     `FINGERPRINT_COVERS` (`src/codex_in_claude/schemas.py`) — the discovered value, shape, or
-    documented meaning of anything in that tuple. Reference the tuple rather than re-listing its
-    categories in prose anywhere in this document (a re-listing drifting out of sync with the code
-    is the exact bug this rule exists to prevent); a refactor that leaves the discovered surface
-    byte-identical does not bump it.
+    documented meaning of anything in that tuple. Reference the tuple by name rather than
+    re-listing its categories in prose — in this document or **any other doc, template, or comment
+    in the repo** (a re-listing drifting out of sync with the code is the exact bug this rule
+    exists to prevent, and it has happened: #227 removed one such copy here, while copies in
+    `CONTRIBUTING.md`, `docs/UPGRADING-CODEX.md`, and the PR template survived and went stale).
+    A refactor that leaves the discovered surface byte-identical does not bump it.
   - **Breaking?** Flag it breaking (commit `!`/`BREAKING CHANGE:` footer + the `breaking-change` PR
     label) only when the change is *backward-incompatible* for a client: removing or renaming a
     field/tool/resource/prompt, retyping a field, adding a required input, narrowing an accepted
@@ -158,12 +169,21 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 - Don't self-approve reviews.
 - After pushing new commits to a PR that was already reviewed, request fresh review rather than
   relying on the stale approval.
-- **Copilot reviews each PR on open and on every push** — the repo enables Copilot review-on-push
-  (a `copilot_code_review` ruleset rule), and merging requires every review thread resolved
-  (`required_review_thread_resolution`). Treat that feedback like any review:
+- **Whether Copilot reviews a PR depends on who authored it**, but merging always requires every
+  review thread resolved (`required_review_thread_resolution`).
+  - **Human-authored PRs** get an automatic Copilot review on open and on every push (the
+    `copilot_code_review` ruleset rule).
+  - **Bot-authored PRs** — including every PR opened under the `briandconnelly-agent[bot]` identity
+    — get **no automatic review**: the ruleset rule skips authors that hold no Copilot seat. The
+    workflow that exists to close that gap, `.github/workflows/copilot-review-bot-prs.yml`, does
+    not currently work (it silently no-ops; see #236) and would not fire on a push even if it did.
+    So until #236 lands, ask the maintainer to request Copilot review on a bot PR, and ask again
+    after each push you want re-reviewed.
+
+  Treat Copilot's feedback like any review:
   - Evaluate each comment on its merits — verify it against the code, don't blindly implement.
   - Fix what's valid, and reply to each comment noting the resolution.
   - A comment you decline (e.g. a false positive) still gets a reply explaining why, and its
     thread still needs resolving.
-  - Because each push re-triggers a review, iterate until it reports no new actionable comments,
-    then resolve the threads before merging.
+  - Iterate until the review reports no new actionable comments, then resolve every thread before
+    merging.

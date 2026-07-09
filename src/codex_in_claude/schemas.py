@@ -47,7 +47,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-33"
+FINGERPRINT = "codex-in-claude/0.1/schema-34"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -113,6 +113,12 @@ ErrorCode = Literal[
     # Setup / auth
     "codex_not_found",
     "codex_auth_required",
+    # The auth probe returned no verdict — `codex.login_status()` yields None when the
+    # `codex login status` child never reported (it timed out, or the binary was gone) —
+    # so the session state is UNKNOWN rather than known-absent. Distinct from
+    # codex_auth_required so an unanswered probe never tells an authenticated caller to
+    # log in, and so the condition is marked temporary (#252).
+    "codex_auth_indeterminate",
     "unexpanded_env_placeholder",
     # Configuration
     "unsupported_tier",

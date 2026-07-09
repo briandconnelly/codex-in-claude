@@ -354,6 +354,36 @@ def _spawn_stderr_drain(stderr: Any) -> Callable[[], str]:
     return lambda: "".join(chunks).strip()[-_MAX_STDERR_BYTES:]
 
 
+def classify_import_error(code: Any) -> TransferStatus:
+    """Map an import-response JSON-RPC ``error.code`` to the transfer status it implies.
+
+    The split decides *who is at fault*, so it decides which repair the agent is handed:
+
+    * A non-integer code (absent, ``null``, a string, a JSON float, or a ``bool``) is a
+      malformed response — the app-server is not speaking the protocol we encode, which is
+      drift. ``PROTOCOL_ERROR`` -> ``cli_contract_changed``.
+    * ``-32601`` (method not found) means the installed codex predates the import method.
+      ``UNSUPPORTED`` -> ``transfer_unsupported``. Checked before the reserved range, which
+      it sits inside.
+    * Any other reserved-range code (``-32768..-32000``: invalid params/request, parse and
+      internal errors, plus the server-defined ``-32000..-32099`` band) means *our request*
+      is at fault. ``PROTOCOL_ERROR`` -> ``cli_contract_changed``.
+    * An application-range code is Codex rejecting *this transcript*.
+      ``ITEM_FAILURE`` -> ``transfer_failed``.
+
+    ``type(code) is int`` rather than ``isinstance``: Python's ``bool`` is a subclass of
+    ``int`` (a JSON ``true`` would satisfy ``isinstance`` and be read as application-range),
+    and a JSON number may decode to ``float``, where ``-32601.0 == -32601`` would otherwise
+    match the method-not-found branch and wrongly tell the caller to update codex."""
+    if type(code) is not int:
+        return TransferStatus.PROTOCOL_ERROR
+    if code == cli_contract.JSONRPC_METHOD_NOT_FOUND:
+        return TransferStatus.UNSUPPORTED
+    if cli_contract.JSONRPC_RESERVED_ERROR_MIN <= code <= cli_contract.JSONRPC_RESERVED_ERROR_MAX:
+        return TransferStatus.PROTOCOL_ERROR
+    return TransferStatus.ITEM_FAILURE
+
+
 def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitting obscures the flow
     *,
     transcript_realpath: str,
@@ -491,22 +521,28 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 )
                 import_sent = True
                 continue
-            # import response → an error means the method is unsupported (or drift).
+            # import response error → classify by JSON-RPC code.
             if msg.get("id") == 2 and "error" in msg:
                 error = msg.get("error")
                 error = error if isinstance(error, dict) else {}
-                if error.get("code") == cli_contract.JSONRPC_METHOD_NOT_FOUND:
+                code = error.get("code")
+                detail = error.get("message")
+                status = classify_import_error(code)
+                if status is TransferStatus.UNSUPPORTED:
                     return TransferOutcome(
                         status=TransferStatus.UNSUPPORTED,
                         codex_home=codex_home,
                         stderr_tail=stderr_tail() or None,
                     )
-                # Any other JSON-RPC error on the import request is a failed import
-                # (bad params, a transient app-server error, a rejected transcript) —
-                # not protocol drift. Surface it as an item failure carrying the
-                # message; reserve PROTOCOL_ERROR/cli_contract_changed for a broken
-                # stream or handshake (EOF, non-JSON, initialize failure).
-                detail = error.get("message")
+                if status is TransferStatus.PROTOCOL_ERROR:
+                    return TransferOutcome(
+                        status=TransferStatus.PROTOCOL_ERROR,
+                        codex_home=codex_home,
+                        message=f"codex app-server rejected the import request: {detail}"
+                        if detail
+                        else "codex app-server rejected the import request.",
+                        stderr_tail=stderr_tail() or None,
+                    )
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
                     codex_home=codex_home,

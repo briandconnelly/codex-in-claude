@@ -1111,7 +1111,12 @@ async def codex_transfer(
                 meta=_meta(cwd_guess, None),
             )
         )
-    # 2. Readiness (free either way): codex present AND authenticated.
+    # 2. Readiness (free either way): fail closed unless codex is present AND *confirmed*
+    #    authenticated. login_status() is tri-state — None means the probe returned no
+    #    verdict, which is not the same as a known-absent session, so it gets its own code
+    #    (#252). The codex_version() check MUST stay ahead of it: it absorbs the
+    #    missing-binary cause of that None, which is what lets codex_auth_indeterminate
+    #    promise temporary=True (see _REPAIR_BY_CODE).
     if codex.codex_version() is None:
         return serialize_error(
             ErrorResult(
@@ -1120,15 +1125,13 @@ async def codex_transfer(
             )
         )
     authenticated, _ = codex.login_status()
-    if authenticated is False:
-        return serialize_error(
-            ErrorResult(
-                error=make_error(
-                    "codex_auth_required", "codex is not authenticated; run `codex login`."
-                ),
-                meta=_meta(cwd_guess, None),
-            )
+    if authenticated is not True:
+        error = (
+            make_error("codex_auth_required", "codex is not authenticated; run `codex login`.")
+            if authenticated is False
+            else make_error("codex_auth_indeterminate", "Could not determine codex auth status.")
         )
+        return serialize_error(ErrorResult(error=error, meta=_meta(cwd_guess, None)))
     # 3. Resolve the workspace (labels the imported thread's origin cwd).
     roots = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
@@ -1293,6 +1296,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
             "invalid_arguments",
             "codex_not_found",
             "codex_auth_required",
+            "codex_auth_indeterminate",
             "transfer_unsupported",
             "transfer_failed",
             "transfer_incomplete",
