@@ -23,8 +23,9 @@ package.
   ```
 
   If you touched `.github/workflows/`, also run `uv run python scripts/check_github_actions_pinning.py`
-  — CI runs it ahead of the four above, and nothing else surfaces an unpinned action.
-  CI (`test.yml`) is the authoritative gate and runs all of this on every supported Python.
+  — CI runs it ahead of the four above, and the `prek` pre-commit hook runs it too once installed
+  (see below). CI (`.github/workflows/test.yml`) is the authoritative gate and runs all of this on
+  every supported Python.
 - Tests use `pytest`; the coverage floor and integration-test markers are defined in Testing below.
 - Local Git hooks are configured in `prek.toml` and run via [`prek`](https://prek.j178.dev) (a dev
   dependency). One-time setup: `uv run prek install --prepare-hooks`. Hooks mirror the CI gate —

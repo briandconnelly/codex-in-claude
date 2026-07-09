@@ -138,7 +138,7 @@ structured-output enforcement) that a codex upgrade is most likely to trip.
 
 ## 6. Verify before shipping
 
-Run the fast contract-adjacent suites first, then the gate (`AGENTS.md` → Tooling), then the two
+Run the fast contract-adjacent suites first, then [the gate](../AGENTS.md#tooling), then the two
 codex-specific checks below:
 
 ```sh
