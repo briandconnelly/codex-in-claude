@@ -252,9 +252,11 @@ for the full fallback guidance.
 uv sync
 uv run pytest                       # unit tests (95% coverage floor)
 uv run pytest -m integration --no-cov   # live tests; needs codex installed + logged in
-uv run ruff check . && uv run ruff format --check . && uv run ty check
 uv run codex-in-claude-mcp          # run the MCP server over stdio
 ```
+
+The full pre-PR gate — lint, format, types, tests — is defined once in
+[`AGENTS.md`](AGENTS.md) under Tooling.
 
 To test the plugin from a local checkout, point `.mcp.json` at
 `uv run --project /path/to/codex-in-claude codex-in-claude-mcp` instead of the version-pinned
