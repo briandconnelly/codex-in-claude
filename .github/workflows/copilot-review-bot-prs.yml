@@ -30,13 +30,18 @@ jobs:
     steps:
       - name: Request Copilot review
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.COPILOT_REVIEW_PAT || github.token }}
+          COPILOT_REVIEW_PAT: ${{ secrets.COPILOT_REVIEW_PAT }}
           # Bind untrusted event data through env rather than interpolating it
           # into the run script.
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ -z "${COPILOT_REVIEW_PAT:-}" ]; then
+            echo "::warning::No user PAT configured (COPILOT_REVIEW_PAT is empty). Copilot review cannot be requested with the default github.token (#236). skipping."
+            exit 0
+          fi
           resp=$(gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
