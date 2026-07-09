@@ -98,6 +98,21 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_transfer` now fails closed when the auth probe is indeterminate** (#252). Its readiness
+  gate rejected only a *known-absent* session (`login_status()` returning `False`), so a
+  `codex login status` probe that timed out — reported as `None`, meaning "could not determine" —
+  fell through the gate and let the tool spawn `codex app-server` and issue a side-effecting
+  `externalAgentConfig/import`, contradicting the handler's own "codex present AND authenticated"
+  contract. `codex_status` already treated `None` as not-ready, so the two tools disagreed about
+  what an unanswered probe meant. The gate now requires a confirmed `True`, and the indeterminate
+  case gets its own error code, **`codex_auth_indeterminate`** (`next_step: inspect_and_retry`,
+  `temporary: true`), rather than being collapsed into `codex_auth_required` — which would tell an
+  already-authenticated caller to run `codex login` and mark a transient probe timeout as permanent.
+  `codex_capabilities` advertises the new code on `codex_transfer` alongside `codex_auth_required`,
+  so an agent branching on the discovered surface learns of it without first triggering it.
+  Backward-compatible addition of an error code; result `fingerprint`
+  `codex-in-claude/0.1/schema-33` → `codex-in-claude/0.1/schema-34`. Not breaking.
+
 - **The test suite no longer corrupts the invoking repository when run with an inherited `GIT_DIR`**
   (#229). Under a pre-push hook launched from a linked worktree, `GIT_DIR` (and friends) are exported;
   the fixtures' `git add`/`commit`/`config` calls then operated on the *real* repo with a temp dir as

@@ -32,6 +32,24 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         False,
         "Run `codex login` (ChatGPT or API key), then rerun codex_status.",
     ),
+    "codex_auth_indeterminate": (
+        # NOT `authenticate`: the caller may well be logged in — the probe, not the
+        # session, is what failed to answer, so telling them to run `codex login` would
+        # be a false repair step.
+        #
+        # temporary=True is load-bearing on an emission-site invariant: `login_status()`
+        # returns None for a missing binary OR an unanswered probe, and a missing binary
+        # is NOT temporary. Every caller must therefore rule the binary out first (today
+        # codex_transfer does, via the codex_version() -> codex_not_found gate that runs
+        # ahead of this one), leaving "the probe didn't answer in time" as the only cause
+        # this code can carry — and that does clear itself. A new emission site that
+        # skips that gate must map binary-missing to codex_not_found, not here.
+        "inspect_and_retry",
+        None,
+        True,
+        "The `codex login status` probe did not complete, so auth could not be confirmed. "
+        "Run codex_status to check, then retry.",
+    ),
     "unexpanded_env_placeholder": (
         "update_plugin",
         None,

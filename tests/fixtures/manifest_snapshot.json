@@ -494,6 +494,7 @@
           "invalid_arguments",
           "codex_not_found",
           "codex_auth_required",
+          "codex_auth_indeterminate",
           "transfer_unsupported",
           "transfer_failed",
           "transfer_incomplete",
@@ -713,6 +714,7 @@
                 "items": {
                   "enum": [
                     "cli_contract_changed",
+                    "codex_auth_indeterminate",
                     "codex_auth_required",
                     "codex_not_found",
                     "codex_rate_limited",
@@ -831,7 +833,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-33",
+            "default": "codex-in-claude/0.1/schema-34",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1096,6 +1098,7 @@
               "code": {
                 "enum": [
                   "cli_contract_changed",
+                  "codex_auth_indeterminate",
                   "codex_auth_required",
                   "codex_not_found",
                   "codex_rate_limited",
@@ -1325,7 +1328,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-33",
+                "default": "codex-in-claude/0.1/schema-34",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2305,7 +2308,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-33",
+            "default": "codex-in-claude/0.1/schema-34",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2899,7 +2902,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-33",
+            "default": "codex-in-claude/0.1/schema-34",
             "title": "Fingerprint",
             "type": "string"
           },

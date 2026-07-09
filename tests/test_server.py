@@ -141,6 +141,16 @@ def test_status_not_authenticated(monkeypatch, clean_env):
     assert "authenticated" in res["readiness_detail"]
 
 
+def test_status_auth_indeterminate(monkeypatch, clean_env):
+    """A probe that could not run (None) is not-ready, and says so without claiming
+    the user is logged out (#252)."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (None, None))
+    res = server.codex_status()
+    assert res["ready"] is False
+    assert res["readiness_detail"] == "Could not determine codex auth status."
+
+
 def test_capability_summary_covers_all_task_families():
     """First-read instructions name every task family + prereqs + negative scope (issue #7)."""
     summary = server.CAPABILITY_SUMMARY
@@ -522,6 +532,17 @@ async def test_dry_run_extra_context_too_large(monkeypatch, clean_env, tmp_path)
     assert res["error"]["details"]["field"] == "extra_context"
     assert res["error"]["limit_bytes"] == 1000
     assert res["error"]["actual_bytes"] == 2000
+
+
+async def test_transfer_advertises_both_auth_error_codes():
+    # codex_transfer's readiness gate can return EITHER auth code — codex_auth_required
+    # for a known-absent session, codex_auth_indeterminate for a probe that could not
+    # run. Capabilities must advertise both, or an agent branching on the discovered
+    # surface never learns the second one exists (#252).
+    caps = server.codex_capabilities()
+    transfer = next(t for t in caps["tool_details"] if t["name"] == "codex_transfer")
+    assert "codex_auth_required" in transfer["error_codes"]
+    assert "codex_auth_indeterminate" in transfer["error_codes"]
 
 
 async def test_dry_run_advertises_returnable_error_codes():
@@ -1676,8 +1697,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_33():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-33"
+def test_fingerprint_is_schema_34():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-34"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4625,7 +4646,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-33")
+    assert result["fingerprint"].endswith("schema-34")
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
@@ -4661,20 +4682,49 @@ async def test_transfer_invalid_path_no_spawn(monkeypatch):
 
 
 async def test_transfer_codex_not_found(monkeypatch):
+    """A missing binary is codex_not_found, and the auth probe is never even reached.
+
+    The ordering is load-bearing, not incidental: `login_status()` returns None for a
+    missing binary *and* for an unanswered probe, but codex_auth_indeterminate promises
+    `temporary=True`, which is false for a missing binary. This gate absorbing the
+    missing-binary cause is what makes that promise honest (#252)."""
+    probed = []
     monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    monkeypatch.setattr(server.codex, "login_status", lambda: probed.append(1) or (None, None))
     _patch_validation(monkeypatch)
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "codex_not_found"
+    assert not probed  # codex_version() must gate ahead of login_status()
 
 
 async def test_transfer_unauthenticated(monkeypatch):
+    called = []
     monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.5")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
+    monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: called.append(1))
     _patch_validation(monkeypatch)
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "codex_auth_required"
+    assert result["error"]["temporary"] is False
+    assert not called  # no app-server spawned
+
+
+async def test_transfer_auth_indeterminate(monkeypatch):
+    """`codex login status` could not run: fail closed, but do not tell an
+    already-authenticated user to run `codex login` (#252)."""
+    called = []
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.142.5")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (None, None))
+    monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: called.append(1))
+    _patch_validation(monkeypatch)
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "codex_auth_indeterminate"
+    assert result["error"]["temporary"] is True
+    assert result["error"]["repair"]["next_step"] == "inspect_and_retry"
+    assert not called  # no app-server spawned, no side-effecting import
 
 
 async def test_transfer_unsupported(monkeypatch):
