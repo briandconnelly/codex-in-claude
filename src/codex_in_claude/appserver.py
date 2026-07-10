@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_in_claude import __version__, cli_contract
-from codex_in_claude._core import streamcap
+from codex_in_claude._core import redaction, streamcap
 from codex_in_claude._core.runtime import BINARY_NOT_FOUND
 
 # Claude Code writes session transcripts under ~/.claude/projects/<cwd-slug>/. We only
@@ -50,6 +50,46 @@ _MAX_STDERR_BYTES = 64 * 1024
 # Max blocking-read slice: caps how long the loop waits before re-checking the deadline
 # and the cooperative-cancellation stop flag, so a cancelled call tears down promptly.
 _POLL_SECONDS = 0.25
+
+# Display budget for one app-server-derived fragment. 300 matches every other foreign-text
+# site (`codex.py`, `orchestration.py`, `_worker.py`); unlike those, the marker below is
+# reserved inside it rather than the cut being silent.
+_MAX_DISPLAY_CHARS = 300
+_DISPLAY_TRUNC_MARKER = "…[truncated]"
+
+
+def _display_text(text: object) -> str:
+    """Redact secret-looking values out of app-server-supplied text, then bound it.
+
+    Everything the app-server sends is foreign input, and upstream documents these
+    messages as "raw failure messages for the client to report". ``_MAX_LINE_BYTES``
+    bounds one JSONL *line* at 8 MiB; without this there is no cap between that line and
+    the agent's context window, and no redaction between it and an MCP error envelope.
+
+    Redaction runs BEFORE truncation: cutting first can split a secret so no pattern
+    matches, publishing its prefix. The result never exceeds ``_MAX_DISPLAY_CHARS`` — an
+    over-cap value ends in ``_DISPLAY_TRUNC_MARKER`` so a reader can tell a clipped
+    diagnostic from a complete one. Non-strings are coerced (``None`` -> ``""``), since
+    every field here is ``.get()``-ed off untrusted JSON and may be any type.
+
+    Apply this to the foreign *fragment* only — never to a composed message — so a long
+    fragment can never truncate away our own static explanation. Any future app-server
+    string that reaches an envelope (e.g. ``stderr_tail``, #275) must route through here.
+
+    Callers decide *whether a diagnostic exists* by testing the RAW wire value, not this
+    function's output. Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
+    ``{}``) carries no diagnostic text, but coercing one here yields a truthy string, so
+    branching on the sanitized result would emit noise like ``rejected the import: {}``
+    instead of a clean generic sentence. The converse cannot happen: a truthy ``detail``
+    never sanitizes to ``""`` (``redact_text`` substitutes a non-empty placeholder), so no
+    caller can strand a prefix with an empty fragment after it.
+    """
+    if text is None:
+        return ""
+    out = redaction.redact_text(str(text)) or ""
+    if len(out) <= _MAX_DISPLAY_CHARS:
+        return out
+    return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
 
 
 def _terminate(proc: subprocess.Popen) -> None:
@@ -90,14 +130,22 @@ class ThreadIdSource(StrEnum):
 
 @dataclass
 class TransferOutcome:
+    """The result of one transfer run, ready for the server layer to shape into an
+    envelope.
+
+    Invariant (#276): every app-server-derived fragment inside ``message`` and
+    ``ledger_path`` has already passed through :func:`_display_text` — redacted and
+    length-bounded — so a consumer may surface them without re-sanitizing. ``codex_home``
+    is deliberately RAW: it is a filesystem base, not display text."""
+
     status: TransferStatus
     thread_id: str | None = None
     thread_id_source: ThreadIdSource | None = None
     import_id: str | None = None
     codex_home: str | None = None
-    ledger_path: str | None = None  # set on INCOMPLETE so the error can name it
-    message: str | None = None  # upstream failure message / diagnostic detail
-    stderr_tail: str | None = None
+    ledger_path: str | None = None  # set on INCOMPLETE so the error can name it; bounded
+    message: str | None = None  # upstream failure message / diagnostic detail; bounded
+    stderr_tail: str | None = None  # bounded by _MAX_STDERR_BYTES; NOT yet redacted (#275)
 
 
 @dataclass
@@ -239,7 +287,10 @@ def _target_from_successes(item: dict[str, Any], transcript_realpath: str) -> st
 
 
 def _failure_message(item: dict[str, Any]) -> str | None:
-    """A joined message from the completed notification's failure entries, if any."""
+    """A joined, redacted, bounded message from the completed notification's failures.
+
+    The join is sanitized as a whole (not per entry) so the bound applies to what an
+    agent actually reads; the empty-join fallback is ours and stays outside it."""
     failures = item.get(cli_contract.IMPORT_FAILURES_KEY)
     if not isinstance(failures, list) or not failures:
         return None
@@ -248,7 +299,7 @@ def _failure_message(item: dict[str, Any]) -> str | None:
         for f in failures
         if isinstance(f, dict) and f.get(cli_contract.IMPORT_MESSAGE_KEY)
     ]
-    return "; ".join(messages) or "Codex reported an import failure."
+    return _display_text("; ".join(messages)) or "Codex reported an import failure."
 
 
 def _resolve_completed(
@@ -298,7 +349,11 @@ def _resolve_completed(
         status=TransferStatus.INCOMPLETE,
         import_id=import_id,
         codex_home=codex_home,
-        ledger_path=str(Path(codex_home) / cli_contract.IMPORT_LEDGER_FILENAME),
+        # Display-only: `codex_home` is app-server-derived, so bound it — but append the
+        # ledger filename afterwards, since that part is ours and naming it is the whole
+        # point of the message. `_lookup_ledger` above still reads the RAW `codex_home`;
+        # bounding the value itself would silently break the dedup lookup.
+        ledger_path=str(Path(_display_text(codex_home)) / cli_contract.IMPORT_LEDGER_FILENAME),
         stderr_tail=tail,
     )
 
@@ -499,7 +554,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 detail = error.get("message") if isinstance(error, dict) else None
                 return TransferOutcome(
                     status=TransferStatus.PROTOCOL_ERROR,
-                    message=f"codex app-server initialize failed: {detail}"
+                    message=f"codex app-server initialize failed: {_display_text(detail)}"
                     if detail
                     else "codex app-server rejected initialize.",
                     stderr_tail=drain.snapshot() or None,
@@ -551,7 +606,8 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
                         codex_home=codex_home,
-                        message=f"codex app-server rejected the import request: {detail}"
+                        message=f"codex app-server rejected the import request: "
+                        f"{_display_text(detail)}"
                         if detail
                         else "codex app-server rejected the import request.",
                         stderr_tail=drain.snapshot() or None,
@@ -559,7 +615,9 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
                     codex_home=codex_home,
-                    message=str(detail) if detail else "codex app-server rejected the import.",
+                    message=_display_text(detail)
+                    if detail
+                    else "codex app-server rejected the import.",
                     stderr_tail=drain.snapshot() or None,
                 )
             if msg.get("id") == 2 and "result" in msg:

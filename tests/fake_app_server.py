@@ -14,6 +14,17 @@ import sys
 
 FIXED_TARGET = "thread-fresh-0001"
 
+# A secret-shaped value the redactor must catch (matches the unlabeled `sk-` vendor-key
+# pattern), and a diagnostic that carries it while running well past the display cap.
+# The secret sits near the front so the redaction marker survives truncation, and the
+# padding is what pushes the whole string over the cap.
+SECRET = "sk-" + "b" * 32
+LEAKY_MESSAGE = f"import failed near {SECRET} while converting " + "z" * 400
+
+# An implausibly long `codexHome`: the app-server may return any string, and it lands in
+# the INCOMPLETE error's ledger path.
+LONG_CODEX_HOME = "/" + "h" * 5000
+
 
 def _emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -88,11 +99,103 @@ def _handle_initialize(scenario: str, codex_home: str) -> bool:
     if scenario == "init_error":
         _emit({"id": 1, "error": {"code": -32000, "message": "bad init"}})
         return True
+    if scenario == "init_error_leaky":
+        _emit({"id": 1, "error": {"code": -32000, "message": LEAKY_MESSAGE}})
+        return True
+    if scenario == "init_error_falsey":
+        _emit({"id": 1, "error": {"code": -32000, "message": 0}})
+        return True
+    if scenario == "long_codex_home":
+        # A valid handshake reporting an absurd codexHome. The client keeps the raw value
+        # for the ledger lookup but must bound it before it reaches an error message.
+        _emit(_init_response(LONG_CODEX_HOME))
+        return False
     if scenario == "init_no_home":
         _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
         return True
     _emit(_init_response(codex_home))
     return scenario == "eof_after_init"
+
+
+# Scenarios that answer the import request with a JSON-RPC error. The client classifies
+# by `code`: -32601 → UNSUPPORTED, the rest of the reserved range → PROTOCOL_ERROR, an
+# application-range code → ITEM_FAILURE, a non-integer code → PROTOCOL_ERROR.
+_IMPORT_ERRORS: dict[str, dict] = {
+    "unsupported": {"code": -32601, "message": "method not found"},
+    # Application-range code → a genuine import rejection (transfer_failed).
+    "import_error": {"code": 42, "message": "boom"},
+    "import_error_leaky": {"code": 42, "message": LEAKY_MESSAGE},
+    # Reserved-range code → request/protocol drift (cli_contract_changed).
+    "invalid_params": {"code": -32602, "message": "invalid params"},
+    "invalid_params_leaky": {"code": -32602, "message": LEAKY_MESSAGE},
+    # Error object with no integer code → treated as protocol drift.
+    "malformed_error": {"message": "weird"},
+    # -32601.0 is `== -32601` in Python but is NOT an integer code. A non-integer code is
+    # malformed → protocol drift, never UNSUPPORTED.
+    "float_method_not_found": {"code": -32601.0, "message": "floaty"},
+    # JSON `true` decodes to bool, a subclass of int → still malformed.
+    "bool_code": {"code": True, "message": "booly"},
+    # Falsey `message` values: no diagnostic text, so the client emits its generic sentence
+    # rather than coercing them into noise like "rejected the import: {}".
+    "import_error_falsey": {"code": 42, "message": 0},
+    "invalid_params_falsey": {"code": -32602, "message": {}},
+}
+
+
+def _handle_import(scenario: str, import_params: dict) -> None:
+    """Respond to `externalAgentConfig/import`, then return so the fake exits."""
+    source = _session_source(import_params)
+    if scenario in _IMPORT_ERRORS:
+        _emit({"id": 2, "error": _IMPORT_ERRORS[scenario]})
+        return
+    if scenario in ("dedup", "long_codex_home"):
+        # Empty successes AND failures. `dedup` is a byte-identical re-import resolved via
+        # the ledger; `long_codex_home` has no ledger record, so it lands as INCOMPLETE and
+        # its message names the ledger path built from the absurd codexHome.
+        _emit(_import_response())
+        _emit(_completed([], []))
+        return
+    if scenario == "item_failure_leaky":
+        _emit(_import_response())
+        _emit(_completed([], [{"itemType": "SESSIONS", "message": LEAKY_MESSAGE}]))
+        return
+    _handle_import_success(scenario, source)
+
+
+def _handle_import_success(scenario: str, source: str) -> None:
+    success = {"itemType": "SESSIONS", "cwd": None, "source": source, "target": FIXED_TARGET}
+    if scenario == "fresh":
+        _emit(_import_response())
+        _emit(_progress())  # interleaved progress (ignored by the client)
+        _emit(_completed([success], []))
+        return
+    if scenario == "completed_before_response":
+        # Terminal notification arrives BEFORE the import response.
+        _emit(_completed([success], []))
+        _emit(_import_response())
+        return
+    if scenario == "item_failure":
+        _emit(_import_response())
+        _emit(
+            _completed(
+                [],
+                [
+                    {
+                        "itemType": "SESSIONS",
+                        "failureStage": "convert",
+                        "message": "could not parse session",
+                        "errorType": "ParseError",
+                    }
+                ],
+            )
+        )
+        return
+    if scenario == "timeout":
+        # Accept the import but never send completed; keep the process alive so the client
+        # hits its deadline. The client kills us on teardown.
+        _emit(_import_response())
+        for _ in sys.stdin:  # block forever
+            pass
 
 
 def main() -> None:
@@ -115,93 +218,7 @@ def main() -> None:
             continue
 
         if method == "externalAgentConfig/import":
-            source = _session_source(msg["params"])
-            if scenario == "unsupported":
-                _emit({"id": 2, "error": {"code": -32601, "message": "method not found"}})
-                return
-            if scenario == "import_error":
-                # Application-range code → a genuine import rejection (transfer_failed).
-                _emit({"id": 2, "error": {"code": 42, "message": "boom"}})
-                return
-            if scenario == "invalid_params":
-                # Reserved-range code → request/protocol drift (cli_contract_changed).
-                _emit({"id": 2, "error": {"code": -32602, "message": "invalid params"}})
-                return
-            if scenario == "malformed_error":
-                # Error object with no integer code → treated as protocol drift.
-                _emit({"id": 2, "error": {"message": "weird"}})
-                return
-            if scenario == "float_method_not_found":
-                # -32601.0 is `== -32601` in Python but is NOT an integer code. A
-                # non-integer code is malformed → protocol drift, never UNSUPPORTED.
-                _emit({"id": 2, "error": {"code": -32601.0, "message": "floaty"}})
-                return
-            if scenario == "bool_code":
-                # JSON `true` decodes to bool, a subclass of int → still malformed.
-                _emit({"id": 2, "error": {"code": True, "message": "booly"}})
-                return
-            if scenario == "fresh":
-                _emit(_import_response())
-                _emit(_progress())  # interleaved progress (ignored by the client)
-                _emit(
-                    _completed(
-                        [
-                            {
-                                "itemType": "SESSIONS",
-                                "cwd": None,
-                                "source": source,
-                                "target": FIXED_TARGET,
-                            }
-                        ],
-                        [],
-                    )
-                )
-                return
-            if scenario == "completed_before_response":
-                # Terminal notification arrives BEFORE the import response.
-                _emit(
-                    _completed(
-                        [
-                            {
-                                "itemType": "SESSIONS",
-                                "cwd": None,
-                                "source": source,
-                                "target": FIXED_TARGET,
-                            }
-                        ],
-                        [],
-                    )
-                )
-                _emit(_import_response())
-                return
-            if scenario == "dedup":
-                # Byte-identical re-import: empty successes AND failures (ledger fallback).
-                _emit(_import_response())
-                _emit(_completed([], []))
-                return
-            if scenario == "item_failure":
-                _emit(_import_response())
-                _emit(
-                    _completed(
-                        [],
-                        [
-                            {
-                                "itemType": "SESSIONS",
-                                "failureStage": "convert",
-                                "message": "could not parse session",
-                                "errorType": "ParseError",
-                            }
-                        ],
-                    )
-                )
-                return
-            if scenario == "timeout":
-                # Accept the import but never send completed; keep the process alive so
-                # the client hits its deadline. The client kills us on teardown.
-                _emit(_import_response())
-                for _ in sys.stdin:  # block forever
-                    pass
-                return
+            _handle_import(scenario, msg["params"])
             return
     # stdin closed without an import request
     return

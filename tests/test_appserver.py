@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, SECRET
 
 from codex_in_claude import appserver
 from codex_in_claude.appserver import (
@@ -565,6 +566,198 @@ def test_resolve_completed_failure_branch():
     outcome = _resolve(params)
     assert outcome.status is TransferStatus.ITEM_FAILURE
     assert outcome.message == "x"
+
+
+# --- app-server text is redacted and bounded before display (#276) ---------------
+
+CAP = appserver._MAX_DISPLAY_CHARS
+MARKER = appserver._DISPLAY_TRUNC_MARKER
+
+
+def test_display_text_passes_short_text_through_unchanged():
+    assert appserver._display_text("could not parse session") == "could not parse session"
+
+
+@pytest.mark.parametrize("length", [0, 1, CAP - 1, CAP])
+def test_display_text_leaves_text_at_or_under_the_cap_intact(length):
+    # The whole in-bounds domain, not just the lengths the call sites happen to produce:
+    # `CAP` is the last length that must survive verbatim, with no marker.
+    text = "y" * length
+    out = appserver._display_text(text)
+    assert out == text
+    assert MARKER not in out
+
+
+@pytest.mark.parametrize("length", [CAP + 1, CAP + 500, 9_000])
+def test_display_text_bounds_over_cap_text_and_says_so(length):
+    # The marker is reserved INSIDE the budget: the result never exceeds CAP, and an agent
+    # can tell a clipped diagnostic from a complete one.
+    out = appserver._display_text("y" * length)
+    assert len(out) == CAP
+    assert out.endswith(MARKER)
+
+
+def test_display_text_redacts_secret_shaped_values():
+    out = appserver._display_text(f"auth failed for {SECRET}")
+    assert SECRET not in out
+    assert "[redacted: secret value]" in out
+
+
+def test_display_text_redacts_before_truncating():
+    """Redaction must run first: truncating first can split a secret so no pattern
+    matches, publishing its prefix.
+
+    The secret must STRADDLE the cut point for this to discriminate — placed wholly after
+    it, a truncate-then-redact implementation drops the secret and passes for the wrong
+    reason. Starting 10 chars before the cut leaves `sk-bbbbbbb` in a truncate-first
+    result, and nothing in a redact-first one."""
+    cut = CAP - len(MARKER)
+    out = appserver._display_text("y" * (cut - 10) + SECRET + "z" * 100)
+    assert "sk-" not in out, "a partial secret survived — truncation ran before redaction"
+    assert len(out) == CAP
+
+
+def test_display_text_coerces_non_string_input():
+    # Wire values are `.get()`-ed off untrusted JSON: `message` may be any JSON type.
+    assert appserver._display_text(None) == ""
+    assert appserver._display_text(1234) == "1234"
+    assert appserver._display_text({"a": 1}) == "{'a': 1}"
+    assert len(appserver._display_text(["y" * 9_000])) == CAP
+
+
+def test_failure_message_redacts_and_bounds_the_join():
+    item = {"failures": [{"message": LEAKY_MESSAGE}, {"message": f"and {SECRET}"}]}
+    message = appserver._failure_message(item)
+    assert SECRET not in message
+    assert len(message) == CAP
+    assert message.endswith(MARKER)
+
+
+def test_failure_message_defaults_survive_sanitizing():
+    # Sanitizing must not swallow the empty-join fallback (regression guard for wiring
+    # `_display_text` around the `or` rather than inside it).
+    assert appserver._failure_message({"failures": [{"nomsg": 1}]}) == (
+        "Codex reported an import failure."
+    )
+    assert appserver._failure_message({"failures": []}) is None
+
+
+@pytest.mark.parametrize(
+    ("scenario", "status", "prefix"),
+    [
+        ("item_failure_leaky", TransferStatus.ITEM_FAILURE, ""),
+        ("init_error_leaky", TransferStatus.PROTOCOL_ERROR, "codex app-server initialize failed: "),
+        ("import_error_leaky", TransferStatus.ITEM_FAILURE, ""),
+        (
+            "invalid_params_leaky",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected the import request: ",
+        ),
+    ],
+)
+def test_every_app_server_message_route_is_redacted_and_bounded(tmp_path, scenario, status, prefix):
+    """#276: all four routes that carry app-server text into an error envelope.
+
+    Each keeps its static prefix (which is ours, not the child's) and bounds only the
+    foreign fragment, so the cap can never eat our own explanation."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is status
+    assert outcome.message.startswith(prefix)
+    foreign = outcome.message[len(prefix) :]
+    assert "sk-" not in foreign
+    assert "[redacted: secret value]" in foreign
+    assert len(foreign) == CAP
+    assert foreign.endswith(MARKER)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "status", "expected"),
+    [
+        (
+            "init_error_falsey",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected initialize.",
+        ),
+        (
+            "invalid_params_falsey",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected the import request.",
+        ),
+        (
+            "import_error_falsey",
+            TransferStatus.ITEM_FAILURE,
+            "codex app-server rejected the import.",
+        ),
+    ],
+)
+def test_falsey_app_server_message_yields_our_generic_sentence(
+    tmp_path, scenario, status, expected
+):
+    """Each `if detail` gate tests the RAW wire value, deliberately.
+
+    A falsey JSON `message` (`0`, `{}`, `""`, `false`, `[]`) carries no diagnostic text.
+    `_display_text` would coerce it to a truthy string, so branching on the *sanitized*
+    result — as a reviewer suggested — would publish noise like "rejected the import: {}"
+    where we currently emit a clean generic sentence. Locks that decision at all three
+    sites."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is status
+    assert outcome.message == expected
+
+
+def test_incomplete_ledger_path_is_bounded_but_keeps_the_ledger_filename(tmp_path):
+    """The INCOMPLETE message names the ledger. `codexHome` is app-server-derived, so the
+    displayed path is built from a bounded copy — but the trailing filename is ours and
+    must survive, since it is the part that tells an operator what to look for."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("long_codex_home", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.INCOMPLETE
+    assert outcome.ledger_path.endswith("/external_agent_session_imports.json")
+    assert len(outcome.ledger_path) <= CAP + len("/external_agent_session_imports.json")
+    assert MARKER in outcome.ledger_path
+    # The RAW codexHome is retained: it is the filesystem base `_lookup_ledger` reads,
+    # so bounding it at capture would silently break the dedup lookup.
+    assert outcome.codex_home == LONG_CODEX_HOME
+
+
+def test_bad_line_still_yields_its_constant_message(tmp_path):
+    """Regression guard for the bound the fix relies on: an over-cap line is truncated by
+    the reader, fails to parse, and becomes a CONSTANT message — no app-server text at
+    all. This is what keeps a multi-megabyte JSONL line off the error envelope."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("flood_line", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert outcome.message == "codex app-server emitted a non-JSON or oversized line."
 
 
 @pytest.mark.integration

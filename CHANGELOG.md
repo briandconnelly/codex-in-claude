@@ -112,6 +112,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_transfer` now redacts and bounds every app-server-derived string before it reaches an error
+  envelope** (#276). Four routes forwarded raw child text into `error.message`: the completed
+  notification's failure entries, the `initialize` error, the import JSON-RPC error, and the
+  incomplete-ledger path (built from the app-server-reported `codexHome`). `ErrorInfo.message` carries
+  no length constraint, so the only backstop was `_MAX_LINE_BYTES` — an 8 MiB *per-line parser* bound,
+  not an output cap. Upstream's app-server README documents these as "raw failure messages for the
+  client to report", which is precisely the surface the repo's redaction convention exists to cover;
+  every other foreign-text site already applied `(redact_text(...) or "")[:300]` and this one did not.
+  A new `appserver._display_text` helper redacts **before** truncating (cutting first can split a
+  secret so no pattern matches, publishing its prefix) and bounds the result to 300 characters,
+  reserving an explicit `…[truncated]` marker inside that budget rather than cutting silently — an
+  agent acting on a diagnostic should be able to tell a clipped one from a complete one, matching the
+  precedent in `_core/streamcap.py`. Sanitizing happens in `appserver.py` at each point foreign text
+  enters `TransferOutcome`, so the invariant holds for every consumer; the static prefixes composed in
+  `server.py` sit outside the bound and can never be truncated away by a verbose child. The raw
+  `codexHome` is deliberately retained — it is the filesystem base `_lookup_ledger` reads, so bounding
+  the value itself would silently break the dedup lookup; only the *displayed* ledger path is bounded,
+  with the trailing ledger filename appended afterwards so the message still names what to look for.
+  Human-readable `error.message` prose only: no schema field is added or retyped and no cached
+  discovery surface changes, so the result `fingerprint` is unchanged (see the versioning table in
+  `AGENTS.md`). The success envelope's app-server-derived identifiers (`thread_id`, `import_id`,
+  `codex_home`) have the same unbounded path and are tracked separately (#279) — they need protocol
+  *validation*, not truncation, since a clipped `thread_id` would silently corrupt `resume_command`.
+
 - **`codex app-server`'s `stderr_tail` now retains the tail, is byte-budgeted, and is safe to snapshot
   from another thread** (#254). `_spawn_stderr_drain` advertised a bounded *tail* but retained the
   *prefix*: once `total` reached `_MAX_STDERR_BYTES` it stopped appending, so the trailing
