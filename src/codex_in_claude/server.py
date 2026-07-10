@@ -1005,7 +1005,12 @@ def _transfer_outcome_envelope(
     meta_for: Callable[[], Meta],
     elapsed_ms: Callable[[], int],
 ) -> dict:
-    """Map an appserver TransferOutcome to the result/error envelope."""
+    """Map an appserver TransferOutcome to the result/error envelope.
+
+    The app-server-derived fragments interpolated below (`outcome.message`,
+    `outcome.ledger_path`) arrive already redacted and length-bounded — see
+    `TransferOutcome`'s invariant. The static prefixes here are ours, so they sit outside
+    that bound and cannot be truncated away by a verbose child."""
     status = outcome.status
     if status is appserver.TransferStatus.OK:
         thread_id = outcome.thread_id or ""
