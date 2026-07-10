@@ -200,6 +200,25 @@ def test_absent_target_key_falls_through_to_ledger(tmp_path):
     assert outcome.thread_id_source is ThreadIdSource.LEDGER
 
 
+def test_multiple_successes_any_invalid_target_fails_loud(tmp_path):
+    # Two matching success entries: one with a VALID target, one with a present-but-invalid
+    # (oversized) target. The invalid entry must poison the whole lookup — the valid entry
+    # must NOT win — per the tri-state rule in `appserver._target_from_successes`.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("mixed_valid_invalid_targets", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert outcome.thread_id is None
+    assert "thread id" in outcome.message
+    assert "t" * 5000 not in outcome.message  # value-free
+
+
 def test_unsupported_method(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()

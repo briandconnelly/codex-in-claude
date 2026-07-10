@@ -222,6 +222,21 @@ def _handle_import_success(scenario: str, source: str) -> None:
         _emit(_import_response())
         _emit(_completed([{"itemType": "SESSIONS", "source": source, "target": "t" * 5000}], []))
         return
+    if scenario == "mixed_valid_invalid_targets":
+        # Two entries both match our source: one VALID target, one present-but-invalid
+        # (oversized) target. The invalid entry must poison the whole lookup even though a
+        # valid one is also present — order in the list must not matter for the outcome.
+        _emit(_import_response())
+        _emit(
+            _completed(
+                [
+                    {"itemType": "SESSIONS", "source": source, "target": "thread-valid-1"},
+                    {"itemType": "SESSIONS", "source": source, "target": "t" * 5000},
+                ],
+                [],
+            )
+        )
+        return
     if scenario == "target_key_absent":
         # A success entry that carries NO target key at all → genuinely absent → ledger fallback.
         _emit(_import_response())
