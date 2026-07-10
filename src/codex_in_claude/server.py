@@ -1095,8 +1095,9 @@ async def codex_transfer(
     Identifiers the app-server reports (the imported thread id and $CODEX_HOME) are validated:
     a drifted, oversized, or malformed value fails as cli_contract_changed rather than
     producing a corrupt resume_command or importing into the wrong home. `resume_command` is
-    POSIX shell syntax. codex_status (free) can
-    confirm Codex is installed and authenticated beforehand."""
+    POSIX shell syntax.
+
+    codex_status (free) can confirm Codex is installed and authenticated beforehand."""
     start = time.monotonic()
     d = config.defaults()
     cwd_guess = workspace.server_cwd()

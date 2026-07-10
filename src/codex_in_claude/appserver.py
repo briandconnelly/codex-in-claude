@@ -108,6 +108,12 @@ def _valid_wire_id(value: object, max_bytes: int) -> str | None:
     it)."""
     if not isinstance(value, str) or not value:
         return None
+    # Cheap O(1) early reject: a UTF-8 encoding is always at least one byte per code point,
+    # so an over-cap character count is already over-cap in bytes. This skips the control
+    # scan and the full-string encode for a hostile oversized value (bounded only by the
+    # 8 MiB line cap upstream), whose encode would otherwise allocate a second large copy.
+    if len(value) > max_bytes:
+        return None
     if _has_control_char(value):
         return None
     try:
@@ -633,19 +639,31 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
                 result = msg.get("result")
-                home = _valid_codex_home(
+                raw_home = (
                     result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
                     if isinstance(result, dict)
                     else None
                 )
+                home = _valid_codex_home(raw_home)
                 if home is None:
                     # No valid absolute codexHome means we can't locate the ledger nor trust
-                    # the handshake — fail fast instead of importing into the dark. Message is
-                    # value-free: the invalid value must not reach the envelope.
+                    # the handshake — fail fast instead of importing into the dark. Both
+                    # messages are value-free (the rejected value never reaches the envelope)
+                    # but distinguish an omitted key from a present-but-invalid value: they are
+                    # different drift modes.
+                    home_present = (
+                        isinstance(result, dict)
+                        and cli_contract.APP_SERVER_CODEX_HOME_KEY in result
+                    )
+                    detail = (
+                        "codex app-server initialize response reported an invalid codexHome "
+                        "(must be a bounded, absolute path)."
+                        if home_present
+                        else "codex app-server initialize response omitted codexHome."
+                    )
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
-                        message="codex app-server reported an invalid codexHome "
-                        "(must be a bounded, absolute path).",
+                        message=detail,
                         stderr_tail=drain.snapshot() or None,
                     )
                 codex_home = home

@@ -613,6 +613,8 @@ def test_initialize_without_codex_home_is_protocol_error(tmp_path):
     )
     assert outcome.status is TransferStatus.PROTOCOL_ERROR
     assert "codexHome" in outcome.message
+    # An omitted key is a distinct drift mode from a present-but-invalid value.
+    assert "omitted" in outcome.message
 
 
 @pytest.mark.parametrize(
@@ -630,6 +632,8 @@ def test_invalid_codex_home_is_protocol_error(tmp_path, scenario):
     )
     assert outcome.status is TransferStatus.PROTOCOL_ERROR
     assert "codexHome" in outcome.message
+    # A present-but-invalid value is a distinct drift mode from an omitted key.
+    assert "invalid" in outcome.message
     # value-free: the invalid value never reaches the message.
     assert OVERSIZED_CODEX_HOME not in outcome.message
     assert "\x00" not in outcome.message
