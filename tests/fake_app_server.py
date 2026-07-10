@@ -247,6 +247,15 @@ def _handle_import_success(scenario: str, source: str) -> None:
         _emit({"id": 2, "result": {"importId": "i" * 5000}})
         _emit(_completed([success], []))
         return
+    if scenario == "progress_flood":
+        # A chatty-but-valid app-server: many progress notifications between the import
+        # response and the terminal completed. The reader must filter these so they never
+        # accumulate in the queue (#277), while the transfer still resolves OK.
+        _emit(_import_response())
+        for _ in range(5000):
+            _emit(_progress())
+        _emit(_completed([success], []))
+        return
     if scenario == "timeout":
         # Accept the import but never send completed; keep the process alive so the client
         # hits its deadline. The client kills us on teardown.

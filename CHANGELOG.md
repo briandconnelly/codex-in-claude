@@ -112,6 +112,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_transfer`'s app-server reader now bounds the memory it buffers ahead of the transfer
+  loop** (#277). `_spawn_reader` fed every parsed message onto an unbounded `queue.Queue`, so a
+  drifting or chatty `codex app-server` emitting valid sub-8-MiB progress notifications faster than
+  the single-consumer loop drained them defeated the OS pipe's backpressure and grew process memory
+  without bound until the 120 s transfer timeout — the per-line `_MAX_LINE_BYTES` cap bounded one
+  line, nothing bounded the aggregate. The reader now (a) enqueues only messages the loop can act on
+  (`id` 1/2, the terminal completed notification), dropping progress and unknown traffic at the
+  source, and (b) uses a small bounded queue (`_MAX_QUEUED_MESSAGES`) so a flood parks the reader in
+  `put()`, restoring pipe backpressure. A private stop `Event` — set before the child is killed —
+  releases a parked reader so teardown can't strand one daemon thread per transfer (a bare bounded
+  queue can't: a full queue takes no poison sentinel and won't wake a blocked producer). The filter
+  mirrors the loop's admission checks exactly (`==`, preserving its equality semantics for unusual
+  ids), so it is behavior-preserving; internal-only, so no `fingerprint` change. Regression tests
+  cover the selector, the progress flood surfacing only the terminal message, prompt reader exit on
+  an abandoned full queue, and an end-to-end chatty-but-valid server still resolving OK. Codex
+  (a different model) collaborated on the design.
 - **`codex_transfer` now rejects unresolvable transcript paths as `invalid_arguments` instead of a
   retryable `internal_error`** (#278). `validate_transcript_path` resolved the caller-supplied path with
   no error handling, so two malformed inputs escaped as `internal_error` — whose repair prose tells the
