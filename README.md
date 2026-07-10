@@ -99,6 +99,10 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
 
 ## Requirements
 
+- **macOS or Linux (POSIX).** Windows is not supported natively — the async-job safety
+  layer (file locks, process groups, signal-driven cancellation) is POSIX-only. Run it
+  under [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) on Windows. See
+  [`COMPATIBILITY.md`](COMPATIBILITY.md) for the platform contract.
 - The [`codex` CLI](https://developers.openai.com/codex/cli) on `PATH`, authenticated
   (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.142`; the supported range lives
   in [`cli_contract.py`](src/codex_in_claude/cli_contract.py), `/codex:status` reports whether your
@@ -215,6 +219,7 @@ reporting (`meta.rate_limit`), background-job semantics, and workspace selection
 | `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` | built-in tested set | comma-separated `codex` `major.minor` versions to treat as supported |
 | `CODEX_IN_CLAUDE_LOG_LEVEL` | `WARNING` | server diagnostic log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`\|`CRITICAL`); logs go to **stderr** (never stdout) |
 | `CODEX_IN_CLAUDE_LOG_FILE` | unset | also mirror diagnostic logs to this file path |
+| `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM` | unset | set to `1` to downgrade the non-POSIX startup refusal to a stderr warning for knowingly consult-only, unsupported use; the async-job safety layer cannot hold, so do not run delegate/review against untrusted work (see [Requirements](#requirements) / `COMPATIBILITY.md`) |
 
 Two further variables, `CODEX_IN_CLAUDE_TIER_DEFAULT` and `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`, exist
 ahead of the planned `apply` tier. They only change the defaults `codex_status` reports — every
