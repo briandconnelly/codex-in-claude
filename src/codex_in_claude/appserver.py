@@ -303,23 +303,48 @@ def _session_item_result(completed_params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _target_from_successes(item: dict[str, Any], transcript_realpath: str) -> str | None:
-    """The imported thread id from a fresh import's success entry, if present."""
+@dataclass
+class _TargetLookup:
+    """Tri-state result of scanning a completed notification's success entries for our
+    imported thread id: a valid ``target``; ``invalid`` when a matching entry carried a
+    present-but-unusable target (drift → PROTOCOL_ERROR); or neither (absent → try the
+    ledger). Presence is key existence, so a ``null``/``0``/``""`` target is present+invalid,
+    not absent."""
+
+    target: str | None = None
+    invalid: bool = False
+
+
+def _target_from_successes(item: dict[str, Any], transcript_realpath: str) -> _TargetLookup:
+    """Scan a fresh import's success entries for our imported thread id (tri-state).
+
+    We submit exactly one session item, so an unlabeled success is ours; a present ``source``
+    must match (defensive cross-check). A matching entry whose ``target`` key is present but
+    fails validation is drift and makes the whole lookup ``invalid`` — even if another entry
+    looks valid — so a corrupt live notification can never be papered over by the ledger."""
     successes = item.get(cli_contract.IMPORT_SUCCESSES_KEY)
     if not isinstance(successes, list):
-        return None
+        return _TargetLookup()
+    first_valid: str | None = None
+    saw_invalid = False
     for success in successes:
         if not isinstance(success, dict):
             continue
-        # We submit exactly one session item, so an unlabeled success is ours; when
-        # `source` is present it must match (defensive cross-check).
         src = success.get(cli_contract.IMPORT_SOURCE_KEY)
         if src is not None and src != transcript_realpath:
             continue
-        target = success.get(cli_contract.IMPORT_TARGET_KEY)
-        if isinstance(target, str) and target:
-            return target
-    return None
+        if cli_contract.IMPORT_TARGET_KEY not in success:
+            continue  # this entry carries no target → not present here
+        valid = _valid_wire_id(
+            success.get(cli_contract.IMPORT_TARGET_KEY), cli_contract.TRANSFER_ID_MAX_BYTES
+        )
+        if valid is None:
+            saw_invalid = True  # present but unusable → drift
+        elif first_valid is None:
+            first_valid = valid
+    if saw_invalid:
+        return _TargetLookup(invalid=True)
+    return _TargetLookup(target=first_valid)
 
 
 def _failure_message(item: dict[str, Any]) -> str | None:
@@ -350,11 +375,19 @@ def _resolve_completed(
     the ledger fallback for a byte-identical (deduped) re-import."""
     tail = stderr_tail or None
     item = _session_item_result(completed_params)
-    target = _target_from_successes(item, transcript_realpath)
-    if target is not None:
+    lookup = _target_from_successes(item, transcript_realpath)
+    if lookup.invalid:
+        return TransferOutcome(
+            status=TransferStatus.PROTOCOL_ERROR,
+            import_id=import_id,
+            codex_home=codex_home,
+            message="codex app-server reported an invalid imported thread id.",
+            stderr_tail=tail,
+        )
+    if lookup.target is not None:
         return TransferOutcome(
             status=TransferStatus.OK,
-            thread_id=target,
+            thread_id=lookup.target,
             thread_id_source=ThreadIdSource.IMPORT_NOTIFICATION,
             import_id=import_id,
             codex_home=codex_home,

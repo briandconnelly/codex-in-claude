@@ -149,6 +149,57 @@ def test_completed_before_response_still_resolves(tmp_path):
     assert outcome.thread_id == "thread-fresh-0001"
 
 
+@pytest.mark.parametrize("scenario", ["oversized_target", "control_target", "null_target"])
+def test_invalid_notification_target_is_protocol_error(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "thread id" in outcome.message
+    assert "t" * 5000 not in outcome.message  # value-free
+
+
+def test_invalid_live_target_beats_valid_ledger(tmp_path):
+    home = tmp_path / "codex_home"
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    _write_ledger(home, source, sha, "thread-from-ledger-OK")
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("invalid_target_with_ledger", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR  # NOT recovered from the ledger
+    assert outcome.thread_id is None
+
+
+def test_absent_target_key_falls_through_to_ledger(tmp_path):
+    home = tmp_path / "codex_home"
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    _write_ledger(home, source, sha, "thread-recovered-77")
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("target_key_absent", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-recovered-77"
+    assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
 def test_unsupported_method(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()
@@ -582,12 +633,12 @@ def test_target_skips_source_mismatch():
             {"itemType": "SESSIONS", "source": "/s.jsonl", "target": "right"},
         ]
     }
-    assert appserver._target_from_successes(item, "/s.jsonl") == "right"
+    assert appserver._target_from_successes(item, "/s.jsonl").target == "right"
 
 
 def test_target_accepts_unlabeled_success():
     item = {"successes": [{"itemType": "SESSIONS", "target": "t"}]}
-    assert appserver._target_from_successes(item, "/s.jsonl") == "t"
+    assert appserver._target_from_successes(item, "/s.jsonl").target == "t"
 
 
 def test_failure_message_joins_and_defaults():

@@ -207,6 +207,26 @@ def _handle_import_success(scenario: str, source: str) -> None:
             )
         )
         return
+    if scenario in ("oversized_target", "control_target", "null_target"):
+        bad = {
+            "oversized_target": "t" * 5000,
+            "control_target": "thread-\x00-bad",
+            "null_target": None,
+        }[scenario]
+        _emit(_import_response())
+        _emit(_completed([{"itemType": "SESSIONS", "source": source, "target": bad}], []))
+        return
+    if scenario == "invalid_target_with_ledger":
+        # A present-but-invalid live target AND a valid ledger record for the same transcript.
+        # The live drift must win (PROTOCOL_ERROR), not silently recover the ledger id.
+        _emit(_import_response())
+        _emit(_completed([{"itemType": "SESSIONS", "source": source, "target": "t" * 5000}], []))
+        return
+    if scenario == "target_key_absent":
+        # A success entry that carries NO target key at all → genuinely absent → ledger fallback.
+        _emit(_import_response())
+        _emit(_completed([{"itemType": "SESSIONS", "source": source}], []))
+        return
     if scenario == "timeout":
         # Accept the import but never send completed; keep the process alive so the client
         # hits its deadline. The client kills us on teardown.
