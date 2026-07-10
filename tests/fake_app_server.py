@@ -102,6 +102,9 @@ def _handle_initialize(scenario: str, codex_home: str) -> bool:
     if scenario == "init_error_leaky":
         _emit({"id": 1, "error": {"code": -32000, "message": LEAKY_MESSAGE}})
         return True
+    if scenario == "init_error_falsey":
+        _emit({"id": 1, "error": {"code": -32000, "message": 0}})
+        return True
     if scenario == "long_codex_home":
         # A valid handshake reporting an absurd codexHome. The client keeps the raw value
         # for the ledger lookup but must bound it before it reaches an error message.
@@ -132,6 +135,10 @@ _IMPORT_ERRORS: dict[str, dict] = {
     "float_method_not_found": {"code": -32601.0, "message": "floaty"},
     # JSON `true` decodes to bool, a subclass of int → still malformed.
     "bool_code": {"code": True, "message": "booly"},
+    # Falsey `message` values: no diagnostic text, so the client emits its generic sentence
+    # rather than coercing them into noise like "rejected the import: {}".
+    "import_error_falsey": {"code": 42, "message": 0},
+    "invalid_params_falsey": {"code": -32602, "message": {}},
 }
 
 

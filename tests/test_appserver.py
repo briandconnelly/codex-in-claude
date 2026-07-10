@@ -678,6 +678,49 @@ def test_every_app_server_message_route_is_redacted_and_bounded(tmp_path, scenar
     assert foreign.endswith(MARKER)
 
 
+@pytest.mark.parametrize(
+    ("scenario", "status", "expected"),
+    [
+        (
+            "init_error_falsey",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected initialize.",
+        ),
+        (
+            "invalid_params_falsey",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected the import request.",
+        ),
+        (
+            "import_error_falsey",
+            TransferStatus.ITEM_FAILURE,
+            "codex app-server rejected the import.",
+        ),
+    ],
+)
+def test_falsey_app_server_message_yields_our_generic_sentence(
+    tmp_path, scenario, status, expected
+):
+    """Each `if detail` gate tests the RAW wire value, deliberately.
+
+    A falsey JSON `message` (`0`, `{}`, `""`, `false`, `[]`) carries no diagnostic text.
+    `_display_text` would coerce it to a truthy string, so branching on the *sanitized*
+    result — as a reviewer suggested — would publish noise like "rejected the import: {}"
+    where we currently emit a clean generic sentence. Locks that decision at all three
+    sites."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is status
+    assert outcome.message == expected
+
+
 def test_incomplete_ledger_path_is_bounded_but_keeps_the_ledger_filename(tmp_path):
     """The INCOMPLETE message names the ledger. `codexHome` is app-server-derived, so the
     displayed path is built from a bounded copy — but the trailing filename is ours and

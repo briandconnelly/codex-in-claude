@@ -75,6 +75,14 @@ def _display_text(text: object) -> str:
     Apply this to the foreign *fragment* only — never to a composed message — so a long
     fragment can never truncate away our own static explanation. Any future app-server
     string that reaches an envelope (e.g. ``stderr_tail``, #275) must route through here.
+
+    Callers decide *whether a diagnostic exists* by testing the RAW wire value, not this
+    function's output. Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
+    ``{}``) carries no diagnostic text, but coercing one here yields a truthy string, so
+    branching on the sanitized result would emit noise like ``rejected the import: {}``
+    instead of a clean generic sentence. The converse cannot happen: a truthy ``detail``
+    never sanitizes to ``""`` (``redact_text`` substitutes a non-empty placeholder), so no
+    caller can strand a prefix with an empty fragment after it.
     """
     if text is None:
         return ""
