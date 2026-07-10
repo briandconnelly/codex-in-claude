@@ -7,8 +7,11 @@ The subprocess/JSONL path is exercised against a scripted fake app-server
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import queue
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -471,6 +474,85 @@ def test_oversized_line_is_protocol_drift(tmp_path):
     assert "non-JSON" in outcome.message
 
 
+# --- reader: filtering + bounded queue + shutdown safety (#277) -----------------
+
+
+def test_relevant_to_loop_retains_actionable_and_drops_noise():
+    # The reader's admission filter must mirror the loop's own checks EXACTLY: keep the
+    # handshake (id 1), the import response/error (id 2), and the terminal completed
+    # notification; drop progress notifications, unknown methods, other ids, and non-dicts
+    # so they never accumulate in the queue.
+    completed = cli_contract.APP_SERVER_IMPORT_COMPLETED_NOTIFICATION
+    assert appserver._relevant_to_loop({"id": 1, "result": {}})
+    assert appserver._relevant_to_loop({"id": 2, "error": {}})
+    assert appserver._relevant_to_loop({"id": 1})  # id match alone, even sans result/error
+    assert appserver._relevant_to_loop({"method": completed, "params": {}})
+    # Dropped: chatty-but-ignored traffic.
+    assert not appserver._relevant_to_loop({"method": "externalAgentConfig/import/progress"})
+    assert not appserver._relevant_to_loop({"id": 3, "result": {}})
+    assert not appserver._relevant_to_loop({"jsonrpc": "2.0"})
+    assert not appserver._relevant_to_loop(["not", "a", "dict"])
+    assert not appserver._relevant_to_loop("scalar")
+
+
+def test_reader_filters_progress_and_surfaces_only_relevant(tmp_path):
+    # A flood of progress notifications, then one completed. Only the completed (plus the
+    # _EOF sentinel) should ever reach the queue — the progress traffic is filtered at the
+    # reader so it cannot accumulate.
+    completed = {"method": cli_contract.APP_SERVER_IMPORT_COMPLETED_NOTIFICATION, "params": {}}
+    progress = {"method": "externalAgentConfig/import/progress"}
+    lines = [json.dumps(progress).encode() + b"\n" for _ in range(500)]
+    lines.append(json.dumps(completed).encode() + b"\n")
+    reader = appserver._spawn_reader(io.BytesIO(b"".join(lines)))
+    drained = []
+    while True:
+        msg = reader.messages.get(timeout=2)
+        if msg is appserver._EOF:
+            break
+        drained.append(msg)
+    assert drained == [completed]
+
+
+def test_reader_thread_exits_when_consumer_abandons_a_full_queue():
+    # With a bounded queue and no draining, the reader blocks on put(). Setting the stop
+    # event must release it so it exits promptly rather than stranding a daemon thread
+    # (one per transfer) forever. All messages are relevant (id 2) so filtering can't be
+    # what drains the flood.
+    payload = b"".join(json.dumps({"id": 2, "result": {}}).encode() + b"\n" for _ in range(1000))
+    reader = appserver._spawn_reader(io.BytesIO(payload))
+    # Never drain. The bounded queue fills and the reader parks in put().
+    reader.stop.set()
+    reader.thread.join(timeout=2)
+    assert not reader.thread.is_alive()
+
+
+def test_put_or_stop_returns_without_enqueue_when_already_stopped():
+    # The fast-path guard: a producer must not enqueue once stop is set, even into a queue
+    # with room. This is what keeps a post-return flood from re-growing the queue.
+    q: queue.Queue[object] = queue.Queue(maxsize=1)
+    stop = threading.Event()
+    stop.set()
+    appserver._put_or_stop(q, stop, "item")
+    assert q.empty()
+
+
+def test_progress_flood_still_resolves_ok(tmp_path):
+    # End-to-end: a valid app-server that emits thousands of progress notifications before
+    # completing must still land OK — filtering + the bounded queue are transparent to a
+    # chatty-but-well-behaved server.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("progress_flood", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK, outcome
+    assert outcome.thread_id
+
+
 def _flood_outcome(tmp_path, scenario):
     home = tmp_path / "codex_home"
     home.mkdir()
@@ -705,7 +787,6 @@ def test_invalid_codex_home_stops_before_import_request(tmp_path):
 def test_stop_event_cancels_promptly(tmp_path):
     """A set stop_event tears the run down well before the deadline, and the child
     process is reaped (cooperative cancellation)."""
-    import threading
 
     home = tmp_path / "codex_home"
     home.mkdir()

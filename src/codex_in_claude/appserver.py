@@ -50,6 +50,12 @@ _MAX_STDERR_BYTES = 64 * 1024
 # Max blocking-read slice: caps how long the loop waits before re-checking the deadline
 # and the cooperative-cancellation stop flag, so a cancelled call tears down promptly.
 _POLL_SECONDS = 0.25
+# Aggregate cap on messages buffered ahead of the single-consumer loop. Small on purpose:
+# the valid burst is initialize -> import response and/or completed, so a handful is ample
+# slack. A drifting app-server that floods faster than the loop drains then blocks the
+# reader on put(), restoring the OS pipe's natural backpressure instead of converting a
+# bounded pipe buffer into unbounded process memory (#277).
+_MAX_QUEUED_MESSAGES = 4
 
 # Display budget for one app-server-derived fragment. 300 matches every other foreign-text
 # site (`codex.py`, `orchestration.py`, `_worker.py`); unlike those, the marker below is
@@ -450,34 +456,88 @@ _EOF = object()
 _BAD_LINE = object()
 
 
-def _spawn_reader(stdout: Any) -> queue.Queue[Any]:
-    """Start a daemon thread that parses newline-delimited JSON from ``stdout`` and
-    queues each message (or a ``_BAD_LINE``/``_EOF`` sentinel).
+def _relevant_to_loop(msg: Any) -> bool:
+    """Whether ``transfer_session``'s loop can ever act on ``msg``.
+
+    Mirrors the loop's admission checks *exactly* — the handshake (``id`` 1), the import
+    response/error (``id`` 2), and the terminal completed notification — so filtering here
+    is behavior-preserving: everything the loop would tolerantly ignore (progress
+    notifications, unknown methods, other ids, non-dicts) is dropped before it can
+    accumulate in the queue (#277). ``==`` (not ``is``) preserves the loop's own equality
+    semantics for unusual ids (e.g. a JSON ``true`` or ``1.0`` that compares equal to 1).
+    Loop-state guards (``codex_home is not None``, ``params`` shape) stay in the loop; the
+    reader admits by message *shape* alone."""
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("id") == 1 or msg.get("id") == 2:
+        return True
+    return msg.get("method") == cli_contract.APP_SERVER_IMPORT_COMPLETED_NOTIFICATION
+
+
+def _put_or_stop(q: queue.Queue[Any], stop: threading.Event, item: Any) -> None:
+    """Enqueue ``item``, blocking only in bounded slices so a stopped consumer releases the
+    producer. Returns without enqueueing once ``stop`` is set — a bounded queue alone is not
+    shutdown-safe (a full queue can't take a poison sentinel and won't wake a producer parked
+    in ``put()``), so the reader's teardown rides on this flag, not on the queue."""
+    while not stop.is_set():
+        try:
+            q.put(item, timeout=_POLL_SECONDS)
+            return
+        except queue.Full:
+            continue
+
+
+@dataclass
+class _Reader:
+    """The stdout reader's handle: its bounded message queue and the levers to stop it.
+
+    ``stop`` is set (before killing the child) so a reader parked in ``put()`` on a full
+    queue unblocks and exits instead of stranding one daemon thread per transfer; ``thread``
+    lets the caller make a bounded join for tidy teardown."""
+
+    messages: queue.Queue[Any]
+    stop: threading.Event
+    thread: threading.Thread
+
+
+def _spawn_reader(stdout: Any) -> _Reader:
+    """Start a daemon thread that parses newline-delimited JSON from ``stdout`` and queues
+    the loop-relevant messages (plus a ``_BAD_LINE``/``_EOF`` sentinel).
 
     ``stdout`` is a *binary* pipe read through ``iter_bounded_lines_interactive``: this is
     a request/response protocol, so a response line must surface on its newline rather
     than when the child exits. That reader also caps a runaway line while it is still
     being buffered — an over-cap line arrives carrying the truncation marker, fails to
     parse, and becomes ``_BAD_LINE``, which is the same protocol-drift outcome a
-    well-formed-but-enormous line would have produced."""
-    q: queue.Queue[Any] = queue.Queue()
+    well-formed-but-enormous line would have produced.
+
+    The queue is bounded (:data:`_MAX_QUEUED_MESSAGES`) and only messages the loop can act
+    on are enqueued (:func:`_relevant_to_loop`); together they keep a chatty or drifting
+    app-server from growing process memory without bound (#277)."""
+    q: queue.Queue[Any] = queue.Queue(maxsize=_MAX_QUEUED_MESSAGES)
+    stop = threading.Event()
 
     def _run() -> None:
         try:
             for line in streamcap.iter_bounded_lines_interactive(stdout, _MAX_LINE_BYTES):
+                if stop.is_set():
+                    return
                 stripped = line.strip()
                 if not stripped:
                     continue
                 try:
-                    q.put(json.loads(stripped))
+                    parsed = json.loads(stripped)
                 except ValueError:
-                    q.put(_BAD_LINE)
+                    _put_or_stop(q, stop, _BAD_LINE)
                     return
+                if _relevant_to_loop(parsed):
+                    _put_or_stop(q, stop, parsed)
         finally:
-            q.put(_EOF)
+            _put_or_stop(q, stop, _EOF)
 
-    threading.Thread(target=_run, daemon=True).start()
-    return q
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return _Reader(messages=q, stop=stop, thread=thread)
 
 
 class _StderrDrain:
@@ -569,7 +629,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
         return TransferOutcome(status=TransferStatus.SPAWN_FAILED, stderr_tail=BINARY_NOT_FOUND)
 
     drain = _StderrDrain(proc.stderr)
-    messages = _spawn_reader(proc.stdout)
+    reader = _spawn_reader(proc.stdout)
 
     def _send(obj: dict[str, Any]) -> None:
         if proc.stdin is None:  # pragma: no cover
@@ -615,7 +675,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 )
             try:
                 # Cap each wait so the deadline and the stop flag are re-checked promptly.
-                msg = messages.get(timeout=min(remaining, _POLL_SECONDS))
+                msg = reader.messages.get(timeout=min(remaining, _POLL_SECONDS))
             except queue.Empty:
                 continue
             if msg is _EOF:
@@ -748,4 +808,8 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             # Everything else (progress notifications, unknown methods, extra fields):
             # ignore and keep reading (tolerant decoding).
     finally:
+        # Release a reader parked in put() on a full queue BEFORE killing the child, then
+        # tear down and make a bounded join so we don't strand a daemon thread per transfer.
+        reader.stop.set()
         _terminate(proc)
+        reader.thread.join(timeout=_POLL_SECONDS)
