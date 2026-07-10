@@ -112,6 +112,45 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_transfer` now rejects unresolvable transcript paths as `invalid_arguments` instead of a
+  retryable `internal_error`** (#278). `validate_transcript_path` resolved the caller-supplied path with
+  no error handling, so two malformed inputs escaped as `internal_error` — whose repair prose tells the
+  caller to *retry*, which can never fix a bad path. An embedded NUL makes `Path.resolve()` raise
+  `ValueError` on every supported Python; a symlink loop makes it raise `RuntimeError` on CPython
+  3.11/3.12. A third leg the same validation missed: `Path.is_file()` re-raises non-ignored `OSError`s
+  such as `PermissionError`/EACCES on CPython 3.11–3.13 (only 3.14 swallows them), so an unstat-able path
+  leaked too. Resolution and the file check are now wrapped in one guard catching `OSError`, `ValueError`,
+  and `RuntimeError`, returning a stable, value-free reason (the offending path is never echoed, matching
+  the #244 posture) that the boundary maps to `invalid_arguments` with `ErrorDetail(field="transcript_path")`.
+  Validation runs before anything is spawned, so there was never any spend — the only harm was the
+  misleading retryable hint. Regression tests cover all three legs (real NUL, real symlink loop, and a
+  forced `is_file` `OSError`) on every supported Python. Error-code mapping only — no result `fingerprint`
+  change (both codes were already advertised) and not a breaking change.
+
+- **`codex_transfer` now redacts and bounds every app-server-derived string before it reaches an error
+  envelope** (#276). Four routes forwarded raw child text into `error.message`: the completed
+  notification's failure entries, the `initialize` error, the import JSON-RPC error, and the
+  incomplete-ledger path (built from the app-server-reported `codexHome`). `ErrorInfo.message` carries
+  no length constraint, so the only backstop was `_MAX_LINE_BYTES` — an 8 MiB *per-line parser* bound,
+  not an output cap. Upstream's app-server README documents these as "raw failure messages for the
+  client to report", which is precisely the surface the repo's redaction convention exists to cover;
+  every other foreign-text site already applied `(redact_text(...) or "")[:300]` and this one did not.
+  A new `appserver._display_text` helper redacts **before** truncating (cutting first can split a
+  secret so no pattern matches, publishing its prefix) and bounds the result to 300 characters,
+  reserving an explicit `…[truncated]` marker inside that budget rather than cutting silently — an
+  agent acting on a diagnostic should be able to tell a clipped one from a complete one, matching the
+  precedent in `_core/streamcap.py`. Sanitizing happens in `appserver.py` at each point foreign text
+  enters `TransferOutcome`, so the invariant holds for every consumer; the static prefixes composed in
+  `server.py` sit outside the bound and can never be truncated away by a verbose child. The raw
+  `codexHome` is deliberately retained — it is the filesystem base `_lookup_ledger` reads, so bounding
+  the value itself would silently break the dedup lookup; only the *displayed* ledger path is bounded,
+  with the trailing ledger filename appended afterwards so the message still names what to look for.
+  Human-readable `error.message` prose only: no schema field is added or retyped and no cached
+  discovery surface changes, so the result `fingerprint` is unchanged (see the versioning table in
+  `AGENTS.md`). The success envelope's app-server-derived identifiers (`thread_id`, `import_id`,
+  `codex_home`) have the same unbounded path and are tracked separately (#279) — they need protocol
+  *validation*, not truncation, since a clipped `thread_id` would silently corrupt `resume_command`.
+
 - **`codex app-server`'s `stderr_tail` now retains the tail, is byte-budgeted, and is safe to snapshot
   from another thread** (#254). `_spawn_stderr_drain` advertised a bounded *tail* but retained the
   *prefix*: once `total` reached `_MAX_STDERR_BYTES` it stopped appending, so the trailing
@@ -232,7 +271,26 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   "temporary" error. No new error code is advertised (the existing `internal_error`
   code is reused), so no `fingerprint` bump.
 
+- **The Copilot-review workflow no longer green-checks when GitHub silently drops the
+  review request** (#236). `.github/workflows/copilot-review-bot-prs.yml` posted to
+  `requested_reviewers` with `github.token` and treated any 200 as success, but GitHub
+  silently ignores Copilot reviewer requests made with a non-user token — the POST
+  returns 200 with an empty `requested_reviewers` and Copilot never reviews. The step
+  now gates on a user-scoped PAT (`COPILOT_REVIEW_PAT`): when it is set, the step
+  captures the response and fails loudly (`::error::` + non-zero exit) if
+  `copilot-pull-request-reviewer[bot]` is absent from `requested_reviewers`, so a
+  silent no-op can never pass as a green check; when no PAT is configured the step
+  emits a `::warning::` and skips (exit 0) rather than issue the doomed
+  default-token request. CI-only; no `fingerprint` bump.
+
 ### Security
+
+- `codex_transfer` now validates and bounds the identifiers the `codex app-server` reports on
+  success — the imported thread id, `$CODEX_HOME`, the ledger id, and `importId`. A drifted,
+  oversized, control-character-bearing, or non-absolute value fails as `cli_contract_changed`
+  (for the live protocol) or is skipped (for the best-effort ledger and optional `importId`)
+  instead of yielding a corrupt `resume_command` or re-basing the ledger lookup on the wrong
+  directory. `resume_command` is now shell-quoted. (#279)
 
 - **Full gitattributes filter isolation for propose-tier worktree git ops** (#163).
   Completes the repo-config hardening started in #156/#162 (which disabled hooks,
