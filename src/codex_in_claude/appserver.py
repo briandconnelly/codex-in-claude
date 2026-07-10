@@ -92,6 +92,42 @@ def _display_text(text: object) -> str:
     return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
 
 
+def _has_control_char(text: str) -> bool:
+    """True if ``text`` contains any Unicode ``Cc`` control code point — exactly C0
+    (U+0000-U+001F), DEL (U+007F), and C1 (U+0080-U+009F)."""
+    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in text)
+
+
+def _valid_wire_id(value: object, max_bytes: int) -> str | None:
+    """Return ``value`` if it is a valid opaque app-server identifier, else ``None``.
+
+    Valid = a non-empty ``str``, free of ``Cc`` control chars, that encodes to at most
+    ``max_bytes`` UTF-8 bytes. JSON permits escaped unpaired surrogates that decode fine but
+    raise ``UnicodeEncodeError`` on encode; those are treated as invalid, never raised. This
+    is a protocol check on a semantic id — reject, never truncate (truncating an id corrupts
+    it)."""
+    if not isinstance(value, str) or not value:
+        return None
+    if _has_control_char(value):
+        return None
+    try:
+        if len(value.encode("utf-8")) > max_bytes:
+            return None
+    except UnicodeError:
+        return None
+    return value
+
+
+def _valid_codex_home(value: object) -> str | None:
+    """Return ``value`` if it is a valid ``codexHome`` (a bounded, control-free, ABSOLUTE
+    path), else ``None``. Absolute-ness is the real invariant — a relative value would
+    re-base the ledger lookup on the server process's cwd."""
+    home = _valid_wire_id(value, cli_contract.CODEX_HOME_MAX_BYTES)
+    if home is None or not Path(home).is_absolute():
+        return None
+    return home
+
+
 def _terminate(proc: subprocess.Popen) -> None:
     """Close stdin, SIGKILL the whole process group, then reap the leader.
 

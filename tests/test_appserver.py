@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, SECRET
 
-from codex_in_claude import appserver
+from codex_in_claude import appserver, cli_contract
 from codex_in_claude.appserver import (
     ThreadIdSource,
     TransferStatus,
@@ -623,6 +623,54 @@ def test_display_text_coerces_non_string_input():
     assert appserver._display_text(1234) == "1234"
     assert appserver._display_text({"a": 1}) == "{'a': 1}"
     assert len(appserver._display_text(["y" * 9_000])) == CAP
+
+
+# --- identifier validation helpers ---------------------------------------------
+
+
+SURROGATE = "\ud800"  # JSON-legal, decodes fine, raises on .encode("utf-8")
+
+
+def test_has_control_char_detects_cc_category():
+    assert appserver._has_control_char("a\x00b")  # C0 NUL
+    assert appserver._has_control_char("a\x7fb")  # DEL
+    assert appserver._has_control_char("a\x85b")  # C1
+    assert not appserver._has_control_char("normal-id_1.2")
+    assert not appserver._has_control_char("café")  # non-ASCII letters are fine
+
+
+def test_valid_wire_id_accepts_plain_id():
+    result = appserver._valid_wire_id("thread-abc_123", cli_contract.TRANSFER_ID_MAX_BYTES)
+    assert result == "thread-abc_123"
+
+
+@pytest.mark.parametrize("bad", ["", 0, None, [], {}, b"bytes"])
+def test_valid_wire_id_rejects_empty_and_non_str(bad):
+    assert appserver._valid_wire_id(bad, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_wire_id_rejects_control_and_surrogate():
+    assert appserver._valid_wire_id("a\x00b", cli_contract.TRANSFER_ID_MAX_BYTES) is None
+    assert appserver._valid_wire_id(SURROGATE, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_wire_id_enforces_byte_bound_not_char_count():
+    at_cap = "z" * cli_contract.TRANSFER_ID_MAX_BYTES
+    assert appserver._valid_wire_id(at_cap, cli_contract.TRANSFER_ID_MAX_BYTES) == at_cap
+    over_cap = "z" * (cli_contract.TRANSFER_ID_MAX_BYTES + 1)
+    assert appserver._valid_wire_id(over_cap, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+    # A 2-byte char at the boundary is measured in BYTES, not characters.
+    two_byte = "é" * ((cli_contract.TRANSFER_ID_MAX_BYTES // 2) + 1)
+    assert appserver._valid_wire_id(two_byte, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_codex_home_requires_absolute():
+    assert appserver._valid_codex_home("/home/u/.codex") == "/home/u/.codex"
+    assert appserver._valid_codex_home("relative/dir") is None
+    assert appserver._valid_codex_home("") is None
+    assert appserver._valid_codex_home("/home/\x00u") is None  # control char
+    assert appserver._valid_codex_home(SURROGATE) is None
+    assert appserver._valid_codex_home("/" + "h" * (cli_contract.CODEX_HOME_MAX_BYTES + 1)) is None
 
 
 def test_failure_message_redacts_and_bounds_the_join():
