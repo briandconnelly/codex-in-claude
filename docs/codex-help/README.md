@@ -1,6 +1,6 @@
 # Captured `codex` CLI help snapshots
 
-One directory per verified `codex` version (e.g. `0.142.0/`), each holding the raw output of the
+One directory per verified `codex` version (e.g. `0.144.1/`), each holding the raw output of the
 free local probes:
 
 - `codex.txt` — top-level `codex --help` (the `Commands:` inventory)
