@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import functools
 import os
+import shlex
 import signal
 import sys
 import threading
@@ -1017,7 +1018,7 @@ def _transfer_outcome_envelope(
         source = outcome.thread_id_source or appserver.ThreadIdSource.IMPORT_NOTIFICATION
         return TransferResult(
             thread_id=thread_id,
-            resume_command=f"codex resume {thread_id}",
+            resume_command=shlex.join(["codex", "resume", thread_id]),
             source_path=source_path,
             meta=TransferMeta(
                 codex_home=outcome.codex_home or "",

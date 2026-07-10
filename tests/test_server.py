@@ -4850,6 +4850,56 @@ async def test_transfer_spawn_failed(monkeypatch):
     assert result["error"]["code"] == "codex_not_found"
 
 
+async def test_transfer_resume_command_is_shell_quoted(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="id with space;rm",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    # shlex.join quotes the pathological id so the pasted command stays one safe argument.
+    assert result["resume_command"] == "codex resume 'id with space;rm'"
+
+
+async def test_transfer_resume_command_plain_id_unquoted(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="thread-fresh-0001",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["resume_command"] == "codex resume thread-fresh-0001"
+
+
+async def test_transfer_protocol_error_message_excludes_the_bad_value(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.PROTOCOL_ERROR,
+            message="codex app-server reported an invalid codexHome "
+            "(must be a bounded, absolute path).",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "cli_contract_changed"
+    assert "h" * 5000 not in result["error"]["message"]  # no value ever interpolated
+
+
 # --- CODEX_IN_CLAUDE_EXTRA_ARGS: status + preflight before spend (#231) -----------
 
 
