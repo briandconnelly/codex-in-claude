@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import io
+import subprocess
+import sys
+import threading
 
 from codex_in_claude._core import streamcap
 
@@ -108,3 +111,103 @@ def test_iter_bounded_lines_truncates_within_chunk_line():
     )
     assert "[line truncated]" in first, f"no truncation marker: {first!r}"
     assert out[-1] == "ok\n"
+
+
+# --- iter_bounded_lines_interactive -------------------------------------------------
+#
+# The drain reader (`iter_bounded_lines`) is fed by `stream.read(n)`, which on a blocking
+# pipe waits for n characters OR EOF. The interactive reader must instead yield a line as
+# soon as its newline arrives, while the producer is still running.
+
+# Emits one line, flushes, then stays alive. `read(n)` blocks here; `read1(n)` does not.
+_ONE_LINE_THEN_SLEEP = (
+    "import sys, time; sys.stdout.write('{\"id\":1}\\n'); sys.stdout.flush(); time.sleep(30)"
+)
+
+
+def _first_line_within(stream, timeout, **kwargs):
+    """Pull one line from the interactive reader on a worker thread; None if it blocks."""
+    box: dict[str, str] = {}
+    lines = streamcap.iter_bounded_lines_interactive(stream, **kwargs)
+    worker = threading.Thread(target=lambda: box.update(line=next(lines)), daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return box.get("line")
+
+
+def test_interactive_yields_line_before_eof():
+    # The regression the drain reader cannot pass: the child holds the pipe open, so the
+    # line must surface on its newline, not on EOF.
+    proc = subprocess.Popen([sys.executable, "-c", _ONE_LINE_THEN_SLEEP], stdout=subprocess.PIPE)
+    try:
+        assert _first_line_within(proc.stdout, timeout=10, max_line_bytes=1024) == '{"id":1}\n'
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_interactive_drain_reader_would_block_on_the_same_pipe():
+    # Pins the constraint documented on iter_bounded_lines: read(n) waits for n or EOF,
+    # so the drain reader never surfaces this line while the producer lives.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _ONE_LINE_THEN_SLEEP], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        box: dict[str, str] = {}
+        lines = streamcap.iter_bounded_lines(proc.stdout, max_line_bytes=1024)
+        worker = threading.Thread(target=lambda: box.update(line=next(lines)), daemon=True)
+        worker.start()
+        worker.join(2)
+        assert worker.is_alive(), "read(n) returned early; the drain/interactive split is moot"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_interactive_basic_and_partial_final_line():
+    stream = io.BytesIO(b"a\nb\nc")
+    out = list(streamcap.iter_bounded_lines_interactive(stream, max_line_bytes=1024))
+    assert out == ["a\n", "b\n", "c"]
+
+
+def test_interactive_empty_stream_yields_nothing():
+    assert list(streamcap.iter_bounded_lines_interactive(io.BytesIO(b""), max_line_bytes=64)) == []
+
+
+def test_interactive_decodes_multibyte_split_across_chunks():
+    # chunk_size=1 forces every multibyte character to straddle a chunk boundary; a
+    # non-incremental decoder mangles these into replacement characters.
+    stream = io.BytesIO("héllo → wörld\n".encode())
+    out = list(streamcap.iter_bounded_lines_interactive(stream, max_line_bytes=1024, chunk_size=1))
+    assert out == ["héllo → wörld\n"]
+
+
+def test_interactive_truncates_huge_line_and_recovers():
+    stream = io.BytesIO(b"x" * 10_000 + b"\ntail\n")
+    out = list(streamcap.iter_bounded_lines_interactive(stream, max_line_bytes=100, chunk_size=64))
+    assert out[0].endswith("[line truncated]\n")
+    assert len(out[0].encode("utf-8")) <= 100
+    assert out[-1] == "tail\n"  # recovery after the oversized line
+
+
+def test_interactive_bounds_memory_of_unterminated_line():
+    # The bound must hold while the line is still being buffered, not after its newline
+    # arrives — that is the defect in appserver's post-hoc len(stripped) > cap check.
+    seen: list[int] = []
+
+    class _Spy(io.BytesIO):
+        def read1(self, size=-1):
+            seen.append(size)
+            return super().read1(size)
+
+    stream = _Spy(b"y" * 500_000)  # no newline, ever
+    out = list(streamcap.iter_bounded_lines_interactive(stream, max_line_bytes=100, chunk_size=64))
+    assert seen, "reader must use read1(), not read()"
+    assert len(out) == 1
+    assert len(out[0].encode("utf-8")) <= 100
+
+
+def test_interactive_preserves_carriage_return():
+    # Splits on LF only — no universal-newline translation. Callers strip \r themselves.
+    stream = io.BytesIO(b"a\r\n")
+    assert list(streamcap.iter_bounded_lines_interactive(stream, max_line_bytes=64)) == ["a\r\n"]
