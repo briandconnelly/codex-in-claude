@@ -1,6 +1,6 @@
 """Bounded streaming primitives shared by the subprocess runtime and diff gather.
 
-CLI-agnostic; no parent-package imports. Two tools:
+CLI-agnostic; no parent-package imports. Three tools:
 
 - ``iter_bounded_lines`` reads a text stream in fixed chunks and yields complete
   lines, capping any single logical line so a pathological producer cannot buffer
@@ -8,18 +8,30 @@ CLI-agnostic; no parent-package imports. Two tools:
   to ``max_line_bytes``; a single logical line that exceeds the cap is truncated
   mid-line with a ``…[line truncated]`` marker (so a pathologically long JSONL
   line may not parse, but normal-sized lines are preserved intact).
+  **It drains to EOF and must never back an interactive stream** — see its docstring.
+- ``iter_bounded_lines_interactive`` applies the same bounding to a *binary* stream
+  read via ``read1``, so a line surfaces as soon as its newline arrives rather than
+  when the producer exits. Use it for request/response protocols over a live pipe.
 - ``BoundedCapture`` accumulates lines under a byte budget, keeping a head window
   plus a bounded tail so the newest lines (where codex emits usage/rate-limit
   metadata) survive truncation. Complete lines only.
+
+Both readers share ``_assemble_bounded_lines``; they differ only in the chunk source,
+which is the whole of the drain/interactive distinction. Keeping the truncation and
+pending-line logic in one place is deliberate: it has been the site of several subtle
+bugs (see the regression tests in ``tests/test_gitdiff.py``), and a second copy would
+let them diverge.
 """
 
 from __future__ import annotations
 
+import codecs
 from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    import io
+    from collections.abc import Iterable, Iterator
     from typing import TextIO
 
 _LINE_TRUNC_MARKER = "…[line truncated]\n"
@@ -40,20 +52,54 @@ def _truncate_to_marker(text: str, max_line_bytes: int) -> str:
     return encoded[:content_limit].decode("utf-8", "ignore") + _LINE_TRUNC_MARKER
 
 
-def iter_bounded_lines(
-    stream: TextIO, max_line_bytes: int, chunk_size: int = 65536
-) -> Iterator[str]:
-    """Yield complete lines from ``stream`` (each ending in ``\\n`` except possibly
-    the last). Reads ``chunk_size`` chars at a time so a line with no newline cannot
-    grow without bound: once the pending line exceeds ``max_line_bytes`` it is
-    flushed truncated and the rest is discarded up to the next newline."""
-    pending: list[str] = []
-    pending_bytes = 0
-    overflowing = False
+def _drain_chunks(stream: TextIO, chunk_size: int) -> Iterator[str]:
+    """Chunk source for a stream being read to completion.
+
+    ``TextIO.read(n)`` blocks until ``n`` characters or EOF, so this source only ever
+    finishes when the producer exits. That is exactly right for draining and fatally
+    wrong for an interactive stream."""
     while True:
         chunk = stream.read(chunk_size)
         if not chunk:
-            break
+            return
+        yield chunk
+
+
+def _available_chunks(stream: io.BufferedIOBase, chunk_size: int, encoding: str) -> Iterator[str]:
+    """Chunk source for a live stream, yielding whatever bytes have arrived.
+
+    ``read1`` returns as soon as *any* bytes are available (``b""`` only at EOF), which
+    is what lets a line surface on its newline instead of on the producer's exit. The
+    incremental decoder holds a partial multibyte character across a chunk boundary, so
+    reading a fixed byte count cannot split a character."""
+    decoder = codecs.getincrementaldecoder(encoding)("replace")
+    while True:
+        data = stream.read1(chunk_size)
+        if not data:
+            # `final=True` flushes a trailing partial character as U+FFFD rather than
+            # dropping the bytes silently.
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                yield tail
+            return
+        # A chunk of continuation bytes alone decodes to "" — skip, don't mistake for EOF.
+        text = decoder.decode(data)
+        if text:
+            yield text
+
+
+def _assemble_bounded_lines(chunks: Iterable[str], max_line_bytes: int) -> Iterator[str]:
+    """Yield complete lines from a stream of text ``chunks`` (each line ending in ``\\n``
+    except possibly the last), capping any single logical line at ``max_line_bytes``.
+
+    The bound holds *while* a line is being buffered, not after its newline arrives:
+    once the pending line exceeds the cap it is flushed truncated and the remainder is
+    discarded up to the next newline. Memory is therefore bounded by
+    ``max_line_bytes + chunk_size`` regardless of what the producer emits."""
+    pending: list[str] = []
+    pending_bytes = 0
+    overflowing = False
+    for chunk in chunks:
         start = 0
         while True:
             nl = chunk.find("\n", start)
@@ -90,6 +136,44 @@ def iter_bounded_lines(
         yield "".join(pending)
     elif pending:
         yield "".join(pending)
+
+
+def iter_bounded_lines(
+    stream: TextIO, max_line_bytes: int, chunk_size: int = 65536
+) -> Iterator[str]:
+    """Yield complete lines from a text ``stream`` that is being **drained to EOF**,
+    capping any single logical line at ``max_line_bytes``.
+
+    Constraint: this reader **must never back an interactive stream.** It is fed by
+    ``stream.read(chunk_size)``, which on a blocking pipe waits for ``chunk_size``
+    characters *or EOF* — it does not return early once a newline arrives. Pointing it
+    at a request/response protocol deadlocks the handshake: the response line never
+    surfaces because the producer is waiting for the next request before it writes
+    enough bytes to fill the chunk. Use ``iter_bounded_lines_interactive`` there.
+
+    Correct callers run a subprocess to completion and read what it wrote."""
+    return _assemble_bounded_lines(_drain_chunks(stream, chunk_size), max_line_bytes)
+
+
+def iter_bounded_lines_interactive(
+    stream: io.BufferedIOBase,
+    max_line_bytes: int,
+    chunk_size: int = 65536,
+    encoding: str = "utf-8",
+) -> Iterator[str]:
+    """Yield complete lines from a **live** binary ``stream``, each as soon as its
+    newline arrives, capping any single logical line at ``max_line_bytes``.
+
+    For request/response protocols over a pipe whose producer is still running. Takes a
+    binary stream (``Popen(..., text=False).stdout``) and owns the bytes-to-text boundary
+    itself, because ``read1`` on a ``TextIOWrapper``'s underlying buffer would bypass any
+    characters the wrapper had already decoded into its own buffer. Never read the same
+    pipe through both a text wrapper and this reader.
+
+    Splits on ``\\n`` only — no universal-newline translation, so a ``\\r\\n`` producer
+    yields lines with a trailing ``\\r``. Undecodable bytes become U+FFFD rather than
+    raising, since a diagnostic stream is not worth crashing a transfer over."""
+    return _assemble_bounded_lines(_available_chunks(stream, chunk_size, encoding), max_line_bytes)
 
 
 class BoundedCapture:

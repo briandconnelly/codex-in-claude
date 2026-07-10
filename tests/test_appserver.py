@@ -318,6 +318,24 @@ def test_protocol_drift_bad_line(tmp_path):
     assert "non-JSON" in outcome.message
 
 
+def test_oversized_line_is_protocol_drift(tmp_path):
+    # A line past _MAX_LINE_BYTES is bounded by the reader (truncated with a marker), so
+    # it fails to parse and lands as protocol drift. Guards the memory bound: the old
+    # post-hoc `len(stripped) > _MAX_LINE_BYTES` check ran only after the whole line had
+    # already been buffered, so it capped nothing.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("flood_line", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "non-JSON" in outcome.message
+
+
 def test_eof_before_completed(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()

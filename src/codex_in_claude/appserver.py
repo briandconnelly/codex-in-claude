@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from codex_in_claude import __version__, cli_contract
+from codex_in_claude._core import streamcap
 from codex_in_claude._core.runtime import BINARY_NOT_FOUND
 
 if TYPE_CHECKING:
@@ -312,18 +313,22 @@ _BAD_LINE = object()
 
 def _spawn_reader(stdout: Any) -> queue.Queue[Any]:
     """Start a daemon thread that parses newline-delimited JSON from ``stdout`` and
-    queues each message (or a ``_BAD_LINE``/``_EOF`` sentinel)."""
+    queues each message (or a ``_BAD_LINE``/``_EOF`` sentinel).
+
+    ``stdout`` is a *binary* pipe read through ``iter_bounded_lines_interactive``: this is
+    a request/response protocol, so a response line must surface on its newline rather
+    than when the child exits. That reader also caps a runaway line while it is still
+    being buffered — an over-cap line arrives carrying the truncation marker, fails to
+    parse, and becomes ``_BAD_LINE``, which is the same protocol-drift outcome a
+    well-formed-but-enormous line would have produced."""
     q: queue.Queue[Any] = queue.Queue()
 
     def _run() -> None:
         try:
-            for line in stdout:
+            for line in streamcap.iter_bounded_lines_interactive(stdout, _MAX_LINE_BYTES):
                 stripped = line.strip()
                 if not stripped:
                     continue
-                if len(stripped) > _MAX_LINE_BYTES:
-                    q.put(_BAD_LINE)
-                    return
                 try:
                     q.put(json.loads(stripped))
                 except ValueError:
@@ -345,7 +350,9 @@ def _spawn_stderr_drain(stderr: Any) -> Callable[[], str]:
     def _run() -> None:
         if stderr is None:  # pragma: no cover
             return
-        for line in stderr:
+        # Line-oriented, like the stdout reader: the tail is read while the child is
+        # still alive (on an error path), so a drain-to-EOF reader would leave it empty.
+        for line in streamcap.iter_bounded_lines_interactive(stderr, _MAX_STDERR_BYTES):
             if total[0] < _MAX_STDERR_BYTES:
                 chunks.append(line)
                 total[0] += len(line)
@@ -401,13 +408,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     subprocess failure — every path returns a :class:`TransferOutcome`."""
     argv = command or [cli_contract.CODEX_BIN, *cli_contract.APP_SERVER_SUBCOMMAND]
     try:
+        # Binary pipes, not text=True: the readers own the bytes-to-text boundary so a
+        # bounded per-line read can never race a TextIOWrapper holding decoded characters
+        # in its own buffer. Nothing else may read these pipes.
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
             start_new_session=True,
         )
     except OSError:
@@ -422,7 +430,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
         # A child that already exited leaves a broken pipe; swallow it and let the
         # reader's EOF drive the outcome instead of raising out of the loop.
         with contextlib.suppress(OSError):
-            proc.stdin.write(json.dumps(obj) + "\n")
+            proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
             proc.stdin.flush()
 
     codex_home: str | None = None

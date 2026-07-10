@@ -60,6 +60,30 @@ def _session_source(import_params: dict) -> str:
     return import_params["migrationItems"][0]["details"]["sessions"][0]["path"]
 
 
+def _handle_initialize(scenario: str, codex_home: str) -> bool:
+    """Respond to `initialize`. Returns True when the fake should exit afterwards."""
+    if scenario == "protocol_drift":
+        sys.stdout.write("this is not json\n")
+        sys.stdout.flush()
+        return True
+    if scenario == "flood_line":
+        # A single *valid JSON* line far past the reader's cap. It is well-formed, so it
+        # parses cleanly unless the reader truncated it — which is what makes this
+        # discriminating rather than merely non-JSON-in, non-JSON-out.
+        pad = "x" * (9 * 1024 * 1024)
+        sys.stdout.write(json.dumps({"id": 1, "result": {"pad": pad}}) + "\n")
+        sys.stdout.flush()
+        return True
+    if scenario == "init_error":
+        _emit({"id": 1, "error": {"code": -32000, "message": "bad init"}})
+        return True
+    if scenario == "init_no_home":
+        _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
+        return True
+    _emit(_init_response(codex_home))
+    return scenario == "eof_after_init"
+
+
 def main() -> None:
     scenario = sys.argv[1]
     codex_home = sys.argv[2] if len(sys.argv) > 2 else "/tmp/fake-codex-home"
@@ -72,18 +96,7 @@ def main() -> None:
         method = msg.get("method")
 
         if method == "initialize":
-            if scenario == "protocol_drift":
-                sys.stdout.write("this is not json\n")
-                sys.stdout.flush()
-                return
-            if scenario == "init_error":
-                _emit({"id": 1, "error": {"code": -32000, "message": "bad init"}})
-                return
-            if scenario == "init_no_home":
-                _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
-                return
-            _emit(_init_response(codex_home))
-            if scenario == "eof_after_init":
+            if _handle_initialize(scenario, codex_home):
                 return
             continue
 

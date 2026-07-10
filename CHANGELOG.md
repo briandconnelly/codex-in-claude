@@ -106,6 +106,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Interactive streams get a bounded reader that cannot deadlock, and the app-server reader is now
+  genuinely memory-bounded** (#255). `_core.streamcap.iter_bounded_lines` reads via
+  `stream.read(chunk_size)`, which on a blocking pipe waits for `chunk_size` characters *or* EOF —
+  correct for draining a finishing subprocess, fatal for a request/response protocol, where the
+  response line never surfaces and the handshake hangs. That helper is **unchanged and still
+  deadlocks if pointed at an interactive stream**; what is new is that the drain-to-EOF constraint is
+  now documented on it, and that a sibling `iter_bounded_lines_interactive` exists for the interactive
+  case. The sibling reads a *binary* stream via `read1` (which returns as soon as any bytes arrive)
+  with an incremental decoder, so a line surfaces on its newline and a multibyte character is never
+  split across a chunk boundary. Both readers share one line-assembler; only the chunk source differs.
+  `appserver` now spawns `codex app-server` with binary pipes and reads both stdout and stderr through
+  the interactive reader, which also fixes a latent memory bug: its old
+  `len(stripped) > _MAX_LINE_BYTES` check ran only *after* `for line in stdout` had already buffered
+  the whole line, so it bounded nothing. An over-cap line now arrives truncated, fails to parse, and
+  is reported as protocol drift — the same outcome as before. Internal only; no agent-visible surface
+  change, so the result `fingerprint` is unchanged.
+
 - **The `invalid_arguments` envelope survives fastmcp >= 3.4.3's exception rewrap.** Since fastmcp
   3.4.3, a bad tool call no longer raises Pydantic's `ValidationError` at the call-tool boundary:
   `FunctionTool._execute` catches it and re-raises `fastmcp.exceptions.ValidationError(str(e))`,
