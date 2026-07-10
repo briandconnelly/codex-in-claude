@@ -4883,21 +4883,32 @@ async def test_transfer_resume_command_plain_id_unquoted(monkeypatch):
     assert result["resume_command"] == "codex resume thread-fresh-0001"
 
 
-async def test_transfer_protocol_error_message_excludes_the_bad_value(monkeypatch):
+async def test_transfer_protocol_error_maps_to_cli_contract_changed(monkeypatch):
+    """PROTOCOL_ERROR maps to cli_contract_changed, and the appserver-supplied
+    message passes through _transfer_outcome_envelope's `message = outcome.message
+    or "..."` faithfully, with no further transformation.
+
+    This does NOT test that no raw/oversized value can reach the message — that
+    guarantee is constructed and enforced at the appserver layer, where
+    outcome.message is built from fixed strings (see test_appserver.py, e.g.
+    test_invalid_codex_home_is_protocol_error and the invalid-target tests, which
+    assert an oversized value is absent from outcome.message before it ever
+    reaches this mapping code).
+    """
     _ready_codex(monkeypatch)
     _patch_validation(monkeypatch)
+    message = "codex app-server reported an invalid codexHome (must be a bounded, absolute path)."
     _patch_transfer(
         monkeypatch,
         server.appserver.TransferOutcome(
             status=server.appserver.TransferStatus.PROTOCOL_ERROR,
-            message="codex app-server reported an invalid codexHome "
-            "(must be a bounded, absolute path).",
+            message=message,
         ),
     )
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "cli_contract_changed"
-    assert "h" * 5000 not in result["error"]["message"]  # no value ever interpolated
+    assert result["error"]["message"] == message
 
 
 # --- CODEX_IN_CLAUDE_EXTRA_ARGS: status + preflight before spend (#231) -----------
