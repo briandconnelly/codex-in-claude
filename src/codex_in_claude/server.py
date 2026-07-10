@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import functools
 import os
+import shlex
 import signal
 import sys
 import threading
@@ -1005,14 +1006,19 @@ def _transfer_outcome_envelope(
     meta_for: Callable[[], Meta],
     elapsed_ms: Callable[[], int],
 ) -> dict:
-    """Map an appserver TransferOutcome to the result/error envelope."""
+    """Map an appserver TransferOutcome to the result/error envelope.
+
+    The app-server-derived fragments interpolated below (`outcome.message`,
+    `outcome.ledger_path`) arrive already redacted and length-bounded — see
+    `TransferOutcome`'s invariant. The static prefixes here are ours, so they sit outside
+    that bound and cannot be truncated away by a verbose child."""
     status = outcome.status
     if status is appserver.TransferStatus.OK:
         thread_id = outcome.thread_id or ""
         source = outcome.thread_id_source or appserver.ThreadIdSource.IMPORT_NOTIFICATION
         return TransferResult(
             thread_id=thread_id,
-            resume_command=f"codex resume {thread_id}",
+            resume_command=shlex.join(["codex", "resume", thread_id]),
             source_path=source_path,
             meta=TransferMeta(
                 codex_home=outcome.codex_home or "",
@@ -1084,8 +1090,14 @@ async def codex_transfer(
     ~/.claude/projects/<cwd-slug>/. If that is ambiguous — for example, more than one recent
     transcript could be the current session — ask the user which one to transfer. Transferring
     a still-live session creates a NEW thread each call — Codex dedups only a byte-identical
-    transcript — so this is not idempotent for an active session. codex_status (free) can
-    confirm Codex is installed and authenticated beforehand."""
+    transcript — so this is not idempotent for an active session.
+
+    Identifiers the app-server reports (the imported thread id and $CODEX_HOME) are validated:
+    a drifted, oversized, or malformed value fails as cli_contract_changed rather than
+    producing a corrupt resume_command or importing into the wrong home. `resume_command` is
+    POSIX shell syntax.
+
+    codex_status (free) can confirm Codex is installed and authenticated beforehand."""
     start = time.monotonic()
     d = config.defaults()
     cwd_guess = workspace.server_cwd()

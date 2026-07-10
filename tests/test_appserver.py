@@ -13,8 +13,9 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
 
-from codex_in_claude import appserver
+from codex_in_claude import appserver, cli_contract
 from codex_in_claude.appserver import (
     ThreadIdSource,
     TransferStatus,
@@ -33,6 +34,10 @@ def _transcript(tmp_path: Path, content: bytes = b'{"type":"user"}\n') -> Path:
 
 def _command(scenario: str, codex_home: Path) -> list[str]:
     return [sys.executable, FAKE, scenario, str(codex_home)]
+
+
+def _command_logged(scenario: str, codex_home: Path, log_path: Path) -> list[str]:
+    return [sys.executable, FAKE, scenario, str(codex_home), str(log_path)]
 
 
 def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: str) -> None:
@@ -110,6 +115,51 @@ def test_validate_accepts_under_projects(tmp_path, monkeypatch):
     assert result.realpath == str(p.resolve())
 
 
+def test_validate_rejects_embedded_nul(tmp_path, monkeypatch):
+    # An embedded NUL makes Path.resolve() raise ValueError on every supported Python
+    # (#278). It must surface as a reason (-> invalid_arguments), never escape as an
+    # internal_error, and must not echo the offending path back.
+    monkeypatch.setattr(appserver, "CLAUDE_PROJECTS_DIR", tmp_path)
+    marker = "SECRETSLUG"
+    result = validate_transcript_path(f"{tmp_path}/{marker}\x00b.jsonl")
+    assert result.realpath is None
+    assert result.reason is not None
+    assert marker not in result.reason
+
+
+def test_validate_rejects_symlink_loop(tmp_path, monkeypatch):
+    # A symlink loop makes Path.resolve() raise RuntimeError on CPython 3.11/3.12 and
+    # resolve to a non-file on 3.13/3.14 (#278). The rejection is required on every
+    # supported Python even though the underlying exception is version-dependent, so
+    # this assertion is deliberately version-independent.
+    monkeypatch.setattr(appserver, "CLAUDE_PROJECTS_DIR", tmp_path)
+    a = tmp_path / "a.jsonl"
+    b = tmp_path / "b.jsonl"
+    a.symlink_to(b)
+    b.symlink_to(a)
+    result = validate_transcript_path(str(a))
+    assert result.realpath is None
+    assert result.reason is not None
+
+
+def test_validate_rejects_unstatable_path(tmp_path, monkeypatch):
+    # is_file() re-raises non-ignored OSErrors (e.g. PermissionError/EACCES) on CPython
+    # 3.11-3.13 rather than swallowing them (#278). Such an OSError must surface as a
+    # reason, not escape as a retryable internal_error. Monkeypatched so the OSError
+    # branch is reached deterministically on every Python (3.14 swallows a real EACCES).
+    from pathlib import Path as _Path
+
+    monkeypatch.setattr(appserver, "CLAUDE_PROJECTS_DIR", tmp_path)
+
+    def _raise_eacces(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(_Path, "is_file", _raise_eacces)
+    result = validate_transcript_path(str(tmp_path / "s.jsonl"))
+    assert result.realpath is None
+    assert result.reason is not None
+
+
 # --- transfer_session outcomes --------------------------------------------------
 
 
@@ -142,6 +192,76 @@ def test_completed_before_response_still_resolves(tmp_path):
     )
     assert outcome.status is TransferStatus.OK
     assert outcome.thread_id == "thread-fresh-0001"
+
+
+@pytest.mark.parametrize("scenario", ["oversized_target", "control_target", "null_target"])
+def test_invalid_notification_target_is_protocol_error(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "thread id" in outcome.message
+    assert "t" * 5000 not in outcome.message  # value-free
+
+
+def test_invalid_live_target_beats_valid_ledger(tmp_path):
+    home = tmp_path / "codex_home"
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    _write_ledger(home, source, sha, "thread-from-ledger-OK")
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("invalid_target_with_ledger", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR  # NOT recovered from the ledger
+    assert outcome.thread_id is None
+
+
+def test_absent_target_key_falls_through_to_ledger(tmp_path):
+    home = tmp_path / "codex_home"
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    _write_ledger(home, source, sha, "thread-recovered-77")
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("target_key_absent", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-recovered-77"
+    assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
+def test_multiple_successes_any_invalid_target_fails_loud(tmp_path):
+    # Two matching success entries: one with a VALID target, one with a present-but-invalid
+    # (oversized) target. The invalid entry must poison the whole lookup — the valid entry
+    # must NOT win — per the tri-state rule in `appserver._target_from_successes`.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("mixed_valid_invalid_targets", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert outcome.thread_id is None
+    assert "thread id" in outcome.message
+    assert "t" * 5000 not in outcome.message  # value-free
 
 
 def test_unsupported_method(tmp_path):
@@ -275,6 +395,21 @@ def test_dedup_recovers_thread_from_ledger(tmp_path):
     assert outcome.status is TransferStatus.OK
     assert outcome.thread_id == "thread-from-ledger-99"
     assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
+def test_oversized_import_id_drops_to_none_but_run_succeeds(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("oversized_import_id", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-fresh-0001"
+    assert outcome.import_id is None  # non-load-bearing → dropped, not fatal
 
 
 def test_dedup_without_ledger_is_incomplete(tmp_path):
@@ -459,6 +594,44 @@ def test_ledger_last_match_wins(tmp_path):
     assert appserver._lookup_ledger(str(tmp_path), source) == "last"
 
 
+def test_ledger_skips_invalid_id_last_valid_match_wins(tmp_path):
+    # Two records match source+sha: an older VALID id, then a newer INVALID (oversized) id.
+    # The invalid newest is filtered; the older valid id is recovered (last VALID match wins).
+    home = tmp_path / "codex_home"
+    home.mkdir(parents=True, exist_ok=True)
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    (home / "external_agent_session_imports.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "source_path": source,
+                        "content_sha256": sha,
+                        "imported_thread_id": "thread-older-valid",
+                    },
+                    {
+                        "source_path": source,
+                        "content_sha256": sha,
+                        "imported_thread_id": "t" * 5000,
+                    },
+                ]
+            }
+        )
+    )
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("dedup", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-older-valid"
+    assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
 def test_initialize_error_is_protocol_error(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()
@@ -485,6 +658,48 @@ def test_initialize_without_codex_home_is_protocol_error(tmp_path):
     )
     assert outcome.status is TransferStatus.PROTOCOL_ERROR
     assert "codexHome" in outcome.message
+    # An omitted key is a distinct drift mode from a present-but-invalid value.
+    assert "omitted" in outcome.message
+
+
+@pytest.mark.parametrize(
+    "scenario", ["relative_home", "control_home", "surrogate_home", "oversized_home"]
+)
+def test_invalid_codex_home_is_protocol_error(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "codexHome" in outcome.message
+    # A present-but-invalid value is a distinct drift mode from an omitted key.
+    assert "invalid" in outcome.message
+    # value-free: the invalid value never reaches the message.
+    assert OVERSIZED_CODEX_HOME not in outcome.message
+    assert "\x00" not in outcome.message
+
+
+def test_invalid_codex_home_stops_before_import_request(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    log = tmp_path / "methods.log"
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command_logged("relative_home", home, log),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    received = log.read_text(encoding="utf-8").split() if log.exists() else []
+    assert "initialize" in received
+    assert "externalAgentConfig/import" not in received  # never imported into the dark
+    assert "initialized" not in received
 
 
 def test_stop_event_cancels_promptly(tmp_path):
@@ -539,12 +754,12 @@ def test_target_skips_source_mismatch():
             {"itemType": "SESSIONS", "source": "/s.jsonl", "target": "right"},
         ]
     }
-    assert appserver._target_from_successes(item, "/s.jsonl") == "right"
+    assert appserver._target_from_successes(item, "/s.jsonl").target == "right"
 
 
 def test_target_accepts_unlabeled_success():
     item = {"successes": [{"itemType": "SESSIONS", "target": "t"}]}
-    assert appserver._target_from_successes(item, "/s.jsonl") == "t"
+    assert appserver._target_from_successes(item, "/s.jsonl").target == "t"
 
 
 def test_failure_message_joins_and_defaults():
@@ -565,6 +780,246 @@ def test_resolve_completed_failure_branch():
     outcome = _resolve(params)
     assert outcome.status is TransferStatus.ITEM_FAILURE
     assert outcome.message == "x"
+
+
+# --- app-server text is redacted and bounded before display (#276) ---------------
+
+CAP = appserver._MAX_DISPLAY_CHARS
+MARKER = appserver._DISPLAY_TRUNC_MARKER
+
+
+def test_display_text_passes_short_text_through_unchanged():
+    assert appserver._display_text("could not parse session") == "could not parse session"
+
+
+@pytest.mark.parametrize("length", [0, 1, CAP - 1, CAP])
+def test_display_text_leaves_text_at_or_under_the_cap_intact(length):
+    # The whole in-bounds domain, not just the lengths the call sites happen to produce:
+    # `CAP` is the last length that must survive verbatim, with no marker.
+    text = "y" * length
+    out = appserver._display_text(text)
+    assert out == text
+    assert MARKER not in out
+
+
+@pytest.mark.parametrize("length", [CAP + 1, CAP + 500, 9_000])
+def test_display_text_bounds_over_cap_text_and_says_so(length):
+    # The marker is reserved INSIDE the budget: the result never exceeds CAP, and an agent
+    # can tell a clipped diagnostic from a complete one.
+    out = appserver._display_text("y" * length)
+    assert len(out) == CAP
+    assert out.endswith(MARKER)
+
+
+def test_display_text_redacts_secret_shaped_values():
+    out = appserver._display_text(f"auth failed for {SECRET}")
+    assert SECRET not in out
+    assert "[redacted: secret value]" in out
+
+
+def test_display_text_redacts_before_truncating():
+    """Redaction must run first: truncating first can split a secret so no pattern
+    matches, publishing its prefix.
+
+    The secret must STRADDLE the cut point for this to discriminate — placed wholly after
+    it, a truncate-then-redact implementation drops the secret and passes for the wrong
+    reason. Starting 10 chars before the cut leaves `sk-bbbbbbb` in a truncate-first
+    result, and nothing in a redact-first one."""
+    cut = CAP - len(MARKER)
+    out = appserver._display_text("y" * (cut - 10) + SECRET + "z" * 100)
+    assert "sk-" not in out, "a partial secret survived — truncation ran before redaction"
+    assert len(out) == CAP
+
+
+def test_display_text_coerces_non_string_input():
+    # Wire values are `.get()`-ed off untrusted JSON: `message` may be any JSON type.
+    assert appserver._display_text(None) == ""
+    assert appserver._display_text(1234) == "1234"
+    assert appserver._display_text({"a": 1}) == "{'a': 1}"
+    assert len(appserver._display_text(["y" * 9_000])) == CAP
+
+
+# --- identifier validation helpers ---------------------------------------------
+
+
+SURROGATE = "\ud800"  # JSON-legal, decodes fine, raises on .encode("utf-8")
+
+
+def test_has_control_char_detects_cc_category():
+    assert appserver._has_control_char("a\x00b")  # C0 NUL
+    assert appserver._has_control_char("a\x7fb")  # DEL
+    assert appserver._has_control_char("a\x85b")  # C1
+    assert not appserver._has_control_char("normal-id_1.2")
+    assert not appserver._has_control_char("café")  # non-ASCII letters are fine
+
+
+def test_valid_wire_id_accepts_plain_id():
+    result = appserver._valid_wire_id("thread-abc_123", cli_contract.TRANSFER_ID_MAX_BYTES)
+    assert result == "thread-abc_123"
+
+
+@pytest.mark.parametrize("bad", ["", 0, None, [], {}, b"bytes"])
+def test_valid_wire_id_rejects_empty_and_non_str(bad):
+    assert appserver._valid_wire_id(bad, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_wire_id_rejects_control_and_surrogate():
+    assert appserver._valid_wire_id("a\x00b", cli_contract.TRANSFER_ID_MAX_BYTES) is None
+    assert appserver._valid_wire_id(SURROGATE, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_wire_id_enforces_byte_bound_not_char_count():
+    at_cap = "z" * cli_contract.TRANSFER_ID_MAX_BYTES
+    assert appserver._valid_wire_id(at_cap, cli_contract.TRANSFER_ID_MAX_BYTES) == at_cap
+    over_cap = "z" * (cli_contract.TRANSFER_ID_MAX_BYTES + 1)
+    assert appserver._valid_wire_id(over_cap, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+    # A 2-byte char at the boundary is measured in BYTES, not characters.
+    two_byte = "é" * ((cli_contract.TRANSFER_ID_MAX_BYTES // 2) + 1)
+    assert appserver._valid_wire_id(two_byte, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_codex_home_requires_absolute():
+    assert appserver._valid_codex_home("/home/u/.codex") == "/home/u/.codex"
+    assert appserver._valid_codex_home("relative/dir") is None
+    assert appserver._valid_codex_home("") is None
+    assert appserver._valid_codex_home("/home/\x00u") is None  # control char
+    assert appserver._valid_codex_home(SURROGATE) is None
+    assert appserver._valid_codex_home("/" + "h" * (cli_contract.CODEX_HOME_MAX_BYTES + 1)) is None
+
+
+def test_failure_message_redacts_and_bounds_the_join():
+    item = {"failures": [{"message": LEAKY_MESSAGE}, {"message": f"and {SECRET}"}]}
+    message = appserver._failure_message(item)
+    assert SECRET not in message
+    assert len(message) == CAP
+    assert message.endswith(MARKER)
+
+
+def test_failure_message_defaults_survive_sanitizing():
+    # Sanitizing must not swallow the empty-join fallback (regression guard for wiring
+    # `_display_text` around the `or` rather than inside it).
+    assert appserver._failure_message({"failures": [{"nomsg": 1}]}) == (
+        "Codex reported an import failure."
+    )
+    assert appserver._failure_message({"failures": []}) is None
+
+
+@pytest.mark.parametrize(
+    ("scenario", "status", "prefix"),
+    [
+        ("item_failure_leaky", TransferStatus.ITEM_FAILURE, ""),
+        ("init_error_leaky", TransferStatus.PROTOCOL_ERROR, "codex app-server initialize failed: "),
+        ("import_error_leaky", TransferStatus.ITEM_FAILURE, ""),
+        (
+            "invalid_params_leaky",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected the import request: ",
+        ),
+    ],
+)
+def test_every_app_server_message_route_is_redacted_and_bounded(tmp_path, scenario, status, prefix):
+    """#276: all four routes that carry app-server text into an error envelope.
+
+    Each keeps its static prefix (which is ours, not the child's) and bounds only the
+    foreign fragment, so the cap can never eat our own explanation."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is status
+    assert outcome.message.startswith(prefix)
+    foreign = outcome.message[len(prefix) :]
+    assert "sk-" not in foreign
+    assert "[redacted: secret value]" in foreign
+    assert len(foreign) == CAP
+    assert foreign.endswith(MARKER)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "status", "expected"),
+    [
+        (
+            "init_error_falsey",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected initialize.",
+        ),
+        (
+            "invalid_params_falsey",
+            TransferStatus.PROTOCOL_ERROR,
+            "codex app-server rejected the import request.",
+        ),
+        (
+            "import_error_falsey",
+            TransferStatus.ITEM_FAILURE,
+            "codex app-server rejected the import.",
+        ),
+    ],
+)
+def test_falsey_app_server_message_yields_our_generic_sentence(
+    tmp_path, scenario, status, expected
+):
+    """Each `if detail` gate tests the RAW wire value, deliberately.
+
+    A falsey JSON `message` (`0`, `{}`, `""`, `false`, `[]`) carries no diagnostic text.
+    `_display_text` would coerce it to a truthy string, so branching on the *sanitized*
+    result — as a reviewer suggested — would publish noise like "rejected the import: {}"
+    where we currently emit a clean generic sentence. Locks that decision at all three
+    sites."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is status
+    assert outcome.message == expected
+
+
+def test_incomplete_ledger_path_is_bounded_but_keeps_the_ledger_filename(tmp_path):
+    """The INCOMPLETE message names the ledger. `codexHome` is app-server-derived, so the
+    displayed path is built from a bounded copy — but the trailing filename is ours and
+    must survive, since it is the part that tells an operator what to look for."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("long_codex_home", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.INCOMPLETE
+    assert outcome.ledger_path.endswith("/external_agent_session_imports.json")
+    assert len(outcome.ledger_path) <= CAP + len("/external_agent_session_imports.json")
+    assert MARKER in outcome.ledger_path
+    # The RAW codexHome is retained: it is the filesystem base `_lookup_ledger` reads,
+    # so bounding it at capture would silently break the dedup lookup.
+    assert outcome.codex_home == LONG_CODEX_HOME
+
+
+def test_bad_line_still_yields_its_constant_message(tmp_path):
+    """Regression guard for the bound the fix relies on: an over-cap line is truncated by
+    the reader, fails to parse, and becomes a CONSTANT message — no app-server text at
+    all. This is what keeps a multi-megabyte JSONL line off the error envelope."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("flood_line", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert outcome.message == "codex app-server emitted a non-JSON or oversized line."
 
 
 @pytest.mark.integration

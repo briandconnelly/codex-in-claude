@@ -47,7 +47,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-34"
+FINGERPRINT = "codex-in-claude/0.1/schema-35"
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -761,7 +761,7 @@ class TransferMeta(BaseModel):
     transfer runs no Codex tier and spends no tokens."""
 
     model_config = ConfigDict(extra="forbid")
-    codex_home: str  # absolute $CODEX_HOME the app-server reported (where the thread lives)
+    codex_home: str  # validated absolute $CODEX_HOME the app-server reported (thread's home)
     # The async import's correlation id, when a fresh import ran; None on a ledger replay.
     import_id: str | None = None
     # Where the thread id came from: the completed notification's success `target`
