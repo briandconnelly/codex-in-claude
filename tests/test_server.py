@@ -2272,15 +2272,18 @@ async def test_resources_declare_explicit_name_and_title():
 async def test_unknown_tool_argument_is_rejected():
     """An unknown argument fails validation rather than being silently ignored.
 
-    This pins the raw Tool-level boundary. Since fastmcp 3.4.3 `Tool.run` raises fastmcp's
-    own `ValidationError`, which is not a Pydantic subclass and carries only `str(e)` — the
-    structured Pydantic error survives as its `__cause__`. `_ArgumentValidationMiddleware`
-    reads `.errors()` off that cause, so pin the chain here: if a future fastmcp drops it,
-    the envelope silently degrades to raw prose (#136)."""
+    This pins the raw Tool-level boundary, where the shape depends on the installed fastmcp:
+    below 3.4.3 `Tool.run` raises Pydantic's `ValidationError` directly; from 3.4.3 it raises
+    fastmcp's own, which is not a Pydantic subclass and carries only `str(e)`, chaining the
+    structured Pydantic error as `__cause__`. Accept either — `requires-python`-style, the
+    project supports `fastmcp>=3.4` — but pin what `_ArgumentValidationMiddleware` actually
+    depends on: reachable Pydantic `.errors()`. If a future fastmcp drops the chaining, the
+    envelope would silently degrade to raw prose, so fail here instead (#136)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
-    with pytest.raises(FastMCPValidationError) as excinfo:
+    with pytest.raises((ValidationError, FastMCPValidationError)) as excinfo:
         await tools["codex_status"].run({"definitely_not_a_param": 1})
-    cause = excinfo.value.__cause__
+    exc = excinfo.value
+    cause = exc if isinstance(exc, ValidationError) else exc.__cause__
     assert isinstance(cause, ValidationError)
     assert cause.errors()[0]["type"] == "unexpected_keyword_argument"
 
