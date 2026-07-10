@@ -46,6 +46,12 @@ _CLIENT_NAME = "codex-in-claude"
 _MAX_LINE_BYTES = 8 * 1024 * 1024
 # Bounded stderr tail retained for diagnostics on an error path.
 _MAX_STDERR_BYTES = 64 * 1024
+# Per-line cap for the stderr reader. Deliberately ABOVE the _MAX_STDERR_BYTES capture
+# ceiling (#275): a line the reader would split mid-token must stay large enough that
+# BoundedCapture evicts it WHOLE, so the redactor never sees a split secret (see _StderrDrain).
+# 2x is the minimal clear margin — a line between the two caps is evicted whole anyway, so a
+# larger cap only grows the drain thread's transient per-line buffer for no diagnostic gain.
+_STDERR_LINE_CAP = 2 * _MAX_STDERR_BYTES
 # Max blocking-read slice: caps how long the loop waits before re-checking the deadline
 # and the cooperative-cancellation stop flag, so a cancelled call tears down promptly.
 _POLL_SECONDS = 0.25
@@ -587,16 +593,15 @@ class _StderrDrain:
         # Line-oriented, like the stdout reader: the tail is read while the child is
         # still alive, so a drain-to-EOF reader would leave it empty (see #255).
         #
-        # The per-line reader cap is _MAX_LINE_BYTES (8 MiB), deliberately LARGER than the
-        # capture's _MAX_STDERR_BYTES (64 KiB) ceiling (#275). A line the reader truncates
-        # would be split mid-token, and the redactor in `_display_stderr_tail` runs on the
-        # assembled snapshot — so a secret straddling that cut would survive as an
-        # unmatchable prefix (the same redact-before-truncate hazard fixed for diffs in
-        # gitdiff's F3). Keeping the reader cap above the capture cap means any line long
-        # enough to be split is instead evicted WHOLE by BoundedCapture (a single oversized
-        # line is a hard-ceiling eviction, never a mid-line cut), so the redactor only ever
-        # sees complete lines.
-        for line in streamcap.iter_bounded_lines_interactive(stderr, _MAX_LINE_BYTES):
+        # The per-line reader cap is _STDERR_LINE_CAP, deliberately ABOVE the capture's
+        # _MAX_STDERR_BYTES ceiling (#275). A line the reader truncates would be split
+        # mid-token, and the redactor in `_display_stderr_tail` runs on the assembled
+        # snapshot — so a secret straddling that cut would survive as an unmatchable prefix
+        # (the same redact-before-truncate hazard fixed for diffs in gitdiff's F3). Keeping
+        # the reader cap above the capture cap means any line long enough to be split is
+        # instead evicted WHOLE by BoundedCapture (a single oversized line is a hard-ceiling
+        # eviction, never a mid-line cut), so the redactor only ever sees complete lines.
+        for line in streamcap.iter_bounded_lines_interactive(stderr, _STDERR_LINE_CAP):
             self._capture.add(line)
 
     def snapshot(self) -> str:
