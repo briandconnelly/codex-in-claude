@@ -219,6 +219,7 @@ reporting (`meta.rate_limit`), background-job semantics, and workspace selection
 | `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` | built-in tested set | comma-separated `codex` `major.minor` versions to treat as supported |
 | `CODEX_IN_CLAUDE_LOG_LEVEL` | `WARNING` | server diagnostic log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`\|`CRITICAL`); logs go to **stderr** (never stdout) |
 | `CODEX_IN_CLAUDE_LOG_FILE` | unset | also mirror diagnostic logs to this file path |
+| `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM` | unset | set to `1` to downgrade the non-POSIX startup refusal to a stderr warning for knowingly consult-only, unsupported use; the async-job safety layer cannot hold, so do not run delegate/review against untrusted work (see [Requirements](#requirements) / `COMPATIBILITY.md`) |
 
 Two further variables, `CODEX_IN_CLAUDE_TIER_DEFAULT` and `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`, exist
 ahead of the planned `apply` tier. They only change the defaults `codex_status` reports — every

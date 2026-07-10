@@ -336,6 +336,9 @@ def test_lock_degrades_when_fcntl_unavailable(tmp_path, monkeypatch):
 
     # The lock() contextmanager still yields (no cross-process lock, but no crash) and
     # its release path skips the LOCK_UN that would otherwise NameError on `fcntl`.
+    # Initialize before entering so a raise inside lock() surfaces the real exception
+    # rather than an UnboundLocalError on the assert.
+    entered = False
     with idx.lock():
         entered = True
     assert entered
