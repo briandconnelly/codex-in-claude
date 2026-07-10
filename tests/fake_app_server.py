@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 FIXED_TARGET = "thread-fresh-0001"
 
@@ -21,9 +22,13 @@ FIXED_TARGET = "thread-fresh-0001"
 SECRET = "sk-" + "b" * 32
 LEAKY_MESSAGE = f"import failed near {SECRET} while converting " + "z" * 400
 
-# An implausibly long `codexHome`: the app-server may return any string, and it lands in
-# the INCOMPLETE error's ledger path.
-LONG_CODEX_HOME = "/" + "h" * 5000
+# An absolute codexHome that is VALID (<= CODEX_HOME_MAX_BYTES) but well past the 300-char
+# display cap, so the INCOMPLETE message still exercises _display_text bounding. Kept under
+# the 4096-byte identifier bound so it survives handshake validation (see #279).
+LONG_CODEX_HOME = "/" + "h" * 400
+
+# An absolute codexHome PAST the 4096-byte bound: valid handshake shape, invalid identifier.
+OVERSIZED_CODEX_HOME = "/" + "h" * 5000
 
 
 def _emit(obj: dict) -> None:
@@ -113,6 +118,18 @@ def _handle_initialize(scenario: str, codex_home: str) -> bool:
     if scenario == "init_no_home":
         _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
         return True
+    if scenario == "relative_home":
+        _emit(_init_response("relative/dir"))
+        return False
+    if scenario == "control_home":
+        _emit(_init_response("/home/\x00u"))
+        return False
+    if scenario == "surrogate_home":
+        _emit(_init_response("/home/\ud800"))
+        return False
+    if scenario == "oversized_home":
+        _emit(_init_response(OVERSIZED_CODEX_HOME))
+        return False
     _emit(_init_response(codex_home))
     return scenario == "eof_after_init"
 
@@ -201,6 +218,7 @@ def _handle_import_success(scenario: str, source: str) -> None:
 def main() -> None:
     scenario = sys.argv[1]
     codex_home = sys.argv[2] if len(sys.argv) > 2 else "/tmp/fake-codex-home"
+    method_log = sys.argv[3] if len(sys.argv) > 3 else None
 
     for raw in sys.stdin:
         stripped = raw.strip()
@@ -208,6 +226,9 @@ def main() -> None:
             continue
         msg = json.loads(stripped)
         method = msg.get("method")
+        if method_log and method:
+            with Path(method_log).open("a", encoding="utf-8") as fh:
+                fh.write(f"{method}\n")
 
         if method == "initialize":
             if _handle_initialize(scenario, codex_home):

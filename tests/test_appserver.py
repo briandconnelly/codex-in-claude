@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
-from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, SECRET
+from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
 
 from codex_in_claude import appserver, cli_contract
 from codex_in_claude.appserver import (
@@ -34,6 +34,10 @@ def _transcript(tmp_path: Path, content: bytes = b'{"type":"user"}\n') -> Path:
 
 def _command(scenario: str, codex_home: Path) -> list[str]:
     return [sys.executable, FAKE, scenario, str(codex_home)]
+
+
+def _command_logged(scenario: str, codex_home: Path, log_path: Path) -> list[str]:
+    return [sys.executable, FAKE, scenario, str(codex_home), str(log_path)]
 
 
 def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: str) -> None:
@@ -486,6 +490,44 @@ def test_initialize_without_codex_home_is_protocol_error(tmp_path):
     )
     assert outcome.status is TransferStatus.PROTOCOL_ERROR
     assert "codexHome" in outcome.message
+
+
+@pytest.mark.parametrize(
+    "scenario", ["relative_home", "control_home", "surrogate_home", "oversized_home"]
+)
+def test_invalid_codex_home_is_protocol_error(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "codexHome" in outcome.message
+    # value-free: the invalid value never reaches the message.
+    assert OVERSIZED_CODEX_HOME not in outcome.message
+    assert "\x00" not in outcome.message
+
+
+def test_invalid_codex_home_stops_before_import_request(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    log = tmp_path / "methods.log"
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command_logged("relative_home", home, log),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    received = log.read_text(encoding="utf-8").split() if log.exists() else []
+    assert "initialize" in received
+    assert "externalAgentConfig/import" not in received  # never imported into the dark
+    assert "initialized" not in received
 
 
 def test_stop_event_cancels_promptly(tmp_path):

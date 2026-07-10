@@ -598,17 +598,19 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
                 result = msg.get("result")
-                home = (
+                home = _valid_codex_home(
                     result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
                     if isinstance(result, dict)
                     else None
                 )
-                if not isinstance(home, str) or not home:
-                    # No codexHome means we can't locate the ledger nor trust the
-                    # handshake — fail fast instead of importing into the dark.
+                if home is None:
+                    # No valid absolute codexHome means we can't locate the ledger nor trust
+                    # the handshake — fail fast instead of importing into the dark. Message is
+                    # value-free: the invalid value must not reach the envelope.
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
-                        message="codex app-server initialize response omitted codexHome.",
+                        message="codex app-server reported an invalid codexHome "
+                        "(must be a bounded, absolute path).",
                         stderr_tail=drain.snapshot() or None,
                     )
                 codex_home = home
