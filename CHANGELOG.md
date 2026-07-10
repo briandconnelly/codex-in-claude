@@ -263,9 +263,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `requested_reviewers` with `github.token` and treated any 200 as success, but GitHub
   silently ignores Copilot reviewer requests made with a non-user token — the POST
   returns 200 with an empty `requested_reviewers` and Copilot never reviews. The step
-  now captures the response and fails loudly (`::error::` + non-zero exit) when
+  now gates on a user-scoped PAT (`COPILOT_REVIEW_PAT`): when it is set, the step
+  captures the response and fails loudly (`::error::` + non-zero exit) if
   `copilot-pull-request-reviewer[bot]` is absent from `requested_reviewers`, so a
-  silent no-op can never pass as a green check. CI-only; no `fingerprint` bump.
+  silent no-op can never pass as a green check; when no PAT is configured the step
+  emits a `::warning::` and skips (exit 0) rather than issue the doomed
+  default-token request. CI-only; no `fingerprint` bump.
 
 ### Security
 
