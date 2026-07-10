@@ -29,14 +29,11 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from codex_in_claude import __version__, cli_contract
 from codex_in_claude._core import streamcap
 from codex_in_claude._core.runtime import BINARY_NOT_FOUND
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 # Claude Code writes session transcripts under ~/.claude/projects/<cwd-slug>/. We only
 # transfer files from there (mirrors upstream's containment check) — a defense against
@@ -341,24 +338,32 @@ def _spawn_reader(stdout: Any) -> queue.Queue[Any]:
     return q
 
 
-def _spawn_stderr_drain(stderr: Any) -> Callable[[], str]:
-    """Start a daemon thread draining ``stderr`` into a bounded buffer; return a
-    callable that yields the retained tail."""
-    chunks: list[str] = []
-    total = [0]
+class _StderrDrain:
+    """Drain ``stderr`` on a daemon thread into a byte-budgeted rolling tail.
 
-    def _run() -> None:
+    A **pure** tail (``head_bytes=0``): when the app-server dies verbosely, the line that
+    killed it is the last one, and a head window would spend half the budget on startup
+    noise. When output exceeds the budget the snapshot opens with the truncation marker,
+    saying plainly that earlier stderr was dropped.
+
+    ``snapshot()`` is called from the main thread on error paths *while this thread is
+    still adding lines*, which is why the capture must be thread-safe. Snapshots are
+    taken fresh rather than memoized: a later error path should see later stderr."""
+
+    def __init__(self, stderr: Any) -> None:
+        self._capture = streamcap.BoundedCapture(_MAX_STDERR_BYTES, head_bytes=0)
+        threading.Thread(target=self._run, args=(stderr,), daemon=True).start()
+
+    def _run(self, stderr: Any) -> None:
         if stderr is None:  # pragma: no cover
             return
         # Line-oriented, like the stdout reader: the tail is read while the child is
-        # still alive (on an error path), so a drain-to-EOF reader would leave it empty.
+        # still alive, so a drain-to-EOF reader would leave it empty (see #255).
         for line in streamcap.iter_bounded_lines_interactive(stderr, _MAX_STDERR_BYTES):
-            if total[0] < _MAX_STDERR_BYTES:
-                chunks.append(line)
-                total[0] += len(line)
+            self._capture.add(line)
 
-    threading.Thread(target=_run, daemon=True).start()
-    return lambda: "".join(chunks).strip()[-_MAX_STDERR_BYTES:]
+    def snapshot(self) -> str:
+        return self._capture.result().strip()
 
 
 def classify_import_error(code: Any) -> TransferStatus:
@@ -421,7 +426,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     except OSError:
         return TransferOutcome(status=TransferStatus.SPAWN_FAILED, stderr_tail=BINARY_NOT_FOUND)
 
-    stderr_tail = _spawn_stderr_drain(proc.stderr)
+    drain = _StderrDrain(proc.stderr)
     messages = _spawn_reader(proc.stdout)
 
     def _send(obj: dict[str, Any]) -> None:
@@ -464,7 +469,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     status=TransferStatus.TIMED_OUT,
                     import_id=import_id,
                     codex_home=codex_home,
-                    stderr_tail=stderr_tail() or None,
+                    stderr_tail=drain.snapshot() or None,
                 )
             try:
                 # Cap each wait so the deadline and the stop flag are re-checked promptly.
@@ -477,14 +482,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     import_id=import_id,
                     codex_home=codex_home,
                     message="codex app-server exited before the import completed.",
-                    stderr_tail=stderr_tail() or None,
+                    stderr_tail=drain.snapshot() or None,
                 )
             if msg is _BAD_LINE:
                 return TransferOutcome(
                     status=TransferStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
                     message="codex app-server emitted a non-JSON or oversized line.",
-                    stderr_tail=stderr_tail() or None,
+                    stderr_tail=drain.snapshot() or None,
                 )
             if not isinstance(msg, dict):
                 continue
@@ -497,7 +502,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     message=f"codex app-server initialize failed: {detail}"
                     if detail
                     else "codex app-server rejected initialize.",
-                    stderr_tail=stderr_tail() or None,
+                    stderr_tail=drain.snapshot() or None,
                 )
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
@@ -513,7 +518,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
                         message="codex app-server initialize response omitted codexHome.",
-                        stderr_tail=stderr_tail() or None,
+                        stderr_tail=drain.snapshot() or None,
                     )
                 codex_home = home
                 _send(
@@ -540,7 +545,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.UNSUPPORTED,
                         codex_home=codex_home,
-                        stderr_tail=stderr_tail() or None,
+                        stderr_tail=drain.snapshot() or None,
                     )
                 if status is TransferStatus.PROTOCOL_ERROR:
                     return TransferOutcome(
@@ -549,13 +554,13 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                         message=f"codex app-server rejected the import request: {detail}"
                         if detail
                         else "codex app-server rejected the import request.",
-                        stderr_tail=stderr_tail() or None,
+                        stderr_tail=drain.snapshot() or None,
                     )
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
                     codex_home=codex_home,
                     message=str(detail) if detail else "codex app-server rejected the import.",
-                    stderr_tail=stderr_tail() or None,
+                    stderr_tail=drain.snapshot() or None,
                 )
             if msg.get("id") == 2 and "result" in msg:
                 result = msg.get("result")
@@ -577,7 +582,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     transcript_realpath=transcript_realpath,
                     codex_home=codex_home,
                     import_id=import_id,
-                    stderr_tail=stderr_tail(),
+                    stderr_tail=drain.snapshot(),
                 )
             # Everything else (progress notifications, unknown methods, extra fields):
             # ignore and keep reading (tolerant decoding).

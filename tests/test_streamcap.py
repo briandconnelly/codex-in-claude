@@ -6,6 +6,9 @@ import io
 import subprocess
 import sys
 import threading
+import time
+
+import pytest
 
 from codex_in_claude._core import streamcap
 
@@ -211,3 +214,86 @@ def test_interactive_preserves_carriage_return():
     # Splits on LF only — no universal-newline translation. Callers strip \r themselves.
     stream = io.BytesIO(b"a\r\n")
     assert list(streamcap.iter_bounded_lines_interactive(stream, max_line_bytes=64)) == ["a\r\n"]
+
+
+# --- BoundedCapture: pure tail + thread safety --------------------------------------
+
+
+def test_bounded_capture_pure_tail_drops_head():
+    # head_bytes=0 turns the capture into a pure rolling tail: no head window, so the
+    # marker leads and only the newest lines survive. This is what a field named
+    # `stderr_tail` actually promises.
+    cap = streamcap.BoundedCapture(max_bytes=40, head_bytes=0)
+    for i in range(100):
+        cap.add(f"line{i}\n")
+    result = cap.result()
+    assert cap.truncated
+    assert result.startswith("[output truncated]\n"), result
+    assert "line0\n" not in result  # earliest dropped, not preserved as a head window
+    assert result.rstrip().endswith("line99")  # newest survives
+
+
+def test_bounded_capture_pure_tail_verbatim_under_budget():
+    cap = streamcap.BoundedCapture(max_bytes=1024, head_bytes=0)
+    for line in ["a\n", "b\n"]:
+        cap.add(line)
+    assert not cap.truncated
+    assert cap.result() == "a\nb\n"  # no marker when nothing was dropped
+
+
+def test_bounded_capture_pure_tail_budgets_in_bytes_not_characters():
+    # Each "é" is 2 UTF-8 bytes. A character-counting cap would retain ~2x the budget.
+    cap = streamcap.BoundedCapture(max_bytes=100, head_bytes=0)
+    for _ in range(50):
+        cap.add("é" * 10 + "\n")  # 21 bytes per line
+    retained = cap.result().replace("[output truncated]\n", "")
+    assert len(retained.encode("utf-8")) <= 100
+
+
+def test_bounded_capture_snapshot_is_safe_while_a_writer_adds():
+    # Regression: result() iterates self._tail while add() appends/poplefts it. Without
+    # a lock this raises `RuntimeError: deque mutated during iteration` — and it does so
+    # on the very error path that is trying to report a failure.
+    cap = streamcap.BoundedCapture(max_bytes=4096)
+    stop = threading.Event()
+    failures: list[BaseException] = []
+
+    def writer() -> None:
+        i = 0
+        while not stop.is_set():
+            cap.add(f"line{i}\n")
+            i += 1
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                # A consistent snapshot must never exceed the budget mid-eviction.
+                out = cap.result().replace("[output truncated]\n", "")
+                assert len(out.encode("utf-8")) <= 4096
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer, daemon=True) for _ in range(2)]
+    threads.append(threading.Thread(target=reader, daemon=True))
+    for t in threads:
+        t.start()
+    time.sleep(1.5)
+    stop.set()
+    for t in threads:
+        t.join(5)
+    assert not failures, f"snapshot raced the writer: {failures[0]!r}"
+
+
+def test_bounded_capture_rejects_head_bytes_outside_the_budget():
+    # A head window larger than the total budget is never evicted, so `add()` grows the
+    # head past max_bytes and `truncated` stays False — the ceiling is silently violated
+    # rather than enforced. Reject it at construction instead of retaining 15x the cap.
+    with pytest.raises(ValueError, match="head_bytes"):
+        streamcap.BoundedCapture(max_bytes=100, head_bytes=101)
+    with pytest.raises(ValueError, match="head_bytes"):
+        streamcap.BoundedCapture(max_bytes=100, head_bytes=-1)
+
+
+def test_bounded_capture_accepts_head_bytes_at_the_boundaries():
+    assert streamcap.BoundedCapture(max_bytes=100, head_bytes=0) is not None
+    assert streamcap.BoundedCapture(max_bytes=100, head_bytes=100) is not None

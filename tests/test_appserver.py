@@ -336,6 +336,41 @@ def test_oversized_line_is_protocol_drift(tmp_path):
     assert "non-JSON" in outcome.message
 
 
+def _flood_outcome(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    return transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+
+
+def test_stderr_tail_retains_the_end_not_the_beginning(tmp_path):
+    # #254: the drain advertised a tail but retained the prefix, so on a verbose failure
+    # the operator got startup noise and none of the error that actually killed it.
+    outcome = _flood_outcome(tmp_path, "stderr_flood")
+    tail = outcome.stderr_tail or ""
+    assert "FINAL-SENTINEL" in tail, "the last stderr line was dropped — still a prefix"
+    assert "EARLY-SENTINEL" not in tail, "the first stderr line survived — still a prefix"
+    assert tail.startswith("[output truncated]"), tail[:80]
+
+
+def test_stderr_tail_budget_is_bytes_not_characters(tmp_path):
+    # #254 (second defect): `total += len(line)` and the final slice counted characters,
+    # so non-ASCII stderr blew past the nominal 64KB budget.
+    outcome = _flood_outcome(tmp_path, "stderr_flood_unicode")
+    tail = outcome.stderr_tail or ""
+    assert "FINAL-SENTINEL" in tail
+    retained = tail.replace("[output truncated]", "", 1)
+    budget = appserver._MAX_STDERR_BYTES
+    assert len(retained.encode("utf-8")) <= budget, (
+        f"retained {len(retained.encode('utf-8'))} bytes > {budget} budget"
+    )
+
+
 def test_eof_before_completed(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()
