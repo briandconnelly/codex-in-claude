@@ -115,6 +115,51 @@ def test_validate_accepts_under_projects(tmp_path, monkeypatch):
     assert result.realpath == str(p.resolve())
 
 
+def test_validate_rejects_embedded_nul(tmp_path, monkeypatch):
+    # An embedded NUL makes Path.resolve() raise ValueError on every supported Python
+    # (#278). It must surface as a reason (-> invalid_arguments), never escape as an
+    # internal_error, and must not echo the offending path back.
+    monkeypatch.setattr(appserver, "CLAUDE_PROJECTS_DIR", tmp_path)
+    marker = "SECRETSLUG"
+    result = validate_transcript_path(f"{tmp_path}/{marker}\x00b.jsonl")
+    assert result.realpath is None
+    assert result.reason is not None
+    assert marker not in result.reason
+
+
+def test_validate_rejects_symlink_loop(tmp_path, monkeypatch):
+    # A symlink loop makes Path.resolve() raise RuntimeError on CPython 3.11/3.12 and
+    # resolve to a non-file on 3.13/3.14 (#278). The rejection is required on every
+    # supported Python even though the underlying exception is version-dependent, so
+    # this assertion is deliberately version-independent.
+    monkeypatch.setattr(appserver, "CLAUDE_PROJECTS_DIR", tmp_path)
+    a = tmp_path / "a.jsonl"
+    b = tmp_path / "b.jsonl"
+    a.symlink_to(b)
+    b.symlink_to(a)
+    result = validate_transcript_path(str(a))
+    assert result.realpath is None
+    assert result.reason is not None
+
+
+def test_validate_rejects_unstatable_path(tmp_path, monkeypatch):
+    # is_file() re-raises non-ignored OSErrors (e.g. PermissionError/EACCES) on CPython
+    # 3.11-3.13 rather than swallowing them (#278). Such an OSError must surface as a
+    # reason, not escape as a retryable internal_error. Monkeypatched so the OSError
+    # branch is reached deterministically on every Python (3.14 swallows a real EACCES).
+    from pathlib import Path as _Path
+
+    monkeypatch.setattr(appserver, "CLAUDE_PROJECTS_DIR", tmp_path)
+
+    def _raise_eacces(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(_Path, "is_file", _raise_eacces)
+    result = validate_transcript_path(str(tmp_path / "s.jsonl"))
+    assert result.realpath is None
+    assert result.reason is not None
+
+
 # --- transfer_session outcomes --------------------------------------------------
 
 

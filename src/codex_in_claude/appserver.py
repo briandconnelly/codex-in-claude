@@ -206,14 +206,24 @@ def validate_transcript_path(path: str) -> PathValidation:
         return PathValidation(None, "transcript_path must be a non-empty string.")
     if not path.endswith(".jsonl"):
         return PathValidation(None, "transcript_path must be a .jsonl session transcript.")
-    real = Path(path).resolve()
-    if not real.is_file():
+    try:
+        real = Path(path).resolve()
+        exists = real.is_file()
+    except (OSError, ValueError, RuntimeError):
+        # resolve() raises ValueError on an embedded NUL and RuntimeError on a symlink
+        # loop (CPython 3.11/3.12); is_file() re-raises non-ignored OSErrors such as
+        # PermissionError on 3.11-3.13. All are malformed-input rejections, not server
+        # faults — surface a stable, value-free reason (mapped to invalid_arguments)
+        # instead of letting them escape as a retryable internal_error (#278).
+        return PathValidation(None, "transcript_path is not a valid file path.")
+    if not exists:
         return PathValidation(None, "transcript_path does not exist or is not a file.")
     try:
         if real.stat().st_size == 0:
             return PathValidation(None, "transcript_path is empty.")
-    except OSError as exc:  # pragma: no cover
-        return PathValidation(None, f"transcript_path could not be read: {exc}.")
+    except OSError:  # pragma: no cover
+        # Value-free by design: the path is not echoed back (#244, #278).
+        return PathValidation(None, "transcript_path could not be read.")
     try:
         real.relative_to(CLAUDE_PROJECTS_DIR.resolve())
     except ValueError:
