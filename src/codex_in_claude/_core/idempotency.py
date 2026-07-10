@@ -75,7 +75,7 @@ def _acquire_flock(fd: int, timeout: float | None) -> None:
     retried — any other ``OSError`` propagates so a real filesystem fault is not masked."""
     try:
         import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
-    except ImportError:  # non-POSIX; server startup guard rejects Windows
+    except ImportError:  # non-POSIX; server startup guard rejects non-POSIX platforms
         return  # degrade to no cross-process lock (see _core/jobs.py worker-lock shim)
 
     if timeout is None:
@@ -99,10 +99,10 @@ def _release_flock(fd: int) -> None:
     """Release ``LOCK_UN`` on ``fd`` if ``fcntl`` is available; no-op on a fcntl-less
     platform (non-POSIX). Mirrors the import guard in :func:`_acquire_flock` so the
     release path does not ``NameError`` when the acquire degraded to no cross-process
-    lock. POSIX-only; the server startup guard rejects native Windows (#232)."""
+    lock. POSIX-only; the server startup guard rejects non-POSIX platforms (#232)."""
     try:
         import fcntl  # noqa: PLC0415 - POSIX only, lazy like the job store's worker lock
-    except ImportError:  # non-POSIX; server startup guard rejects Windows
+    except ImportError:  # non-POSIX; server startup guard rejects non-POSIX platforms
         return
     with contextlib.suppress(OSError):
         fcntl.flock(fd, fcntl.LOCK_UN)

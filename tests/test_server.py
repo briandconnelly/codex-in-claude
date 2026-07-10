@@ -62,6 +62,8 @@ def test_posix_platform_guard_refuses_other_non_posix(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "requires a POSIX platform" in err
     assert "os.name=java" in err
+    # The WSL2 hint is Windows-specific and must not appear for other non-POSIX runtimes.
+    assert "WSL2" not in err
 
 
 def test_posix_platform_guard_escape_hatch_reports_actual_os_name(monkeypatch, capsys):

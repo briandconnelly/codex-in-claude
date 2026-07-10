@@ -240,7 +240,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   and `SIGTERM`-driven graceful cancellation) is POSIX-only and silently degrades on Windows.
   The classifier is now `Operating System :: MacOS` + `Operating System :: POSIX :: Linux`;
   `README.md` and `COMPATIBILITY.md` state the platform contract; the server entrypoint
-  refuses to start on `os.name == "nt"` with a WSL2 pointer before the transport loop runs
+  refuses to start on any non-POSIX `os.name` (Windows additionally gets a WSL2 pointer) before the transport loop runs
   (overridable to a stderr warning via `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1` for
   consult-only use); and the bare `import fcntl` in `_core/idempotency.py` is now guarded
   the same way `_core/jobs.py`'s worker lock already is, so `_core` stays internally

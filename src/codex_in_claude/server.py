@@ -3723,9 +3723,10 @@ def _enforce_posix_platform(os_name: str | None = None) -> None:
             "use delegate/review against untrusted work.\n"
         )
         return
+    wsl2_hint = "On Windows, run it under WSL2. " if platform_name == "nt" else ""
     sys.stderr.write(
         f"codex-in-claude requires a POSIX platform (macOS or Linux); got os.name={platform_name}. "
-        "On Windows, run it under WSL2. Set "
+        f"{wsl2_hint}Set "
         "CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1 to override "
         "(consult-only, unsupported).\n"
     )
