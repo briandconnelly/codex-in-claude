@@ -112,6 +112,26 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_transfer` now surfaces the child `codex app-server`'s stderr on the failures where it is
+  the only diagnostic** (#275). The `codex app-server`'s stderr tail was captured on every failing
+  path but never read by the error envelope — so when the child crashed (`cli_contract_changed`),
+  wedged (`timeout`), or completed without recording a thread (`transfer_incomplete`), the agent got
+  a generic sentence and the stack trace / config error that actually killed it was discarded. It now
+  rides a dedicated, nullable `error.app_server_stderr_tail` field — a **separate channel from
+  `error.message`** because it is untrusted child output (an LLM reads `message` as guidance; child
+  stderr can contain injected directives). The field is best-effort secret-redacted and bounded to
+  `_MAX_DISPLAY_CHARS` characters, keeping the **tail** (the terminal exception line) with the
+  truncation marker at the start — a token-sized projection, not the 64 KiB internal capture. It is
+  populated only for those three codes; `transfer_failed` (its structured message is already surfaced,
+  #276), `transfer_unsupported` (an unambiguous `-32601`), and `codex_not_found` are excluded. Also
+  fixes a latent landmine: the spawn-failure path stuffed the internal `BINARY_NOT_FOUND` sentinel
+  into `stderr_tail`; that path now returns no tail, so the sentinel can never leak to an agent. To
+  keep redaction sound, the stderr reader's per-line cap is raised above the drain's capture ceiling
+  so a line long enough to be split mid-token is evicted whole rather than kept with a
+  split-and-unmatchable secret — the redactor only ever sees complete lines (the same
+  redact-before-truncate discipline as the diff path's F3 fix). Backward-compatible addition; result
+  `fingerprint` `codex-in-claude/0.1/schema-35` → `codex-in-claude/0.1/schema-36`.
+
 - **`codex_transfer`'s app-server reader now bounds the memory it buffers ahead of the transfer
   loop** (#277). `_spawn_reader` fed every parsed message onto an unbounded `queue.Queue`, so a
   drifting or chatty `codex app-server` emitting valid sub-8-MiB progress notifications faster than
