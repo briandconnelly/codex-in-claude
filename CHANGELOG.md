@@ -97,6 +97,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   only affect `codex_status` reporting; background-job and rate-limit reference detail moved to
   new `docs/REFERENCE.md` sections ("Background jobs", "Rate-limit reporting"); a contents line
   was added and duplicated safety prose removed.
+- **Docs: AGENTS.md Testing gains an input-domain rule.** A new parameter is new API surface, so its
+  documented invariants must be tested across the whole domain — boundary and invalid values — not
+  only the values the current callers pass. Prompted by #273, where `BoundedCapture(head_bytes=...)`
+  was tested only at the two values its callers used and a larger head budget silently retained ~15x
+  the byte cap while reporting `truncated=False`.
+
 - **Docs: AGENTS.md rules separated from context** (#227). "The result contract" no longer
   re-lists the `FINGERPRINT_COVERS` categories (the prose copy had already drifted from the
   code) and now points at the tuple; rules previously buried in prose — the

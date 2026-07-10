@@ -139,6 +139,13 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 - TDD: write the failing test first, then the minimal code to pass it.
 - Test files mirror the module under test (`tests/test_<module>.py`).
 - Every bug fix lands with a regression test that fails before the fix.
+- **A new parameter is new API surface, not just new behavior.** Test the documented invariants
+  across the parameter's whole domain — the boundary values and the invalid ones — not only the
+  values the current callers pass. Red-green covers the behavior you intended; the input domain
+  needs its own pass. This matters most in `_core/`, which is written for callers who do not exist
+  yet. (#273 added `BoundedCapture(head_bytes=...)` tested only at `None` and `0`, the two values
+  its callers used; `head_bytes > max_bytes` then retained ~15x the byte cap while reporting
+  `truncated=False`, silently breaking the guarantee stated in that class's own docstring.)
 - The **95% coverage floor** is enforced in CI. Live tests that hit the real `codex` CLI are marked
   `integration` and excluded by default (`uv run pytest -m integration --no-cov`).
 
