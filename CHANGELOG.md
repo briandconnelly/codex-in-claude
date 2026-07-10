@@ -258,6 +258,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   "temporary" error. No new error code is advertised (the existing `internal_error`
   code is reused), so no `fingerprint` bump.
 
+- **The Copilot-review workflow no longer green-checks when GitHub silently drops the
+  review request** (#236). `.github/workflows/copilot-review-bot-prs.yml` posted to
+  `requested_reviewers` with `github.token` and treated any 200 as success, but GitHub
+  silently ignores Copilot reviewer requests made with a non-user token — the POST
+  returns 200 with an empty `requested_reviewers` and Copilot never reviews. The step
+  now gates on a user-scoped PAT (`COPILOT_REVIEW_PAT`): when it is set, the step
+  captures the response and fails loudly (`::error::` + non-zero exit) if
+  `copilot-pull-request-reviewer[bot]` is absent from `requested_reviewers`, so a
+  silent no-op can never pass as a green check; when no PAT is configured the step
+  emits a `::warning::` and skips (exit 0) rather than issue the doomed
+  default-token request. CI-only; no `fingerprint` bump.
+
 ### Security
 
 - `codex_transfer` now validates and bounds the identifiers the `codex app-server` reports on
