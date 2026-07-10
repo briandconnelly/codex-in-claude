@@ -319,7 +319,7 @@ def test_lock_degrades_when_fcntl_unavailable(tmp_path, monkeypatch):
     """A fcntl-less platform (non-POSIX) degrades to no cross-process lock instead of
     crashing on `import fcntl` (#232). Mirrors the worker-lock shim in _core/jobs.py
     and the killpg-less simulation in tests/test_gitdiff.py. The server startup guard
-    rejects native Windows before this path is reached; this keeps _core internally
+    rejects non-POSIX platforms before this path is reached; this keeps _core internally
     consistent and extractable."""
     import sys
 
