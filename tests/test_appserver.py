@@ -19,6 +19,7 @@ import pytest
 from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
 
 from codex_in_claude import appserver, cli_contract
+from codex_in_claude._core import streamcap
 from codex_in_claude.appserver import (
     ThreadIdSource,
     TransferStatus,
@@ -566,26 +567,52 @@ def _flood_outcome(tmp_path, scenario):
 
 
 def test_stderr_tail_retains_the_end_not_the_beginning(tmp_path):
-    # #254: the drain advertised a tail but retained the prefix, so on a verbose failure
-    # the operator got startup noise and none of the error that actually killed it.
+    # #254/#275: the tail must retain the END — the line that killed the child, not the
+    # startup noise. The outcome now carries the display *projection* (#275): redacted,
+    # capped to _MAX_DISPLAY_CHARS, with the truncation marker at the START (not
+    # _display_text's head-keeping cut).
     outcome = _flood_outcome(tmp_path, "stderr_flood")
     tail = outcome.stderr_tail or ""
     assert "FINAL-SENTINEL" in tail, "the last stderr line was dropped — still a prefix"
     assert "EARLY-SENTINEL" not in tail, "the first stderr line survived — still a prefix"
-    assert tail.startswith("[output truncated]"), tail[:80]
+    assert tail.startswith(appserver._DISPLAY_TRUNC_MARKER), tail[:80]
+    assert len(tail) <= appserver._MAX_DISPLAY_CHARS
 
 
-def test_stderr_tail_budget_is_bytes_not_characters(tmp_path):
-    # #254 (second defect): `total += len(line)` and the final slice counted characters,
-    # so non-ASCII stderr blew past the nominal 64KB budget.
+def test_stderr_tail_display_projection_is_char_bounded_even_with_unicode(tmp_path):
+    # #275: the surfaced tail is bounded by _MAX_DISPLAY_CHARS *characters* — a token
+    # budget for the agent — independent of the drain's 64KB *byte* capture, and non-ASCII
+    # stderr must not let it grow. (The raw drain's byte budget, #254's second defect, is
+    # covered directly on BoundedCapture in test_streamcap.)
     outcome = _flood_outcome(tmp_path, "stderr_flood_unicode")
     tail = outcome.stderr_tail or ""
     assert "FINAL-SENTINEL" in tail
-    retained = tail.replace("[output truncated]", "", 1)
-    budget = appserver._MAX_STDERR_BYTES
-    assert len(retained.encode("utf-8")) <= budget, (
-        f"retained {len(retained.encode('utf-8'))} bytes > {budget} budget"
-    )
+    assert len(tail) <= appserver._MAX_DISPLAY_CHARS
+
+
+def test_stderr_tail_never_leaks_a_secret_split_by_the_per_line_cap():
+    # #275 (Codex review): the reader's per-line cap must exceed the capture cap, so a line
+    # long enough to be split mid-token is evicted WHOLE by BoundedCapture rather than kept
+    # with a split secret the redactor can't match. Here a single secret is positioned to
+    # STRADDLE the reader's 64 KiB per-line cut, so a truncate-before-redact bug retains only
+    # its unmatchable `sk-bbb…` prefix (needs 20+ chars) right before the truncation marker —
+    # inside the last-300-char display window. With the reader cap above the capture cap the
+    # whole line is evicted instead, so no `sk-` fragment survives. (The oversized line is the
+    # SOLE content: a trailing line would evict the split line and mask the leak.)
+    content_limit = appserver._MAX_STDERR_BYTES - streamcap._LINE_TRUNC_MARKER_BYTES
+    # SECRET straddles the reader's cut at content_limit: its sk- prefix lands just inside.
+    huge = "x" * (content_limit - 10) + SECRET + "x" * 500
+    drain = appserver._StderrDrain(io.BytesIO((huge + "\n").encode("utf-8")))
+    prev = None
+    for _ in range(500):  # wait for the daemon reader to drain the BytesIO to EOF and settle
+        snap = drain.snapshot()
+        if snap and snap == prev:
+            break
+        prev = snap
+        time.sleep(0.01)
+    out = appserver._display_stderr_tail(drain.snapshot()) or ""
+    assert "sk-" not in out, "a secret fragment from a split oversized line leaked"
+    assert SECRET not in out
 
 
 def test_eof_before_completed(tmp_path):
@@ -624,6 +651,10 @@ def test_spawn_failed_missing_binary(tmp_path):
         timeout_seconds=5,
     )
     assert outcome.status is TransferStatus.SPAWN_FAILED
+    # #275 landmine: the spawn failed, so no child and no stderr ever existed. The tail must
+    # be None — never the internal BINARY_NOT_FOUND sentinel, which a future envelope path
+    # could otherwise surface to the agent as if it were child diagnostics.
+    assert outcome.stderr_tail is None
 
 
 # --- ledger reader edge cases ---------------------------------------------------
@@ -918,6 +949,48 @@ def test_display_text_coerces_non_string_input():
     assert appserver._display_text(1234) == "1234"
     assert appserver._display_text({"a": 1}) == "{'a': 1}"
     assert len(appserver._display_text(["y" * 9_000])) == CAP
+
+
+def test_display_stderr_tail_none_and_empty_return_none():
+    # Callers branch on 'is there a diagnostic', so no-tail collapses to None (not "").
+    assert appserver._display_stderr_tail(None) is None
+    assert appserver._display_stderr_tail("") is None
+
+
+def test_display_stderr_tail_short_text_passes_through_unchanged():
+    assert appserver._display_stderr_tail("panic: config missing") == "panic: config missing"
+
+
+def test_display_stderr_tail_keeps_the_end_with_marker_at_start():
+    # Opposite of _display_text: stderr_tail's signal is the terminal exception line, so
+    # keep the END and drop the oldest output, marking the cut at the START.
+    text = "OLDEST-STARTUP-NOISE\n" + "x" * (CAP * 2) + "\nNEWEST-CRASH-LINE"
+    out = appserver._display_stderr_tail(text)
+    assert out is not None
+    assert out.endswith("NEWEST-CRASH-LINE"), "the terminal line must survive"
+    assert "OLDEST-STARTUP-NOISE" not in out, "the oldest output must be dropped, not the newest"
+    assert out.startswith(MARKER)
+    assert len(out) <= CAP
+
+
+def test_display_stderr_tail_redacts_secret_shaped_values():
+    out = appserver._display_stderr_tail(f"auth failed for {SECRET}")
+    assert out is not None
+    assert SECRET not in out
+    assert "[redacted: secret value]" in out
+
+
+def test_display_stderr_tail_redacts_before_truncating():
+    """Redaction must run on the FULL capture before the tail cut. A secret straddling the
+    kept-window boundary would otherwise leave its unredacted suffix (`bbbb…`) in the tail
+    under a truncate-first implementation; redact-first replaces it whole. The `sk-` prefix
+    always falls in the dropped head here, so it cannot be the discriminator — the surviving
+    `b`-run is."""
+    keep = CAP - len(MARKER)
+    text = "y" * 200 + SECRET + "z" * (keep - 15)
+    out = appserver._display_stderr_tail(text) or ""
+    assert "b" * 12 not in out, "a partial secret survived — truncation ran before redaction"
+    assert len(out) <= CAP
 
 
 # --- identifier validation helpers ---------------------------------------------

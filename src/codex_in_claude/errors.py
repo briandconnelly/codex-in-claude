@@ -277,6 +277,7 @@ def make_error(
     limit_bytes: int | None = None,
     actual_bytes: int | None = None,
     candidate_roots: list[str] | None = None,
+    app_server_stderr_tail: str | None = None,
 ) -> ErrorInfo:
     """Build the §6 error envelope for `code`, deriving the symbolic repair from the
     per-code table. `temporary` defaults to the table's value; pass it to override.
@@ -310,6 +311,7 @@ def make_error(
         limit_bytes=limit_bytes,
         actual_bytes=actual_bytes,
         candidate_roots=candidate_roots,
+        app_server_stderr_tail=app_server_stderr_tail,
     )
 
 

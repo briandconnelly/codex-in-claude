@@ -1748,8 +1748,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_35():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-35"
+def test_fingerprint_is_schema_36():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-36"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4734,7 +4734,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-35")
+    assert result["fingerprint"].endswith("schema-36")
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
@@ -4886,6 +4886,85 @@ async def test_transfer_protocol_error(monkeypatch):
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "cli_contract_changed"
+
+
+# --- app_server_stderr_tail: surfaced only where it is the primary diagnostic (#275) ------
+
+_STDERR_ELIGIBLE = {
+    server.appserver.TransferStatus.PROTOCOL_ERROR: "cli_contract_changed",
+    server.appserver.TransferStatus.TIMED_OUT: "timeout",
+    server.appserver.TransferStatus.INCOMPLETE: "transfer_incomplete",
+}
+
+
+async def _transfer_with_tail(monkeypatch, status, **fields):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(status=status, stderr_tail="panic: boom\nFINAL", **fields),
+    )
+    return await server.codex_transfer(transcript_path="/x.jsonl")
+
+
+@pytest.mark.parametrize("status,code", list(_STDERR_ELIGIBLE.items()))
+async def test_transfer_surfaces_stderr_tail_for_eligible_codes(monkeypatch, status, code):
+    result = await _transfer_with_tail(monkeypatch, status)
+    assert result["error"]["code"] == code
+    # The untrusted child stderr rides a dedicated field, never error.message.
+    assert result["error"]["app_server_stderr_tail"] == "panic: boom\nFINAL"
+    assert "panic: boom" not in result["error"]["message"]
+
+
+async def test_transfer_omits_stderr_tail_for_transfer_failed(monkeypatch):
+    # ITEM_FAILURE always carries a structured message (surfaced post-#276); a second
+    # arbitrary-text channel is not worth its injection/leak surface here.
+    result = await _transfer_with_tail(
+        monkeypatch,
+        server.appserver.TransferStatus.ITEM_FAILURE,
+        message="could not parse session",
+    )
+    assert result["error"]["code"] == "transfer_failed"
+    assert "app_server_stderr_tail" not in result["error"]
+
+
+async def test_transfer_omits_stderr_tail_for_unsupported(monkeypatch):
+    result = await _transfer_with_tail(monkeypatch, server.appserver.TransferStatus.UNSUPPORTED)
+    assert result["error"]["code"] == "transfer_unsupported"
+    assert "app_server_stderr_tail" not in result["error"]
+
+
+async def test_transfer_success_never_carries_stderr_tail(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="t1",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            codex_home="/home/u/.codex",
+            stderr_tail="noise on a healthy run",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is True
+    assert "app_server_stderr_tail" not in result
+
+
+async def test_transfer_eligible_code_without_tail_omits_the_field(monkeypatch):
+    # exclude_none: an eligible code whose outcome captured no stderr must not emit a null.
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.PROTOCOL_ERROR, stderr_tail=None
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["error"]["code"] == "cli_contract_changed"
+    assert "app_server_stderr_tail" not in result["error"]
 
 
 async def test_transfer_spawn_failed(monkeypatch):

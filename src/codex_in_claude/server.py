@@ -1058,6 +1058,17 @@ def _transfer_outcome_envelope(
     else:  # PROTOCOL_ERROR
         code = "cli_contract_changed"
         message = outcome.message or "codex app-server returned an unexpected response."
+    # Surface the child app-server's stderr tail ONLY where it is the primary (or only)
+    # diagnostic: a protocol/contract break, a timeout, or a completed-but-empty import. It
+    # is untrusted child output (already redacted + display-bounded on the outcome), so it
+    # rides a dedicated field, never error.message. Excluded elsewhere: transfer_failed
+    # always carries a structured message (#276); transfer_unsupported is an unambiguous
+    # -32601; codex_not_found had no child at all (the SPAWN_FAILED path, #275).
+    stderr_tail = (
+        outcome.stderr_tail
+        if code in ("cli_contract_changed", "timeout", "transfer_incomplete")
+        else None
+    )
     return serialize_error(
         ErrorResult(
             error=make_error(
@@ -1065,6 +1076,7 @@ def _transfer_outcome_envelope(
                 message,
                 temporary=temporary,
                 repair_alternative=alt,
+                app_server_stderr_tail=stderr_tail,
             ),
             meta=meta_for(),
         )

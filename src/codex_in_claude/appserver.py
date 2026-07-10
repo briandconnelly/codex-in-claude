@@ -33,7 +33,6 @@ from typing import Any
 
 from codex_in_claude import __version__, cli_contract
 from codex_in_claude._core import redaction, streamcap
-from codex_in_claude._core.runtime import BINARY_NOT_FOUND
 
 # Claude Code writes session transcripts under ~/.claude/projects/<cwd-slug>/. We only
 # transfer files from there (mirrors upstream's containment check) — a defense against
@@ -47,6 +46,12 @@ _CLIENT_NAME = "codex-in-claude"
 _MAX_LINE_BYTES = 8 * 1024 * 1024
 # Bounded stderr tail retained for diagnostics on an error path.
 _MAX_STDERR_BYTES = 64 * 1024
+# Per-line cap for the stderr reader. Deliberately ABOVE the _MAX_STDERR_BYTES capture
+# ceiling (#275): a line the reader would split mid-token must stay large enough that
+# BoundedCapture evicts it WHOLE, so the redactor never sees a split secret (see _StderrDrain).
+# 2x is the minimal clear margin — a line between the two caps is evicted whole anyway, so a
+# larger cap only grows the drain thread's transient per-line buffer for no diagnostic gain.
+_STDERR_LINE_CAP = 2 * _MAX_STDERR_BYTES
 # Max blocking-read slice: caps how long the loop waits before re-checking the deadline
 # and the cooperative-cancellation stop flag, so a cancelled call tears down promptly.
 _POLL_SECONDS = 0.25
@@ -96,6 +101,31 @@ def _display_text(text: object) -> str:
     if len(out) <= _MAX_DISPLAY_CHARS:
         return out
     return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
+
+
+def _display_stderr_tail(raw: str | None) -> str | None:
+    """Project a raw ``codex app-server`` stderr tail for an error envelope.
+
+    Redact the FULL capture, then keep the LAST ``_MAX_DISPLAY_CHARS`` characters with the
+    truncation marker at the START. This is the mirror image of :func:`_display_text`, which
+    keeps the *head*: ``stderr_tail`` is a rolling tail whose signal — the terminal
+    exception / panic line — is last, so head-truncation would spend the whole budget on the
+    oldest, least useful output (the #275 hazard). Redaction runs before the cut so a secret
+    straddling the boundary can't survive as an unredacted suffix.
+
+    Returns ``None`` for empty / ``None`` input so a caller can branch on *whether a
+    diagnostic exists* — the same falsey-collapse the ``drain.snapshot() or None`` idiom
+    gave, now folded in. Applying this at every ``stderr_tail=`` construction site keeps the
+    :class:`TransferOutcome` invariant uniform: no raw foreign stderr ever rests on the
+    outcome for a later path to surface unredacted."""
+    if not raw:
+        return None
+    out = redaction.redact_text(raw) or ""
+    if not out:
+        return None
+    if len(out) <= _MAX_DISPLAY_CHARS:
+        return out
+    return _DISPLAY_TRUNC_MARKER + out[-(_MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)) :]
 
 
 def _has_control_char(text: str) -> bool:
@@ -181,10 +211,11 @@ class TransferOutcome:
     """The result of one transfer run, ready for the server layer to shape into an
     envelope.
 
-    Invariant (#276): every app-server-derived fragment inside ``message`` and
-    ``ledger_path`` has already passed through :func:`_display_text` — redacted and
-    length-bounded — so a consumer may surface them without re-sanitizing. ``codex_home``
-    is deliberately RAW: it is a filesystem base, not display text."""
+    Invariant (#276, #275): every app-server-derived fragment inside ``message``,
+    ``ledger_path``, and ``stderr_tail`` has already passed through the display sanitizers
+    (:func:`_display_text` for the first two, :func:`_display_stderr_tail` for the tail) —
+    redacted and length-bounded — so a consumer may surface them without re-sanitizing.
+    ``codex_home`` is deliberately RAW: it is a filesystem base, not display text."""
 
     status: TransferStatus
     thread_id: str | None = None
@@ -193,7 +224,7 @@ class TransferOutcome:
     codex_home: str | None = None
     ledger_path: str | None = None  # set on INCOMPLETE so the error can name it; bounded
     message: str | None = None  # upstream failure message / diagnostic detail; bounded
-    stderr_tail: str | None = None  # bounded by _MAX_STDERR_BYTES; NOT yet redacted (#275)
+    stderr_tail: str | None = None  # redacted + display-bounded child stderr tail (#275)
 
 
 @dataclass
@@ -397,7 +428,7 @@ def _resolve_completed(
 ) -> TransferOutcome:
     """Map a completed notification to an outcome: notification `target` first, then
     the ledger fallback for a byte-identical (deduped) re-import."""
-    tail = stderr_tail or None
+    tail = _display_stderr_tail(stderr_tail)
     item = _session_item_result(completed_params)
     lookup = _target_from_successes(item, transcript_realpath)
     if lookup.invalid:
@@ -561,7 +592,16 @@ class _StderrDrain:
             return
         # Line-oriented, like the stdout reader: the tail is read while the child is
         # still alive, so a drain-to-EOF reader would leave it empty (see #255).
-        for line in streamcap.iter_bounded_lines_interactive(stderr, _MAX_STDERR_BYTES):
+        #
+        # The per-line reader cap is _STDERR_LINE_CAP, deliberately ABOVE the capture's
+        # _MAX_STDERR_BYTES ceiling (#275). A line the reader truncates would be split
+        # mid-token, and the redactor in `_display_stderr_tail` runs on the assembled
+        # snapshot — so a secret straddling that cut would survive as an unmatchable prefix
+        # (the same redact-before-truncate hazard fixed for diffs in gitdiff's F3). Keeping
+        # the reader cap above the capture cap means any line long enough to be split is
+        # instead evicted WHOLE by BoundedCapture (a single oversized line is a hard-ceiling
+        # eviction, never a mid-line cut), so the redactor only ever sees complete lines.
+        for line in streamcap.iter_bounded_lines_interactive(stderr, _STDERR_LINE_CAP):
             self._capture.add(line)
 
     def snapshot(self) -> str:
@@ -626,7 +666,10 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             start_new_session=True,
         )
     except OSError:
-        return TransferOutcome(status=TransferStatus.SPAWN_FAILED, stderr_tail=BINARY_NOT_FOUND)
+        # No child was created, so there is no stderr. Leave stderr_tail None — never the
+        # internal BINARY_NOT_FOUND sentinel, which a future envelope path could otherwise
+        # surface to the agent as if it were child diagnostics (#275).
+        return TransferOutcome(status=TransferStatus.SPAWN_FAILED)
 
     drain = _StderrDrain(proc.stderr)
     reader = _spawn_reader(proc.stdout)
@@ -671,7 +714,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     status=TransferStatus.TIMED_OUT,
                     import_id=import_id,
                     codex_home=codex_home,
-                    stderr_tail=drain.snapshot() or None,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
                 )
             try:
                 # Cap each wait so the deadline and the stop flag are re-checked promptly.
@@ -684,14 +727,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     import_id=import_id,
                     codex_home=codex_home,
                     message="codex app-server exited before the import completed.",
-                    stderr_tail=drain.snapshot() or None,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
                 )
             if msg is _BAD_LINE:
                 return TransferOutcome(
                     status=TransferStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
                     message="codex app-server emitted a non-JSON or oversized line.",
-                    stderr_tail=drain.snapshot() or None,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
                 )
             if not isinstance(msg, dict):
                 continue
@@ -704,7 +747,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     message=f"codex app-server initialize failed: {_display_text(detail)}"
                     if detail
                     else "codex app-server rejected initialize.",
-                    stderr_tail=drain.snapshot() or None,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
                 )
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
@@ -734,7 +777,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
                         message=detail,
-                        stderr_tail=drain.snapshot() or None,
+                        stderr_tail=_display_stderr_tail(drain.snapshot()),
                     )
                 codex_home = home
                 _send(
@@ -761,7 +804,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.UNSUPPORTED,
                         codex_home=codex_home,
-                        stderr_tail=drain.snapshot() or None,
+                        stderr_tail=_display_stderr_tail(drain.snapshot()),
                     )
                 if status is TransferStatus.PROTOCOL_ERROR:
                     return TransferOutcome(
@@ -771,7 +814,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                         f"{_display_text(detail)}"
                         if detail
                         else "codex app-server rejected the import request.",
-                        stderr_tail=drain.snapshot() or None,
+                        stderr_tail=_display_stderr_tail(drain.snapshot()),
                     )
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
@@ -779,7 +822,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     message=_display_text(detail)
                     if detail
                     else "codex app-server rejected the import.",
-                    stderr_tail=drain.snapshot() or None,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
                 )
             if msg.get("id") == 2 and "result" in msg:
                 result = msg.get("result")
