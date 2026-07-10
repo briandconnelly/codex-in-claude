@@ -187,11 +187,14 @@ class BoundedCapture:
     actually exceeds the cap and a line is dropped; retained bytes never exceed
     ``max_bytes`` plus the marker.  Complete lines only.
 
-    ``head_bytes`` overrides the head window (default: half of ``max_bytes``).  Pass
-    ``head_bytes=0`` for a **pure rolling tail** — no head window, so the marker leads
-    and only the newest lines survive.  That is the right shape when the diagnostic
-    value is at the *end* of the stream (a stack trace that killed a process) rather
-    than at the start.
+    ``head_bytes`` overrides the head window (default: half of ``max_bytes``) and must lie
+    in ``0..max_bytes``.  Pass ``head_bytes=0`` for a **pure rolling tail** — no head
+    window, so the marker leads and only the newest lines survive.  That is the right
+    shape when the diagnostic value is at the *end* of the stream (a stack trace that
+    killed a process) rather than at the start.  A head window is never evicted, so a
+    budget above ``max_bytes`` would let the head grow past the ceiling with ``truncated``
+    still ``False`` — silently violating the guarantee instead of enforcing it.  Rejected
+    at construction rather than clamped: it can only be a programming error.
 
     **Thread-safe.**  ``add()`` and ``result()`` are serialized, so a reader may snapshot
     a capture that a writer thread is still filling.  ``add()`` mutates a list, a deque
@@ -203,6 +206,9 @@ class BoundedCapture:
     snapshot is *consistent*, not *final*: a live stream may still grow after it."""
 
     def __init__(self, max_bytes: int, *, head_bytes: int | None = None) -> None:
+        if head_bytes is not None and not 0 <= head_bytes <= max_bytes:
+            msg = f"head_bytes must be in 0..{max_bytes} (max_bytes), got {head_bytes}"
+            raise ValueError(msg)
         self._max_bytes = max_bytes
         self._head_budget = max(1, max_bytes // 2) if head_bytes is None else head_bytes
         self._head: list[str] = []

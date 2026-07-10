@@ -8,6 +8,8 @@ import sys
 import threading
 import time
 
+import pytest
+
 from codex_in_claude._core import streamcap
 
 
@@ -280,3 +282,18 @@ def test_bounded_capture_snapshot_is_safe_while_a_writer_adds():
     for t in threads:
         t.join(5)
     assert not failures, f"snapshot raced the writer: {failures[0]!r}"
+
+
+def test_bounded_capture_rejects_head_bytes_outside_the_budget():
+    # A head window larger than the total budget is never evicted, so `add()` grows the
+    # head past max_bytes and `truncated` stays False — the ceiling is silently violated
+    # rather than enforced. Reject it at construction instead of retaining 15x the cap.
+    with pytest.raises(ValueError, match="head_bytes"):
+        streamcap.BoundedCapture(max_bytes=100, head_bytes=101)
+    with pytest.raises(ValueError, match="head_bytes"):
+        streamcap.BoundedCapture(max_bytes=100, head_bytes=-1)
+
+
+def test_bounded_capture_accepts_head_bytes_at_the_boundaries():
+    assert streamcap.BoundedCapture(max_bytes=100, head_bytes=0) is not None
+    assert streamcap.BoundedCapture(max_bytes=100, head_bytes=100) is not None
