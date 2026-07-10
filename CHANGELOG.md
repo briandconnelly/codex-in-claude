@@ -46,8 +46,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   not pass CI on its own). Picks up upstream's SSRF and OAuth hardening — NAT64/6to4/Teredo/ISATAP
   transition addresses can no longer smuggle private IPv4 targets past the allow-list, Streamable HTTP
   validates `Host`/`Origin` against DNS rebinding, and OAuth redirect validation rejects unsafe schemes
-  and unregistered DCR redirect URIs — plus proxy session-teardown and JSON-schema conversion fixes. The
-  argument-validation rewrap this release also carries is handled under Fixed below.
+  and unregistered DCR redirect URIs — plus proxy session-teardown and JSON-schema conversion fixes.
+  This release also rewraps tool-argument validation errors; the Fixed entry below covers how that is
+  handled.
 
 - **Separate binding rules from facts across instructions, capabilities, and tool descriptions**
   (#243). A prose-only sweep (from the agent-friendly-mcp audit, `separating-context-from-constraints`
