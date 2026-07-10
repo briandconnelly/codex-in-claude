@@ -4,7 +4,7 @@ This plugin shells out to the OpenAI `codex` CLI. Every assumption it makes live
 `src/codex_in_claude/cli_contract.py` so an upstream change is a one-file, greppable edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.142`.
+Verified against `codex-cli 0.144`.
 
 ## Platform support
 
@@ -118,7 +118,7 @@ so an event-schema change degrades metadata rather than breaking a run.
 `Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
 labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
 every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
-`appserver.py`. Verified against `codex-cli 0.142.5` via `codex app-server generate-json-schema`.
+`appserver.py`. Verified against `codex-cli 0.144.1` via `codex app-server generate-json-schema --out <DIR>`.
 
 The flow: `initialize` (with `capabilities.experimentalApi=true`) → `initialized` notification → one
 `externalAgentConfig/import` request carrying a single `SESSIONS` migration item → wait for the

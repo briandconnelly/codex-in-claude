@@ -42,6 +42,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Tracked Codex version bumped to `0.144`.** `SUPPORTED_VERSIONS` now tracks `(0, 144)` (replacing
+  `(0, 142)`); the CLI contract, compatibility notes, help snapshots (`docs/codex-help/0.144.1/`), and
+  `KNOWN_MODEL_SLUGS` fallback (now the `gpt-5.6-*`/`gpt-5.5`/`gpt-5.4*` set) are verified against
+  `codex-cli 0.144.1`. Advisory only — a version outside the tested set warns in `codex_status` but
+  never blocks. The invoked `codex exec`/`review` flag surface and sandbox values are byte-identical
+  to `0.142`, and the `app-server` session-import request/response contract is unchanged, so this is a
+  non-breaking bump with no `fingerprint` change. Note for operators: `0.143` flipped the upstream
+  `remote_plugin` feature to default-on, which can expose additional third-party connector tools to a
+  `codex exec` run; hardening the plugin's isolation against that is tracked separately.
+
 - **`fastmcp` 3.4.2 → 3.4.4** (supersedes the Dependabot bump in #260, which targeted 3.4.3 and could
   not pass CI on its own). Picks up upstream's SSRF and OAuth hardening — NAT64/6to4/Teredo/ISATAP
   transition addresses can no longer smuggle private IPv4 targets past the allow-list, Streamable HTTP
