@@ -245,6 +245,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Security
 
+- `codex_transfer` now validates and bounds the identifiers the `codex app-server` reports on
+  success — the imported thread id, `$CODEX_HOME`, the ledger id, and `importId`. A drifted,
+  oversized, control-character-bearing, or non-absolute value fails as `cli_contract_changed`
+  (for the live protocol) or is skipped (for the best-effort ledger and optional `importId`)
+  instead of yielding a corrupt `resume_command` or re-basing the ledger lookup on the wrong
+  directory. `resume_command` is now shell-quoted. (#279)
+
 - **Full gitattributes filter isolation for propose-tier worktree git ops** (#163).
   Completes the repo-config hardening started in #156/#162 (which disabled hooks,
   fsmonitor, and GPG signing). The `propose`-tier worktree git ops run in the *server*

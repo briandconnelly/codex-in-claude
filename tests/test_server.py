@@ -1698,8 +1698,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_34():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-34"
+def test_fingerprint_is_schema_35():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-35"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4684,7 +4684,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-34")
+    assert result["fingerprint"].endswith("schema-35")
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
@@ -4848,6 +4848,67 @@ async def test_transfer_spawn_failed(monkeypatch):
     result = await server.codex_transfer(transcript_path="/x.jsonl")
     assert result["ok"] is False
     assert result["error"]["code"] == "codex_not_found"
+
+
+async def test_transfer_resume_command_is_shell_quoted(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="id with space;rm",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    # shlex.join quotes the pathological id so the pasted command stays one safe argument.
+    assert result["resume_command"] == "codex resume 'id with space;rm'"
+
+
+async def test_transfer_resume_command_plain_id_unquoted(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.OK,
+            thread_id="thread-fresh-0001",
+            thread_id_source=server.appserver.ThreadIdSource.IMPORT_NOTIFICATION,
+            codex_home="/home/u/.codex",
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["resume_command"] == "codex resume thread-fresh-0001"
+
+
+async def test_transfer_protocol_error_maps_to_cli_contract_changed(monkeypatch):
+    """PROTOCOL_ERROR maps to cli_contract_changed, and the appserver-supplied
+    message passes through _transfer_outcome_envelope's `message = outcome.message
+    or "..."` faithfully, with no further transformation.
+
+    This does NOT test that no raw/oversized value can reach the message — that
+    guarantee is constructed and enforced at the appserver layer, where
+    outcome.message is built from fixed strings (see test_appserver.py, e.g.
+    test_invalid_codex_home_is_protocol_error and the invalid-target tests, which
+    assert an oversized value is absent from outcome.message before it ever
+    reaches this mapping code).
+    """
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch)
+    message = "codex app-server reported an invalid codexHome (must be a bounded, absolute path)."
+    _patch_transfer(
+        monkeypatch,
+        server.appserver.TransferOutcome(
+            status=server.appserver.TransferStatus.PROTOCOL_ERROR,
+            message=message,
+        ),
+    )
+    result = await server.codex_transfer(transcript_path="/x.jsonl")
+    assert result["ok"] is False
+    assert result["error"]["code"] == "cli_contract_changed"
+    assert result["error"]["message"] == message
 
 
 # --- CODEX_IN_CLAUDE_EXTRA_ARGS: status + preflight before spend (#231) -----------

@@ -13,9 +13,9 @@ import time
 from pathlib import Path
 
 import pytest
-from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, SECRET
+from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
 
-from codex_in_claude import appserver
+from codex_in_claude import appserver, cli_contract
 from codex_in_claude.appserver import (
     ThreadIdSource,
     TransferStatus,
@@ -34,6 +34,10 @@ def _transcript(tmp_path: Path, content: bytes = b'{"type":"user"}\n') -> Path:
 
 def _command(scenario: str, codex_home: Path) -> list[str]:
     return [sys.executable, FAKE, scenario, str(codex_home)]
+
+
+def _command_logged(scenario: str, codex_home: Path, log_path: Path) -> list[str]:
+    return [sys.executable, FAKE, scenario, str(codex_home), str(log_path)]
 
 
 def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: str) -> None:
@@ -143,6 +147,76 @@ def test_completed_before_response_still_resolves(tmp_path):
     )
     assert outcome.status is TransferStatus.OK
     assert outcome.thread_id == "thread-fresh-0001"
+
+
+@pytest.mark.parametrize("scenario", ["oversized_target", "control_target", "null_target"])
+def test_invalid_notification_target_is_protocol_error(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "thread id" in outcome.message
+    assert "t" * 5000 not in outcome.message  # value-free
+
+
+def test_invalid_live_target_beats_valid_ledger(tmp_path):
+    home = tmp_path / "codex_home"
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    _write_ledger(home, source, sha, "thread-from-ledger-OK")
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("invalid_target_with_ledger", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR  # NOT recovered from the ledger
+    assert outcome.thread_id is None
+
+
+def test_absent_target_key_falls_through_to_ledger(tmp_path):
+    home = tmp_path / "codex_home"
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    _write_ledger(home, source, sha, "thread-recovered-77")
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("target_key_absent", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-recovered-77"
+    assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
+def test_multiple_successes_any_invalid_target_fails_loud(tmp_path):
+    # Two matching success entries: one with a VALID target, one with a present-but-invalid
+    # (oversized) target. The invalid entry must poison the whole lookup — the valid entry
+    # must NOT win — per the tri-state rule in `appserver._target_from_successes`.
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("mixed_valid_invalid_targets", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert outcome.thread_id is None
+    assert "thread id" in outcome.message
+    assert "t" * 5000 not in outcome.message  # value-free
 
 
 def test_unsupported_method(tmp_path):
@@ -276,6 +350,21 @@ def test_dedup_recovers_thread_from_ledger(tmp_path):
     assert outcome.status is TransferStatus.OK
     assert outcome.thread_id == "thread-from-ledger-99"
     assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
+def test_oversized_import_id_drops_to_none_but_run_succeeds(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("oversized_import_id", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-fresh-0001"
+    assert outcome.import_id is None  # non-load-bearing → dropped, not fatal
 
 
 def test_dedup_without_ledger_is_incomplete(tmp_path):
@@ -460,6 +549,44 @@ def test_ledger_last_match_wins(tmp_path):
     assert appserver._lookup_ledger(str(tmp_path), source) == "last"
 
 
+def test_ledger_skips_invalid_id_last_valid_match_wins(tmp_path):
+    # Two records match source+sha: an older VALID id, then a newer INVALID (oversized) id.
+    # The invalid newest is filtered; the older valid id is recovered (last VALID match wins).
+    home = tmp_path / "codex_home"
+    home.mkdir(parents=True, exist_ok=True)
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    (home / "external_agent_session_imports.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "source_path": source,
+                        "content_sha256": sha,
+                        "imported_thread_id": "thread-older-valid",
+                    },
+                    {
+                        "source_path": source,
+                        "content_sha256": sha,
+                        "imported_thread_id": "t" * 5000,
+                    },
+                ]
+            }
+        )
+    )
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("dedup", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-older-valid"
+    assert outcome.thread_id_source is ThreadIdSource.LEDGER
+
+
 def test_initialize_error_is_protocol_error(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()
@@ -486,6 +613,48 @@ def test_initialize_without_codex_home_is_protocol_error(tmp_path):
     )
     assert outcome.status is TransferStatus.PROTOCOL_ERROR
     assert "codexHome" in outcome.message
+    # An omitted key is a distinct drift mode from a present-but-invalid value.
+    assert "omitted" in outcome.message
+
+
+@pytest.mark.parametrize(
+    "scenario", ["relative_home", "control_home", "surrogate_home", "oversized_home"]
+)
+def test_invalid_codex_home_is_protocol_error(tmp_path, scenario):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert "codexHome" in outcome.message
+    # A present-but-invalid value is a distinct drift mode from an omitted key.
+    assert "invalid" in outcome.message
+    # value-free: the invalid value never reaches the message.
+    assert OVERSIZED_CODEX_HOME not in outcome.message
+    assert "\x00" not in outcome.message
+
+
+def test_invalid_codex_home_stops_before_import_request(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    log = tmp_path / "methods.log"
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command_logged("relative_home", home, log),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    received = log.read_text(encoding="utf-8").split() if log.exists() else []
+    assert "initialize" in received
+    assert "externalAgentConfig/import" not in received  # never imported into the dark
+    assert "initialized" not in received
 
 
 def test_stop_event_cancels_promptly(tmp_path):
@@ -540,12 +709,12 @@ def test_target_skips_source_mismatch():
             {"itemType": "SESSIONS", "source": "/s.jsonl", "target": "right"},
         ]
     }
-    assert appserver._target_from_successes(item, "/s.jsonl") == "right"
+    assert appserver._target_from_successes(item, "/s.jsonl").target == "right"
 
 
 def test_target_accepts_unlabeled_success():
     item = {"successes": [{"itemType": "SESSIONS", "target": "t"}]}
-    assert appserver._target_from_successes(item, "/s.jsonl") == "t"
+    assert appserver._target_from_successes(item, "/s.jsonl").target == "t"
 
 
 def test_failure_message_joins_and_defaults():
@@ -623,6 +792,54 @@ def test_display_text_coerces_non_string_input():
     assert appserver._display_text(1234) == "1234"
     assert appserver._display_text({"a": 1}) == "{'a': 1}"
     assert len(appserver._display_text(["y" * 9_000])) == CAP
+
+
+# --- identifier validation helpers ---------------------------------------------
+
+
+SURROGATE = "\ud800"  # JSON-legal, decodes fine, raises on .encode("utf-8")
+
+
+def test_has_control_char_detects_cc_category():
+    assert appserver._has_control_char("a\x00b")  # C0 NUL
+    assert appserver._has_control_char("a\x7fb")  # DEL
+    assert appserver._has_control_char("a\x85b")  # C1
+    assert not appserver._has_control_char("normal-id_1.2")
+    assert not appserver._has_control_char("café")  # non-ASCII letters are fine
+
+
+def test_valid_wire_id_accepts_plain_id():
+    result = appserver._valid_wire_id("thread-abc_123", cli_contract.TRANSFER_ID_MAX_BYTES)
+    assert result == "thread-abc_123"
+
+
+@pytest.mark.parametrize("bad", ["", 0, None, [], {}, b"bytes"])
+def test_valid_wire_id_rejects_empty_and_non_str(bad):
+    assert appserver._valid_wire_id(bad, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_wire_id_rejects_control_and_surrogate():
+    assert appserver._valid_wire_id("a\x00b", cli_contract.TRANSFER_ID_MAX_BYTES) is None
+    assert appserver._valid_wire_id(SURROGATE, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_wire_id_enforces_byte_bound_not_char_count():
+    at_cap = "z" * cli_contract.TRANSFER_ID_MAX_BYTES
+    assert appserver._valid_wire_id(at_cap, cli_contract.TRANSFER_ID_MAX_BYTES) == at_cap
+    over_cap = "z" * (cli_contract.TRANSFER_ID_MAX_BYTES + 1)
+    assert appserver._valid_wire_id(over_cap, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+    # A 2-byte char at the boundary is measured in BYTES, not characters.
+    two_byte = "é" * ((cli_contract.TRANSFER_ID_MAX_BYTES // 2) + 1)
+    assert appserver._valid_wire_id(two_byte, cli_contract.TRANSFER_ID_MAX_BYTES) is None
+
+
+def test_valid_codex_home_requires_absolute():
+    assert appserver._valid_codex_home("/home/u/.codex") == "/home/u/.codex"
+    assert appserver._valid_codex_home("relative/dir") is None
+    assert appserver._valid_codex_home("") is None
+    assert appserver._valid_codex_home("/home/\x00u") is None  # control char
+    assert appserver._valid_codex_home(SURROGATE) is None
+    assert appserver._valid_codex_home("/" + "h" * (cli_contract.CODEX_HOME_MAX_BYTES + 1)) is None
 
 
 def test_failure_message_redacts_and_bounds_the_join():

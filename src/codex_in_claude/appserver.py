@@ -92,6 +92,48 @@ def _display_text(text: object) -> str:
     return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
 
 
+def _has_control_char(text: str) -> bool:
+    """True if ``text`` contains any Unicode ``Cc`` control code point — exactly C0
+    (U+0000-U+001F), DEL (U+007F), and C1 (U+0080-U+009F)."""
+    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in text)
+
+
+def _valid_wire_id(value: object, max_bytes: int) -> str | None:
+    """Return ``value`` if it is a valid opaque app-server identifier, else ``None``.
+
+    Valid = a non-empty ``str``, free of ``Cc`` control chars, that encodes to at most
+    ``max_bytes`` UTF-8 bytes. JSON permits escaped unpaired surrogates that decode fine but
+    raise ``UnicodeEncodeError`` on encode; those are treated as invalid, never raised. This
+    is a protocol check on a semantic id — reject, never truncate (truncating an id corrupts
+    it)."""
+    if not isinstance(value, str) or not value:
+        return None
+    # Cheap O(1) early reject: a UTF-8 encoding is always at least one byte per code point,
+    # so an over-cap character count is already over-cap in bytes. This skips the control
+    # scan and the full-string encode for a hostile oversized value (bounded only by the
+    # 8 MiB line cap upstream), whose encode would otherwise allocate a second large copy.
+    if len(value) > max_bytes:
+        return None
+    if _has_control_char(value):
+        return None
+    try:
+        if len(value.encode("utf-8")) > max_bytes:
+            return None
+    except UnicodeError:
+        return None
+    return value
+
+
+def _valid_codex_home(value: object) -> str | None:
+    """Return ``value`` if it is a valid ``codexHome`` (a bounded, control-free, ABSOLUTE
+    path), else ``None``. Absolute-ness is the real invariant — a relative value would
+    re-base the ledger lookup on the server process's cwd."""
+    home = _valid_wire_id(value, cli_contract.CODEX_HOME_MAX_BYTES)
+    if home is None or not Path(home).is_absolute():
+        return None
+    return home
+
+
 def _terminate(proc: subprocess.Popen) -> None:
     """Close stdin, SIGKILL the whole process group, then reap the leader.
 
@@ -247,9 +289,11 @@ def _lookup_ledger(codex_home: str, transcript_realpath: str) -> str | None:
             continue
         if record.get(cli_contract.IMPORT_LEDGER_CONTENT_SHA_KEY) != content_sha:
             continue
-        thread_id = record.get(cli_contract.IMPORT_LEDGER_THREAD_ID_KEY)
-        if isinstance(thread_id, str) and thread_id:
-            match = thread_id  # last match wins
+        valid = _valid_wire_id(
+            record.get(cli_contract.IMPORT_LEDGER_THREAD_ID_KEY), cli_contract.TRANSFER_ID_MAX_BYTES
+        )
+        if valid is not None:
+            match = valid  # last VALID match wins; an invalid record is skipped (best-effort)
     return match
 
 
@@ -267,23 +311,48 @@ def _session_item_result(completed_params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _target_from_successes(item: dict[str, Any], transcript_realpath: str) -> str | None:
-    """The imported thread id from a fresh import's success entry, if present."""
+@dataclass
+class _TargetLookup:
+    """Tri-state result of scanning a completed notification's success entries for our
+    imported thread id: a valid ``target``; ``invalid`` when a matching entry carried a
+    present-but-unusable target (drift → PROTOCOL_ERROR); or neither (absent → try the
+    ledger). Presence is key existence, so a ``null``/``0``/``""`` target is present+invalid,
+    not absent."""
+
+    target: str | None = None
+    invalid: bool = False
+
+
+def _target_from_successes(item: dict[str, Any], transcript_realpath: str) -> _TargetLookup:
+    """Scan a fresh import's success entries for our imported thread id (tri-state).
+
+    We submit exactly one session item, so an unlabeled success is ours; a present ``source``
+    must match (defensive cross-check). A matching entry whose ``target`` key is present but
+    fails validation is drift and makes the whole lookup ``invalid`` — even if another entry
+    looks valid — so a corrupt live notification can never be papered over by the ledger."""
     successes = item.get(cli_contract.IMPORT_SUCCESSES_KEY)
     if not isinstance(successes, list):
-        return None
+        return _TargetLookup()
+    first_valid: str | None = None
+    saw_invalid = False
     for success in successes:
         if not isinstance(success, dict):
             continue
-        # We submit exactly one session item, so an unlabeled success is ours; when
-        # `source` is present it must match (defensive cross-check).
         src = success.get(cli_contract.IMPORT_SOURCE_KEY)
         if src is not None and src != transcript_realpath:
             continue
-        target = success.get(cli_contract.IMPORT_TARGET_KEY)
-        if isinstance(target, str) and target:
-            return target
-    return None
+        if cli_contract.IMPORT_TARGET_KEY not in success:
+            continue  # this entry carries no target → not present here
+        valid = _valid_wire_id(
+            success.get(cli_contract.IMPORT_TARGET_KEY), cli_contract.TRANSFER_ID_MAX_BYTES
+        )
+        if valid is None:
+            saw_invalid = True  # present but unusable → drift
+        elif first_valid is None:
+            first_valid = valid
+    if saw_invalid:
+        return _TargetLookup(invalid=True)
+    return _TargetLookup(target=first_valid)
 
 
 def _failure_message(item: dict[str, Any]) -> str | None:
@@ -314,11 +383,19 @@ def _resolve_completed(
     the ledger fallback for a byte-identical (deduped) re-import."""
     tail = stderr_tail or None
     item = _session_item_result(completed_params)
-    target = _target_from_successes(item, transcript_realpath)
-    if target is not None:
+    lookup = _target_from_successes(item, transcript_realpath)
+    if lookup.invalid:
+        return TransferOutcome(
+            status=TransferStatus.PROTOCOL_ERROR,
+            import_id=import_id,
+            codex_home=codex_home,
+            message="codex app-server reported an invalid imported thread id.",
+            stderr_tail=tail,
+        )
+    if lookup.target is not None:
         return TransferOutcome(
             status=TransferStatus.OK,
-            thread_id=target,
+            thread_id=lookup.target,
             thread_id_source=ThreadIdSource.IMPORT_NOTIFICATION,
             import_id=import_id,
             codex_home=codex_home,
@@ -562,17 +639,31 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
                 result = msg.get("result")
-                home = (
+                raw_home = (
                     result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
                     if isinstance(result, dict)
                     else None
                 )
-                if not isinstance(home, str) or not home:
-                    # No codexHome means we can't locate the ledger nor trust the
-                    # handshake — fail fast instead of importing into the dark.
+                home = _valid_codex_home(raw_home)
+                if home is None:
+                    # No valid absolute codexHome means we can't locate the ledger nor trust
+                    # the handshake — fail fast instead of importing into the dark. Both
+                    # messages are value-free (the rejected value never reaches the envelope)
+                    # but distinguish an omitted key from a present-but-invalid value: they are
+                    # different drift modes.
+                    home_present = (
+                        isinstance(result, dict)
+                        and cli_contract.APP_SERVER_CODEX_HOME_KEY in result
+                    )
+                    detail = (
+                        "codex app-server initialize response reported an invalid codexHome "
+                        "(must be a bounded, absolute path)."
+                        if home_present
+                        else "codex app-server initialize response omitted codexHome."
+                    )
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
-                        message="codex app-server initialize response omitted codexHome.",
+                        message=detail,
                         stderr_tail=drain.snapshot() or None,
                     )
                 codex_home = home
@@ -622,10 +713,12 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 )
             if msg.get("id") == 2 and "result" in msg:
                 result = msg.get("result")
-                if isinstance(result, dict) and isinstance(
-                    result.get(cli_contract.IMPORT_ID_KEY), str
-                ):
-                    import_id = result[cli_contract.IMPORT_ID_KEY]
+                if isinstance(result, dict):
+                    # Non-load-bearing metadata: an invalid importId drops to None rather than
+                    # failing the run (it does not establish the resumable thread).
+                    import_id = _valid_wire_id(
+                        result.get(cli_contract.IMPORT_ID_KEY), cli_contract.TRANSFER_ID_MAX_BYTES
+                    )
                 continue
             # The terminal signal: the import/completed notification. Single in-flight
             # import ⇒ any completed notification is ours (handles completion-before-

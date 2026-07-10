@@ -81,6 +81,16 @@ JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_RESERVED_ERROR_MIN = -32768
 JSONRPC_RESERVED_ERROR_MAX = -32000
 
+# --- App-server identifier bounds (defensive policy, not a documented protocol limit) -
+# Upstream publishes no length cap on these ids/paths, so we pick generous ceilings that
+# reject implausible or hostile values — an id or path far past these is drift, not a real
+# identifier — WITHOUT pinning a specific id format (a ULID/UUID scheme change must not
+# false-positive). Surfaced in codex_transfer's result; see #279.
+# opaque ids (imported thread id / importId); ULIDs/UUIDs are ~26-36 bytes
+TRANSFER_ID_MAX_BYTES = 512
+# a filesystem path; ~PATH_MAX headroom. Absolute-ness is the real invariant.
+CODEX_HOME_MAX_BYTES = 4096
+
 # --- Import ledger (undocumented dedup fallback) ---------------------------------
 # $CODEX_HOME/external_agent_session_imports.json maps an imported transcript to its
 # thread id: {"records": [{source_path, content_sha256, imported_thread_id}]}. Same
