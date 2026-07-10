@@ -14,7 +14,9 @@ CLI-agnostic; no parent-package imports. Three tools:
   when the producer exits. Use it for request/response protocols over a live pipe.
 - ``BoundedCapture`` accumulates lines under a byte budget, keeping a head window
   plus a bounded tail so the newest lines (where codex emits usage/rate-limit
-  metadata) survive truncation. Complete lines only.
+  metadata) survive truncation. Complete lines only. ``head_bytes=0`` drops the head
+  window for a pure rolling tail. It is thread-safe: a reader may snapshot it while a
+  writer thread is still filling it.
 
 Both readers share ``_assemble_bounded_lines``; they differ only in the chunk source,
 which is the whole of the drain/interactive distinction. Keeping the truncation and
@@ -26,6 +28,7 @@ let them diverge.
 from __future__ import annotations
 
 import codecs
+import threading
 from collections import deque
 from typing import TYPE_CHECKING
 
@@ -182,49 +185,69 @@ class BoundedCapture:
     ``head + marker + tail`` when at least one line was evicted because the total
     exceeded ``max_bytes``.  Truncation (and the marker) occur only when output
     actually exceeds the cap and a line is dropped; retained bytes never exceed
-    ``max_bytes`` plus the marker.  Complete lines only."""
+    ``max_bytes`` plus the marker.  Complete lines only.
 
-    def __init__(self, max_bytes: int) -> None:
+    ``head_bytes`` overrides the head window (default: half of ``max_bytes``).  Pass
+    ``head_bytes=0`` for a **pure rolling tail** — no head window, so the marker leads
+    and only the newest lines survive.  That is the right shape when the diagnostic
+    value is at the *end* of the stream (a stack trace that killed a process) rather
+    than at the start.
+
+    **Thread-safe.**  ``add()`` and ``result()`` are serialized, so a reader may snapshot
+    a capture that a writer thread is still filling.  ``add()`` mutates a list, a deque
+    and three counters across several statements; the GIL makes each statement atomic but
+    not the sequence, so an unlocked ``result()`` can observe a pre-eviction over-budget
+    state, disagree with the ``truncated`` flag, or raise ``RuntimeError: deque mutated
+    during iteration`` — on the very error path trying to report a failure.  The lock is
+    held only for bounded in-memory work, never across a blocking read.  Note that a
+    snapshot is *consistent*, not *final*: a live stream may still grow after it."""
+
+    def __init__(self, max_bytes: int, *, head_bytes: int | None = None) -> None:
         self._max_bytes = max_bytes
-        self._head_budget = max(1, max_bytes // 2)
+        self._head_budget = max(1, max_bytes // 2) if head_bytes is None else head_bytes
         self._head: list[str] = []
         self._head_bytes = 0
         self._tail: deque[tuple[str, int]] = deque()
         self._tail_bytes = 0
         self._truncated = False
+        self._lock = threading.Lock()
 
     def add(self, line: str) -> None:
         n = _nbytes(line)
-        # Fill the head window first.  Once any line has gone to the tail OR a line
-        # has been evicted (``_truncated``), all subsequent lines follow into the
-        # tail so ordering is preserved (head=earliest, tail=most-recent).  The
-        # ``not self._truncated`` guard matters because eviction can empty the tail
-        # again: without it a later line would slip back into the head and end up
-        # before the truncation marker, ahead of output it actually followed.
-        if not self._truncated and not self._tail and self._head_bytes + n <= self._head_budget:
-            self._head.append(line)
-            self._head_bytes += n
-            return
-        self._tail.append((line, n))
-        self._tail_bytes += n
-        # Drop oldest tail lines only when the TOTAL retained exceeds the cap.
-        # Nothing is dropped (and no marker is shown) until the full cap — not
-        # merely the head half — is exceeded, so any output that fits within
-        # max_bytes is returned verbatim.  The len(self._tail) > 1 guard is
-        # intentionally absent so even a single oversized tail line is evicted,
-        # making max_bytes a hard ceiling.
-        while self._head_bytes + self._tail_bytes > self._max_bytes and self._tail:
-            _, dropped = self._tail.popleft()
-            self._tail_bytes -= dropped
-            self._truncated = True
+        with self._lock:
+            # Fill the head window first.  Once any line has gone to the tail OR a line
+            # has been evicted (``_truncated``), all subsequent lines follow into the
+            # tail so ordering is preserved (head=earliest, tail=most-recent).  The
+            # ``not self._truncated`` guard matters because eviction can empty the tail
+            # again: without it a later line would slip back into the head and end up
+            # before the truncation marker, ahead of output it actually followed.
+            # With ``head_budget == 0`` no line ever qualifies, giving a pure tail.
+            if not self._truncated and not self._tail and self._head_bytes + n <= self._head_budget:
+                self._head.append(line)
+                self._head_bytes += n
+                return
+            self._tail.append((line, n))
+            self._tail_bytes += n
+            # Drop oldest tail lines only when the TOTAL retained exceeds the cap.
+            # Nothing is dropped (and no marker is shown) until the full cap — not
+            # merely the head half — is exceeded, so any output that fits within
+            # max_bytes is returned verbatim.  The len(self._tail) > 1 guard is
+            # intentionally absent so even a single oversized tail line is evicted,
+            # making max_bytes a hard ceiling.
+            while self._head_bytes + self._tail_bytes > self._max_bytes and self._tail:
+                _, dropped = self._tail.popleft()
+                self._tail_bytes -= dropped
+                self._truncated = True
 
     @property
     def truncated(self) -> bool:
-        return self._truncated
+        with self._lock:
+            return self._truncated
 
     def result(self) -> str:
-        head = "".join(self._head)
-        tail = "".join(line for line, _ in self._tail)
-        if not self._truncated:
-            return head + tail
-        return head + _OUTPUT_TRUNC_MARKER + tail
+        with self._lock:
+            head = "".join(self._head)
+            tail = "".join(line for line, _ in self._tail)
+            if not self._truncated:
+                return head + tail
+            return head + _OUTPUT_TRUNC_MARKER + tail

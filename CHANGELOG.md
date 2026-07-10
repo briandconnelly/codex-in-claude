@@ -106,6 +106,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex app-server`'s `stderr_tail` now retains the tail, is byte-budgeted, and is safe to snapshot
+  from another thread** (#254). `_spawn_stderr_drain` advertised a bounded *tail* but retained the
+  *prefix*: once `total` reached `_MAX_STDERR_BYTES` it stopped appending, so the trailing
+  `[-_MAX_STDERR_BYTES:]` slice trimmed an already-prefix-limited buffer and could not recover a tail
+  that was never captured. On a verbose failure — exactly when the tail matters — the operator got
+  startup noise and none of the error that killed the app-server. The cap also counted *characters*,
+  not UTF-8 bytes, so non-ASCII stderr could overshoot the 64KB budget several-fold. The drain now
+  accumulates into `_core.streamcap.BoundedCapture`, which budgets in bytes.
+  `BoundedCapture` gains `head_bytes=` (pass `0` for a **pure rolling tail** — no head window, marker
+  leads, newest lines survive), which is what a field named `stderr_tail` should mean when the
+  diagnostic value is a stack trace at the end of the stream rather than startup noise at the front.
+  `BoundedCapture` is also **thread-safe** now: `add()` mutates a list, a deque and three counters
+  across several statements, so an unlocked `result()` could observe a pre-eviction over-budget state,
+  disagree with its own `truncated` flag, or raise `RuntimeError: deque mutated during iteration` — on
+  the very error path trying to report a failure. All three were reproduced before the fix. Internal
+  only; no agent-visible surface change, so the result `fingerprint` is unchanged.
+
 - **Interactive streams get a bounded reader that cannot deadlock, and the app-server reader is now
   genuinely memory-bounded** (#255). `_core.streamcap.iter_bounded_lines` reads via
   `stream.read(chunk_size)`, which on a blocking pipe waits for `chunk_size` characters *or* EOF —

@@ -74,6 +74,17 @@ def _handle_initialize(scenario: str, codex_home: str) -> bool:
         sys.stdout.write(json.dumps({"id": 1, "result": {"pad": pad}}) + "\n")
         sys.stdout.flush()
         return True
+    if scenario in ("stderr_flood", "stderr_flood_unicode"):
+        # Flood stderr past _MAX_STDERR_BYTES between two sentinels, then exit without
+        # answering. The client sees stdout EOF; the diagnostic that matters is the LAST
+        # stderr line, which a prefix-retaining drain throws away.
+        filler = "é" * 40 if scenario == "stderr_flood_unicode" else "x" * 80
+        sys.stderr.write("EARLY-SENTINEL\n")
+        for _ in range(4000):  # ~320KB, far past the 64KB cap
+            sys.stderr.write(filler + "\n")
+        sys.stderr.write("FINAL-SENTINEL\n")
+        sys.stderr.flush()
+        return True
     if scenario == "init_error":
         _emit({"id": 1, "error": {"code": -32000, "message": "bad init"}})
         return True
