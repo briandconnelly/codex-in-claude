@@ -242,6 +242,11 @@ def _handle_import_success(scenario: str, source: str) -> None:
         _emit(_import_response())
         _emit(_completed([{"itemType": "SESSIONS", "source": source}], []))
         return
+    if scenario == "oversized_import_id":
+        success = {"itemType": "SESSIONS", "cwd": None, "source": source, "target": FIXED_TARGET}
+        _emit({"id": 2, "result": {"importId": "i" * 5000}})
+        _emit(_completed([success], []))
+        return
     if scenario == "timeout":
         # Accept the import but never send completed; keep the process alive so the client
         # hits its deadline. The client kills us on teardown.

@@ -352,6 +352,21 @@ def test_dedup_recovers_thread_from_ledger(tmp_path):
     assert outcome.thread_id_source is ThreadIdSource.LEDGER
 
 
+def test_oversized_import_id_drops_to_none_but_run_succeeds(tmp_path):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("oversized_import_id", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-fresh-0001"
+    assert outcome.import_id is None  # non-load-bearing → dropped, not fatal
+
+
 def test_dedup_without_ledger_is_incomplete(tmp_path):
     home = tmp_path / "codex_home"
     home.mkdir()
@@ -532,6 +547,44 @@ def test_ledger_last_match_wins(tmp_path):
         )
     )
     assert appserver._lookup_ledger(str(tmp_path), source) == "last"
+
+
+def test_ledger_skips_invalid_id_last_valid_match_wins(tmp_path):
+    # Two records match source+sha: an older VALID id, then a newer INVALID (oversized) id.
+    # The invalid newest is filtered; the older valid id is recovered (last VALID match wins).
+    home = tmp_path / "codex_home"
+    home.mkdir(parents=True, exist_ok=True)
+    content = b'{"type":"user","text":"hi"}\n'
+    t = _transcript(tmp_path, content)
+    source = str(t.resolve())
+    sha = hashlib.sha256(content).hexdigest()
+    (home / "external_agent_session_imports.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "source_path": source,
+                        "content_sha256": sha,
+                        "imported_thread_id": "thread-older-valid",
+                    },
+                    {
+                        "source_path": source,
+                        "content_sha256": sha,
+                        "imported_thread_id": "t" * 5000,
+                    },
+                ]
+            }
+        )
+    )
+    outcome = transfer_session(
+        transcript_realpath=source,
+        cwd=str(tmp_path),
+        command=_command("dedup", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.OK
+    assert outcome.thread_id == "thread-older-valid"
+    assert outcome.thread_id_source is ThreadIdSource.LEDGER
 
 
 def test_initialize_error_is_protocol_error(tmp_path):

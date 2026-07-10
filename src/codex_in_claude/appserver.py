@@ -283,9 +283,11 @@ def _lookup_ledger(codex_home: str, transcript_realpath: str) -> str | None:
             continue
         if record.get(cli_contract.IMPORT_LEDGER_CONTENT_SHA_KEY) != content_sha:
             continue
-        thread_id = record.get(cli_contract.IMPORT_LEDGER_THREAD_ID_KEY)
-        if isinstance(thread_id, str) and thread_id:
-            match = thread_id  # last match wins
+        valid = _valid_wire_id(
+            record.get(cli_contract.IMPORT_LEDGER_THREAD_ID_KEY), cli_contract.TRANSFER_ID_MAX_BYTES
+        )
+        if valid is not None:
+            match = valid  # last VALID match wins; an invalid record is skipped (best-effort)
     return match
 
 
@@ -693,10 +695,12 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 )
             if msg.get("id") == 2 and "result" in msg:
                 result = msg.get("result")
-                if isinstance(result, dict) and isinstance(
-                    result.get(cli_contract.IMPORT_ID_KEY), str
-                ):
-                    import_id = result[cli_contract.IMPORT_ID_KEY]
+                if isinstance(result, dict):
+                    # Non-load-bearing metadata: an invalid importId drops to None rather than
+                    # failing the run (it does not establish the resumable thread).
+                    import_id = _valid_wire_id(
+                        result.get(cli_contract.IMPORT_ID_KEY), cli_contract.TRANSFER_ID_MAX_BYTES
+                    )
                 continue
             # The terminal signal: the import/completed notification. Single in-flight
             # import ⇒ any completed notification is ours (handles completion-before-
