@@ -41,29 +41,29 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
+          reviewer='copilot-pull-request-reviewer[bot]'
           if [ -z "${COPILOT_REVIEW_PAT:-}" ]; then
             echo "::warning::No user PAT configured (COPILOT_REVIEW_PAT is empty). Copilot review cannot be requested with the default github.token (#236). skipping."
             exit 0
           fi
-          # Request the Copilot reviewer. On a `synchronize` (push) re-run this can
-          # 422 because Copilot is still a pending reviewer from the open event or a
-          # prior push — that's fine (its pending review will cover the new commits),
-          # so don't abort on it. The GET below is the authoritative check.
-          gh api --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f "reviewers[]=copilot-pull-request-reviewer[bot]" >/dev/null 2>&1 || true
-          # A non-user token silently drops the request (#236): the POST returns 200
-          # but the reviewer never registers, so the job would green-check while
-          # Copilot never reviews. Verify against the PR object's requested_reviewers
-          # (same shape #240 validated) and fail loudly if Copilot is absent. This
-          # also confirms an already-pending request (the tolerated-422 case above)
-          # counts as success.
-          if gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
-               --jq '[.requested_reviewers[].login] | index("copilot-pull-request-reviewer[bot]") != null' \
-               | grep -qx true; then
+          # Request the Copilot reviewer with an explicit JSON body (avoids any
+          # ambiguity in how `-f reviewers[]=…[bot]` is parsed). A `synchronize`
+          # (push) re-run can 422 because Copilot is still a pending reviewer from a
+          # prior event — that's fine (its pending review will cover the new commits),
+          # so don't abort on it; the GET below is authoritative. Capture the POST
+          # output so a genuine failure is diagnosable rather than hidden.
+          post_out=$(printf '{"reviewers":["%s"]}' "$reviewer" \
+            | gh api --method POST -H "Accept: application/vnd.github+json" \
+                "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" --input - 2>&1) || true
+          # A non-user token silently drops the request (#236). Verify against the PR
+          # object's requested_reviewers and fail loudly if Copilot is absent — an
+          # already-pending request (the tolerated-422 case) still counts as success.
+          reviewers_now=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.requested_reviewers[].login' || true)
+          if printf '%s\n' "$reviewers_now" | grep -qxF "$reviewer"; then
             echo "Copilot review requested for PR #${PR_NUMBER}."
           else
-            echo "::error::Copilot review request was silently dropped (copilot-pull-request-reviewer[bot] is absent from the PR's requested reviewers). A non-user token (github.token or an App token) cannot request the Copilot reviewer; use a user-scoped PAT such as COPILOT_REVIEW_PAT. See #236."
+            echo "::error::Copilot review request did not register — '${reviewer}' is absent from the PR's requested reviewers (see #236)."
+            echo "POST response:"; printf '%s\n' "$post_out"
+            echo "Requested reviewers now:"; printf '%s\n' "${reviewers_now:-<none>}"
             exit 1
           fi
