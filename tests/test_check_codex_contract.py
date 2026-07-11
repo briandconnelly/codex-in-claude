@@ -35,6 +35,8 @@ Run Codex non-interactively
   --add-dir <DIR>
   --skip-git-repo-check
   --output-schema <FILE>
+  --enable <FEATURE>
+  --disable <FEATURE>
   -m, --model <MODEL>
 """
 

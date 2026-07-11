@@ -61,6 +61,31 @@ network step yourself after reviewing and applying the returned diff. The tool d
 `codex_capabilities` `negative_scope` state this so a calling agent doesn't assume write access
 implies internet access.
 
+## Remote-plugin isolation (`remote_plugin`, #287)
+
+Codex **0.143+** flipped the `remote_plugin` feature to **default-on**, which makes named
+third-party connectors (GitHub, Gmail, Google Drive, Slack, Notion, …) available to the model on
+every run. Those connectors are network side-effect / data-disclosure channels **outside** the
+`--sandbox` filesystem boundary, so they are incompatible with this server's safe, read-only-by-default
+posture. Crucially, `--ignore-user-config` does **not** neutralize them: plugins load from marketplace
+snapshots (`~/.cache/codex-runtimes/`, `~/.codex/.tmp/bundled-marketplaces/`), not `config.toml`.
+
+The server therefore sends **`--disable remote_plugin`** on **every model-bearing `codex exec` call**,
+regardless of tier or isolation (`cli_contract.py`: `DISABLE_FEATURE_FLAG` + `REMOTE_PLUGIN_FEATURE`,
+emitted in `codex.build_exec_command`). It is an **ALWAYS_SEND** guarantee-bearing flag:
+
+- `--disable <FEATURE>` is documented as exactly `-c features.<FEATURE>=false`, and it wins over any
+  `--enable`/`-c features.remote_plugin=true` **regardless of order**.
+- An **unknown feature name fails loud** (`Error: Unknown feature flag`), so a future rename/removal of
+  `remote_plugin` upstream surfaces as `cli_contract_changed` at arg-parse — zero spend — rather than a
+  silent posture regression. Verify with a tool-surface probe on each Codex upgrade.
+
+**Scope and boundary.** The guarantee covers model-bearing `codex exec` calls (consult/review/delegate);
+it does not describe the separate `codex app-server` path used by `codex_transfer` (no model call). And
+like the sandbox/approval `-c` denials below, it is bounded by the **`--profile` operator-trust
+boundary** — an opaque profile this server cannot inspect could re-enable the feature, so only enable
+that knob with profiles you control.
+
 ## Flag classes
 
 - **ALWAYS_SEND_FLAGS** — guarantee-bearing (sandbox, cd, json, output-last-message, isolation,
@@ -94,6 +119,12 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   codex's own `-c` parser trims it before this check, so a leading/segment space cannot slip a denied
   key past. A `-c` value may hold a secret, so it is never echoed in `codex_status` or an error
   envelope.
+- **`--enable remote_plugin`** and any **`-c features.remote_plugin=…`** (either spelling, since
+  `--enable X` == `-c features.X=true`) are refused: the server disables the remote_plugin connectors as
+  a documented security guarantee (#287, above) and an operator override must not silently re-enable
+  them. The bare **`-c features=…`** parent key (a TOML inline table that could reach `remote_plugin`)
+  is refused for the same reason. `--disable remote_plugin` and other features set by their own dotted
+  key (`-c features.some_other=true`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
   **operator-trust boundary** — only enable this knob with profiles you control.

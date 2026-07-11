@@ -100,6 +100,10 @@ def build_exec_command(
     tokens += ["--output-last-message", output_last_message_path]
     if ephemeral:
         tokens += ["--ephemeral"]
+    # Disable third-party connectors on every model-bearing call, regardless of tier or
+    # isolation (codex 0.143+ defaults `remote_plugin` on; #287). Guarantee-bearing and
+    # order-independent — `--disable` wins over any operator `--enable`/`-c ...=true`.
+    tokens += [cli_contract.DISABLE_FEATURE_FLAG, cli_contract.REMOTE_PLUGIN_FEATURE]
     tokens += isolation_flags(isolation)
     if skip_git_repo_check:
         tokens += ["--skip-git-repo-check"]

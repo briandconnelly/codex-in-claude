@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import anyio
+import pytest
 
 from codex_in_claude import cli_contract, codex
 from codex_in_claude._core.runtime import CommandRun
@@ -47,6 +48,42 @@ def test_build_exec_command_isolation(tmp_path):
     )
     assert "--ignore-user-config" in cmd
     assert "--ignore-rules" in cmd
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "isolation"),
+    [
+        ("read-only", "inherit"),  # consult / review tier
+        ("workspace-write", "inherit"),  # delegate tier
+        ("workspace-write", "ignore-rules"),  # most-isolated
+    ],
+)
+def test_build_exec_command_disables_remote_plugin_every_tier(tmp_path, sandbox, isolation):
+    # #287: connectors are disabled on EVERY model-bearing call, regardless of tier/isolation.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox=sandbox,
+        isolation=isolation,
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd[cmd.index("--disable") + 1] == cli_contract.REMOTE_PLUGIN_FEATURE
+    # It is a plugin-owned flag (before operator extra_args), never gated away.
+    assert cli_contract.DISABLE_FEATURE_FLAG in cli_contract.ALWAYS_SEND_FLAGS
+
+
+def test_build_exec_command_disable_precedes_extra_args(tmp_path):
+    # The plugin-owned --disable is emitted before any operator extra_args, so an operator
+    # token can never displace it (and --disable wins over --enable regardless of order).
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        extra_args=("-c", "model_provider=x"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd.index("--disable") < cmd.index("-c")
 
 
 def test_build_exec_command_drops_unsupported_model(tmp_path):

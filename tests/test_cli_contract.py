@@ -11,6 +11,14 @@ def test_always_send_and_help_gated_are_disjoint():
     assert cli_contract.ALWAYS_SEND_FLAGS.isdisjoint(cli_contract.HELP_GATED_FLAGS)
 
 
+def test_remote_plugin_disable_is_guarantee_bearing():
+    # #287: the connector-disable flag is ALWAYS_SEND (fail-loud on drift), and the
+    # feature name it targets is a stable constant referenced across the codebase.
+    assert cli_contract.DISABLE_FEATURE_FLAG == "--disable"
+    assert cli_contract.REMOTE_PLUGIN_FEATURE == "remote_plugin"
+    assert cli_contract.DISABLE_FEATURE_FLAG in cli_contract.ALWAYS_SEND_FLAGS
+
+
 def test_core_sandbox_values():
     assert cli_contract.SANDBOX_READ_ONLY in cli_contract.VALID_SANDBOXES
     assert cli_contract.SANDBOX_WORKSPACE_WRITE in cli_contract.VALID_SANDBOXES

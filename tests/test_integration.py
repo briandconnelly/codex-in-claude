@@ -10,9 +10,43 @@ from __future__ import annotations
 
 import pytest
 
-from codex_in_claude import codex, server
+from codex_in_claude import cli_contract, codex, server
+from codex_in_claude._core import runtime
 
 pytestmark = pytest.mark.integration
+
+
+def _feature_state(feature: str, *flags: str) -> str | None:
+    """Live `codex features list [flags]` → the effective 'true'/'false' for one feature."""
+    run = runtime.run_sync_capture(
+        [cli_contract.CODEX_BIN, "features", "list", *flags], timeout_seconds=30
+    )
+    for line in run.stdout.splitlines():
+        parts = line.split()
+        if parts and parts[0] == feature:
+            return parts[-1]
+    return None
+
+
+def test_remote_plugin_disabled_by_plugin_flag_live():
+    # #287: prove the mechanism against the real CLI (no model spend). The feature is
+    # default-on, and the plugin's `--disable remote_plugin` flips it off.
+    assert _feature_state(cli_contract.REMOTE_PLUGIN_FEATURE) == "true"
+    off = _feature_state(
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+        cli_contract.DISABLE_FEATURE_FLAG,
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+    )
+    assert off == "false"
+    # An operator --enable cannot win: --disable is order-independent.
+    still_off = _feature_state(
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+        "--enable",
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+        cli_contract.DISABLE_FEATURE_FLAG,
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+    )
+    assert still_off == "false"
 
 
 def test_status_live():
