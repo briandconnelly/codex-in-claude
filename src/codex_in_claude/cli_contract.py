@@ -258,6 +258,11 @@ CONTRACT_DRIFT_STDERR_PATTERNS = (
     "invalid choice",
     "no such subcommand",
     "found argument",
+    # A `--disable/--enable <FEATURE>` whose feature name codex no longer knows (e.g. an
+    # upstream rename/removal of remote_plugin) prints this instead of a clap arg-parse error;
+    # matching it keeps the remote_plugin isolation guarantee fail-closed as cli_contract_changed
+    # rather than a confusing nonzero_exit (#287).
+    "unknown feature flag",
 )
 
 # --- Auth-failure stderr/stdout signatures --------------------------------------

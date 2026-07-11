@@ -119,12 +119,15 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   codex's own `-c` parser trims it before this check, so a leading/segment space cannot slip a denied
   key past. A `-c` value may hold a secret, so it is never echoed in `codex_status` or an error
   envelope.
-- **`--enable remote_plugin`** and any **`-c features.remote_plugin=…`** (either spelling, since
-  `--enable X` == `-c features.X=true`) are refused: the server disables the remote_plugin connectors as
-  a documented security guarantee (#287, above) and an operator override must not silently re-enable
-  them. The bare **`-c features=…`** parent key (a TOML inline table that could reach `remote_plugin`)
-  is refused for the same reason. `--disable remote_plugin` and other features set by their own dotted
-  key (`-c features.some_other=true`) are still allowed.
+- **`remote_plugin` is wholly plugin-owned in the passthrough.** Both `--enable remote_plugin` and
+  `--disable remote_plugin`, and any `-c features.remote_plugin=…` (either spelling, since
+  `--enable X` == `-c features.X=true`), are refused — the server manages this feature as a documented
+  security guarantee (#287, above). `--disable` is refused even though it agrees with the plugin, so a
+  drift on the plugin's own guarantee flag can't be misattributed to the operator's passthrough. The
+  refusal also covers the bare **`-c features=…`** parent key (a TOML inline table that could reach
+  `remote_plugin`) and quoted key segments that resolve to the same path (`features."remote_plugin"`,
+  `"features".remote_plugin`). Other features set by their own dotted key (`-c features.some_other=true`,
+  `--disable some_other`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
   **operator-trust boundary** — only enable this knob with profiles you control.

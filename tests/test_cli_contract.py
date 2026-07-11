@@ -32,6 +32,9 @@ def test_core_sandbox_values():
         "error: invalid value 'wat' for '--sandbox'",
         "unrecognized subcommand 'frobnicate'",
         "no such subcommand",
+        # #287: a renamed/removed feature name behind `--disable <FEATURE>` — the exact wording
+        # codex 0.144.1 prints — keeps the remote_plugin guarantee fail-closed as drift.
+        "Error: Unknown feature flag: remote_plugin",
     ],
 )
 def test_is_contract_drift_true(text):

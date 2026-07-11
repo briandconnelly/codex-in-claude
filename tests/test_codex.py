@@ -154,6 +154,15 @@ def test_classify_contract_drift():
     assert err.code == "cli_contract_changed"
 
 
+def test_classify_unknown_feature_flag_is_contract_drift():
+    # #287: an upstream rename/removal of remote_plugin makes `--disable remote_plugin` print
+    # "Unknown feature flag" — must fail-closed as cli_contract_changed, not generic nonzero_exit.
+    err = codex.classify_failure(
+        CommandRun("", "Error: Unknown feature flag: remote_plugin", 1, 1, False)
+    )
+    assert err.code == "cli_contract_changed"
+
+
 def test_classify_nonzero_generic():
     err = codex.classify_failure(CommandRun("", "boom", 1, 1, False))
     assert err.code == "nonzero_exit"
