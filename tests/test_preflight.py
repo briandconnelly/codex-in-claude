@@ -17,6 +17,7 @@ Run Codex non-interactively
   --add-dir <DIR>
   --skip-git-repo-check
   --output-schema <FILE>
+  --disable <FEATURE>
   -m, --model <MODEL>
 """
 

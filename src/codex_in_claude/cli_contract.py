@@ -117,6 +117,23 @@ SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL = "danger-full-access"
 VALID_SANDBOXES = (SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, SANDBOX_DANGER_FULL)
 
+# --- Remote-plugin isolation (issue #287) ---------------------------------------
+# Codex 0.143+ flipped the `remote_plugin` feature to default-on, which makes named
+# third-party connectors (GitHub, Gmail, Google Drive, Slack, Notion, …) available to
+# the model on every run. Those connectors are network side-effect / data-disclosure
+# channels that live OUTSIDE the local `--sandbox` filesystem boundary, so they are
+# incompatible with this server's advertised safe, read-only-by-default posture. The
+# existing `--ignore-user-config` isolation does NOT neutralize them (plugins load from
+# marketplace snapshots, not `$CODEX_HOME/config.toml`). We therefore disable the feature
+# on EVERY model-bearing `codex exec` call, unconditionally, via the plugin-owned
+# `--disable remote_plugin` (verified `== -c features.remote_plugin=false`; it wins over
+# `--enable`/`-c ...=true` regardless of order, and an unknown feature name fails loud as
+# `Error: Unknown feature flag`, giving us ALWAYS_SEND fail-closed drift). The guarantee is
+# bounded by the documented `--profile` operator-trust boundary (an opaque profile this
+# server cannot inspect); see COMPATIBILITY.md.
+DISABLE_FEATURE_FLAG = "--disable"  # `--disable <FEATURE>`; == `-c features.<FEATURE>=false`
+REMOTE_PLUGIN_FEATURE = "remote_plugin"
+
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
 # that use them and NEVER gated on `--help` parsing. If upstream removes/renames
@@ -137,6 +154,7 @@ ALWAYS_SEND_FLAGS = frozenset(
         "--ignore-rules",  # isolation: drop user/project execpolicy .rules
         "--add-dir",  # extra writable dir for the propose/apply tiers
         "--output-schema",  # enforce a JSON Schema on the final response (structured findings)
+        DISABLE_FEATURE_FLAG,  # isolation: disable remote_plugin connectors (#287)
     }
 )
 
@@ -240,6 +258,11 @@ CONTRACT_DRIFT_STDERR_PATTERNS = (
     "invalid choice",
     "no such subcommand",
     "found argument",
+    # A `--disable/--enable <FEATURE>` whose feature name codex no longer knows (e.g. an
+    # upstream rename/removal of remote_plugin) prints this instead of a clap arg-parse error;
+    # matching it keeps the remote_plugin isolation guarantee fail-closed as cli_contract_changed
+    # rather than a confusing nonzero_exit (#287).
+    "unknown feature flag",
 )
 
 # --- Auth-failure stderr/stdout signatures --------------------------------------

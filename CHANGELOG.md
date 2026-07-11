@@ -5,6 +5,21 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Security
+
+- **Disable Codex's `remote_plugin` connectors on every model-bearing call** (#287). Codex 0.143+
+  flipped the `remote_plugin` feature to default-on, exposing named third-party connectors (GitHub,
+  Gmail, Google Drive, Slack, …) to the model — network side-effect / data-disclosure channels outside
+  the `--sandbox` filesystem boundary, and the existing `--ignore-user-config` isolation did **not**
+  neutralize them (plugins load from marketplace snapshots, not `config.toml`). The server now sends
+  `--disable remote_plugin` on every `codex exec` call, regardless of tier or isolation, as an
+  `ALWAYS_SEND` guarantee-bearing flag: an unknown feature name fails loud as `cli_contract_changed`
+  (zero spend), and the operator `CODEX_IN_CLAUDE_EXTRA_ARGS` passthrough now refuses `--enable
+  remote_plugin` / `-c features.remote_plugin=…` so the guarantee cannot be silently re-enabled (the
+  `--profile` operator-trust boundary still applies). Advertised in the server instructions; scoped to
+  model-bearing `codex exec` (not the `codex_transfer` app-server path). Backward-compatible hardening;
+  result `fingerprint` `codex-in-claude/0.1/schema-36` → `codex-in-claude/0.1/schema-37`.
+
 ### Added
 
 - **Opt-in extra `codex` args passthrough via `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#231). An operator-only
