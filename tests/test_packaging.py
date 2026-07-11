@@ -7,6 +7,9 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+import yaml
+
 from codex_in_claude import __version__, server
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -114,28 +117,91 @@ def test_pyproject_version_matches_package():
         assert __version__ == pyproject["project"]["version"]
 
 
-def _frontmatter(text: str) -> str:
-    """The YAML block delimited by the leading `---`/`---` fence, or '' if absent."""
-    if not text.startswith("---"):
-        return ""
-    end = text.find("\n---", 3)
-    return text[3:end] if end != -1 else ""
+def _skill_frontmatter(skill_md: Path) -> dict[str, object]:
+    """Parse and validate one shipped skill's YAML frontmatter."""
+    lines = skill_md.read_text().splitlines()
+    assert lines and lines[0] == "---", f"{skill_md} frontmatter must start on the first line"
+    # Later "---" lines are markdown horizontal rules, not fences; only the first close counts.
+    closing_fence = next((index for index, line in enumerate(lines[1:], 1) if line == "---"), None)
+    assert closing_fence is not None, f"{skill_md} frontmatter is never closed"
+    assert closing_fence > 1, f"{skill_md} has empty frontmatter"
+
+    frontmatter_lines = lines[1:closing_fence]
+    parsed = yaml.safe_load("\n".join(frontmatter_lines))
+    assert isinstance(parsed, dict), f"{skill_md} frontmatter must be a YAML mapping"
+    for key in ("name", "description"):
+        assert isinstance(parsed.get(key), str), f"{skill_md} {key} must be a string"
+    assert parsed["name"] == skill_md.parent.name, f"{skill_md} frontmatter name mismatch"
+    assert len(parsed["description"]) <= 650, f"{skill_md} description exceeds 650 characters"
+    return parsed
 
 
 def test_skills_present_with_frontmatter():
-    """Every skills/<dir>/SKILL.md has frontmatter naming its own directory."""
+    """Every skills/<dir>/SKILL.md has valid, bounded YAML frontmatter."""
     skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
     assert skill_files, "no skills found under skills/*/SKILL.md"
     for skill_md in skill_files:
-        front = _frontmatter(skill_md.read_text())
-        assert front, f"{skill_md} missing frontmatter"
-        # Match the `name:` key inside the frontmatter block only, not the body.
-        assert re.search(rf"^name: {re.escape(skill_md.parent.name)}$", front, re.MULTILINE), (
-            f"{skill_md} frontmatter name mismatch"
-        )
-    # The composition skill and its reference home must both ship.
+        _skill_frontmatter(skill_md)
+    # One router skill owns ordinary calls and composed deliberation workflows.
     names = {p.parent.name for p in skill_files}
-    assert {"collaborating-with-codex", "deliberating-with-codex"} <= names
+    assert "collaborating-with-codex" in names
+    assert "deliberating-with-codex" not in names
+    reference_dir = ROOT / "skills/collaborating-with-codex/references"
+    references = {p.name for p in reference_dir.glob("*.md")}
+    assert {"independent-attempt.md", "review-revise.md"} <= references
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "name: example\ndescription: example\n",
+        "---\nname: example\ndescription: example\n",
+        "body\n---\nname: example\ndescription: example\n---\n",
+    ],
+)
+def test_skill_frontmatter_rejects_missing_or_misplaced_fences(tmp_path, text):
+    skill_dir = tmp_path / "example"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(text)
+    with pytest.raises(AssertionError):
+        _skill_frontmatter(skill_md)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A horizontal rule in the body is markdown, not a frontmatter fence.
+        "---\nname: example\ndescription: example\n---\nbody\n---\nmore body\n",
+        # Plain-scalar descriptions are valid frontmatter; folded style is not a contract.
+        "---\nname: example\ndescription: example\n---\nbody\n",
+    ],
+)
+def test_skill_frontmatter_accepts_body_rules_and_plain_descriptions(tmp_path, text):
+    skill_dir = tmp_path / "example"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(text)
+    assert _skill_frontmatter(skill_md)["name"] == "example"
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "message"),
+    [
+        ("- name\n- description", "mapping"),
+        ("name: example\n", "description must be a string"),
+        ("name: 123\ndescription: >-\n  example", "name must be a string"),
+        ("name: wrong\ndescription: >-\n  example", "name mismatch"),
+        (f"name: example\ndescription: >-\n  {'x' * 651}", "exceeds 650"),
+    ],
+)
+def test_skill_frontmatter_rejects_invalid_yaml_contract(tmp_path, frontmatter, message):
+    skill_dir = tmp_path / "example"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(f"---\n{frontmatter}\n---\nbody\n")
+    with pytest.raises(AssertionError, match=message):
+        _skill_frontmatter(skill_md)
 
 
 def test_commands_present():
