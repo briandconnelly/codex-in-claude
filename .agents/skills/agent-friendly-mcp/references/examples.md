@@ -9,7 +9,7 @@ Tool definition for `slack_send_message`. *Demonstrates §3 tool-shape rules.*
 ```json
 {
   "name": "slack_send_message",
-  "description": "Post a message to a Slack channel or DM.\n\nWhen to use: any time the agent has composed a message and a destination (channel id, user id, or thread ts) and wants to deliver it. Prefer this over `slack_create_channel` + post when the channel already exists.\n\nUsage notes:\n- DMs to users require a `user_id`, not a channel name; resolve via `slack_lookup_user` first.\n- Threaded replies require both `channel_id` and `thread_ts`; omitting `thread_ts` posts a new top-level message.\n\nFor the failure modes this tool can return (channel archived, not found, rate limited, etc.), see the `errors` field below — do not infer error semantics from this description.\n\nExample: {\"channel_id\": \"C0123ABCD\", \"text\": \"Deploy finished.\"}",
+  "description": "Post a message to a Slack channel or DM.\n\nWhen to use: any time the agent has composed a message and a destination (channel id, user id, or thread ts) and wants to deliver it. Prefer this over `slack_create_channel` + post when the channel already exists.\n\nUsage notes:\n- DMs to users require a `user_id`, not a channel name; resolve via `slack_lookup_user` first.\n- Threaded replies require both `channel_id` and `thread_ts`; omitting `thread_ts` posts a new top-level message.\n- If a call times out, do not blind-retry: re-send with the same `idempotency_key`, or check delivery via `slack_list_messages` before retrying without one.\n\nFor the failure modes this tool can return (channel archived, not found, rate limited, etc.), see the `errors` field below — do not infer error semantics from this description.\n\nExample: {\"channel_id\": \"C0123ABCD\", \"text\": \"Deploy finished.\"}",
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -34,7 +34,13 @@ Tool definition for `slack_send_message`. *Demonstrates §3 tool-shape rules.*
       "broadcast_to_channel": {
         "type": "boolean",
         "default": false,
-        "description": "If `thread_ts` is set, also surface this reply in the main channel."
+        "description": "If `thread_ts` is set, also surface this reply in the main channel. Omitted means false (the server applies this default)."
+      },
+      "idempotency_key": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Optional client-supplied key; re-sends with the same key within 10 minutes are deduplicated to one post. Omitted means no deduplication — each call posts."
       }
     },
     "additionalProperties": false
@@ -54,7 +60,12 @@ Tool definition for `slack_send_message`. *Demonstrates §3 tool-shape rules.*
 }
 ```
 
-What to notice: the description orients the agent (when-to-use, usage notes, example invocation) but does **not** carry failure semantics — those live in the structured `errors` array, where each code has a `temporary` flag and a concrete repair direction. Parameter names are disambiguated (`channel_id`, `thread_ts`); `required` lists only what's truly necessary; annotations are honest — `idempotentHint: false` because re-sending creates a duplicate post, not a no-op. (`errors` is a convention extension, not a native `Tool` field — see the native-vs-convention rule in `SKILL.md`; §3 of the contract-checklist requires side effects, idempotency, and rate limits to be first-class contract, not prose.)
+What to notice: the description orients the agent (when-to-use, usage notes, example invocation) but does **not** carry failure semantics — those live in the structured `errors` array, where each code has a `temporary` flag and a concrete repair direction.
+Parameter names are disambiguated (`channel_id`, `thread_ts`); `required` lists only what's truly necessary.
+Every optional parameter declares its omission semantics: `thread_ts` omitted means a top-level post (omission semantics with no `default` at all), while `broadcast_to_channel` declares both the `default` and that the server applies it (per §3).
+Annotations are honest — `idempotentHint: false` because re-sending creates a duplicate post, not a no-op — which is exactly why the schema offers `idempotency_key` with a declared deduplication window and the description names the ambiguous-timeout recovery path (`slack_list_messages`), per the §3 mutation-safety rules.
+(`errors` is a convention extension, not a native `Tool` field — see the native-vs-convention rule in `SKILL.md`; §3 of the contract-checklist requires side effects, idempotency, and rate limits to be first-class contract, not prose.)
+This four-code catalog is small enough to inline; a tool with a long error taxonomy should keep only the repair-critical codes inline and serve the full catalog on demand (per §6), because every byte of this definition is paid by each preloading client.
 
 ## 2. Structured tool response
 
@@ -80,9 +91,9 @@ Concise (default, `detail: "summary"`):
   ],
   "has_more": true,
   "next_cursor": "eyJ0cyI6IjE3MTQ2MDAwNTUuMDAxMzAwIn0",
-  "estimated_total": 47,
+  "estimated_total": 3210,
   "truncated": true,
-  "truncation_hint": "hit cap of 50; narrow with `since=` or `query=`"
+  "truncation_hint": "result set capped at 500 of ~3210 matches; narrow with `since=` or `query=`"
 }
 ```
 
@@ -97,6 +108,7 @@ Detail (`detail: "full"`):
       "channel": "#deploys",
       "author_id": "U07ALICE",
       "author": "alice",
+      "preview": "Deploy started for api@v2.4.1",
       "text": "Deploy started for api@v2.4.1",
       "blocks": [{"type": "rich_text", "elements": []}],
       "reactions": [],
@@ -108,17 +120,36 @@ Detail (`detail: "full"`):
   ],
   "has_more": true,
   "next_cursor": "eyJ0cyI6IjE3MTQ2MDAwNTUuMDAxMzAwIn0",
-  "estimated_total": 47,
+  "estimated_total": 3210,
   "truncated": true,
-  "truncation_hint": "hit cap of 50; narrow with `since=` or `query=`"
+  "truncation_hint": "result set capped at 500 of ~3210 matches; narrow with `since=` or `query=`"
 }
 ```
 
-What to notice: concise mode uses readable domain identifiers (`alice`, `#deploys`) and a `preview` string; detail mode adds the raw domain IDs (`channel_id`, `author_id`, `client_msg_id`), the full `text` and `blocks`, plus null-valued fields.
-The truncation signal carries explicit repair guidance (`since=` or `query=`) — the agent doesn't have to guess what to do next.
-Pagination is cursor-based with `has_more` and `estimated_total`.
-State handles such as jobs, cursors, and sessions would be opaque IDs with readable labels or summaries, while security-sensitive references would never leak structure.
+What to notice: the concise fields are a strict subset of the detailed fields — `preview` stays present in both modes, so one parser handles both, and detail adds the raw domain IDs (`channel_id`, `author_id`, `client_msg_id`), the full `text` and `blocks`, plus null-valued fields.
+Pagination and truncation are distinct signals carried together: `has_more`/`next_cursor` continue the walk page by page, while `truncated: true` says the walk will stop at the 500-item cap even though ~3210 messages match — and the `truncation_hint` names the repair (`since=` or `query=`) so the agent doesn't have to guess.
 On clients that support it, deliver this payload as `structuredContent` paired with a published `outputSchema`; the same JSON shape goes in `content` as a textual fallback for clients that do not.
+
+## 2a. Dispatched-but-unconfirmed mutation result
+
+A success result from `hvac_set_zone_temperature` where the command was dispatched but its effect is not yet confirmed.
+*Demonstrates the §3 dispatched-vs-applied rule: the dispatch fact, a confirmation status, and a `follow_up` that reuses the §6 `repair` object shape on the success carrier.*
+
+```json
+{
+  "command_sent": true,
+  "status": "pending_verification",
+  "zone_id": "z-12",
+  "follow_up": {
+    "next_step": "verify_setpoint_applied",
+    "tool": "hvac_get_zone_state",
+    "arguments": {"zone_id": "z-12"}
+  }
+}
+```
+
+What to notice: `command_sent` and `status` make dispatch and application separately observable, so a verification timeout can return this same shape rather than a plain failure — "never landed" and "unconfirmed" stay distinguishable, and the agent reconciles via `follow_up` instead of blind-retrying a non-idempotent action.
+`follow_up.tool` is a registered `tools/list` name with literally callable `arguments` — the same `{next_step, tool, arguments, alternative}` shape as §6 `repair` (`alternative` is optional and, per the §6 presence convention, omitted here rather than sent as `null`), not a second convention.
 
 ## 3. Resource index entry
 
@@ -157,34 +188,49 @@ Index entry that points at it:
   "annotations": {"lastModified": "2026-05-01T18:14:32Z"},
   "_meta": {
     "com.slack-mcp/chunks": [
-      {"id": "thread:1714600000.001200#root", "size": 412},
-      {"id": "thread:1714600000.001200#replies-1-6", "size": 3902},
-      {"id": "thread:1714600000.001200#replies-7-12", "size": 4107}
+      {"id": "root", "uri": "slack://channels/C0123ABCD/messages/1714600000.001200/chunks/root", "size": 412},
+      {"id": "replies-1-6", "uri": "slack://channels/C0123ABCD/messages/1714600000.001200/chunks/replies-1-6", "size": 3902},
+      {"id": "replies-7-12", "uri": "slack://channels/C0123ABCD/messages/1714600000.001200/chunks/replies-7-12", "size": 4107}
     ]
   }
 }
 ```
 
-Body fragment for chunk `thread:1714600000.001200#replies-1-6`:
+Each chunk is addressable through its own URI, published as a resource template so agents can construct chunk reads without the catalog:
+
+```json
+{
+  "uriTemplate": "slack://channels/{channel_id}/messages/{ts}/chunks/{chunk_id}",
+  "name": "thread_chunk",
+  "title": "Thread chunk",
+  "description": "One chunk of a long thread; chunk ids are stable per resource version.",
+  "mimeType": "application/vnd.slack.thread+json"
+}
+```
+
+Body fragment read at `slack://channels/C0123ABCD/messages/1714600000.001200/chunks/replies-1-6`:
 
 ```json
 {
   "resource_uri": "slack://channels/C0123ABCD/messages/1714600000.001200",
-  "chunk_id": "thread:1714600000.001200#replies-1-6",
+  "chunk_id": "replies-1-6",
   "version": "2026-05-01T18:14:32Z",
   "content": [
     {"ts": "1714600012.001210", "author": "bob", "text": "Watching dashboards."},
     {"ts": "1714600025.001220", "author": "carol", "text": "Cache warming queued."},
     {"ts": "1714600040.001230", "author": "deploy-bot", "text": "Stage 1/3 complete."}
   ],
-  "next_chunk_id": "thread:1714600000.001200#replies-7-12"
+  "next_chunk_id": "replies-7-12",
+  "next_chunk_uri": "slack://channels/C0123ABCD/messages/1714600000.001200/chunks/replies-7-12"
 }
 ```
 
-What to notice: the chunk catalog is a server-specific convention with no native `Resource` field, so it rides under a namespaced `_meta` key (`com.slack-mcp/chunks`) rather than a new top-level field — this is the worked `_meta` namespacing pattern the rest of the skill points at.
-Chunk ids are domain-readable (`#replies-1-6`) because they name stable positions inside a Slack thread, not server-side state handles.
-`version` matches the index's `annotations.lastModified` so the agent can detect stale chunk references; `next_chunk_id` lets the agent paginate without re-fetching the index.
-The agent can quote `chunk_id` back to a tool that asks "where did you read that?"
+What to notice: every chunk has a callable fetch path — native `resources/read` takes only a URI, so each chunk gets its own URI and the pattern is published as a resource template (per the §4 callable-fetch rule).
+The `_meta` chunk catalog is auxiliary: clients may never surface `_meta` to the model, which is why the body carries `next_chunk_uri` in-band — the agent can walk chunk N+1 without the catalog or the index.
+The chunk catalog is a server-specific convention with no native `Resource` field, so it rides under a namespaced `_meta` key (`com.slack-mcp/chunks`) rather than a new top-level field — this is the worked `_meta` namespacing pattern the rest of the skill points at.
+Chunk ids are domain-readable (`replies-1-6`), scoped to the resource they chunk, and double as the template's `{chunk_id}` variable — substituting a catalog id into the template yields exactly the chunk URI, so the two identifiers can never drift apart.
+`version` matches the index's `annotations.lastModified` so the agent can detect stale chunk references.
+The agent can quote `resource_uri` plus `chunk_id` back to a tool that asks "where did you read that?"
 
 ## 5. Prompt scaffold
 
@@ -393,7 +439,7 @@ A resource read failure (e.g., `resources/read` against a deleted thread) uses a
       "machine_code": "resource_gone",
       "human_message": "Message thread was deleted or is no longer visible.",
       "details": {
-        "field": "resource_uri",
+        "field": "uri",
         "value": "slack://channels/C0123ABCD/messages/1714600000.001200",
         "reason": "Thread was deleted on 2026-04-12T09:00:00Z."
       },
@@ -415,7 +461,8 @@ A resource read failure (e.g., `resources/read` against a deleted thread) uses a
 
 What to notice: the `data` block carries the same error envelope as the tool-result error's `structuredContent`, with the optional `resource_uri` correlation field populated because this failure is tied to a specific resource. `machine_code: resource_gone` with `temporary: false` and `retry_after_ms: null` tells the agent the exact resource is permanently gone — don't back off and retry the same read — while `repair` still routes it to a real next call (`slack_search_messages`) to recover the underlying information a different way. (This is why no separate `recoverable` flag is needed: `machine_code` + `temporary` already say whether *this* resource can return, and a non-empty `repair` already says recovery is possible by another path.) `request_id` here mirrors the envelope `id`, and `fingerprint` ties the failure to the server contract version — the same correlation context the tool surface carries.
 
-`-32002` is MCP's resource-not-found JSON-RPC code under the 2025-11-25 baseline; the `data` block carries the repair contract. (The 2026-07-28 RC is expected — not yet confirmed final text — to fold this into the standard `-32602` *Invalid params*; see the spec-baseline note in `SKILL.md`. Either way, branch on `machine_code`, not the numeric code, to stay portable across that change.)
+`-32002` is MCP's resource-not-found JSON-RPC code under the 2025-11-25 baseline; the `data` block carries the repair contract.
+Branch on `machine_code`, not the numeric code — the numeric code is a likely migration point (see `SKILL.md` Spec Baseline).
 
 ## 7. Server capability summary
 
@@ -442,6 +489,10 @@ The capability summary exposed via a resource, discovery tool, or instructions f
     "File uploads larger than 5MB (use Slack's web client).",
     "Real-time event subscriptions (this is a request/response server)."
   ],
+  "error_carriers": {
+    "tool_errors": "structuredContent",
+    "non_tool_rpc_errors": "error.data"
+  },
   "prerequisites": {
     "workspace_scope": "One Slack workspace per server instance.",
     "required_scopes": ["chat:write", "channels:read", "users:read"],
@@ -494,6 +545,7 @@ Capability strings use fully qualified `server.capabilities.*` and `client.capab
 The auth block separates stdio credential sourcing from the optional HTTP variant.
 The `http_variant` fields apply only if the same contract is also exposed over streamable HTTP; stdio-only servers should omit that object.
 It does not ask the model to handle bearer tokens directly.
+The `error_carriers` block names where the §6 error envelope travels on each surface; a server whose framework forces a `content[0].text` mirror on error results would declare that degraded mode here, with its trigger (§6).
 The fingerprint appears here too so agents can short-circuit re-discovery (see §9).
 This summary is a convention surface, not a native MCP structure — expose it through whatever the client honors (a resource, a discovery tool, or the server `instructions` field) and keep its shape documented (see the native-vs-convention rule in `SKILL.md`).
 
@@ -787,7 +839,8 @@ Request:
       "started_after": "2026-01-01T00:00:00Z",
       "ended_before": "2026-05-01T00:00:00Z"
     },
-    "task": {"ttl": 86400000}
+    "task": {"ttl": 86400000},
+    "_meta": {"progressToken": "pt_01J9EXPORT"}
   }
 }
 ```
@@ -807,12 +860,13 @@ Response (`CreateTaskResult`):
       "lastUpdatedAt": "2026-05-01T18:14:32Z",
       "ttl": 86400000,
       "pollInterval": 5000
-    }
+    },
+    "_meta": {"io.modelcontextprotocol/model-immediate-response": "Export accepted as task_01J9EXPORT; results retrievable for 24h."}
   }
 }
 ```
 
-**Progress** is keyed by `progressToken` and, like other task-associated notifications, carries `io.modelcontextprotocol/related-task` in `_meta`.
+**Progress** is keyed by the `progressToken` the requestor supplied in the request's `_meta` — the server echoes that opaque value, never mints its own — and, like other task-associated notifications, carries `io.modelcontextprotocol/related-task` in `_meta`.
 
 Notification:
 
@@ -830,7 +884,7 @@ Notification:
 }
 ```
 
-**Poll** with `tasks/get` (`params: {"taskId": "task_01J9EXPORT"}`) until a terminal status, respecting `pollInterval`; the response carries the `Task` directly in `result`.
+**Poll** with `tasks/get` (`params: {"taskId": "task_01J9EXPORT"}`) until a terminal status or `input_required`, respecting `pollInterval`; the response carries the `Task` directly in `result`.
 
 Response:
 
@@ -849,7 +903,9 @@ Response:
 }
 ```
 
-**Retrieve** the result with `tasks/result` (`params: {"taskId": "task_01J9EXPORT"}`) once the task is terminal; it returns exactly what the original `tools/call` would have, including the related-task `_meta`. Domain payload (export location, counts) rides in `structuredContent`.
+**Retrieve** the result with `tasks/result` (`params: {"taskId": "task_01J9EXPORT"}`); it blocks until the task is terminal, then returns exactly what the original `tools/call` would have, including the related-task `_meta`.
+Domain payload (export location, counts) rides in `structuredContent`.
+If polling shows `input_required`, call `tasks/result` preemptively and hold it open: the pending input request arrives as a separate server-to-client request (an `elicitation/create` carrying the related-task `_meta`) while the call is pending — not as the `tasks/result` response — and once input arrives the task returns to `working` and the same held call completes with the terminal result (re-call only if the call itself fails).
 
 Response:
 
@@ -906,7 +962,8 @@ Response:
 ```
 
 What to notice: native recovery needs both the server `server.capabilities.tasks.requests.tools.call` declaration and the tool's `execution.taskSupport` — the per-tool flag alone does nothing.
-Native task fields use the spec's casing exactly: `taskId`, `status`, `createdAt`, `lastUpdatedAt`, `ttl`, `pollInterval` — do not rename them to the snake_case used by domain fields.
+The `progressToken` originates in the request's `_meta`; the `model-immediate-response` `_meta` string on the `CreateTaskResult` gives the host something to hand the model immediately instead of silence while the task runs.
+Native task fields use the spec's casing exactly: `taskId`, `status`, `statusMessage`, `createdAt`, `lastUpdatedAt`, `ttl`, `pollInterval` — do not rename them to the snake_case used by domain fields.
 `ttl` and `pollInterval` are both milliseconds per the spec, and the names don't encode the unit — so `86400000` here is a 24-hour TTL and `5000` is a 5-second poll interval; `createdAt`/`lastUpdatedAt` are RFC3339 timestamps.
 Status is one of `working`, `input_required`, `completed`, `failed`, `cancelled`; there is no `running`, `succeeded`, or `expired` — expiry is `ttl` elapsing, after which the receiver may delete the task.
 `CreateTaskResult` nests the `Task` under `result.task`; `tasks/get` and `tasks/cancel` return the `Task` directly in `result`; `tasks/result` returns the underlying tool result — read each shape from the spec rather than assuming one envelope.
@@ -932,8 +989,6 @@ A read-only query tool whose result is delivered as a local CSV file rather than
   },
   "annotations": {
     "readOnlyHint": true,
-    "destructiveHint": false,
-    "idempotentHint": true,
     "openWorldHint": true
   }
 }
@@ -961,7 +1016,7 @@ A successful response:
 
 What to notice: this skill treats `readOnlyHint: true` as defensible here — the call doesn't mutate the warehouse, doesn't change shared state, and the CSV is response delivery (scoped to this call, declared TTL, no shared visibility), not persistent state that outlives the response contract.
 That is a deliberate reading of an ambiguous hint, not settled spec (see contract-checklist §3): a reviewer who reads `readOnlyHint` literally as "does not modify its environment" may count the local write as mutation, so where you can, prefer returning the result as a resource or resource link with TTL metadata rather than a local-file artifact.
-`idempotentHint: true` follows the same framing: repeated calls don't compound state. Each call produces a fresh delivery artifact at a new path, but the artifact is the response, not an effect on the world. (Compare with `slack_send_message` in §1, where `idempotentHint: false` because re-sending compounds — two messages posted, not a no-op. Idempotency tracks compounding effect, not whether the wire response is byte-identical.)
+`destructiveHint` and `idempotentHint` are omitted because the spec makes them meaningful only when `readOnlyHint` is `false` — declaring them here would assert semantics the protocol does not assign (contrast `slack_send_message` in §1, where `readOnlyHint: false` makes `idempotentHint: false` meaningful: re-sending compounds — two messages posted, not a no-op).
 `openWorldHint: true` reflects that the tool reaches an external warehouse.
 The artifact is disclosed in the structured response — `result_artifact` (a convention field) with `path`, `mime_type`, `ttl_hours`, `expires_at` — and in the tool description, never by flipping the annotation.
 Its sub-fields use house `snake_case` (`mime_type`, not the native `Resource.mimeType`) because `result_artifact` is a convention object, not a native `Resource`; if a server instead returns a real native `resource_link`, it carries the native `mimeType` casing (see `contract-checklist.md` §3 and the native-vs-convention rule in `SKILL.md`).

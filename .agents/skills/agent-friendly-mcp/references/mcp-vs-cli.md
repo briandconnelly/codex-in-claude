@@ -6,13 +6,14 @@ This is a decision aid for authors deciding how to expose capability to an agent
 
 ### Direct tool-calling MCP
 
-Typed tool schemas with descriptions and annotations, semantic discoverability across multi-server clients, and protocol-level support for resources and prompts. The chat surface lists tools, the model picks one, and arguments are validated against a schema before invocation.
+Typed tool schemas with descriptions and annotations, semantic discoverability across multi-server clients, and protocol-level support for resources and prompts.
+The chat surface lists tools, the model picks one, and arguments are declared in a schema that capable clients validate before invocation — though client validation is not guaranteed, so the server still validates every call itself.
 
 **When it fits.** The agent lives in a chat surface that can list and call typed tools. Selection from many candidates matters, and the surface itself benefits from the model rendering arguments and reading annotations (read-only, destructive, idempotent) at call time. You want clients to differentiate read-only from destructive operations without you parsing intent yourself.
 
 **Decision hinge.** The agent benefits from typed args and semantic discovery in the chat UI itself. If the UI never surfaces tool metadata to the model — or if there's only one obvious entry point — the typed schema isn't earning its weight.
 
-**Cost.** Token-heavy at scale. The least-capable realistic client preloads every tool definition from `tools/list`, so hundreds of definitions waste context before the agent does any work, and a server with no way to narrow its catalog is functionally undiscoverable. Keep definitions compact (the universal baseline), reduce the catalog itself where you can (consolidation, a compact dispatcher, authorization-scoped catalogs), and add progressive disclosure matched to your clients' cost axis. See [contract-checklist.md §2](contract-checklist.md).
+**Cost.** Token-heavy at scale: preloading clients pay for every definition before the agent does any work, so compact definitions and catalog reduction are the levers — see [contract-checklist.md §2](contract-checklist.md).
 
 ### Code-execution with MCP
 
