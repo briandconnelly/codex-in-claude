@@ -3,8 +3,9 @@ name: collaborating-with-codex
 description: >-
   Use whenever Claude Code should call or compose with Codex: an ordinary consult, code review,
   delegated implementation, transfer, async run, independent two-model attempt, or declared
-  review–revise workflow. Trigger on requests such as “ask Codex,” “get a second opinion,” “review
-  this,” “delegate this,” “have both models attempt this,” or “run review–revise,” and at
+  review–revise workflow. Trigger on requests such as “ask Codex,” “get a second opinion,” “have
+  Codex review this,” “delegate this to Codex,” “have both models attempt this,” or “run
+  review–revise,” and at
   self-initiated decision points: choosing a hard-to-reverse approach, after two failed fixes,
   before declaring risky work complete, or when an independent implementation would help. Route to
   the matching reference and compose with applicable process skills.
@@ -33,6 +34,7 @@ and verification skills instead of replacing them.
 | Situation | Tool or workflow | Read |
 | --- | --- | --- |
 | One answer, design critique, or second opinion | `codex_consult` | [active workflows](references/active-workflows.md) |
+| Stuck mid-debugging or choosing between viable approaches | `codex_consult` | [active workflows](references/active-workflows.md) |
 | Review changes already represented in git | `codex_review_changes` | [active workflows](references/active-workflows.md) |
 | Proposed implementation diff from an isolated worktree | `codex_delegate` | [active workflows](references/active-workflows.md) |
 | Long-running consult, review, or delegate | matching `_async` tool | [background jobs](references/background-jobs.md) |
@@ -41,14 +43,18 @@ and verification skills instead of replacing them.
 | Claude drafts, Codex critiques, Claude revises | declared review–revise | [review–revise](references/review-revise.md) |
 | Optional parameters, idempotency, or a tool error | current tool | [options and errors](references/options-and-errors.md) |
 | MCP server unavailable | limited read-only CLI fallback | [server-down fallback](references/server-down-fallback.md) |
+| None of these, or a Codex call would not change the decision | no call — proceed without Codex | — |
 
 Use `codex_dry_run` or `codex_delegate_dry_run` to preview review or delegate scope. Use
 `codex_capabilities`, `codex_status`, and `codex_models` for current schemas, defaults, readiness,
-and model discovery.
+and model discovery. A subset of these tools is also exposed to users as `/codex:*` slash commands.
 
-Route a one-call critique or “judge my draft” request as ordinary consult or review. Select a
-composed workflow only when the user requested multi-model composition or the task already declares
-it, the decision justifies added orchestration, and the outputs can be verified and synthesized.
+Route a one-call critique or “judge my draft” request as ordinary consult or review. A single
+consult — or no call — is the default; composition is opt-in and exceptional. Select a composed
+workflow only when the user requested it or the task already declares it, and the value/risk gate
+clears: the stakes are high (a hard-to-reverse, load-bearing, or security-sensitive decision), a
+single opinion is genuinely insufficient, and you can verify and synthesize the outputs. If the
+gate fails, make one call or none and move on.
 
 ## Reading results
 
@@ -65,16 +71,19 @@ it, the decision justifies added orchestration, and the outputs can be verified 
 
 ## Binding rules
 
-- **Spend:** Make one active call per ordinary decision point. An independent-attempt workflow also
-  gets one Codex call. A declared review–revise workflow gets one call by default and at most two
-  only when high risk and the two-call cap were declared before call one. Count each async start as
-  an active call; never start both sync and async forms for the same work.
+- **Spend — one call per decision point:** Make one active call per ordinary decision point. Each
+  async start counts as an active call, and never start both the sync and async forms for the same
+  work.
+- **Spend — workflow caps:** An independent-attempt workflow gets one Codex call. A declared
+  review–revise workflow gets one call by default, and at most two only when high risk and the
+  two-call cap were declared before call one (see the independent-attempt and review–revise
+  references).
 - **Workspace:** Pass an absolute `workspace_root` for every repo-grounded call, including consult,
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
-- **Privacy:** Treat every supplied prompt and context field as raw input sent to OpenAI. During every
-  active call, including consult, Codex may read other files in the resolved workspace. Redaction is
-  best-effort protection for gathered diffs and returned output; it does not protect supplied input
-  or files Codex reads. Do not target a workspace containing secrets you cannot disclose.
+- **Privacy:** Do not target a workspace containing secrets you cannot disclose. Every supplied
+  prompt and context field is sent to OpenAI raw, and during every active call — including consult —
+  Codex may read other files in the resolved workspace. Redaction is best-effort protection for
+  gathered diffs and returned output only; it does not protect supplied input or files Codex reads.
 - **Verification:** Treat findings, summaries, verdicts, and proposed changes as unverified claims.
   Run the applicable project checks yourself; read-only consult/review is not proof tests ran.
 - **Delegation:** Never apply a delegated diff before reviewing it. The plugin does not apply it to

@@ -37,12 +37,8 @@ when correct. The delegate sandbox blocks network egress, so installs, remote gi
 
 ## Result discrimination
 
-Always branch in this order:
-
-1. Read `ok`.
-2. If false, read `error.code`, then the machine-readable repair fields.
-3. If true, identify the concrete tool or originating job kind.
-4. Read only fields documented for that success type.
+Discriminate results in the order given in SKILL.md → Reading results: branch on `ok`, then on the
+concrete tool or originating job kind, then read only that success type's fields.
 
 Completed consult, review, and delegate results share `summary`, `findings`, `questions`,
 `assumptions`, `next_steps`, `raw_response`, and `meta`. Other tools do not inherit that success

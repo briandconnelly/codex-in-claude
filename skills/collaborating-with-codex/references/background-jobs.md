@@ -12,7 +12,15 @@ synchronous wait. Starting it commits spend immediately; abandoning polling does
 3. While running, honor each new `poll_after_ms`. Activity fields are advisory; silence does not
    prove a stall.
 4. When `result_available` is true, fetch with `codex_job_result`.
-5. Branch on `ok`, then on the fetched result's originating consult, review, or delegate type.
+5. Discriminate the fetched result in the order given in SKILL.md → Reading results; it matches the
+   originating consult, review, or delegate type.
+
+## Parallel work
+
+Async also enables one bounded parallel pattern: start the matching `_async` tool, continue your own
+independent work, poll at the next natural pause, and synthesize when the result arrives. The start
+still counts as the one active call for that decision point — parallelism never adds calls. Do not
+start a job whose result you do not intend to read; fire-and-forget is not a mode.
 
 `codex_job_consume_result` fetches and deletes the record. Use it only when destructive consumption
 is intended. `codex_job_cancel` requests cancellation; `codex_job_list` can recover a lost job id.

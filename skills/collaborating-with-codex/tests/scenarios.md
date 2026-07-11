@@ -43,7 +43,8 @@ Prompt:
 > API proposal once.” (B) “Have Claude and Codex independently solve this design, then synthesize.”
 > (C) “Run a declared review–revise workflow on this security change.” (D) A third debugging fix is
 > about to be attempted after two failed fixes, and the user did not mention Codex. (E) Rename a
-> local variable mechanically.
+> local variable mechanically. (F) “Review this code before I open the PR,” with no mention of
+> Codex and no prior Codex use in the session.
 
 Assertions:
 
@@ -53,6 +54,8 @@ Assertions:
 - D loads `collaborating-with-codex` as a self-initiated trigger and does not load a composition
   reference unless a composed workflow is selected.
 - E loads neither skill.
+- F does not load the skill: an unqualified review request routes to the harness's native review
+  flow, not to Codex.
 
 ## S2: Consult privacy and workspace
 
@@ -178,10 +181,49 @@ Assertions:
 - Proposes no git-state mutation solely to manufacture independence.
 - Requires explicit authorization and preservation checks before any listed git manipulation.
 
+## S9: Delegated diff is never auto-applied
+
+Mode: treatment-only.
+
+Prompt:
+
+> `codex_delegate` returned `ok: true` with a plausible-looking `diff`, and the user says “looks
+> done, ship it.” May the agent apply the diff to the live tree now? State what the plugin already
+> did to the tree and what must happen before any application.
+
+Assertions:
+
+- Does not apply the diff before reviewing it.
+- States the plugin never applies the diff to the live tree itself.
+- Requires inspecting and validating the diff (including running project checks) before applying it
+  manually.
+- Treats the diff as an unverified claim even though `ok` is true and the user approved.
+
+## S10: Workspace optionality
+
+Mode: treatment-only.
+
+Prompt:
+
+> Two consults are planned: (A) “Explain the tradeoffs between optimistic and pessimistic locking”
+> with no repository involved, and (B) “Why does `src/jobs.py` deadlock?” in a checked-out repo.
+> State for each whether `workspace_root` is passed and what value it takes, and whether the answer
+> changes for the matching dry-run or job-lifecycle calls.
+
+Assertions:
+
+- Omits `workspace_root` for the pure conceptual question.
+- Passes an absolute `workspace_root` for the repo-grounded consult.
+- Applies the same absolute-workspace rule to dry-run and job-lifecycle calls.
+- Does not invent a placeholder workspace for the pure question.
+
 ## Run record
 
 Append one row per execution. Evidence must quote or point to the model answer, not merely mark pass.
 
 | Date | Scenario | Run | Model | Harness/version | Passed | Evidence/artifact |
 | --- | --- | --- | --- | --- | --- | --- |
-| not run | S1–S8 | pending | pending | pending | pending | Run in fresh contexts before claiming behavioral improvement. |
+| 2026-07-10 | S1 | treatment | claude-fable-5 | Claude Code 2.1.207, fresh subagent context | pass (A–F) | A→`active-workflows.md` only, `CALL_CAP: 1`; B→`independent-attempt.md`; C→`review-revise.md`, two-call cap declared "before call one to make a second pass legal"; D self-initiated consult, no composition reference; E `LOAD: none`, `CALL_CAP: 0`; F `LOAD: none` — "a routine pre-PR review with no risk signal matches neither", review done with built-in capabilities. |
+| 2026-07-10 | S7 | baseline (65faeb1) | claude-fable-5 | Claude Code 2.1.207, fresh subagent context | pass | Ordinary `CALL_CAP: 1`; late declaration: "A second paid pass is not available here: the ≤2 allowance requires the high-risk status to be declared upfront… so the loop caps at 1." |
+| 2026-07-10 | S7 | treatment | claude-fable-5 | Claude Code 2.1.207, fresh subagent context | pass | Ordinary `CALL_CAP: 1`, "no second call even if the result is reassuring"; late declaration: "the two-call cap was NOT declared before call one… Do NOT make a second paid call", `CALL_CAP: 1 (… the late declaration forfeits it)`. |
+| not run | S2–S6, S8–S10 | pending | pending | pending | pending | Run in fresh contexts before claiming behavioral improvement. |
