@@ -119,20 +119,18 @@ def test_pyproject_version_matches_package():
 
 def _skill_frontmatter(skill_md: Path) -> dict[str, object]:
     """Parse and validate one shipped skill's YAML frontmatter."""
-    text = skill_md.read_text()
-    fence_lines = [index for index, line in enumerate(text.splitlines()) if line == "---"]
-    assert len(fence_lines) == 2, f"{skill_md} must contain exactly two frontmatter fences"
-    assert fence_lines[0] == 0, f"{skill_md} frontmatter must start on the first line"
-    assert fence_lines[1] > 1, f"{skill_md} has empty frontmatter"
+    lines = skill_md.read_text().splitlines()
+    assert lines and lines[0] == "---", f"{skill_md} frontmatter must start on the first line"
+    # Later "---" lines are markdown horizontal rules, not fences; only the first close counts.
+    closing_fence = next((index for index, line in enumerate(lines[1:], 1) if line == "---"), None)
+    assert closing_fence is not None, f"{skill_md} frontmatter is never closed"
+    assert closing_fence > 1, f"{skill_md} has empty frontmatter"
 
-    frontmatter_lines = text.splitlines()[1 : fence_lines[1]]
+    frontmatter_lines = lines[1:closing_fence]
     parsed = yaml.safe_load("\n".join(frontmatter_lines))
     assert isinstance(parsed, dict), f"{skill_md} frontmatter must be a YAML mapping"
     for key in ("name", "description"):
         assert isinstance(parsed.get(key), str), f"{skill_md} {key} must be a string"
-    assert any(line.startswith("description: >") for line in frontmatter_lines), (
-        f"{skill_md} description must use folded YAML"
-    )
     assert parsed["name"] == skill_md.parent.name, f"{skill_md} frontmatter name mismatch"
     assert len(parsed["description"]) <= 650, f"{skill_md} description exceeds 650 characters"
     return parsed
@@ -158,16 +156,33 @@ def test_skills_present_with_frontmatter():
     [
         "name: example\ndescription: example\n",
         "---\nname: example\ndescription: example\n",
-        "---\nname: example\ndescription: example\n---\nbody\n---\n",
+        "body\n---\nname: example\ndescription: example\n---\n",
     ],
 )
-def test_skill_frontmatter_rejects_missing_or_extra_fences(tmp_path, text):
+def test_skill_frontmatter_rejects_missing_or_misplaced_fences(tmp_path, text):
     skill_dir = tmp_path / "example"
     skill_dir.mkdir()
     skill_md = skill_dir / "SKILL.md"
     skill_md.write_text(text)
     with pytest.raises(AssertionError):
         _skill_frontmatter(skill_md)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A horizontal rule in the body is markdown, not a frontmatter fence.
+        "---\nname: example\ndescription: example\n---\nbody\n---\nmore body\n",
+        # Plain-scalar descriptions are valid frontmatter; folded style is not a contract.
+        "---\nname: example\ndescription: example\n---\nbody\n",
+    ],
+)
+def test_skill_frontmatter_accepts_body_rules_and_plain_descriptions(tmp_path, text):
+    skill_dir = tmp_path / "example"
+    skill_dir.mkdir()
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(text)
+    assert _skill_frontmatter(skill_md)["name"] == "example"
 
 
 @pytest.mark.parametrize(
