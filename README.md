@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/briandconnelly/codex-in-claude/actions/workflows/ci.yml/badge.svg)](https://github.com/briandconnelly/codex-in-claude/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/pypi/pyversions/codex-in-claude.svg)](pyproject.toml)
 [![PyPI](https://img.shields.io/pypi/v/codex-in-claude.svg)](https://pypi.org/project/codex-in-claude/)
 
 Call **OpenAI Codex** from **Claude Code** — an independent second opinion, structured code
