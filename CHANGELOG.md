@@ -5,387 +5,200 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-11
+
+A security-and-hardening release, centered on `codex_transfer` robustness and shutting off Codex's
+`remote_plugin` connectors. The agent-visible surface changed across several increments (result
+`fingerprint` `codex-in-claude/0.1/schema-29` → `codex-in-claude/0.1/schema-37`), so pre-1.0 this is
+a minor release; clients that cache by `fingerprint` re-fetch the contract. Every change is
+backward-compatible — no tool, field, or error code was removed or retyped.
+
 ### Security
 
 - **Disable Codex's `remote_plugin` connectors on every model-bearing call** (#287). Codex 0.143+
-  flipped the `remote_plugin` feature to default-on, exposing named third-party connectors (GitHub,
-  Gmail, Google Drive, Slack, …) to the model — network side-effect / data-disclosure channels outside
-  the `--sandbox` filesystem boundary, and the existing `--ignore-user-config` isolation did **not**
-  neutralize them (plugins load from marketplace snapshots, not `config.toml`). The server now sends
-  `--disable remote_plugin` on every `codex exec` call, regardless of tier or isolation, as an
-  `ALWAYS_SEND` guarantee-bearing flag: an unknown feature name fails loud as `cli_contract_changed`
-  (zero spend), and the operator `CODEX_IN_CLAUDE_EXTRA_ARGS` passthrough now refuses `--enable
-  remote_plugin` / `-c features.remote_plugin=…` so the guarantee cannot be silently re-enabled (the
-  `--profile` operator-trust boundary still applies). Advertised in the server instructions; scoped to
-  model-bearing `codex exec` (not the `codex_transfer` app-server path). Backward-compatible hardening;
-  result `fingerprint` `codex-in-claude/0.1/schema-36` → `codex-in-claude/0.1/schema-37`.
+  flipped `remote_plugin` to default-on, exposing named third-party connectors (GitHub, Gmail, Drive,
+  Slack, …) to the model — network/data-disclosure channels outside the `--sandbox` filesystem
+  boundary that the existing `--ignore-user-config` isolation did not neutralize (plugins load from
+  marketplace snapshots, not `config.toml`). The server now sends `--disable remote_plugin` on every
+  `codex exec` call as a guarantee-bearing flag — an unknown feature name fails loud as
+  `cli_contract_changed` (zero spend) — and `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses any attempt to
+  re-enable it. Backward-compatible hardening; `fingerprint` `schema-36` → `schema-37`.
+
+- **`codex_transfer` validates and bounds the identifiers the `codex app-server` reports on success**
+  (#279) — the imported thread id, `$CODEX_HOME`, the ledger id, and `importId`. A drifted, oversized,
+  control-character-bearing, or non-absolute value fails as `cli_contract_changed` (for the live
+  protocol) or is skipped (for the best-effort ledger) instead of yielding a corrupt `resume_command`,
+  which is now shell-quoted.
+
+- **Full gitattributes filter isolation for propose-tier worktree git ops** (#163). Completes the
+  repo-config hardening started in #156/#162. The propose-tier worktree git ops run in the server
+  process, not Codex's sandbox, so a repo-configured `clean`/`smudge`/`process` gitattributes filter
+  driver was repo-controlled code executing in-process. Every driver is now neutralized via
+  highest-precedence `git -c` overrides enumerated per git call; a name that cannot be safely
+  expressed as `-c` fails closed with zero spend. Same own-repo trust model as #156; internal only, no
+  `fingerprint` change.
 
 ### Added
 
 - **Opt-in extra `codex` args passthrough via `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#231). An operator-only
-  env knob adds allowlisted global `codex` options to every paid `exec` call (consult/review/delegate)
-  — `-c`/`--config KEY=VALUE`, `-p`/`--profile NAME`, `--enable`/`--disable FEATURE` — so a
-  `model_provider`/profile can be selected even under `ignore-config` isolation (which drops
-  `config.toml`, leaving `-c` the only lever). It is an allowlist, not arbitrary argv: anything else is
-  refused **before any spend** with a new `extra_args_rejected` error code, and `-c` keys under
-  `sandbox`/`approval_policy`/`shell_environment_policy` are refused because they would weaken the
-  advertised sandbox / no-network / approval / host-env-isolation guarantees. Tokens are appended after the plugin's help-gated flags (never displacing the
-  envelope-bearing `--json`/`--sandbox`/`--output-schema`/… flags) and are read from the
-  worker-inherited env rather than persisted to any job spec, so a secret `-c` value never lands on
-  disk and is never echoed in `codex_status` or an error envelope. When `codex` rejects a passthrough
-  entry the failure is classified `extra_args_rejected` (operator config to fix) rather than
-  `cli_contract_changed` — but only when the rejection names one of the injected descriptors, so a
-  genuine plugin-flag drift still fails loudly. `codex_status` reports `extra_args_configured`/
-  `extra_args_count`/`extra_args_valid` (never the raw values). A `--profile` layers an opaque on-disk
-  TOML this server cannot inspect — a documented operator-trust boundary (see `COMPATIBILITY.md`).
-  Backward-compatible addition; result `fingerprint` `codex-in-claude/0.1/schema-30` →
-  `codex-in-claude/0.1/schema-31`.
+  env knob adds allowlisted global `codex` options (`-c`/`--config KEY=VALUE`, `-p`/`--profile NAME`,
+  `--enable`/`--disable FEATURE`) to every paid `exec` call, so a `model_provider`/profile can be
+  selected even under `ignore-config` isolation. It is an allowlist: anything else — or a `-c` key
+  under `sandbox`/`approval_policy`/`shell_environment_policy` that would weaken the advertised
+  guarantees — is refused before any spend with a new `extra_args_rejected` error code. Secret `-c`
+  values are read from the environment, never persisted to a job spec or echoed (in `codex_status` or
+  errors); `codex_status` reports only `extra_args_configured`/`_count`/`_valid`. Backward-compatible;
+  `fingerprint` `schema-30` → `schema-31`.
 
 - **`codex_transfer` tool: hand off the current Claude Code session to a resumable Codex thread**
   (#230). Imports a Claude Code session transcript (`.jsonl`) into a persistent Codex thread via the
-  experimental `codex app-server` `externalAgentConfig/import` protocol and returns
-  `resume_command` (`codex resume <thread_id>`) so the user can continue that exact conversation in
-  Codex. Free — no model call or token spend (a local file conversion) — but it does create a thread
-  in `$CODEX_HOME`. The thread id is read from the import-completed notification's `target` (the
-  versioned, schema-emitted surface), falling back to the undocumented import ledger only for a
-  byte-identical re-import; transferring a live, growing session is intentionally not idempotent (a
-  new thread per call). New error codes `transfer_unsupported` (codex too old — JSON-RPC `-32601`),
-  `transfer_failed` (import item failed), and `transfer_incomplete` (completed but no thread
-  recorded). Ships the `/codex:transfer` slash command. Backward-compatible addition; result
-  `fingerprint` `codex-in-claude/0.1/schema-29` → `codex-in-claude/0.1/schema-30`. Every
-  `app-server` wire assumption lives in `cli_contract.py`; see `COMPATIBILITY.md`.
+  experimental `codex app-server` and returns `resume_command` (`codex resume <thread_id>`) so the
+  user can continue that exact conversation in Codex. Free — no model call — but it does create a
+  thread in `$CODEX_HOME`, and transferring a live session is intentionally not idempotent (a new
+  thread per call). New error codes `transfer_unsupported`/`transfer_failed`/`transfer_incomplete`;
+  ships the `/codex:transfer` slash command. Backward-compatible; `fingerprint` `schema-29` →
+  `schema-30`.
 
 ### Changed
 
-- **Documentation freshness fixes.** Added a `CODEOWNERS` file so every path has a named owner, and
-  swapped the README's hardcoded `python-3.11–3.14` badge for a dynamic `pypi/pyversions` badge that
-  tracks the trove classifiers instead of drifting. Docs/infra only; no code or agent-visible surface
-  change.
-
-- **Consolidate the bundled Codex guidance into one progressive-disclosure router skill.**
-  `collaborating-with-codex` now owns shared safety and routes ordinary consult, review, delegation,
-  transfer, async, independent-attempt, and declared review–revise workflows to references loaded on
-  demand. The former `deliberating-with-codex` entry point is removed; explicit invocations must use
-  `collaborating-with-codex`. The rewrite also corrects paid-call preflight, workspace privacy,
-  quota-cache, result-branching, independence, and bounded-spend guidance, and packaging tests now
-  parse and bound skill YAML with an explicit development dependency. Bundled skills are outside
-  `FINGERPRINT_COVERS`, so the agent-visible MCP surface and result `fingerprint` are unchanged.
-
-- **Tracked Codex version bumped to `0.144`.** `SUPPORTED_VERSIONS` now tracks `(0, 144)` (replacing
-  `(0, 142)`); the CLI contract, compatibility notes, help snapshots (`docs/codex-help/0.144.1/`), and
-  `KNOWN_MODEL_SLUGS` fallback (now the `gpt-5.6-*`/`gpt-5.5`/`gpt-5.4*` set) are verified against
-  `codex-cli 0.144.1`. Advisory only — a version outside the tested set warns in `codex_status` but
-  never blocks. The invoked `codex exec`/`review` flag surface and sandbox values are byte-identical
-  to `0.142`, and the `app-server` session-import request/response contract is unchanged, so this is a
-  non-breaking bump with no `fingerprint` change. Note for operators: `0.143` flipped the upstream
-  `remote_plugin` feature to default-on, which can expose additional third-party connector tools to a
-  `codex exec` run; hardening the plugin's isolation against that is tracked separately.
+- **Tracked Codex version bumped to `0.144`** (#286). `SUPPORTED_VERSIONS` now tracks `(0, 144)`; the
+  CLI contract, help snapshots (`docs/codex-help/0.144.1/`), and `KNOWN_MODEL_SLUGS` fallback are
+  verified against `codex-cli 0.144.1`. Advisory only — an untested version warns in `codex_status`
+  but never blocks. The invoked flag surface, sandbox values, and app-server import contract are
+  byte-identical to `0.142`, so no `fingerprint` change.
 
 - **`fastmcp` 3.4.2 → 3.4.4** (supersedes the Dependabot bump in #260, which targeted 3.4.3 and could
-  not pass CI on its own). Picks up upstream's SSRF and OAuth hardening — NAT64/6to4/Teredo/ISATAP
-  transition addresses can no longer smuggle private IPv4 targets past the allow-list, Streamable HTTP
-  validates `Host`/`Origin` against DNS rebinding, and OAuth redirect validation rejects unsafe schemes
-  and unregistered DCR redirect URIs — plus proxy session-teardown and JSON-schema conversion fixes.
-  This release also rewraps tool-argument validation errors; the Fixed entry below covers how that is
-  handled.
+  not pass CI on its own). Picks up upstream SSRF and OAuth hardening — transition-address SSRF,
+  DNS-rebinding `Host`/`Origin` validation, and stricter OAuth redirect validation — plus proxy and
+  JSON-schema fixes. It also rewraps tool-argument validation errors; the `invalid_arguments` fix
+  below handles that.
+
+- **`codex_capabilities` / `codex_status` serve their heavy payload schemas on demand** (#242). The
+  last two discovery tools that inlined their full success closure in `tools/list` now opaque their
+  heavy nested fields to compact pointers and publish the full schemas at two new resources
+  (`codex://capabilities-result`, `codex://status-result`), also reachable via
+  `codex_capabilities(include_schemas=[...])`. Cuts ~4.2 KB from cold-start `tools/list`; every
+  top-level scalar stays advertised. Backward-compatible (schemas widened, not narrowed);
+  `fingerprint` `schema-31` → `schema-32`.
 
 - **Separate binding rules from facts across instructions, capabilities, and tool descriptions**
-  (#243). A prose-only sweep (from the agent-friendly-mcp audit, `separating-context-from-constraints`
-  lens): the `codex_status`-first rule is now stated at one consistent strength across the three
-  surfaces that carried three (initialize instructions, the `codex_status` docstring, and
-  `codex_transfer` — the last demoted to advisory since transfer is free); the two imperatives that
-  were buried in a `capabilities.negative_scope` fact bullet ("keep it self-contained / do any network
-  step yourself") are dropped there and left to `codex_delegate`'s own no-network paragraph, keeping
-  the bullet pure fact; and several rules attached as sentence tails or parentheticals
-  (`codex_consult` verify-the-claims, `codex_review_changes` redaction, `codex_job_list`
-  read-results-promptly, `codex_transfer` transcript-ambiguity, and the initialize error-carrier
-  directive) are split into standalone imperative sentences. Also drops the stale "in-place edits are a
-  later milestone" roadmap line from `negative_scope`. No semantic change — every guarantee and caveat
-  is preserved (the redaction and job-eviction wordings were kept deliberately broad). Wording-only;
-  result `fingerprint` `codex-in-claude/0.1/schema-32` → `codex-in-claude/0.1/schema-33`. Not breaking.
+  (#243). A prose-only sweep from the agent-friendly-mcp audit: the `codex_status`-first rule now
+  reads at one consistent strength across the three surfaces that carried three, imperatives buried in
+  fact bullets or sentence tails were promoted to standalone directives, and a stale roadmap line was
+  dropped. No semantic change; wording-only `fingerprint` `schema-32` → `schema-33`.
 
-- **`codex_capabilities` / `codex_status` output schemas now serve their heavy payload
-  schemas on demand** (#242). The two free discovery tools were the last outputSchemas still
-  inlining their full success closure in `tools/list`; they now opaque their heavy nested
-  fields — `codex_capabilities.tool_details` and `codex_status.rate_limit`/`raw_defaults`/
-  `resolved_defaults` — to compact `{type, description}` pointers and prune the orphaned
-  `$defs` (`ToolCapability`/`AsyncLifecycle`; `RateLimit`/`RateLimitWindow`/`RawDefaults`/
-  `ResolvedDefaults`), the same opaque-pointer treatment `meta` already gets (#173). Every
-  top-level scalar field stays advertised, so first-pass discovery is unchanged. The full
-  schemas are published at two new resources, `codex://capabilities-result` and
-  `codex://status-result`, and are also reachable as a resource-blind fallback via
-  `codex_capabilities(include_schemas=["capabilities-result", "status-result"])`; their
-  content is snapshot-guarded in the manifest under new `FINGERPRINT_COVERS` tokens
-  (`capabilities_result_schema`/`status_result_schema`). Cuts ~4.2KB from cold-start
-  `tools/list`. The emitted payloads are unchanged and the advertised schemas are widened,
-  not narrowed — a backward-compatible change (not breaking). Result `fingerprint`
-  `codex-in-claude/0.1/schema-31` → `codex-in-claude/0.1/schema-32`.
+- **Consolidate the bundled Codex guidance into one router skill** (#290). `collaborating-with-codex`
+  now owns shared safety and routes consult/review/delegate/transfer/async plus the independent-attempt
+  and review–revise workflows to references loaded on demand; the former `deliberating-with-codex`
+  entry point is removed. Bundled skills are outside `FINGERPRINT_COVERS`, so no `fingerprint` change.
 
-- **Bundled skills now cover `codex_transfer`** (#234). `collaborating-with-codex` gains a
-  "Choosing a tool" row, `/codex:transfer` in the slash-command list, a per-tool bullet (free but
-  not read-only — creates a persistent thread in `$CODEX_HOME`; `transcript_path` discovery; not
-  idempotent for a live session), and a common-mistakes entry; `deliberating-with-codex` gets a
-  one-line boundary note that a session hand-off is not a deliberation pattern. Skill markdown
-  only — no fingerprint change.
+- **Bundled skills now cover `codex_transfer`** (#234) — a "Choosing a tool" row, `/codex:transfer` in
+  the slash-command list, and a per-tool note (free but not read-only; not idempotent for a live
+  session). Skill markdown only.
 
-- **Docs: README restructured for accuracy and audience** (#227). The quick start separates
-  terminal commands from Claude Code input (the old single `sh` block was not pasteable); the
-  `propose`-tier / `delegate`-tool naming is reconciled at first use; the configuration table
-  gains the previously undocumented `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` and
-  `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS` and a note that `TIER_DEFAULT`/`SANDBOX_DEFAULT`
-  only affect `codex_status` reporting; background-job and rate-limit reference detail moved to
-  new `docs/REFERENCE.md` sections ("Background jobs", "Rate-limit reporting"); a contents line
-  was added and duplicated safety prose removed.
-- **Docs: AGENTS.md Testing gains an input-domain rule.** A new parameter is new API surface, so its
-  documented invariants must be tested across the whole domain — boundary and invalid values — not
-  only the values the current callers pass. Prompted by #273, where `BoundedCapture(head_bytes=...)`
-  was tested only at the two values its callers used and a larger head budget silently retained ~15x
-  the byte cap while reporting `truncated=False`.
+- **Documentation freshness fixes** (#291). Added a `CODEOWNERS` file so every path has an owner, and
+  swapped the README's hardcoded Python-version badge for a dynamic `pypi/pyversions` badge that
+  tracks the trove classifiers. Docs/infra only.
 
-- **Docs: AGENTS.md rules separated from context** (#227). "The result contract" no longer
-  re-lists the `FINGERPRINT_COVERS` categories (the prose copy had already drifted from the
-  code) and now points at the tuple; rules previously buried in prose — the
-  `check_commit_message.py`/Git-PRs sync obligation, the `_core` import ban, and the
-  Copilot-review obligations — are standalone bullets; compound bullets were split and the
-  coverage-floor guidance deduplicated into Testing.
+- **Docs: README restructured for accuracy and audience** (#227). The quick start separates terminal
+  commands from Claude Code input, the `propose`-tier / `delegate`-tool naming is reconciled at first
+  use, the configuration table gains the previously-undocumented rate-limit variables, and
+  background-job / rate-limit reference detail moved to `docs/REFERENCE.md`.
+
+- **Docs: AGENTS.md rules separated from context, plus an input-domain testing rule** (#227, #273).
+  "The result contract" now points at the `FINGERPRINT_COVERS` tuple instead of re-listing it (the
+  prose copy had drifted), and buried rules became standalone bullets. A new Testing rule requires a
+  new parameter's whole input domain — its boundary and invalid values — to be tested, not just the
+  values current callers pass (prompted by #273, where a larger `BoundedCapture(head_bytes=…)` silently
+  retained ~15× the byte cap while reporting `truncated=False`).
 
 ### Fixed
 
-- **`codex_transfer` now surfaces the child `codex app-server`'s stderr on the failures where it is
-  the only diagnostic** (#275). The `codex app-server`'s stderr tail was captured on every failing
-  path but never read by the error envelope — so when the child crashed (`cli_contract_changed`),
-  wedged (`timeout`), or completed without recording a thread (`transfer_incomplete`), the agent got
-  a generic sentence and the stack trace / config error that actually killed it was discarded. It now
-  rides a dedicated, nullable `error.app_server_stderr_tail` field — a **separate channel from
-  `error.message`** because it is untrusted child output (an LLM reads `message` as guidance; child
-  stderr can contain injected directives). The field is best-effort secret-redacted and bounded to
-  `_MAX_DISPLAY_CHARS` characters, keeping the **tail** (the terminal exception line) with the
-  truncation marker at the start — a token-sized projection, not the 64 KiB internal capture. It is
-  populated only for those three codes; `transfer_failed` (its structured message is already surfaced,
-  #276), `transfer_unsupported` (an unambiguous `-32601`), and `codex_not_found` are excluded. Also
-  fixes a latent landmine: the spawn-failure path stuffed the internal `BINARY_NOT_FOUND` sentinel
-  into `stderr_tail`; that path now returns no tail, so the sentinel can never leak to an agent. To
-  keep redaction sound, the stderr reader's per-line cap is raised above the drain's capture ceiling
-  so a line long enough to be split mid-token is evicted whole rather than kept with a
-  split-and-unmatchable secret — the redactor only ever sees complete lines (the same
-  redact-before-truncate discipline as the diff path's F3 fix). Backward-compatible addition; result
-  `fingerprint` `codex-in-claude/0.1/schema-35` → `codex-in-claude/0.1/schema-36`.
+- **`codex_transfer` surfaces the child `codex app-server`'s stderr on crash-class failures** (#275).
+  The captured stderr tail was never read by the error envelope, so a crashed (`cli_contract_changed`),
+  wedged (`timeout`), or thread-less (`transfer_incomplete`) child left the agent a generic sentence.
+  It now rides a dedicated, nullable, redacted, bounded `error.app_server_stderr_tail` — a separate
+  channel from `error.message` because it is untrusted child output. Backward-compatible addition;
+  `fingerprint` `schema-35` → `schema-36`.
 
-- **`codex_transfer`'s app-server reader now bounds the memory it buffers ahead of the transfer
-  loop** (#277). `_spawn_reader` fed every parsed message onto an unbounded `queue.Queue`, so a
-  drifting or chatty `codex app-server` emitting valid sub-8-MiB progress notifications faster than
-  the single-consumer loop drained them defeated the OS pipe's backpressure and grew process memory
-  without bound until the 120 s transfer timeout — the per-line `_MAX_LINE_BYTES` cap bounded one
-  line, nothing bounded the aggregate. The reader now (a) enqueues only messages the loop can act on
-  (`id` 1/2, the terminal completed notification), dropping progress and unknown traffic at the
-  source, and (b) uses a small bounded queue (`_MAX_QUEUED_MESSAGES`) so a flood parks the reader in
-  `put()`, restoring pipe backpressure. A private stop `Event` — set before the child is killed —
-  releases a parked reader so teardown can't strand one daemon thread per transfer (a bare bounded
-  queue can't: a full queue takes no poison sentinel and won't wake a blocked producer). The filter
-  mirrors the loop's admission checks exactly (`==`, preserving its equality semantics for unusual
-  ids), so it is behavior-preserving; internal-only, so no `fingerprint` change. Regression tests
-  cover the selector, the progress flood surfacing only the terminal message, prompt reader exit on
-  an abandoned full queue, and an end-to-end chatty-but-valid server still resolving OK. Codex
-  (a different model) collaborated on the design.
-- **`codex_transfer` now rejects unresolvable transcript paths as `invalid_arguments` instead of a
-  retryable `internal_error`** (#278). `validate_transcript_path` resolved the caller-supplied path with
-  no error handling, so two malformed inputs escaped as `internal_error` — whose repair prose tells the
-  caller to *retry*, which can never fix a bad path. An embedded NUL makes `Path.resolve()` raise
-  `ValueError` on every supported Python; a symlink loop makes it raise `RuntimeError` on CPython
-  3.11/3.12. A third leg the same validation missed: `Path.is_file()` re-raises non-ignored `OSError`s
-  such as `PermissionError`/EACCES on CPython 3.11–3.13 (only 3.14 swallows them), so an unstat-able path
-  leaked too. Resolution and the file check are now wrapped in one guard catching `OSError`, `ValueError`,
-  and `RuntimeError`, returning a stable, value-free reason (the offending path is never echoed, matching
-  the #244 posture) that the boundary maps to `invalid_arguments` with `ErrorDetail(field="transcript_path")`.
-  Validation runs before anything is spawned, so there was never any spend — the only harm was the
-  misleading retryable hint. Regression tests cover all three legs (real NUL, real symlink loop, and a
-  forced `is_file` `OSError`) on every supported Python. Error-code mapping only — no result `fingerprint`
-  change (both codes were already advertised) and not a breaking change.
+- **`codex_transfer`'s app-server reader now bounds the memory it buffers** (#277). `_spawn_reader`
+  fed every parsed message onto an unbounded queue, so a chatty app-server emitting valid progress
+  faster than the single-consumer loop drained it grew process memory without bound until the timeout.
+  The reader now enqueues only actionable messages onto a small bounded queue (restoring pipe
+  backpressure), and a stop event releases a parked reader on teardown. Behavior-preserving; internal
+  only. Codex (a different model) collaborated on the design.
 
-- **`codex_transfer` now redacts and bounds every app-server-derived string before it reaches an error
-  envelope** (#276). Four routes forwarded raw child text into `error.message`: the completed
-  notification's failure entries, the `initialize` error, the import JSON-RPC error, and the
-  incomplete-ledger path (built from the app-server-reported `codexHome`). `ErrorInfo.message` carries
-  no length constraint, so the only backstop was `_MAX_LINE_BYTES` — an 8 MiB *per-line parser* bound,
-  not an output cap. Upstream's app-server README documents these as "raw failure messages for the
-  client to report", which is precisely the surface the repo's redaction convention exists to cover;
-  every other foreign-text site already applied `(redact_text(...) or "")[:300]` and this one did not.
-  A new `appserver._display_text` helper redacts **before** truncating (cutting first can split a
-  secret so no pattern matches, publishing its prefix) and bounds the result to 300 characters,
-  reserving an explicit `…[truncated]` marker inside that budget rather than cutting silently — an
-  agent acting on a diagnostic should be able to tell a clipped one from a complete one, matching the
-  precedent in `_core/streamcap.py`. Sanitizing happens in `appserver.py` at each point foreign text
-  enters `TransferOutcome`, so the invariant holds for every consumer; the static prefixes composed in
-  `server.py` sit outside the bound and can never be truncated away by a verbose child. The raw
-  `codexHome` is deliberately retained — it is the filesystem base `_lookup_ledger` reads, so bounding
-  the value itself would silently break the dedup lookup; only the *displayed* ledger path is bounded,
-  with the trailing ledger filename appended afterwards so the message still names what to look for.
-  Human-readable `error.message` prose only: no schema field is added or retyped and no cached
-  discovery surface changes, so the result `fingerprint` is unchanged (see the versioning table in
-  `AGENTS.md`). The success envelope's app-server-derived identifiers (`thread_id`, `import_id`,
-  `codex_home`) have the same unbounded path and are tracked separately (#279) — they need protocol
-  *validation*, not truncation, since a clipped `thread_id` would silently corrupt `resume_command`.
+- **`codex_transfer` rejects unresolvable transcript paths as `invalid_arguments`** (#278). An
+  embedded NUL, a symlink loop, or an unstat-able path made `validate_transcript_path` raise, escaping
+  as a retryable `internal_error` whose "retry" hint can never fix a bad path. Resolution and the file
+  check are now guarded and return a stable, value-free `invalid_arguments` reason. Validation runs
+  before any spawn, so there was never spend; error-code mapping only, no `fingerprint` change.
 
-- **`codex app-server`'s `stderr_tail` now retains the tail, is byte-budgeted, and is safe to snapshot
-  from another thread** (#254). `_spawn_stderr_drain` advertised a bounded *tail* but retained the
-  *prefix*: once `total` reached `_MAX_STDERR_BYTES` it stopped appending, so the trailing
-  `[-_MAX_STDERR_BYTES:]` slice trimmed an already-prefix-limited buffer and could not recover a tail
-  that was never captured. On a verbose failure — exactly when the tail matters — the operator got
-  startup noise and none of the error that killed the app-server. The cap also counted *characters*,
-  not UTF-8 bytes, so non-ASCII stderr could overshoot the 64KB budget several-fold. The drain now
-  accumulates into `_core.streamcap.BoundedCapture`, which budgets in bytes.
-  `BoundedCapture` gains `head_bytes=` (pass `0` for a **pure rolling tail** — no head window, marker
-  leads, newest lines survive), which is what a field named `stderr_tail` should mean when the
-  diagnostic value is a stack trace at the end of the stream rather than startup noise at the front.
-  `BoundedCapture` is also **thread-safe** now: `add()` mutates a list, a deque and three counters
-  across several statements, so an unlocked `result()` could observe a pre-eviction over-budget state,
-  disagree with its own `truncated` flag, or raise `RuntimeError: deque mutated during iteration` — on
-  the very error path trying to report a failure. All three were reproduced before the fix. Internal
-  only; no agent-visible surface change, so the result `fingerprint` is unchanged.
+- **`codex_transfer` redacts and bounds every app-server-derived string before it reaches an error
+  envelope** (#276). Four routes forwarded raw child text into `error.message` with only an 8 MiB
+  per-line parser bound. A new `_display_text` helper redacts before truncating (cutting first can
+  split a secret so no pattern matches) and bounds the result to 300 characters with an explicit
+  `…[truncated]` marker. `error.message` prose only; no `fingerprint` change. (The success envelope's
+  identifiers are handled by #279.)
+
+- **`codex app-server`'s `stderr_tail` retains the tail, is byte-budgeted, and is safe to snapshot
+  from another thread** (#254). The drain advertised a bounded tail but retained the prefix and counted
+  characters, not UTF-8 bytes, so a verbose failure gave the operator startup noise instead of the
+  error that killed it. It now accumulates into `_core.streamcap.BoundedCapture`, which budgets in
+  bytes, gains `head_bytes=0` for a pure rolling tail, and is now lock-guarded against a torn read.
+  Internal only; no `fingerprint` change.
 
 - **Interactive streams get a bounded reader that cannot deadlock, and the app-server reader is now
-  genuinely memory-bounded** (#255). `_core.streamcap.iter_bounded_lines` reads via
-  `stream.read(chunk_size)`, which on a blocking pipe waits for `chunk_size` characters *or* EOF —
-  correct for draining a finishing subprocess, fatal for a request/response protocol, where the
-  response line never surfaces and the handshake hangs. That helper is **unchanged and still
-  deadlocks if pointed at an interactive stream**; what is new is that the drain-to-EOF constraint is
-  now documented on it, and that a sibling `iter_bounded_lines_interactive` exists for the interactive
-  case. The sibling reads a *binary* stream via `read1` (which returns as soon as any bytes arrive)
-  with an incremental decoder, so a line surfaces on its newline and a multibyte character is never
-  split across a chunk boundary. Both readers share one line-assembler; only the chunk source differs.
-  `appserver` now spawns `codex app-server` with binary pipes and reads both stdout and stderr through
-  the interactive reader, which also fixes a latent memory bug: its old
-  `len(stripped) > _MAX_LINE_BYTES` check ran only *after* `for line in stdout` had already buffered
-  the whole line, so it bounded nothing. An over-cap line now arrives truncated, fails to parse, and
-  is reported as protocol drift — the same outcome as before. Internal only; no agent-visible surface
-  change, so the result `fingerprint` is unchanged.
+  genuinely memory-bounded** (#255). `iter_bounded_lines` reads to `chunk_size`-or-EOF — correct for
+  draining a finishing subprocess, fatal for a request/response protocol. A new
+  `iter_bounded_lines_interactive` reads a binary stream via `read1` with an incremental decoder, so a
+  line surfaces on its newline and a multibyte character is never split across a chunk boundary;
+  `appserver` now uses it, which also fixes a latent unbounded-line buffer. Internal only; no
+  `fingerprint` change.
 
-- **The `invalid_arguments` envelope survives fastmcp >= 3.4.3's exception rewrap.** Since fastmcp
-  3.4.3, a bad tool call no longer raises Pydantic's `ValidationError` at the call-tool boundary:
-  `FunctionTool._execute` catches it and re-raises `fastmcp.exceptions.ValidationError(str(e))`,
-  which is not a Pydantic subclass and exposes no `.errors()`. `_ArgumentValidationMiddleware`
-  caught only the Pydantic class, so on 3.4.3+ every bad-argument call bypassed the result contract
-  — no symbolic `code`, `repair`, `request_id`, or `fingerprint`, just raw validator prose (the
-  regression #136 exists to prevent). Because that prose interpolates Pydantic's `input_value`, it
-  also echoed the rejected argument value back to the caller and reflected an oversized unknown
-  argument name verbatim, undoing the never-echo and no-amplification guarantees. The middleware now
-  accepts both exception shapes and reads the structured errors off the wrapper's `__cause__`,
-  re-raising anything whose cause is not a Pydantic error. Compatible with the whole supported
-  `fastmcp>=3.4` range; the emitted envelope is unchanged, so no `fingerprint` bump.
+- **The `invalid_arguments` envelope survives fastmcp ≥ 3.4.3's exception rewrap** (#271). Since 3.4.3
+  a bad tool call raises `fastmcp.exceptions.ValidationError` (not a Pydantic subclass, no `.errors()`),
+  so the middleware bypassed the result contract and emitted raw validator prose — which also echoed
+  the rejected argument value. It now accepts both exception shapes and reads the structured errors off
+  the wrapper's `__cause__`. Compatible across the supported `fastmcp>=3.4` range; the emitted envelope
+  is unchanged, so no `fingerprint` bump.
 
-- **`codex_transfer` now fails closed when the auth probe is indeterminate** (#252). Its readiness
-  gate rejected only a *known-absent* session (`login_status()` returning `False`), so a
-  `codex login status` probe that timed out — reported as `None`, meaning "could not determine" —
-  fell through the gate and let the tool spawn `codex app-server` and issue a side-effecting
-  `externalAgentConfig/import`, contradicting the handler's own "codex present AND authenticated"
-  contract. `codex_status` already treated `None` as not-ready, so the two tools disagreed about
-  what an unanswered probe meant. The gate now requires a confirmed `True`, and the indeterminate
-  case gets its own error code, **`codex_auth_indeterminate`** (`next_step: inspect_and_retry`,
-  `temporary: true`), rather than being collapsed into `codex_auth_required` — which would tell an
-  already-authenticated caller to run `codex login` and mark a transient probe timeout as permanent.
-  `codex_capabilities` advertises the new code on `codex_transfer` alongside `codex_auth_required`,
-  so an agent branching on the discovered surface learns of it without first triggering it.
-  Backward-compatible addition of an error code; result `fingerprint`
-  `codex-in-claude/0.1/schema-33` → `codex-in-claude/0.1/schema-34`. Not breaking.
+- **`codex_transfer` fails closed when the auth probe is indeterminate** (#252). Its readiness gate
+  rejected only a known-absent session, so a `codex login status` probe that timed out (reported as
+  `None`) fell through and let the tool spawn `app-server` and issue a side-effecting import. The gate
+  now requires a confirmed `True`, and the indeterminate case gets its own retryable
+  `codex_auth_indeterminate` code rather than telling an already-authenticated caller to re-login.
+  Backward-compatible addition; `fingerprint` `schema-33` → `schema-34`.
 
 - **The test suite no longer corrupts the invoking repository when run with an inherited `GIT_DIR`**
-  (#229). Under a pre-push hook launched from a linked worktree, `GIT_DIR` (and friends) are exported;
-  the fixtures' `git add`/`commit`/`config` calls then operated on the *real* repo with a temp dir as
-  the working tree — staging every tracked file as deleted and rewriting the real repo's config
-  (`core.bare`, `core.worktree`, test identity). The shared test helpers now scrub the git-location
-  vars (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`) so
-  every git subprocess a test spawns is anchored purely by `cwd`, via both a per-call scrub (`run_git`)
-  and an autouse blanket fixture. Test-infrastructure only — production `_core` git subprocesses
-  already pass a fresh, non-inherited environment and were never exposed; no `fingerprint` bump.
+  (#229). Under a pre-push hook launched from a linked worktree, an exported `GIT_DIR` made the
+  fixtures' git calls operate on the real repo — staging every tracked file as deleted and rewriting
+  its config. The shared test helpers now scrub the git-location env vars so every test git subprocess
+  is anchored purely by `cwd`. Test-infrastructure only; no `fingerprint` bump.
 
-- **An omitted `base`/`commit` on a `branch`/`commit` review no longer leaks the Python literal
-  `None` into the error message** (#244). `codex_review_changes`/`codex_dry_run` with `scope="branch"`
-  and no `base` (or `scope="commit"` and no `commit`) previously produced `invalid base ref: None`;
-  the message now distinguishes an omitted input ("base ref is required for a branch diff but was
-  omitted") from a present-but-invalid one (which still keeps its `repr` so stray whitespace/quoting
-  shows). Runtime error-message prose only — not manifest-covered, so no `fingerprint` bump. (The
-  same issue's proposed `ErrorDetail.value` schema change was evaluated and declined: the enum fields
-  it targeted — `scope`/`detail`/`isolation` — surface over MCP as `invalid_arguments`, not
-  `ErrorDetail`; `timeout_seconds` is clamped rather than rejected; and echoing a value the caller
-  just sent is redundant with `field`/`reason`/`allowed_values`. See #244 for the full rationale.)
+- **An omitted `base`/`commit` on a `branch`/`commit` review no longer leaks the Python literal `None`
+  into the error message** (#244). `invalid base ref: None` is now "base ref is required for a branch
+  diff but was omitted", distinguished from a present-but-invalid ref (which keeps its `repr`). Message
+  prose only; no `fingerprint` change.
 
 - **Packaging and startup now declare POSIX-only and fail loudly on Windows** (#232). The
-  `Operating System :: OS Independent` trove classifier was incorrect: the async-job safety
-  layer (`fcntl` advisory locks, process-group teardown via `os.killpg`/`start_new_session`,
-  and `SIGTERM`-driven graceful cancellation) is POSIX-only and silently degrades on Windows.
-  The classifier is now `Operating System :: MacOS` + `Operating System :: POSIX :: Linux`;
-  `README.md` and `COMPATIBILITY.md` state the platform contract; the server entrypoint
-  refuses to start on any non-POSIX `os.name` (Windows additionally gets a WSL2 pointer) before the transport loop runs
-  (overridable to a stderr warning via `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1` for
-  consult-only use); and the bare `import fcntl` in `_core/idempotency.py` is now guarded
-  the same way `_core/jobs.py`'s worker lock already is, so `_core` stays internally
-  consistent on fcntl-less platforms. WSL2 reports `posix` and is unaffected. Not
-  manifest-covered and not backward-incompatible — no `fingerprint` bump.
+  `OS Independent` trove classifier was wrong — the async-job safety layer (`fcntl` locks, `os.killpg`,
+  `SIGTERM` cancellation) is POSIX-only. The classifier is now MacOS + POSIX::Linux, the entrypoint
+  refuses to start on a non-POSIX `os.name` (overridable via
+  `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1` for consult-only use), and the bare `import fcntl` in
+  `_core/idempotency.py` is now guarded. WSL2 is unaffected. Not `fingerprint`-covered.
 
-- **Exception-derived `internal_error` messages no longer leave a dangling separator** (#203).
-  Empty or fully redacted exception text now renders as just the exception class name in the
-  generic tool boundary, background-job spawn failure, and worker crash sinks instead of ending
-  with `": "`. Existing per-sink truncation and redaction behavior is unchanged. Runtime
-  error-message prose only — not manifest-covered, so no `fingerprint` bump.
+- **Exception-derived `internal_error` messages no longer leave a dangling `": "` separator** (#203).
+  Empty or fully-redacted exception text now renders as just the exception class name. Message prose
+  only; no `fingerprint` bump.
 
-- **A transient read `OSError` on an idempotency record no longer classifies as a
-  permanent result-unavailable** (#202). `IdempotencyIndex._read` mapped any `OSError`
-  (e.g. EIO on flaky/network storage, a permissions race) to `"corrupt"`, and
-  `_classify` mapped `"corrupt"` to `UNAVAILABLE` — `temporary: false`, repair
-  `use_new_idempotency_key`. So a momentary I/O blip while reading the record of a
-  healthy, replayable completed run told the agent, permanently and non-retryably, to
-  start a new paid run under a fresh key — duplicate spend when a retry one second
-  later would have replayed the stored result. `_read` now distinguishes a transient
-  I/O failure (`"io_error"`) from genuinely malformed content (`"corrupt"`): corrupt
-  records still fail closed (`UNAVAILABLE`), while an I/O error surfaces as a new
-  `IO_ERROR` outcome kind that the server maps to a retryable `internal_error` envelope
-  (`temporary: true`, repair: "retry the same call with the same idempotency_key").
-  `sweep()` gives an `io_error` entry a generous multiple of the horizon to clear
-  before reclaiming it (the record may be intact), but bounds the wait so a
-  persistently unreadable entry cannot wedge its key behind an infinitely-retryable
-  "temporary" error. No new error code is advertised (the existing `internal_error`
-  code is reused), so no `fingerprint` bump.
-
-- **The Copilot-review workflow no longer green-checks when GitHub silently drops the
-  review request** (#236). `.github/workflows/copilot-review-bot-prs.yml` posted to
-  `requested_reviewers` with `github.token` and treated any 200 as success, but GitHub
-  silently ignores Copilot reviewer requests made with a non-user token — the POST
-  returns 200 with an empty `requested_reviewers` and Copilot never reviews. The step
-  now gates on a user-scoped PAT (`COPILOT_REVIEW_PAT`): when it is set, the step
-  captures the response and fails loudly (`::error::` + non-zero exit) if
-  `copilot-pull-request-reviewer[bot]` is absent from `requested_reviewers`, so a
-  silent no-op can never pass as a green check; when no PAT is configured the step
-  emits a `::warning::` and skips (exit 0) rather than issue the doomed
-  default-token request. CI-only; no `fingerprint` bump.
-
-### Security
-
-- `codex_transfer` now validates and bounds the identifiers the `codex app-server` reports on
-  success — the imported thread id, `$CODEX_HOME`, the ledger id, and `importId`. A drifted,
-  oversized, control-character-bearing, or non-absolute value fails as `cli_contract_changed`
-  (for the live protocol) or is skipped (for the best-effort ledger and optional `importId`)
-  instead of yielding a corrupt `resume_command` or re-basing the ledger lookup on the wrong
-  directory. `resume_command` is now shell-quoted. (#279)
-
-- **Full gitattributes filter isolation for propose-tier worktree git ops** (#163).
-  Completes the repo-config hardening started in #156/#162 (which disabled hooks,
-  fsmonitor, and GPG signing). The `propose`-tier worktree git ops run in the *server*
-  process, not Codex's sandbox, so a repo-configured `clean`/`smudge`/`process`
-  gitattributes filter driver was repo-controlled code executing in-process — at
-  checkout (`git worktree add HEAD`), staging (`git add -A`), and working-tree diffs
-  (`git diff HEAD`, including the free `codex_dry_run`/`plan` preview). Every configured
-  filter driver is now neutralized via highest-precedence `git -c` overrides
-  (`filter.<d>.process=`/`.smudge=`/`.clean=` blanked, `.required=false`) enumerated
-  fresh per git call, so no filter command executes anywhere in the worktree lifecycle
-  while git still reconstructs the correct raw file bytes. A driver whose name cannot be
-  safely expressed as a `-c` override (contains `=` or a control char) fails closed with
-  a zero-spend error rather than running unneutralized. Same own-repo trust model as
-  #156 (relevant when `delegate` targets a repo whose git config the user does not fully
-  trust) — hardening, not a live exposure. Internal change to the worktree engine only;
-  no change to any agent-visible tool/resource/prompt surface, so no `fingerprint` bump.
-  A repo using a real filter (e.g. Git LFS) now materializes raw pointer content in the
-  throwaway worktree instead of smudged content — consistent with the review path's
-  existing `--no-filters` posture.
+- **A transient read `OSError` on an idempotency record no longer classifies as permanently
+  unavailable** (#202). `IdempotencyIndex._read` mapped any `OSError` to `"corrupt"` → a non-retryable
+  `use_new_idempotency_key`, so a momentary I/O blip while reading a healthy record told the agent,
+  permanently, to start a new paid run under a fresh key. It now distinguishes a transient `io_error`
+  (a retryable `internal_error`) from genuine corruption (still fails closed), and `sweep()` bounds how
+  long an unreadable entry can hold its key. The existing `internal_error` code is reused, so no
+  `fingerprint` bump.
 
 ## [0.8.0] - 2026-07-05
 

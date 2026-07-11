@@ -1,6 +1,6 @@
 [project]
 name = "codex-in-claude"
-version = "0.8.0"
+version = "0.9.0"
 description = "Call OpenAI Codex from Claude Code for delegation, review, and second opinions"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,7 +10,7 @@ authors = [
 ]
 keywords = ["codex", "claude-code", "code-review", "delegation", "mcp", "plugin"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
