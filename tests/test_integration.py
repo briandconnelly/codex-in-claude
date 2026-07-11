@@ -29,9 +29,12 @@ def _feature_state(feature: str, *flags: str) -> str | None:
 
 
 def test_remote_plugin_disabled_by_plugin_flag_live():
-    # #287: prove the mechanism against the real CLI (no model spend). The feature is
-    # default-on, and the plugin's `--disable remote_plugin` flips it off.
-    assert _feature_state(cli_contract.REMOTE_PLUGIN_FEATURE) == "true"
+    # #287: prove the mechanism against the real CLI (no model spend). The plugin's
+    # guarantee is that `--disable remote_plugin` forces the feature OFF — NOT that the
+    # upstream default is on (that premise is documented in cli_contract.py, and pinning it
+    # here would make the test brittle if Codex ever flips the default). So assert only that
+    # the feature exists and is readable, then that the plugin flag drives it to false.
+    assert _feature_state(cli_contract.REMOTE_PLUGIN_FEATURE) in {"true", "false"}
     off = _feature_state(
         cli_contract.REMOTE_PLUGIN_FEATURE,
         cli_contract.DISABLE_FEATURE_FLAG,
