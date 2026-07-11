@@ -55,11 +55,12 @@ jobs:
             -f "reviewers[]=copilot-pull-request-reviewer[bot]" >/dev/null 2>&1 || true
           # A non-user token silently drops the request (#236): the POST returns 200
           # but the reviewer never registers, so the job would green-check while
-          # Copilot never reviews. Verify against the PR's current requested reviewers
-          # and fail loudly if Copilot is absent. This also confirms an already-pending
-          # request (the tolerated-422 case above) counts as success.
-          if gh api "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
-               --jq '[.users[].login] | index("copilot-pull-request-reviewer[bot]") != null' \
+          # Copilot never reviews. Verify against the PR object's requested_reviewers
+          # (same shape #240 validated) and fail loudly if Copilot is absent. This
+          # also confirms an already-pending request (the tolerated-422 case above)
+          # counts as success.
+          if gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+               --jq '[.requested_reviewers[].login] | index("copilot-pull-request-reviewer[bot]") != null' \
                | grep -qx true; then
             echo "Copilot review requested for PR #${PR_NUMBER}."
           else
