@@ -198,11 +198,16 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   - **Human-authored PRs** get an automatic Copilot review on open and on every push (the
     `copilot_code_review` ruleset rule).
   - **Bot-authored PRs** — including every PR opened under the `briandconnelly-agent[bot]` identity
-    — get **no automatic review**: the ruleset rule skips authors that hold no Copilot seat. The
-    workflow that exists to close that gap, `.github/workflows/copilot-review-bot-prs.yml`, does
-    not currently work (it silently no-ops; see #236) and would not fire on a push even if it did.
-    So until #236 lands, ask the maintainer to request Copilot review on a bot PR, and ask again
-    after each push you want re-reviewed.
+    — get **no automatic review by default**: the ruleset rule skips authors that hold no Copilot
+    seat. The gap-filler workflow, `.github/workflows/copilot-review-bot-prs.yml`, was fixed in #240
+    (closing #236): it requests the Copilot reviewer and **fails loudly** if the request is dropped,
+    instead of the old silent no-op that green-checked while nothing happened. Two limits remain: it
+    requests a review only when a user-scoped PAT (`COPILOT_REVIEW_PAT`) is configured — a non-user
+    token can't request Copilot — and it triggers only on open/reopen/ready-for-review, **never on
+    push**. That secret is **not currently set**, so today the workflow warns and skips and bot PRs
+    still get no automatic review. Until a PAT is configured, ask the maintainer to request Copilot
+    review on a bot PR, and ask again after each push you want re-reviewed (a push never re-triggers
+    it either way).
 
   Treat Copilot's feedback like any review:
   - Evaluate each comment on its merits — verify it against the code, don't blindly implement.
