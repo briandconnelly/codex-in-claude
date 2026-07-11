@@ -35,10 +35,22 @@ The `pyproject.toml` trove classifiers declare `Operating System :: MacOS` and
 
 Every paid call family — `codex_consult[_async]`, `codex_review_changes[_async]`, and
 `codex_delegate[_async]` — runs its model work on `codex exec` alone. None uses the native
-`codex review`/`codex exec review` subcommand (its `--output-schema` is not honored for the final
-message, and its output depends on the user's Codex MCP fleet), and none uses the `app-server`
+`codex review`/`codex exec review` subcommand, and none uses the `app-server`
 JSON-RPC/broker protocol, which was the source of most of the upstream `codex-plugin-cc`
 reliability issues. Reviews use `codex exec` with a diff we gather ourselves.
+
+**Why not native review — re-verified at codex-cli 0.144.1 (issue #124).** `codex exec review`
+now advertises `--output-schema`, `--output-last-message`, and `--json`, but `--output-schema` is
+**accepted and silently ignored**: a clean-room run
+(`--uncommitted --ignore-user-config --ignore-rules --strict-config --ephemeral --output-schema
+<strict FINDINGS_OUTPUT_SCHEMA> --output-last-message <file> --json`) exits 0 yet writes free-form
+prose — not schema-conforming JSON — to the last-message file, and no structured-findings payload
+appears anywhere in the `--json` event stream (only `command_execution` items and one prose
+`agent_message`). Native review therefore can't back our strict result contract. Two lesser notes:
+`codex exec review` has **no `--sandbox` flag** (config-based read-only control was not tested), and
+the historical "output depends on the user's Codex MCP fleet" concern was **not re-tested** this
+pass — it appears mitigable via `--disable remote_plugin`. Adopting native review remains blocked on
+`--output-schema` alone; re-open the question only if a future Codex honors it.
 
 `codex_transfer` is the single, deliberate exception: this plugin reaches Codex's transcript-import
 surface only through `app-server`. That surface is experimental upstream, so it is quarantined —
