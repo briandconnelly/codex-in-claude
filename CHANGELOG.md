@@ -57,6 +57,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Documentation freshness fixes.** Added a `CODEOWNERS` file so every path has a named owner, and
+  swapped the README's hardcoded `python-3.11–3.14` badge for a dynamic `pypi/pyversions` badge that
+  tracks the trove classifiers instead of drifting. Docs/infra only; no code or agent-visible surface
+  change.
+
 - **Consolidate the bundled Codex guidance into one progressive-disclosure router skill.**
   `collaborating-with-codex` now owns shared safety and routes ordinary consult, review, delegation,
   transfer, async, independent-attempt, and declared review–revise workflows to references loaded on

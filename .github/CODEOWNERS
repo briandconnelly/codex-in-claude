@@ -1,0 +1,6 @@
+# Code owners for codex-in-claude.
+# Assigns a default owner so every doc and code path has a named owner
+# (a Freshness Mechanisms requirement) and auto-requests review on PRs.
+# Last matching pattern wins; add narrower rules below the catch-all as needed.
+
+* @briandconnelly
