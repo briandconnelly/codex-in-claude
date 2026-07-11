@@ -137,6 +137,26 @@ _EXTRA_CONFIG_FLAGS = ("-c", "--config")  # -c KEY=VALUE  (a dotted-path config 
 _EXTRA_PROFILE_FLAGS = ("-p", "--profile")  # -p NAME       (layer a named config profile)
 _EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE
 
+# Feature NAMES that are wholly plugin-owned, refused even though `--enable`/`--disable`/`-c`
+# are allowlisted: the plugin disables the remote_plugin connectors on every model-bearing call
+# as a documented security guarantee (#287), so an operator override must not touch the feature
+# in EITHER direction. `--enable` would defeat the guarantee; `--disable` is redundant with the
+# plugin but, if allowed, injects a passthrough descriptor that could misattribute a plugin-owned
+# guarantee-flag drift to CODEX_IN_CLAUDE_EXTRA_ARGS — so both are refused. `--enable X` is exactly
+# `-c features.X=true`, so the `-c` spellings are denied too (see _DENIED_CONFIG_KEYS below). NOTE:
+# an opaque `--profile` can still re-enable it — the same documented operator-trust boundary that
+# bounds the `-c` denials (see COMPATIBILITY.md).
+_PLUGIN_OWNED_FEATURES = frozenset({cli_contract.REMOTE_PLUGIN_FEATURE})
+# Both the dotted key AND the bare `features` parent table are refused: `-c
+# features={remote_plugin=true}` (a TOML inline table) reaches the same setting through the
+# parent key, so denying only the dotted form leaves that inline-table bypass open. Denying
+# bare `features` refuses the whole-table inline form; a different feature is still settable
+# via its own dotted key (`-c features.some_other=true`), which is NOT in this set.
+_FEATURES_NAMESPACE = "features"
+_DENIED_CONFIG_KEYS = frozenset(
+    {_FEATURES_NAMESPACE, f"{_FEATURES_NAMESPACE}.{cli_contract.REMOTE_PLUGIN_FEATURE}"}
+)
+
 # Config-key roots refused even though `-c/--config` is allowlisted: a `-c` value can
 # override ANY dotted config path, and these would weaken a guarantee this server
 # advertises — the sandbox capability boundary and the no-network-egress promise
@@ -186,6 +206,18 @@ def _safe_token(token: str) -> str:
     return (redaction.redact_text(token) or "")[:60]
 
 
+def _normalize_config_key(key: str) -> str:
+    """Normalize a dotted `-c` config KEY the way codex's own TOML key parser resolves it —
+    trim each dotted segment, strip surrounding TOML quotes, and lowercase — so neither an
+    embedded space (`features . Remote_Plugin`) nor a quoted segment (`features."remote_plugin"`,
+    `"features".remote_plugin`) can slip a denied key past the whole-key denylist. shlex strips
+    unescaped quotes before this, but an escaped/preserved quote can survive to here (#287)."""
+    segments = []
+    for seg in key.split("."):
+        segments.append(seg.strip().strip("\"'").strip().lower())
+    return ".".join(segments)
+
+
 def _parse_extra_args(raw: str) -> ExtraArgs:
     """Tokenize + allowlist-validate a non-blank CODEX_IN_CLAUDE_EXTRA_ARGS value."""
     try:
@@ -232,6 +264,15 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         "network / approval / host-env-isolation guarantees this server advertises"
                     ),
                 )
+            if _normalize_config_key(key) in _DENIED_CONFIG_KEYS:
+                return ExtraArgs(
+                    configured=True,
+                    error=(
+                        f"config key '{key.strip()}' is refused: the plugin disables the "
+                        "remote_plugin connectors as a security guarantee (#287); an operator "
+                        "override cannot re-enable them"
+                    ),
+                )
             tokens += [flag, value]
             # Record the flag too (not just the key), so a drift where codex rejects the
             # `-c`/`--config` flag token itself is still attributed to the passthrough.
@@ -240,6 +281,15 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
         else:  # profile / feature — the value is a non-secret NAME
             if not value:
                 return ExtraArgs(configured=True, error=f"{flag} requires a non-empty value")
+            if kind == "feature" and value.strip().lower() in _PLUGIN_OWNED_FEATURES:
+                return ExtraArgs(
+                    configured=True,
+                    error=(
+                        f"feature '{value.strip()}' is managed by the plugin and cannot be set "
+                        f"via {EXTRA_ARGS_ENV} (enable or disable): it disables the remote_plugin "
+                        "connectors as a security guarantee (#287)"
+                    ),
+                )
             tokens += [flag, value]
             descriptors += [flag, value]
         count += 1

@@ -356,3 +356,48 @@ def test_extra_args_denies_shell_environment_policy_key(monkeypatch):
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c shell_environment_policy.inherit=all")
     ea = config.extra_args()
     assert ea.valid is False
+
+
+# --- #287: an operator may not re-enable the remote_plugin connectors -----------------
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "--enable remote_plugin",  # feature spelling, spaced
+        "--enable=remote_plugin",  # feature spelling, attached
+        "--enable Remote_Plugin",  # case-insensitive
+        "-c features.remote_plugin=true",  # config spelling (== --enable)
+        "--config features.remote_plugin=true",  # long config flag
+        "--config=features.remote_plugin=true",  # attached long config flag
+        "-c features.remote_plugin=false",  # any assignment refused, not just =true
+        '-c " features . Remote_Plugin =true"',  # whitespace/case around the dotted key
+        "-c features={remote_plugin=true}",  # TOML inline table via the bare parent key
+        '-c "features = {remote_plugin = true}"',  # inline table with whitespace
+        # `--disable remote_plugin` is refused too — the feature is wholly plugin-owned, and
+        # allowing the redundant flag would let a plugin-guarantee-flag drift be misattributed
+        # to the operator's passthrough (#287 review).
+        "--disable remote_plugin",
+        # Quoted TOML key segments that SURVIVE shlex (single-quoted whole value preserves the
+        # inner double-quotes) and resolve to features.remote_plugin in codex.
+        "-c 'features.\"remote_plugin\"=true'",
+        "-c '\"features\".remote_plugin=true'",
+    ],
+)
+def test_extra_args_denies_remote_plugin_reenable(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "remote_plugin" in (ea.error or "")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "--enable some_other_feature",  # a different feature is unaffected
+        "--disable some_other_feature",  # disabling a different feature is fine
+        "-c features.some_other=true",  # a different features.* key is unaffected
+    ],
+)
+def test_extra_args_allows_non_plugin_owned_features(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is True

@@ -116,7 +116,10 @@ CAPABILITY_SUMMARY = (
     "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a "
     "structured review of your git changes, or a delegated coding task. This plugin does "
     "not bypass Codex's sandbox or approvals, and codex_delegate never edits your working "
-    "tree — it returns a reviewable diff you apply yourself. "
+    "tree — it returns a reviewable diff you apply yourself. Every model-bearing call also "
+    "disables Codex's remote_plugin feature, so third-party connectors (GitHub, Gmail, Slack, "
+    "Drive, …) aren't exposed to the Codex run — barring a custom operator-supplied Codex "
+    "profile. "
     # Routing: one imperative sentence per task family.
     "Use codex_consult for a read-only second opinion or Q&A — including on a diff you "
     "paste inline. "
