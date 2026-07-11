@@ -9,9 +9,6 @@ Call **OpenAI Codex** from **Claude Code** — an independent second opinion, st
 review, and delegated coding tasks (**cross-model review**) — through a FastMCP plugin that drives
 the `codex` CLI safely.
 
-> **Status:** alpha. The agent-visible surface is versioned by a `fingerprint` — a surface-version
-> string reported in every result and by `codex_capabilities`; pre-1.0 minor releases may change it.
-
 **Contents:** [Why](#why) · [Quick start](#quick-start) · [Example](#example) ·
 [Requirements](#requirements) · [Tools](#tools) · [Skills](#skills) ·
 [Result envelopes](#result-envelopes) · [Safety](#safety) ·
