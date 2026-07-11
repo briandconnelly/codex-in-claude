@@ -4,7 +4,7 @@ This plugin shells out to the OpenAI `codex` CLI. Every assumption it makes live
 `src/codex_in_claude/cli_contract.py` so an upstream change is a one-file, greppable edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.144`.
+Verified against `codex-cli 0.144.1`.
 
 ## Platform support
 
@@ -41,12 +41,16 @@ reliability issues. Reviews use `codex exec` with a diff we gather ourselves.
 
 **Why not native review — re-verified at codex-cli 0.144.1 (issue #124).** `codex exec review`
 now advertises `--output-schema`, `--output-last-message`, and `--json`, but `--output-schema` is
-**accepted and silently ignored**: a clean-room run
-(`--uncommitted --ignore-user-config --ignore-rules --strict-config --ephemeral --output-schema
-<strict FINDINGS_OUTPUT_SCHEMA> --output-last-message <file> --json`) exits 0 yet writes free-form
-prose — not schema-conforming JSON — to the last-message file, and no structured-findings payload
-appears anywhere in the `--json` event stream (only `command_execution` items and one prose
-`agent_message`). Native review therefore can't back our strict result contract. Two lesser notes:
+**accepted and silently ignored**. A clean-room run —
+
+```sh
+codex exec review --uncommitted --ignore-user-config --ignore-rules --strict-config \
+  --ephemeral --output-schema <strict FINDINGS_OUTPUT_SCHEMA> --output-last-message <file> --json
+```
+
+— exits 0 yet writes free-form prose (not schema-conforming JSON) to the last-message file, and no
+structured-findings payload appears anywhere in the `--json` event stream (only `command_execution`
+items and one prose `agent_message`). Native review therefore can't back our strict result contract. Two lesser notes:
 `codex exec review` has **no `--sandbox` flag** (config-based read-only control was not tested), and
 the historical "output depends on the user's Codex MCP fleet" concern was **not re-tested** this
 pass — it appears mitigable via `--disable remote_plugin`. Adopting native review remains blocked on
