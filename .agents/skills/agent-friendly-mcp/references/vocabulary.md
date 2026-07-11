@@ -6,7 +6,7 @@ Shared terms used across `SKILL.md`, the contract checklist, the workflows, and 
 - **Concise vs detailed result**: a single structured default response, with an opt-in detail mode for richer content. Not a free `response_format` toggle.
 - **Resource index**: a lightweight catalog of available resources with metadata sufficient to decide whether to read the body, distinct from the bodies themselves.
 - **Prompt scaffold**: a reusable task starter that points at tools and resources, with explicit prerequisites and expected follow-on actions.
-- **Composable primitive vs workflow tool**: granularity decision: one tool that completes a user task vs. several tools the agent must chain.
+- **Task-completing tool vs composable primitive**: the granularity decision: one tool that completes a user task vs. several narrower tools the agent must chain.
 - **Operational prerequisites**: auth scopes, workspace/project context, prior setup, or implicit state that affects capability availability, result shape, permissions, or repair.
 - **Negotiated capability**: an optional MCP feature that both sides advertised during initialization; agents must not assume it exists from schema prose alone.
 - **Root**: a client-declared filesystem boundary exposed through `roots/list`; useful for workspace-scoped servers, but guidance rather than access control.

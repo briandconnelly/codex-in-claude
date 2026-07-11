@@ -7,14 +7,14 @@ A review is grounded when its findings cite evidence from the schema, the respon
 ## Severity Scale
 
 - **Critical** — agent will reliably fail to use the server correctly, or there is a security or data-integrity risk. Examples: a tool that mutates shared or persistent state advertised `readOnlyHint: true` (§3), `idempotentHint: true` on a tool that creates duplicates on retry, undocumented destructive side effects, secrets leaked in error payloads, a `stdio` server logging to stdout, an auth model collapsed to "credential failure" with no distinction between missing / wrong / insufficient scope. Blocks merge.
-- **Major** — agent will frequently choose the wrong primitive, waste tokens, or hit avoidable errors. Examples: overlapping tool descriptions, bloated definitions or a 50-tool catalog with no client-independent surface reduction (and no progressive-disclosure mechanism matched to the target clients), unstructured error strings with no symbolic codes, no capability fingerprint, resource lists that inline bodies.
+- **Major** — agent will frequently choose the wrong primitive, waste tokens, or hit avoidable errors. Examples: overlapping tool descriptions, bloated definitions or a 50-tool catalog with no client-independent surface reduction (and no progressive-disclosure mechanism matched to the target clients), unstructured error strings with no symbolic codes, no capability fingerprint for a target client that caches or pins the server surface, resource lists that inline bodies.
 - **Minor** — degrades agent experience but recoverable. Examples: verbose default responses with no detail toggle, missing `request_id` correlation, ambiguous parameter names whose schema types still constrain shape, summaries longer than three sentences.
 - **Nit** — style, naming, or doc improvement. Examples: inconsistent verb usage across tools, capitalization drift, a prompt that could be one sentence shorter.
 
 ## Audit Procedure
 
 1. **Read or generate the server capability summary.** If the server publishes one, start there.
-   If it does not, that absence is usually a Major finding against §2 and §1; make it Critical only when the server surface is broad or ambiguous enough that agents predictably fail without it.
+   If it does not, record that absence as a Major finding against §2 and §1 by default; escalate to Critical when the server surface is broad or ambiguous enough that agents predictably fail without it.
    Record the finding and continue by reading the discovery surface (tool list, resource catalog, prompts) to reconstruct what the summary should have said.
    Note stated scope, negative scope, transport choice, and prerequisites that affect whether or how an agent should use the server.
 2. **Walk [contract-checklist.md](contract-checklist.md) section by section, top to bottom.** For each section (§1 through §9), record exactly one of:
@@ -30,12 +30,18 @@ A review is grounded when its findings cite evidence from the schema, the respon
 
 ## Transcript Probes
 
-Nine questions to ask while reading code and transcripts. Each should be answerable from concrete evidence — schema text, response payloads, or transcript excerpts — not intuition.
+Ten questions to ask while reading code and transcripts. Each should be answerable from concrete evidence — schema text, response payloads, or transcript excerpts — not intuition.
 
 - **Cold start.** What does an agent see when it first connects? Can it learn what the server does, what it does NOT do, and what prerequisites affect use in one read? Trace the first few definition loads from a transcript or simulate them from the schema. *(maps to §1, §2)*
 - **Tool selection.** Given two adjacent tools (same verb, overlapping nouns, or similar surface), can an agent pick the right one without invoking both? Are descriptions narrow enough that the schema alone disambiguates? Look for tools whose descriptions you cannot tell apart at a glance. *(maps to §3; see `examples.md` §10 for the failure-mode shape)*
 - **First repair.** When the agent makes an invalid call, does the error response tell it specifically how to retry — which field, which allowed values, which tool to call instead? Force one invalid call per error code documented for the tool and read the payload, not just the message. *(maps to §6; see `examples.md` §6 for the target payload shape)*
-- **Discovery cost.** How many tokens does the agent spend learning the server's surface before its first useful call? Count, do not estimate — and measure serialized definition tokens, not tool count. The dominant lever is compact definitions, since the least-capable realistic client preloads the whole catalog regardless of any discovery tool. Credit `search_tools` / `describe_tool` only against the clients that actually withhold native definitions; on a preloading client they add cost. A bloated definition or an inflated catalog with no client-independent reduction (consolidation, a compact dispatcher, authorization-scoped catalogs) is the finding. *(maps to §2, §8; see `examples.md` §8 for one host-managed-disclosure shape)*
+- **Advertised vs. actual.** Inspect captured responses or isolated fixtures for at least one success and one forced error per tool; use live calls only where the Safety rule permits.
+  Verify that every required and claimed-always-present field is populated, that conditional fields appear under their documented conditions, and that the error carrier matches the wire — `isError: true`, envelope location, envelope shape.
+  Prefer schema-invalid requests known to fail before handler execution; do not probe mutating tools with guessed placeholder values.
+  When a finding relies on host or client behavior — stringified arguments, truncated descriptions, hidden annotations, stale cached schemas — cite captured `tools/list` payloads as the client receives them and observed `tools/call` arguments at the server; never infer host quirks from folklore.
+  Absence of an optional field is a finding only when the contract claims presence. *(maps to §1, §3, §6)*
+- **Discovery cost.** How many tokens does the agent spend learning the server's surface before its first useful call? Count, do not estimate — and measure the serialized `tools/list` wire response, not tool count or source models. Credit `search_tools` / `describe_tool` only against clients that actually withhold native definitions; on a preloading client they add cost (§2). A bloated definition or an inflated catalog with no client-independent reduction is the finding.
+  Common bloat mechanisms to check: generated output schemas dominating bytes, framework `$defs` inlining that duplicates shared envelopes per tool, echo field descriptions that restate the field name, and identical boilerplate blocks repeated across docstrings. *(maps to §2, §8; see `examples.md` §8 for one host-managed-disclosure shape)*
 - **Capability gating.** Which optional MCP capabilities does the server rely on after initialization?
   Verify that roots, completions, resource subscriptions, elicitation, tasks, and list-change notifications are advertised before use, and that weaker clients get a structured fallback instead of a mysterious method failure.
   *(maps to §1, §2, §4, §6, §7, §9)*
@@ -77,7 +83,7 @@ After the findings list, include a **checklist coverage table**. One row per sec
 | §6 Failure Recovery | finding F4 | error responses are unstructured strings |
 | §7 Long-Running Operations | not-checked | no long-running operations identified |
 | §8 Token Efficiency | OK | cursor pagination present; `detail` toggle on every tool |
-| §9 Versioning | finding F5 | no capability fingerprint published |
+| §9 Versioning | finding F5 | no capability fingerprint despite a caching client |
 
 End the report with open questions or assumptions, and an optional remediation summary if the findings cluster around a theme (e.g., "most Critical findings concentrate in §6 — invest there first").
 

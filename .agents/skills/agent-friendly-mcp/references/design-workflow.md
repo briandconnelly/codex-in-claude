@@ -49,7 +49,7 @@ Checkpoint: §3 granularity rule.
 
 Treat the schema as the authoritative contract. Write it before behavior.
 
-- Required vs optional discipline: required parameters are necessary; optional ones have meaningful defaults declared in schema.
+- Required vs optional discipline: required parameters are necessary; optional ones declare their omission semantics in the schema description, with `default` only where the server actually applies that value (§3).
 - Strict types: enums for fixed value sets; formats (`date-time`, `uri`, `email`); `integer` vs `number` chosen deliberately.
 - Schema dialect: declare it where supported, and close object schemas with `additionalProperties: false` unless extension fields are intentional.
 - Outputs: Publish an `outputSchema` and return `structuredContent` when targeting MCP versions that support them.
@@ -63,20 +63,20 @@ Checkpoint: §3, §4. See `examples.md` §1 for a worked tool schema and §5 for
 
 ## Step 5: Design the discovery surface
 
-Decide how an agent finds the right primitive at the lowest cost its clients allow — remembering that the least-capable realistic client preloads every definition from `tools/list`.
+Decide how an agent finds the right primitive at the lowest cost its clients allow (§2 defines the client-dependence rules).
 
 - Write the server capability summary: what it does, what it does NOT do, and any prerequisites that affect whether or how an agent should use it.
 - Expose the summary through a resource, discovery tool, or instructions field, whichever the client honors.
   Treat `instructions` as supplemental because some clients do not surface it to the model.
-- Make compact definitions your baseline: tight schemas and concise-but-sufficient descriptions lower cost on every client, including the ones that preload the whole catalog.
-- Then, if you need progressive disclosure, pick a mechanism by cost axis (§2): host-managed context disclosure (`search_tools` / `describe_tool`, resource catalog — client-dependent), server-managed catalog disclosure (`listChanged` with a fallback — client-dependent), or client-independent surface reduction (consolidation, a compact dispatcher, narrowly-scoped servers, authorization-scoped catalogs). Only the last helps a client that preloads and never lazy-loads.
+- Make compact definitions your baseline (§2), then, if you need progressive disclosure, pick a mechanism by cost axis: host-managed context disclosure, server-managed catalog disclosure, or client-independent surface reduction — only the last helps a client that preloads and never lazy-loads.
 - Make discovery selective, but through a discovery tool, resource catalog, or authorization-scoped catalog — native `tools/list` takes only a pagination cursor and has no filter parameters. A flat list of 80 tools is undiscoverable.
 - Index resources; do not inline bodies. Catalog entries carry triage metadata only.
 - Publish `resources/templates/list` for URI-shaped resources that cannot or should not be fully enumerated.
 - Implement `completion/complete` for prompt arguments and resource-template variables with dynamic value sets when `server.capabilities.completions` is negotiated.
   Document that completion does not cover arbitrary tool arguments.
 - For workspace-scoped servers, request `roots/list` from clients that negotiate roots and declare how root changes are handled.
-- If resource discoverability matters, provide a tool fallback for clients that do not expose resources well.
+- If resource discoverability matters, provide a tool fallback for clients that do not expose resources well — self-sufficient from `tools/list` alone (§4).
+- Set a serialized-size budget for `tools/list` — the wire response as a client receives it — and enforce it in CI (Step 8).
 
 Output: server capability summary, discovery primitives implemented, resource catalog shape.
 Checkpoint: §1, §2, §4. See `examples.md` §7 for a server capability summary and §8 for a `search_tools` response.
@@ -105,7 +105,7 @@ For each operation that may outlive a normal request/response turn, decide how t
 - Choose blocking `tools/call`, progress notifications, or task-augmented requests.
 - Declare expected duration, timeout behavior, and whether partial progress is observable.
 - Support `progressToken` and recover through native task operations where applicable — poll `tasks/get` (respect `pollInterval`), fetch with `tasks/result`, cancel with `tasks/cancel` — using the spec's task fields and statuses (`working`, `input_required`, `completed`, `failed`, `cancelled`).
-- For `input_required`, say whether the task resumes through elicitation, URL-mode elicitation, or a domain-specific status/repair tool.
+- For `input_required`, design around the native path — the requestor preemptively calls `tasks/result` and holds it open; the pending input request arrives as a separate receiver-to-requestor request while the call is pending, and the held call returns the terminal result once input is supplied — and say whether the input mechanism is elicitation, URL-mode elicitation, or a domain-specific status/repair tool (§7).
 - Enable tasks at both levels: declare the server `server.capabilities.tasks.requests.tools.call` and the tool's `execution.taskSupport` (`optional`, `required`, or `forbidden`).
   Tasks are experimental, so add a domain-specific status/cancel fallback only as a labeled stand-in for clients without task support.
 
@@ -121,6 +121,10 @@ Build an eval suite from the Step 1 task list before iterating further.
 - Measure first-repair correctness: given a structured error, did the agent's next call succeed?
 - Measure token consumption and tool-call count per completed task — both are first-class quality signals.
 - Include fixture types for cold-start/tool discovery, wrong-tool selection, invalid-argument, auth-failure, pagination, upgrade/version-change, and long-running progress plus cancel/recover.
+- Add a `forced_error` fixture per tool asserting `isError: true`, carrier location, and envelope shape on the serialized wire result — unit-level error objects can pass while framework serialization is broken.
+- Add a `discovery_size_budget` fixture asserting the exact serialized `tools/list` response against a deterministic byte budget, runnable in CI; pin the tokenizer if the budget is stated in tokens.
+- Add a `host_capture` fixture per target client: record the serialized `tools/list` payload as that client receives it and real `tools/call` arguments as observed at the server, and treat what hosts actually do — stringify containers, truncate descriptions, hide annotations, cache stale schemas, expose resources poorly — as compatibility constraints on the design, not protocol facts.
+  Captures gate the §3 stringified-argument shim and the §2 retrieval-phrasing note: neither applies without observed evidence.
 
 A worked fixture for one task makes the metrics runnable rather than aspirational. Each fixture pairs a prompt with an assertion the harness can check against the transcript:
 
@@ -133,7 +137,7 @@ A worked fixture for one task makes the metrics runnable rather than aspirationa
     {
       "type": "cold_start",
       "given": "fresh connection, no prior discovery",
-      "assert": "agent reads the capability summary (or search_tools) before its first slack_send_message call, not the full tool list"
+      "assert": "parameterized by host mode: on a preloading host, the serialized definitions the host injects stay within the token budget (the agent cannot avoid the load); on a lazy-loading host, the agent reads the capability summary or search_tools before loading full definitions"
     },
     {
       "type": "first_repair",
@@ -161,7 +165,7 @@ Run the eval with an agent and read the transcripts; do not trust aggregate scor
 - Look for contradictions between description prose and schema; the schema wins, so fix the prose or the schema.
 - Look for ambiguity in tool selection — two tools the agent confuses, or descriptions that overlap.
 - Look for ineffective discovery: agents loading every definition, agents missing a tool that exists, agents picking the wrong namespace.
-- Each iteration should produce a measurable improvement in first-call correctness, first-repair correctness, or token consumption — if it doesn't, the change wasn't grounded.
+- Each iteration should produce a measurable improvement in first-call correctness, first-repair correctness, or token consumption, without regressing first-call or first-repair correctness — if it doesn't, the change wasn't grounded.
 
 Output: revised schemas, descriptions, and discovery surface, with eval-measured improvement against the prior baseline.
 Checkpoint: §1–§9 — walk the full checklist; iteration is the moment to catch contradictions any earlier checkpoint missed.

@@ -57,6 +57,23 @@ failure directs you to regenerate the fixture
 drift for review; it does not mechanically force the bump (the snapshot and `FINGERPRINT` are
 independently editable, so bumping remains review policy). Record the change in `CHANGELOG.md`.
 
+## Auditing changes with the bundled skills
+
+Maintenance skills live under `.agents/skills/` (mirrored to `.claude/skills/` for Claude Code
+discovery). When a change touches the surface below, audit it with the matching skill before landing
+— these are quality lenses, not part of [the gate](#tooling):
+
+- **MCP tools, resources, prompts** (schemas, descriptions, the server instructions block) →
+  `agent-friendly-mcp`.
+- **Instruction-style text** (this file, `skills/` bodies, tool/server descriptions, `commands/`
+  slash-command prompts) → `separating-context-from-constraints`.
+- **Documentation** (`README`, `docs/`, `CONTRIBUTING`, per-directory context files) →
+  `agent-friendly-docs`.
+
+Each skill's own description owns *when* it applies — consult it rather than re-deriving triggers
+here. A Claude Code session surfaces these automatically; naming them keeps the expectation explicit
+and reachable by any harness that reads this file.
+
 ## Versioning
 
 - Semantic Versioning. **Pre-1.0:** a minor bump may change the agent-visible surface (a breaking

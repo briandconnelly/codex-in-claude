@@ -4,7 +4,7 @@ metadata:
     github-path: agent-friendly-mcp
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: 7cbe114835f9d75940f0961e249c3b0dbd0ceb58
+    github-tree-sha: 493d4516c9b0326b890c3d6dd34a5bacbe906784
 name: agent-friendly-mcp
 ---
 # Agent-Friendly MCP
@@ -16,8 +16,9 @@ Use this skill to make MCP servers easy for agents to discover, invoke correctly
 This skill is written against the stable **MCP 2025-11-25** specification; the field names, capability paths, and task lifecycle it uses follow that revision.
 
 A **2026-07-28 release candidate** is in flight — not yet ratified, and still subject to change before it finalizes.
-It is expected to make the protocol stateless (removing the `initialize`/`initialized` handshake and per-session ids, with client info and capabilities traveling per request), move **tasks** from experimental core to a negotiated **extension**, deprecate **roots**, **sampling**, and **logging** on long retention windows, and formalize a reverse-DNS **extensions framework** that gives the convention metadata below an official home.
-Treat init-time capability negotiation, native tasks, and roots as **likely migration points**: design against them today, but keep server logic able to absorb their restructuring, and branch on stable symbolic codes rather than numeric or transport-level details where you have the choice.
+It is expected to make the protocol stateless (removing the `initialize`/`initialized` handshake and per-session ids, with client info and capabilities traveling per request), move **tasks** from experimental core to a negotiated **extension** (server-directed task creation, `tasks/update` added, `tasks/list` removed), deprecate **roots**, **sampling**, and **logging** on long retention windows, formalize a reverse-DNS **extensions framework** that gives the convention metadata below an official home, and fold the resource-not-found JSON-RPC code `-32002` into the standard `-32602`.
+This section is the single home for RC expectations; forward-compat notes elsewhere in this skill point here rather than restating them.
+Treat init-time capability negotiation, native tasks, and roots as **likely migration points** — design against them today, and hedge concretely: branch on stable symbolic codes rather than numeric or transport-level details where you have the choice, keep workspace scope expressible as ordinary tool arguments (contract-checklist §1 forward-compat), and keep task status/result/cancel expressible as ordinary tools (§7 forward-compat).
 Revisit this skill when 2026-07-28 finalizes.
 
 ## Core Standard
@@ -27,9 +28,9 @@ Revisit this skill when 2026-07-28 finalizes.
   Do not put essential selection, prerequisite, safety, or repair behavior only in `instructions`.
 - Optional MCP features only exist for an agent after protocol version and capability negotiation.
   Gate roots, completions, resource subscriptions, elicitation, list-change notifications, and tasks on the initialized capabilities.
-- Optimize for the first successful tool call **and** the first successful repair from a cold start.
+- First-call and first-repair success from a cold start are first-class quality metrics: measure both per design-workflow Step 8, and treat a design change that regresses either as wrong.
 - Design around user/agent tasks, not the underlying API's endpoint surface.
-- Make side effects, idempotency, rate limits, and agent-actionable prerequisites visible.
+- Declare side effects and idempotency via tool annotations where MCP assigns them meaning (contract-checklist §3), surface rate limits in structured response fields (§3/§6), and declare agent-actionable prerequisites in the capability summary (§1).
 - Default to compact, deterministic, structured output; structured data is authoritative and text or markdown is supplemental rendering for human-facing clients.
 - Provide explicit discovery primitives, but keep every definition compact: the least-capable realistic client preloads the whole catalog from `tools/list`, so compact schemas and concise descriptions are the universal baseline, and selective on-demand loading is a client-dependent optimization layered on top.
 - Design for the least-capable realistic client: some preload tools, paginate discovery, ignore annotations, or expose resources poorly.
@@ -65,7 +66,7 @@ Keep them — but never let them masquerade as protocol.
 - Library or SDK design that is not exposed via MCP — this skill is MCP-specific.
 - Trivial schema additions to an already agent-friendly server; just follow the existing contract.
 - Out of scope: sampling, server logging streams, server-operator dashboards, packaging/deployment, and skills-over-MCP (experimental at https://github.com/modelcontextprotocol/experimental-ext-skills — revisit when stable).
-  Elicitation is in scope only as an agent-facing contract boundary: when a server needs missing user input, confirmation, or sensitive external interaction, declare whether it supports MCP elicitation and how non-elicitation clients recover.
+  Elicitation is in scope only as an agent-facing contract boundary; the binding rules live in [contract-checklist.md](references/contract-checklist.md) §1 (declare the `client.capabilities.elicitation` dependency) and §6 (elicitation use and the non-elicitation fallback).
   Do not use this skill for designing full user-experience flows.
 
 ## Vocabulary
@@ -82,13 +83,13 @@ Notation: bare `§N` always means a contract-checklist section; `ex§N` means se
 | --- | --- | --- | --- |
 | §1 | Server-Level | Identity, transport, auth modes, agent-actionable prerequisites, negotiated capabilities, and roots — learnable in one read. State handles are declared here: opaque IDs, lifetime, expiry, auth on every use. | ex§7, ex§8a |
 | §2 | Discovery | A capability summary plus compact definitions as the universal baseline; progressive disclosure is a client-dependent optimization — pick a mechanism by cost axis (host-managed context, server-managed catalog, or client-independent surface reduction). | ex§7, ex§8 |
-| §3 | Tools | Task-completing tools over endpoint mirrors; strict closed schemas; honest annotations; failure paths are contract, not prose. | ex§1, ex§2, ex§10, ex§12, ex§13 |
+| §3 | Tools | Task-completing tools over endpoint mirrors; strict closed schemas; honest annotations; failure paths are contract, not prose. | ex§1, ex§2, ex§2a, ex§10, ex§12, ex§13 |
 | §4 | Resources | Stable hierarchical URIs; index before body; stable chunk ids; templates + completion; subscriptions for mutable resources. | ex§3, ex§4, ex§5a, ex§5b |
 | §5 | Prompts | Advisory orchestration scaffolding only — reference tools by name, never redefine their contract. | ex§5 |
 | §6 | Failure Recovery | Stable symbolic codes, field-level feedback, explicit retryability, repair hints naming real callable surfaces. | ex§6 |
 | §7 | Long-Running Operations | Choose blocking / progress / task-augmented deliberately; declare duration and timeout; recover via the native task lifecycle with a labeled fallback. | ex§11 |
 | §8 | Token Efficiency | Concise default with a `detail` toggle; native list methods paginate with `nextCursor` (omission = done), while a tool's own result payload may use a documented `has_more` convention; explicit truncation with a repair hint; identifiers chosen by role. | ex§2 |
-| §9 | Versioning | Publish a capability fingerprint; deterministic list ordering; native list-changed notifications; discoverable deprecation. | ex§9 |
+| §9 | Versioning | Publish a capability fingerprint where target clients cache or pin the surface; deterministic list ordering; native list-changed notifications; discoverable deprecation. | ex§9 |
 
 ## Workflow
 
@@ -97,7 +98,8 @@ Notation: bare `§N` always means a contract-checklist section; `ex§N` means se
 3. For an audit, follow [review-workflow.md](references/review-workflow.md); severity scale and report format live there.
 4. Use [contract-checklist.md](references/contract-checklist.md) as the detailed standard for both workflows.
 5. Use [mcp-vs-cli.md](references/mcp-vs-cli.md) if deciding which surface to expose; use [examples.md](references/examples.md) for concrete schema, response, error, and discovery shapes.
-6. Once the contract is designed, implement it with an MCP SDK — e.g. FastMCP for Python or the official TypeScript SDK. This skill defines the agent-facing wire contract, not the framework; if a FastMCP (or equivalent SDK) skill is available in your environment, use it for implementation specifics.
+6. When writing or auditing prose surfaces — server `instructions`, the capability summary, tool and resource descriptions — apply the rules-then-context discipline in [contract-checklist.md](references/contract-checklist.md) §2/§3/§4; if a separating-context-from-constraints skill is available in your environment, use it as the audit lens for those surfaces.
+7. Once the contract is designed, implement it with an MCP SDK — e.g. FastMCP for Python or the official TypeScript SDK. This skill defines the agent-facing wire contract, not the framework; if a FastMCP (or equivalent SDK) skill is available in your environment, use it for implementation specifics.
 
 ## Done Criteria
 
