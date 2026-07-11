@@ -91,11 +91,11 @@ records that sync runs also create). Operational semantics:
 
 ## Rate-limit reporting
 
-Each active call's `meta.rate_limit` carries the live snapshot captured from that run
-(`source: current_run`); `codex_status` reports the cached one from your last paid call
-(`source: plugin_cache`), including whether it has gone stale
-(`CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS`). The block is advisory — it informs whether to spend;
-`status: unknown` just means no fresh reading yet.
+When an active call emits usable quota data, its `meta.rate_limit` carries that live snapshot
+(`source: current_run`) and the plugin caches it. `codex_status` reports the latest usable cached
+snapshot (`source: plugin_cache`), including whether it has gone stale
+(`CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS`). A paid call that emits no usable quota data leaves the
+previous snapshot, or the unknown state, unchanged. The block is advisory.
 
 ## Workspace selection
 

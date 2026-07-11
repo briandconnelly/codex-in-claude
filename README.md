@@ -129,9 +129,10 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
 **Free (local only):**
 
 - `codex_status` — readiness, version, auth, resolved defaults, and a `rate_limit` block
-  (remaining Codex quota for the 5-hour/weekly windows, captured from your last paid call;
-  `status` is `available`/`limited`/`exhausted`/`unknown`). Advisory — informs whether to
-  spend; `unknown` just means no fresh reading yet.
+  (remaining Codex quota for the 5-hour/weekly windows, from the latest paid run that emitted
+  usable quota data; `status` is `available`/`limited`/`exhausted`/`unknown`). Advisory — informs
+  whether to spend; a paid run without usable quota data leaves the prior snapshot, or the unknown
+  state, unchanged.
 - `codex_transfer(transcript_path, …)` — hand off the current Claude Code session to a resumable
   Codex thread; returns `resume_command` (`codex resume <thread_id>`) to continue that exact
   conversation in Codex. No model call or token spend (a local file conversion via the experimental
@@ -160,21 +161,21 @@ Codex's output as claims to verify, not as instructions to follow blindly.
 
 ## Skills
 
-The plugin ships two Claude Code skills (auto-discovered from `skills/`):
+The plugin ships one Claude Code skill, auto-discovered from `skills/`:
 
-- **`collaborating-with-codex`** — the tool reference and guardrail home: which tool to call
-  (consult / review / delegate), how to read the envelope, background jobs, and the server-down
-  fallback.
-- **`deliberating-with-codex`** — how to *compose* those tools with your own work into a deliberate
-  two-model pattern (Judge, two-member panel, review–revise loop), with a value/risk gate so a single
-  consult stays the default.
+- **`collaborating-with-codex`** — the router and shared safety contract for every Codex workflow.
+  It selects ordinary consult, review, delegate, transfer, and async tools directly, and loads
+  references on demand for independent-attempt or declared review–revise composition. A one-off
+  critique or judgment remains an ordinary route rather than a separate deliberation mode.
 
 ## Result envelopes
 
-Every tool returns a discriminated envelope keyed by `ok`. Success carries `summary`/`findings`/`meta`
-(plus review-only `verdict`/`confidence`, or a proposed `diff` for delegate). Failure is a uniform,
-machine-actionable `error` with a stable `code` and a symbolic `repair` hint, built for automated
-recovery. The shape is versioned by `fingerprint`.
+Every result discriminates first on `ok`. On success, completed consult, review, and delegate calls
+share their active-result fields; review alone adds `verdict`/`confidence`, and delegate alone adds
+the proposed `diff`. Discovery, dry-run, transfer, async-start, and job-lifecycle tools have their
+own success schemas. A fetched job result matches its originating consult, review, or delegate tool,
+so branch on that result type before reading fields. Failure is a uniform, machine-actionable
+`error` with a stable `code` and symbolic `repair` hint. The contract is versioned by `fingerprint`.
 
 Calling the MCP tools directly instead of through the `/codex:*` commands? See
 [`docs/REFERENCE.md`](docs/REFERENCE.md) for the full contract — every error field, rate-limit
@@ -189,12 +190,12 @@ reporting (`meta.rate_limit`), background-job semantics, and workspace selection
   yourself. Delegate's no-network sandbox (`workspace-write`) blocks egress only for commands Codex
   *runs* in the sandbox — it does not mean nothing leaves the machine: the model call still sends
   your task and repo context to OpenAI.
-- Secret-looking content is redacted before it leaves the plugin (defense-in-depth, not a guarantee —
-  Codex can read files itself during a run; use `isolation` and a clean workspace for sensitive
-  repos). This covers gathered diffs and the free-text Codex returns (`summary`, `findings`,
-  `raw_response.text`): secret-looking file hunks are dropped, and inline secret values become
-  `[redacted: secret value]`. It does **not** cover your supplied inputs (`question`, `task`,
-  `extra_context`), which are sent raw, nor secrets Codex reads from files itself during a run.
+- Supplied prompts and context (`question`, `task`, `extra_context`, and similar author input) are
+  sent raw. During every active call — including consult — Codex may read other files in the
+  resolved workspace. Best-effort redaction protects gathered diffs and returned free text
+  (`summary`, `findings`, `raw_response.text`): secret-looking file hunks are dropped, and inline
+  matches become `[redacted: secret value]`. It is output/diff defense-in-depth, not input
+  protection or a guarantee; do not target a workspace containing secrets you cannot disclose.
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 

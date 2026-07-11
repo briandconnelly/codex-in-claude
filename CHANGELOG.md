@@ -42,6 +42,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Consolidate the bundled Codex guidance into one progressive-disclosure router skill.**
+  `collaborating-with-codex` now owns shared safety and routes ordinary consult, review, delegation,
+  transfer, async, independent-attempt, and declared review–revise workflows to references loaded on
+  demand. The former `deliberating-with-codex` entry point is removed; explicit invocations must use
+  `collaborating-with-codex`. The rewrite also corrects paid-call preflight, workspace privacy,
+  quota-cache, result-branching, independence, and bounded-spend guidance, and packaging tests now
+  parse and bound skill YAML with an explicit development dependency. Bundled skills are outside
+  `FINGERPRINT_COVERS`, so the agent-visible MCP surface and result `fingerprint` are unchanged.
+
 - **Tracked Codex version bumped to `0.144`.** `SUPPORTED_VERSIONS` now tracks `(0, 144)` (replacing
   `(0, 142)`); the CLI contract, compatibility notes, help snapshots (`docs/codex-help/0.144.1/`), and
   `KNOWN_MODEL_SLUGS` fallback (now the `gpt-5.6-*`/`gpt-5.5`/`gpt-5.4*` set) are verified against
