@@ -197,18 +197,13 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   review thread resolved (`required_review_thread_resolution`).
   - **Human-authored PRs** get an automatic Copilot review on open and on every push (the
     `copilot_code_review` ruleset rule).
-  - **PRs from `briandconnelly-agent[bot]`** — this project's GitHub-App agent, which holds no
-    Copilot seat, so the ruleset rule above skips it — are reviewed by the gap-filler workflow
-    `.github/workflows/copilot-review-bot-prs.yml` instead. It requests the Copilot reviewer on
-    open/reopen/ready-for-review **and on every push** (`synchronize`), using the user-scoped
-    `COPILOT_REVIEW_PAT` secret (a non-user token can't request Copilot) and **failing loudly** if
-    the request is dropped (#236/#240). So these PRs get an automatic review like human-authored ones.
-    If `COPILOT_REVIEW_PAT` is unset or expired the workflow warns and skips (no review) — then ask
-    the maintainer to request review manually.
-  - **PRs from any other bot or agent** — e.g. `dependabot[bot]`, `kingpy-bot`, or a different
-    agent's account — are **not** auto-reviewed: the ruleset skips bot/seatless authors, and the
-    gap-filler matches only `briandconnelly-agent[bot]`. If you are such an author, ask the
-    maintainer to request Copilot review on your PR, and again after each push you want re-reviewed.
+  - **Bot/agent-authored PRs** — `briandconnelly-agent[bot]`, `kingpy-bot`, `dependabot[bot]`, or
+    any other non-human author — get **no automatic Copilot review**: the ruleset rule skips authors
+    that hold no Copilot seat. This is **deliberately not automated** — requesting the Copilot
+    reviewer through the API needs a full user identity that CI/automation tokens don't have (a
+    fine-grained PAT is refused `403`, and a broad classic PAT was declined on security grounds; see
+    #294 / #236). So the maintainer requests Copilot on a bot PR with the web-UI **"Request review"**
+    button. If you authored the PR, ask them to — and again after each push you want re-reviewed.
 
   Treat Copilot's feedback like any review:
   - Evaluate each comment on its merits — verify it against the code, don't blindly implement.
