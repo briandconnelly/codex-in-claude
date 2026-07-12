@@ -136,24 +136,27 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 
 # --- Auto-loaded workspace context (issue #300) ----------------------------------
 # `codex exec` automatically loads the resolved workspace's `AGENTS.md` into model
-# context and auto-discovers skills under `.agents/skills/` (name/description metadata
-# up front; a skill's body loads progressively when the skill is selected). This
-# happens before any tool-directed read, on every model-bearing call — so that content
-# can reach OpenAI even when the caller's prompt never mentions those files. Verified
-# empirically against codex-cli 0.144.1 (2026-07-12) via marker tests; the behavior is
+# context and auto-discovers skills under `.agents/skills/` (per upstream docs:
+# name/description metadata up front, a skill's body when it is selected). It needs no
+# tool-directed read, and every model-bearing call here runs `codex exec` — so that
+# content can reach OpenAI even when the caller's prompt never mentions those files.
+# Verified empirically against codex-cli 0.144.1 (2026-07-12) via marker probes;
 # invisible in `codex exec --help` (no flag, no subcommand), so the mechanical
 # help-drift check CANNOT catch upstream changes to it. The isolation flags do NOT
 # suppress it: `--ignore-user-config` drops `$CODEX_HOME/config.toml` and
 # `--ignore-rules` drops execpolicy `.rules`; neither touches project-level `AGENTS.md`
-# or `.agents/skills/`. Not verified (do not assume): whether `.claude/skills/` is also
-# discovered, whether parent-directory `AGENTS.md` files load, whether
-# `project_doc_max_bytes=0` fully disables loading. Upstream docs:
+# or `.agents/skills/`. Upstream docs:
 # https://developers.openai.com/codex/concepts/customization#agents-guidance and
-# https://developers.openai.com/codex/concepts/customization#skills (config reference
-# documents `project_doc_max_bytes` and per-skill `skills.config.<index>.enabled`).
-# Every egress-caveat prose site (server instructions, tool descriptions/docstrings,
-# README, COMPATIBILITY.md) must disclose this; no feature-detection logic exists here
-# by design.
+# https://developers.openai.com/codex/concepts/customization#skills.
+# Reader-facing detail — the re-verification probe and the unverified edge cases
+# (`.claude/skills/`, parent-dir `AGENTS.md`, `project_doc_max_bytes=0`) — lives in
+# COMPATIBILITY.md, "Auto-loaded workspace context"; keep that section the single home
+# for both.
+#
+# RULE: every egress-caveat prose site — the server instructions, the codex_status
+# caveat, the tool capability descriptions and docstrings, README.md, COMPATIBILITY.md,
+# and the collaborating-with-codex skill — must disclose this. No feature-detection
+# logic exists here by design.
 
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations

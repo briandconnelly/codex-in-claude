@@ -120,8 +120,8 @@ CAPABILITY_SUMMARY = (
     "disables Codex's remote_plugin feature, so third-party connectors (GitHub, Gmail, Slack, "
     "Drive, …) aren't exposed to the Codex run — barring a custom operator-supplied Codex "
     "profile. "
-    "Every active call sends your inputs to OpenAI raw, and Codex also auto-loads context "
-    "from the resolved workspace — the project's AGENTS.md and any skills under "
+    "Every model-bearing call sends your inputs to OpenAI raw, and Codex also auto-loads "
+    "context from the resolved workspace — the project's AGENTS.md and any skills under "
     ".agents/skills/ — so their content can be sent even if your prompt never mentions "
     "them; the plugin's isolation flags do not suppress this project-level context. "
     # Routing: one imperative sentence per task family.
@@ -1452,8 +1452,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
                 "Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex "
                 "always runs with a resolved working dir (workspace_root, your MCP roots, "
-                "or the server cwd) and may read and send files from it, including "
-                "auto-loaded AGENTS.md/.agents/skills context. Recorded as a "
+                "or the server cwd) and may read and send files from it; it always "
+                "auto-loads AGENTS.md and .agents/skills/ context. Recorded as a "
                 "terminal job (meta.job_id) recoverable via codex_job_result after a "
                 "dropped connection.",
             ),
@@ -1476,8 +1476,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "codex_job_status; read the consult envelope with codex_job_result. "
                 "Egress: same as codex_consult — sends question+extra_context (raw) to "
                 "OpenAI, plus files Codex reads from its resolved working dir "
-                "(workspace_root, your MCP roots, or the server cwd), including "
-                "auto-loaded AGENTS.md/.agents/skills context.",
+                "(workspace_root, your MCP roots, or the server cwd); it always "
+                "auto-loads AGENTS.md and .agents/skills/ context.",
             ),
             ToolCapability(
                 name="codex_review_changes",
@@ -1499,8 +1499,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 returns="A result envelope with verdict, findings, and a context summary. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
                 "Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) "
-                "extra_context to OpenAI; Codex may also read other repo files, including "
-                "auto-loaded AGENTS.md/.agents/skills context. Recorded as "
+                "extra_context to OpenAI; Codex may also read other repo files and "
+                "always auto-loads AGENTS.md and .agents/skills/ context. Recorded as "
                 "a terminal job (meta.job_id) recoverable via codex_job_result after a "
                 "dropped connection.",
             ),
@@ -1526,7 +1526,7 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "codex_job_status; read the review envelope with codex_job_result. "
                 "Egress: same as codex_review_changes — sends the secret-redacted diff "
                 "plus your raw extra_context to OpenAI; Codex may also read other repo "
-                "files, including auto-loaded AGENTS.md/.agents/skills context.",
+                "files and always auto-loads AGENTS.md and .agents/skills/ context.",
             ),
             ToolCapability(
                 name="codex_delegate",
@@ -1547,7 +1547,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "raw_response.text; detail='full' includes it. "
                 "Egress: sends your task (raw) to OpenAI and lets Codex read tracked "
                 "files in the throwaway worktree and send their content, including the "
-                "committed AGENTS.md/.agents/skills context it auto-loads. Recorded as a "
+                "tracked AGENTS.md and .agents/skills/ context it auto-loads. "
+                "Recorded as a "
                 "terminal job (meta.job_id) recoverable via codex_job_result after a "
                 "dropped connection.",
             ),
@@ -1569,8 +1570,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read with codex_job_result. "
                 "Egress: same as codex_delegate — sends your task (raw) to OpenAI plus "
-                "the worktree files Codex reads, including the committed "
-                "AGENTS.md/.agents/skills context it auto-loads.",
+                "the worktree files Codex reads, including the tracked AGENTS.md and "
+                ".agents/skills/ context it auto-loads.",
             ),
             ToolCapability(
                 name="codex_job_status",
@@ -1714,9 +1715,10 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
             "server cwd); review sends the bounded, secret-redacted diff "
             "plus your raw extra_context; delegate sends the task and lets Codex read "
             "tracked files in the throwaway worktree. Every active call also auto-loads "
-            "the workspace's AGENTS.md and .agents/skills/ skills (the committed ones, "
-            "for delegate's worktree), so their content can be sent even if your prompt "
-            "never mentions them; the isolation flags do not suppress this.",
+            "the workspace's AGENTS.md and .agents/skills/ skills (for delegate, the "
+            "tracked versions seeded into its throwaway worktree), so their content "
+            "can be sent even if your prompt never mentions them; the isolation flags "
+            "do not suppress this.",
             "Delegate's no-network sandbox does NOT mean nothing leaves the machine: "
             "workspace-write blocks network egress only for commands Codex RUNS in the "
             "sandbox (so a delegated task cannot push/fetch/publish/install), but the "
@@ -2358,11 +2360,11 @@ async def codex_delegate(
     with a DNS/host-resolution error). Ask only for local code changes; do any network
     step yourself afterward. This does NOT mean nothing leaves the machine: the Codex
     model call still sends your `task` to OpenAI and lets Codex read tracked files in
-    the worktree and send their content. The worktree is seeded from your git baseline,
-    so the committed `AGENTS.md` and `.agents/skills/` skills auto-load there too — their
-    content can be sent even if your `task` never mentions them (the plugin's isolation
-    flags do not suppress this). Your `task` is sent raw — secret redaction is
-    best-effort and does not cover it or files Codex reads itself.
+    the worktree and send their content. The tracked `AGENTS.md` and `.agents/skills/`
+    skills seeded into the worktree auto-load there too — their content can be sent even
+    if your `task` never mentions them (the plugin's isolation flags do not suppress
+    this). Your `task` is sent raw — secret redaction is best-effort and does not cover
+    it or files Codex reads itself.
 
     Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
     `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
@@ -2427,7 +2429,7 @@ async def codex_delegate_async(
     self-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with
     a DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the
     machine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex
-    read tracked files in the worktree and send their content — including the committed
+    read tracked files in the worktree and send their content — including the tracked
     `AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret
     redaction is best-effort and does not cover your `task` or files Codex reads
     itself."""
