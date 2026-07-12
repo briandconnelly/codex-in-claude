@@ -208,17 +208,27 @@ what matters here is what the identity does and does not buy.
   it. Claim by commenting first, with `<!-- agent-claim -->` as the first line; **record the `id` the
   API returns** — that is your claim for the rest of the issue's life. The label is shared state with
   no owner: an index for humans and search, written only by the agent that wins the race below.
-- **An active claim is a claim comment whose id no release names.** A release comment's first line is
-  exactly `<!-- agent-release:CLAIM_ID -->`, naming the one claim it releases. This query prints the
-  winning active claim, or nothing if the issue is free:
+- **An active claim is a claim comment whose id no release names — and only the bot's comments are
+  protocol data.** A release comment's first line is exactly `<!-- agent-release:CLAIM_ID -->`, naming
+  the one claim it releases. The query below keys both markers on the bot's immutable account id
+  (rename-proof, unlike the login), so a claim or release posted by any other account can neither take
+  nor free an issue, and it fetches **every** comments page (`--paginate`), so a claim or release past
+  page one still counts. It prints the winning active claim, or nothing if the issue is free. A
+  non-zero exit means a page fetch or parse failed — discard any output and re-run; never treat a
+  failed run as "free":
 
   ```sh
-  gh api repos/briandconnelly/codex-in-claude/issues/ISSUE_NUMBER/comments --jq '
-    [ .[] | select(.body | startswith("<!-- agent-release:"))
-          | .body | capture("<!-- agent-release:(?<id>[0-9]+) -->").id | tonumber ] as $released
-    | [ .[] | select(.body | startswith("<!-- agent-claim -->")) ]
-    | map(select(.id as $i | ($released | index($i)) | not)) | min_by(.id)'
+  set -o pipefail
+  gh api repos/briandconnelly/codex-in-claude/issues/ISSUE_NUMBER/comments --paginate | jq -s '
+    add
+    | map(select(.user.id == 292553156))    # briandconnelly-agent[bot]
+    | [ .[] | .body
+          | capture("^<!-- agent-release:(?<id>[0-9]+) -->(\r?\n|$)").id | tonumber ] as $released
+    | [ .[] | select(.body | test("^<!-- agent-claim -->(\r?\n|$)")) ]
+    | map(select(.id as $i | ($released | index($i)) | not)) | min_by(.id) // empty'
   ```
+
+  Both markers must be the *entire* first line — trailing text on the marker line makes it inert.
 
 - **Resolve a race by lowest claim id, then take the label.** After commenting, re-run that query.
   The active claim with the lowest `id` wins: REST ids are unique ascending integers, so they never

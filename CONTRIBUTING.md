@@ -51,6 +51,10 @@ uv run pytest -m integration --no-cov
   triggers a `FINGERPRINT` bump are the `FINGERPRINT_COVERS` tuple in that file. Note every bump in
   `CHANGELOG.md`.
 - `_core/` must not import from its parent package (one-way dependency / extraction seam).
+- **Picking up an issue:** check it's free first. It's taken if it has an assignee or carries the
+  `agent:in-progress` label — that label means an AI agent session is actively working it, so
+  don't start duplicate work. Claim by asking to be assigned; the agents' own comment-based claim
+  protocol lives in [AGENTS.md](AGENTS.md) → Git / PRs.
 
 ## Reporting issues
 
