@@ -199,32 +199,40 @@ what matters here is what the identity does and does not buy.
   title needs an "and", split the PR.
 - Branch names are `<type>/<slug>` matching the commit type (e.g. `feat/async-jobs`, `docs/conventions`).
 - **Claim an issue before working it, and never work one someone else has taken.** Before starting,
-  read it (`gh issue view ISSUE_NUMBER --json assignees,labels,comments,title`) and stop if it is
-  taken: assigned to anyone other than the maintainer directing your session, or carrying an *active
-  claim* — an `<!-- agent-claim -->` comment with no later `<!-- agent-release -->` comment from that
-  same author.
-- **The claim is the comment, not the label.** Claim by commenting first, with `<!-- agent-claim -->`
-  as the comment's first line, followed by a line naming yourself and saying you are starting. Only a
-  comment can hold a claim: it is unique, attributable to an actor, and totally ordered. The
-  `agent:in-progress` label is shared state with no owner — it is an index for humans and search,
-  never the claim itself, and it is written only by the agent that has already won the race below.
-- **Resolve a race by lowest comment id, then take the label.** After commenting, re-read the claims
-  over REST, which returns unique ascending integer ids:
+  check the assignees (`gh issue view ISSUE_NUMBER --json assignees,title`) and run the active-claim
+  query below. Stop if either is taken: the issue is assigned to anyone other than the maintainer
+  directing your session, or it carries an active claim that is not yours.
+- **The claim is a comment, and its identity is that comment's id.** Every agent session posts as the
+  same actor (`briandconnelly-agent[bot]`), so neither the author nor the `agent:in-progress` label
+  can tell two sessions apart — the comment id is the only unique key, and every rule below turns on
+  it. Claim by commenting first, with `<!-- agent-claim -->` as the first line; **record the `id` the
+  API returns** — that is your claim for the rest of the issue's life. The label is shared state with
+  no owner: an index for humans and search, written only by the agent that wins the race below.
+- **An active claim is a claim comment whose id no release names.** A release comment's first line is
+  exactly `<!-- agent-release:CLAIM_ID -->`, naming the one claim it releases. This query prints the
+  winning active claim, or nothing if the issue is free:
 
   ```sh
-  gh api repos/briandconnelly/codex-in-claude/issues/ISSUE_NUMBER/comments \
-    --jq '.[] | select(.body | startswith("<!-- agent-claim -->")) | {id, user: .user.login}'
+  gh api repos/briandconnelly/codex-in-claude/issues/ISSUE_NUMBER/comments --jq '
+    [ .[] | select(.body | startswith("<!-- agent-release:"))
+          | .body | capture("<!-- agent-release:(?<id>[0-9]+) -->").id | tonumber ] as $released
+    | [ .[] | select(.body | startswith("<!-- agent-claim -->")) ]
+    | map(select(.id as $i | ($released | index($i)) | not)) | min_by(.id)'
   ```
 
-  The active claim with the **lowest `id`** wins; ids never tie, so every agent computes the same
-  winner. (`gh issue view --json comments` returns opaque GraphQL node ids — `IC_kwDO…` — which carry
-  no order and cannot decide this; use the REST endpoint.) If you won, take the label
-  (`gh issue edit ISSUE_NUMBER --add-label agent:in-progress`). If you lost, post an
-  `<!-- agent-release -->` comment, **leave the label alone** — it belongs to the winner — and stop.
-- **Release the claim when you stop working the issue.** Post `<!-- agent-release -->` and, only if
-  you hold the winning claim, remove the label
-  (`gh issue edit ISSUE_NUMBER --remove-label agent:in-progress`). A stale claim blocks the next
-  agent. (The bot cannot self-assign — see Agent identity.)
+- **Resolve a race by lowest claim id, then take the label.** After commenting, re-run that query.
+  The active claim with the lowest `id` wins: REST ids are unique ascending integers, so they never
+  tie and every racing agent computes the same winner. (`gh issue view --json comments` returns
+  opaque GraphQL node ids — `IC_kwDO…` — which carry no order and cannot decide this; use REST.) If
+  the winner is your claim id, take the label (`gh issue edit ISSUE_NUMBER --add-label
+  agent:in-progress`). If it is not, release your own claim, **leave the label alone** — it belongs
+  to the winner — and stop.
+- **Release your own claim whenever you stop working the issue** — you lost the race, the work
+  landed, or you abandoned it. Post `<!-- agent-release:CLAIM_ID -->` naming the id of *your* claim,
+  and remove the label (`gh issue edit ISSUE_NUMBER --remove-label agent:in-progress`) only if you
+  held the winning claim. **Never release a claim id that is not yours** — that hands the issue to
+  the next agent while its owner is still working. A stale claim blocks the next agent. (The bot
+  cannot self-assign — see Agent identity.)
 - Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
   body (`Closes #N`); label the PR with a type and (for issues) a priority.
 - Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
