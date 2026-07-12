@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Keep this launcher out of the personal PATH and invoke it by absolute path.
+REAL_CODEX="REPLACE"  # absolute path to the real codex executable
+
+case "$REAL_CODEX" in
+  /*) ;;
+  *) echo "codex-bot: REAL_CODEX must be an absolute path" >&2; exit 1 ;;
+esac
+if [ ! -x "$REAL_CODEX" ]; then
+  echo "codex-bot: real codex not found or not executable at $REAL_CODEX" >&2
+  exit 1
+fi
+
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+if [ ! -r "$CODEX_HOME/bot.config.toml" ]; then
+  echo "codex-bot: bot profile is not readable at $CODEX_HOME/bot.config.toml" >&2
+  exit 1
+fi
+
+for arg in "$@"; do
+  case "$arg" in
+    -p|-p?*|--profile|--profile=*)
+      echo "codex-bot: caller-supplied profile overrides are not allowed" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exec "$REAL_CODEX" --profile bot "$@"

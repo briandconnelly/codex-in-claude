@@ -1,0 +1,82 @@
+{
+  "task": "Fetch the current state of issue #42 in octo/demo, then recover from a wrong issue number.",
+  "tool": "github_get_issue",
+  "expect_first_call": {
+    "tool": "github_get_issue",
+    "args_match": { "repo": "octo/demo", "issue_number": 42 }
+  },
+  "inject_error": {
+    "code": "issue_not_found",
+    "repair": { "next_step": "list_issues_to_find_valid_number", "tool": "github_list_issues" }
+  },
+  "expect_repair": {
+    "tool": "github_list_issues",
+    "args_match": { "repo": "octo/demo", "state": "open" }
+  },
+  "metrics": { "max_tool_calls": 3, "max_tokens": 4000 },
+  "wire": {
+    "output_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "title", "state"],
+      "properties": {
+        "number": { "type": "integer" },
+        "title": { "type": "string" },
+        "state": { "type": "string", "enum": ["open", "closed"] },
+        "labels": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "error_schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["code", "message", "temporary", "retry_after_ms"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "temporary": { "type": "boolean" },
+        "retry_after_ms": { "type": ["integer", "null"] },
+        "details": { "type": "object" },
+        "repair": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["next_step"],
+          "properties": {
+            "next_step": { "type": "string", "minLength": 1 },
+            "tool": { "type": "string" },
+            "arguments": { "type": "object" },
+            "alternative": { "type": "string" }
+          }
+        },
+        "request_id": { "type": "string" }
+      }
+    },
+    "success_result": {
+      "content": [{ "type": "text", "text": "Issue #42: Login button misaligned (open)" }],
+      "structuredContent": {
+        "number": 42,
+        "title": "Login button misaligned",
+        "state": "open",
+        "labels": ["bug"]
+      },
+      "isError": false
+    },
+    "error_result": {
+      "content": [{ "type": "text", "text": "No issue #99999 in octo/demo." }],
+      "structuredContent": {
+        "code": "issue_not_found",
+        "message": "Issue #99999 does not exist in octo/demo.",
+        "temporary": false,
+        "retry_after_ms": null,
+        "details": { "field": "issue_number", "value": 99999, "reason": "no such issue in repository" },
+        "repair": {
+          "next_step": "list_issues_to_find_valid_number",
+          "tool": "github_list_issues",
+          "arguments": { "repo": "octo/demo", "state": "open" },
+          "alternative": "Call github_search_issues with a text query when the number is unknown."
+        },
+        "request_id": "req-abc123"
+      },
+      "isError": true
+    }
+  }
+}

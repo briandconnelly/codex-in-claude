@@ -1,15 +1,22 @@
 # MCP Server Review Workflow
 
-Use this workflow when auditing an existing MCP server or advising how to make it more agent-friendly. Inputs are the server's tool, resource, and prompt schemas, its capability summary, and — ideally — at least one real agent transcript exercising the high-value tasks. Outputs are severity-tagged findings against [contract-checklist.md](contract-checklist.md), each anchored to a specific `§N`, plus a coverage table that accounts for every section in the checklist.
+Use this workflow when auditing an existing MCP server or advising how to make it more agent-friendly.
+Inputs are the server's tool, resource, and prompt schemas, its capability summary, and — ideally — at least one real agent transcript exercising the high-value tasks.
+Outputs are severity-tagged findings against [contract-checklist.md](contract-checklist.md), each anchored to a specific `§N`, plus a coverage table that accounts for every section in the checklist.
 
 A review is grounded when its findings cite evidence from the schema, the response payloads, or a transcript — not from how the server "feels." Where evidence is unavailable, mark the relevant section `not-checked` with a reason rather than guessing.
 
 ## Severity Scale
 
-- **Critical** — agent will reliably fail to use the server correctly, or there is a security or data-integrity risk. Examples: a tool that mutates shared or persistent state advertised `readOnlyHint: true` (§3), `idempotentHint: true` on a tool that creates duplicates on retry, undocumented destructive side effects, secrets leaked in error payloads, a `stdio` server logging to stdout, an auth model collapsed to "credential failure" with no distinction between missing / wrong / insufficient scope. Blocks merge.
-- **Major** — agent will frequently choose the wrong primitive, waste tokens, or hit avoidable errors. Examples: overlapping tool descriptions, bloated definitions or a 50-tool catalog with no client-independent surface reduction (and no progressive-disclosure mechanism matched to the target clients), unstructured error strings with no symbolic codes, no capability fingerprint for a target client that caches or pins the server surface, resource lists that inline bodies.
-- **Minor** — degrades agent experience but recoverable. Examples: verbose default responses with no detail toggle, missing `request_id` correlation, ambiguous parameter names whose schema types still constrain shape, summaries longer than three sentences.
-- **Nit** — style, naming, or doc improvement. Examples: inconsistent verb usage across tools, capitalization drift, a prompt that could be one sentence shorter.
+- **Critical** — agent will reliably fail to use the server correctly, or there is a security or data-integrity risk.
+  Examples: a tool that mutates shared or persistent state advertised `readOnlyHint: true` (§3), `idempotentHint: true` on a tool that creates duplicates on retry, undocumented destructive side effects, secrets leaked in error payloads, a `stdio` server logging to stdout, an auth model collapsed to "credential failure" with no distinction between missing / wrong / insufficient scope.
+  Blocks merge.
+- **Major** — agent will frequently choose the wrong primitive, waste tokens, or hit avoidable errors.
+  Examples: overlapping tool descriptions, bloated definitions or a 50-tool catalog with no client-independent surface reduction (and no progressive-disclosure mechanism matched to the target clients), unstructured error strings with no symbolic codes, no capability fingerprint for a target client that caches or pins the server surface, resource lists that inline bodies.
+- **Minor** — degrades agent experience but recoverable.
+  Examples: verbose default responses with no detail toggle, missing `request_id` correlation, ambiguous parameter names whose schema types still constrain shape, summaries longer than three sentences.
+- **Nit** — style, naming, or doc improvement.
+  Examples: inconsistent verb usage across tools, capitalization drift, a prompt that could be one sentence shorter.
 
 ## Audit Procedure
 
@@ -24,23 +31,34 @@ A review is grounded when its findings cite evidence from the schema, the respon
    A section may have multiple findings; a section with both findings and `OK` evidence on adjacent items is fine — note both.
 3. **Run the transcript-style probes below.** Use a real agent transcript when available; otherwise simulate one from the schema by tracing what an agent would see at each step.
    The cold-start and first-repair probes must be answered with concrete evidence, plus at least three other probes where the server's surface makes them applicable; record an inapplicability reason for any probe skipped (e.g., "no long-running operations defined").
-4. **Synthesize findings into the report format below.** Order findings by severity (Critical → Nit), then by checklist section. Then assemble the coverage table.
+4. **Synthesize findings into the report format below.** Order findings by severity (Critical → Nit), then by checklist section.
+   Then assemble the coverage table.
 
-**Safety:** Do not invoke tools that mutate live state, rotate credentials, or trigger paid operations unless the user explicitly approves. When simulating credential failures, prefer obviously invalid placeholder values over real-looking incorrect ones.
+**Safety:** Do not invoke tools that mutate live state, rotate credentials, or trigger paid operations unless the user explicitly approves.
+When simulating credential failures, prefer obviously invalid placeholder values over real-looking incorrect ones.
 
 ## Transcript Probes
 
-Ten questions to ask while reading code and transcripts. Each should be answerable from concrete evidence — schema text, response payloads, or transcript excerpts — not intuition.
+Ten questions to ask while reading code and transcripts.
+Each should be answerable from concrete evidence — schema text, response payloads, or transcript excerpts — not intuition.
 
-- **Cold start.** What does an agent see when it first connects? Can it learn what the server does, what it does NOT do, and what prerequisites affect use in one read? Trace the first few definition loads from a transcript or simulate them from the schema. *(maps to §1, §2)*
-- **Tool selection.** Given two adjacent tools (same verb, overlapping nouns, or similar surface), can an agent pick the right one without invoking both? Are descriptions narrow enough that the schema alone disambiguates? Look for tools whose descriptions you cannot tell apart at a glance. *(maps to §3; see `examples.md` §10 for the failure-mode shape)*
-- **First repair.** When the agent makes an invalid call, does the error response tell it specifically how to retry — which field, which allowed values, which tool to call instead? Force one invalid call per error code documented for the tool and read the payload, not just the message. *(maps to §6; see `examples.md` §6 for the target payload shape)*
+- **Cold start.** What does an agent see when it first connects?
+  Can it learn what the server does, what it does NOT do, and what prerequisites affect use in one read?
+  Trace the first few definition loads from a transcript or simulate them from the schema. *(maps to §1, §2)*
+- **Tool selection.** Given two adjacent tools (same verb, overlapping nouns, or similar surface), can an agent pick the right one without invoking both?
+  Are descriptions narrow enough that the schema alone disambiguates?
+  Look for tools whose descriptions you cannot tell apart at a glance. *(maps to §3; see `examples.md` §10 for the failure-mode shape)*
+- **First repair.** When the agent makes an invalid call, does the error response tell it specifically how to retry — which field, which allowed values, which tool to call instead?
+  Force one invalid call per error code documented for the tool and read the payload, not just the message. *(maps to §6; see `examples.md` §6 for the target payload shape)*
 - **Advertised vs. actual.** Inspect captured responses or isolated fixtures for at least one success and one forced error per tool; use live calls only where the Safety rule permits.
   Verify that every required and claimed-always-present field is populated, that conditional fields appear under their documented conditions, and that the error carrier matches the wire — `isError: true`, envelope location, envelope shape.
   Prefer schema-invalid requests known to fail before handler execution; do not probe mutating tools with guessed placeholder values.
   When a finding relies on host or client behavior — stringified arguments, truncated descriptions, hidden annotations, stale cached schemas — cite captured `tools/list` payloads as the client receives them and observed `tools/call` arguments at the server; never infer host quirks from folklore.
   Absence of an optional field is a finding only when the contract claims presence. *(maps to §1, §3, §6)*
-- **Discovery cost.** How many tokens does the agent spend learning the server's surface before its first useful call? Count, do not estimate — and measure the serialized `tools/list` wire response, not tool count or source models. Credit `search_tools` / `describe_tool` only against clients that actually withhold native definitions; on a preloading client they add cost (§2). A bloated definition or an inflated catalog with no client-independent reduction is the finding.
+- **Discovery cost.** How many tokens does the agent spend learning the server's surface before its first useful call?
+  Count, do not estimate — and measure the serialized `tools/list` wire response, not tool count or source models.
+  Credit `search_tools` / `describe_tool` only against clients that actually withhold native definitions; on a preloading client they add cost (§2).
+  A bloated definition or an inflated catalog with no client-independent reduction is the finding.
   Common bloat mechanisms to check: generated output schemas dominating bytes, framework `$defs` inlining that duplicates shared envelopes per tool, echo field descriptions that restate the field name, and identical boilerplate blocks repeated across docstrings. *(maps to §2, §8; see `examples.md` §8 for one host-managed-disclosure shape)*
 - **Capability gating.** Which optional MCP capabilities does the server rely on after initialization?
   Verify that roots, completions, resource subscriptions, elicitation, tasks, and list-change notifications are advertised before use, and that weaker clients get a structured fallback instead of a mysterious method failure.
@@ -50,8 +68,11 @@ Ten questions to ask while reading code and transcripts. Each should be answerab
   *(maps to §4, §9)*
 - **Long-running operation.** Does a 2-minute operation give useful progress, and can the client cancel it or recover the result later? *(maps to §7; see `examples.md` §11 for one valid shape)*
   Exercise the status and cancellation surface, not only the initial call.
-- **Security boundary.** Do confirmation boundaries, least-privilege scopes, secret redaction, and untrusted-content handling show up in schema, annotations, and response payloads? Trace at least one open-world or external-send tool when available. *(maps to §3 security subsection)*
-- **Cross-version.** What changes when this server upgrades? Does the capability fingerprint move, and can a cached client detect the change without re-walking the full surface? Diff two versions of the discovery surface if available; otherwise inspect what the fingerprint covers. *(maps to §9; see `examples.md` §9 for a deprecation lifecycle)*
+- **Security boundary.** Do confirmation boundaries, least-privilege scopes, secret redaction, and untrusted-content handling show up in schema, annotations, and response payloads?
+  Trace at least one open-world or external-send tool when available. *(maps to §3 security subsection)*
+- **Cross-version.** What changes when this server upgrades?
+  Does the capability fingerprint move, and can a cached client detect the change without re-walking the full surface?
+  Diff two versions of the discovery surface if available; otherwise inspect what the fingerprint covers. *(maps to §9; see `examples.md` §9 for a deprecation lifecycle)*
 
 ## Report Format
 
@@ -71,7 +92,10 @@ Concrete example:
 > - **Evidence:** `tools/slack.py:42` and `tools/slack.py:118` — both descriptions begin "Send a message to a Slack channel." Eval transcript `runs/2026-04-29.jsonl` shows 7/12 first-call selections went to the wrong tool.
 > - **Remediation:** Collapse the two into a single `slack_send_message` (§3 granularity rule); if the second variant is truly distinct, rename to reflect the distinguishing axis (e.g., `slack_send_threaded_reply`) and rewrite both descriptions to lead with the disambiguating clause.
 
-After the findings list, include a **checklist coverage table**. One row per section §1–§9; each row records `finding(s)` (with refs into the findings list), `OK` (with evidence), or `not-checked` (with reason). Section names mirror `contract-checklist.md`; if that file changes section count or names, update this template alongside it. Example shape:
+After the findings list, include a **checklist coverage table**.
+One row per section §1–§9; each row records `finding(s)` (with refs into the findings list), `OK` (with evidence), or `not-checked` (with reason).
+Section names mirror `contract-checklist.md`; if that file changes section count or names, update this template alongside it.
+Example shape:
 
 | Section | Status | Notes |
 | --- | --- | --- |

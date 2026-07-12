@@ -3,7 +3,8 @@
 Shared terms used across `SKILL.md`, the contract checklist, the workflows, and the examples.
 
 - **Discovery surface**: the union of definitions, summaries, and discovery primitives an agent can see before deciding which capability to invoke.
-- **Concise vs detailed result**: a single structured default response, with an opt-in detail mode for richer content. Not a free `response_format` toggle.
+- **Concise vs detailed result**: a single structured default response, with an opt-in detail mode for richer content.
+  Not a free `response_format` toggle.
 - **Resource index**: a lightweight catalog of available resources with metadata sufficient to decide whether to read the body, distinct from the bodies themselves.
 - **Prompt scaffold**: a reusable task starter that points at tools and resources, with explicit prerequisites and expected follow-on actions.
 - **Task-completing tool vs composable primitive**: the granularity decision: one tool that completes a user task vs. several narrower tools the agent must chain.

@@ -4,7 +4,7 @@ metadata:
     github-path: agent-friendly-mcp
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: 493d4516c9b0326b890c3d6dd34a5bacbe906784
+    github-tree-sha: b7ab8dde2dd1b3095e7e0d23f4fe64ed6da45f27
 name: agent-friendly-mcp
 ---
 # Agent-Friendly MCP
@@ -23,7 +23,8 @@ Revisit this skill when 2026-07-28 finalizes.
 
 ## Core Standard
 
-- Tool and resource schemas are the operational contract; prompts are advisory scaffolding for orchestration. Do not hide essential behavior in prompts.
+- Tool and resource schemas are the operational contract; prompts are advisory scaffolding for orchestration.
+  Do not hide essential behavior in prompts.
 - Server-level `instructions` are advisory and may not be surfaced by every client.
   Do not put essential selection, prerequisite, safety, or repair behavior only in `instructions`.
 - Optional MCP features only exist for an agent after protocol version and capability negotiation.
@@ -41,7 +42,8 @@ This skill is deliberately opinionated: native MCP fields alone are often insuff
 Keep them — but never let them masquerade as protocol.
 
 - **Preserve native MCP field names and casing exactly; prefer `snake_case` for house/domain fields.**
-  A field's provenance is determined by the MCP type that contains it, **not** by its casing — native `_meta` carries an underscore, `name`/`code`/`repair` are lowercase on both sides, and a convention object may hold a `mimeType`-style name. So casing is a preference for house fields, never a test for whether a field is protocol.
+  A field's provenance is determined by the MCP type that contains it, **not** by its casing — native `_meta` carries an underscore, `name`/`code`/`repair` are lowercase on both sides, and a convention object may hold a `mimeType`-style name.
+  So casing is a preference for house fields, never a test for whether a field is protocol.
   Tool: `name`, `title`, `description`, `icons`, `inputSchema`, `outputSchema`, `annotations`, `execution`, `_meta`.
   Resource: `uri`, `name`, `title`, `description`, `mimeType`, `size`, `icons`, `annotations`, `_meta`.
   Resource template: `uriTemplate`, `name`, `title`, `description`, `mimeType`, `icons`, `annotations`, `_meta`.
@@ -49,7 +51,8 @@ Keep them — but never let them masquerade as protocol.
   Implementation: `name`, `title`, `version`, `description`, `icons`, `websiteUrl`.
 - Put convention metadata under a namespaced `_meta` key (e.g., `com.example/chunks`) — the spec-sanctioned extension point — so it cannot collide with future MCP fields.
 - Label every convention extension as such where it appears, so a reader can tell protocol from house style.
-- The examples in this skill keep some conventions inline at the top level for readability; production servers SHOULD namespace convention metadata under `_meta`. See `examples.md` §3/§4 for the worked `_meta` pattern.
+- The primary example blocks in this skill are wire-valid: convention metadata rides under a namespaced `_meta` key, never as a top-level field on a native record.
+  See `examples.md` §1/§3/§4/§5 for the worked `_meta` pattern; the few deliberately abbreviated blocks (e.g. §10) carry an explicit non-wire label.
 - For the exact native request/response envelopes, field names, and casing of the methods most often confused with house conventions — list pagination, completion, the `tools/call` result, and the task lifecycle — see [native-wire-shapes.md](references/native-wire-shapes.md).
 
 ## When To Use
@@ -76,7 +79,8 @@ Shared terms — discovery surface, repair signal, state handle, capability fing
 ## Checklist Map
 
 The normative standard lives in [contract-checklist.md](references/contract-checklist.md); walk it top to bottom for any design or review.
-This index orients and routes — it does not restate the rules. State-handle discipline and long-running-operation contracts are normative in §1/§8 and §7 respectively; consult them there rather than a second copy here.
+This index orients and routes — it does not restate the rules.
+State-handle discipline and long-running-operation contracts are normative in §1/§8 and §7 respectively; consult them there rather than a second copy here.
 Notation: bare `§N` always means a contract-checklist section; `ex§N` means section N of [examples.md](references/examples.md).
 
 | § | Section | One-line rule | Worked examples |
@@ -99,11 +103,13 @@ Notation: bare `§N` always means a contract-checklist section; `ex§N` means se
 4. Use [contract-checklist.md](references/contract-checklist.md) as the detailed standard for both workflows.
 5. Use [mcp-vs-cli.md](references/mcp-vs-cli.md) if deciding which surface to expose; use [examples.md](references/examples.md) for concrete schema, response, error, and discovery shapes.
 6. When writing or auditing prose surfaces — server `instructions`, the capability summary, tool and resource descriptions — apply the rules-then-context discipline in [contract-checklist.md](references/contract-checklist.md) §2/§3/§4; if a separating-context-from-constraints skill is available in your environment, use it as the audit lens for those surfaces.
-7. Once the contract is designed, implement it with an MCP SDK — e.g. FastMCP for Python or the official TypeScript SDK. This skill defines the agent-facing wire contract, not the framework; if a FastMCP (or equivalent SDK) skill is available in your environment, use it for implementation specifics.
+7. Once the contract is designed, implement it with an MCP SDK — e.g. FastMCP for Python or the official TypeScript SDK.
+   This skill defines the agent-facing wire contract, not the framework; if a FastMCP (or equivalent SDK) skill is available in your environment, use it for implementation specifics.
 
 ## Done Criteria
 
 Before declaring done, walk [contract-checklist.md](references/contract-checklist.md) against your output.
 
 - **Design tasks**: every checklist section must have an answer in the schema set or be explicitly marked not-applicable with a one-line justification.
-- **Review tasks**: every checklist section is either covered by a finding, marked `OK` with brief evidence, or noted `not-checked` with reason. Use the severity scale and report format defined in [review-workflow.md](references/review-workflow.md).
+- **Review tasks**: every checklist section is either covered by a finding, marked `OK` with brief evidence, or noted `not-checked` with reason.
+  Use the severity scale and report format defined in [review-workflow.md](references/review-workflow.md).

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Codex adapter: gh shim, first on the Codex-controlled PATH.
+# Mints a fresh installation token per invocation; fails CLOSED with a
+# non-empty invalid token so gh errors loudly instead of silently falling
+# back to personal stored credentials (gh treats empty GH_TOKEN as unset).
+set -euo pipefail
+
+REAL_GH="REPLACE"  # absolute path to the real gh, e.g. /opt/homebrew/bin/gh
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+
+# Validate REAL_GH before minting: a misconfigured shim must not spend a
+# network call or write the token cache. A relative REAL_GH would re-resolve
+# through PATH — where this shim is first — and exec itself forever.
+case "$REAL_GH" in
+  /*) ;;
+  *) echo "codex gh shim: REAL_GH must be an absolute path" >&2; exit 1 ;;
+esac
+if [ ! -x "$REAL_GH" ]; then
+  echo "codex gh shim: real gh not found at $REAL_GH — refusing to guess" >&2
+  exit 1
+fi
+
+# A mint that "succeeds" with empty output is as dangerous as a crash.
+GH_TOKEN="$("$SCRIPT_DIR/bot-token")" || GH_TOKEN=""
+[ -n "$GH_TOKEN" ] || GH_TOKEN="BOT-TOKEN-MINT-FAILED"
+export GH_TOKEN
+
+exec "$REAL_GH" "$@"

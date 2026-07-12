@@ -10,12 +10,16 @@ import httpx, jwt
 APP_ID = "REPLACE"
 INSTALL_ID = "REPLACE"
 KEY = Path.home() / ".config/acme-agent/key.pem"
-CACHE = Path.home() / ".config/acme-agent/token.json"
+# The cache lives apart from the key and the scripts so a sandboxed harness can
+# grant write access to it without also granting write access to key.pem.
+CACHE = Path.home() / ".cache/acme-agent/token.json"
 
 if CACHE.exists():
     try:
         c = json.loads(CACHE.read_text())
         if c["exp"] - time.time() > 300:
+            if not c["token"]:  # Never print empty: gh reads it as unset.
+                sys.exit("bot-token: cached token is empty; delete the cache")
             print(c["token"])
             sys.exit()
     except (ValueError, KeyError, TypeError, OSError):
@@ -30,6 +34,8 @@ r = httpx.post(
 )
 r.raise_for_status()
 data = r.json()
+if not data.get("token"):  # Never print empty: gh reads it as unset.
+    sys.exit("bot-token: GitHub returned an empty token")
 exp = datetime.datetime.fromisoformat(data["expires_at"]).timestamp()
 CACHE.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp = tempfile.mkstemp(dir=CACHE.parent, suffix=".tmp")

@@ -35,13 +35,16 @@ Result — a method-specific array key plus an **optional** `nextCursor`:
 
 Rules that examples must not contradict:
 
-- Casing is `nextCursor` (camelCase). The cursor is **opaque** — do not decode or construct it.
+- Casing is `nextCursor` (camelCase).
+  The cursor is **opaque** — do not decode or construct it.
 - **Absence of `nextCursor` means the list is complete.** There is no native `has_more`, `next_cursor`, `estimated_total`, `total`, or `limit` on these methods, and page size is server-selected.
-- A tool's *own* result payload (the body of a `tools/call` result, not a list method) MAY use a documented house pagination convention such as `has_more` / `next_cursor` / `estimated_total`. That is convention, lives in the tool's `structuredContent` under its `outputSchema`, and must be labeled as such — see §8 of `contract-checklist.md`.
+- A tool's *own* result payload (the body of a `tools/call` result, not a list method) MAY use a documented house pagination convention such as `has_more` / `next_cursor` / `estimated_total`.
+  That is convention, lives in the tool's `structuredContent` under its `outputSchema`, and must be labeled as such — see §8 of `contract-checklist.md`.
 
 ## Completion — `completion/complete`
 
-Gated on `server.capabilities.completions`. The result nests under `completion`:
+Gated on `server.capabilities.completions`.
+The result nests under `completion`:
 
 ```json
 { "jsonrpc": "2.0", "id": "1", "result": { "completion": { "values": ["C0123DEPLOYS", "C0456DEPLOYOPS"], "total": 2, "hasMore": false } } }
@@ -57,8 +60,10 @@ Gated on `server.capabilities.completions`. The result nests under `completion`:
 ```
 
 - Native fields: `content` (array of content blocks), `structuredContent` (object, paired with the tool's `outputSchema`), `isError` (boolean), `_meta`.
-- **Declared domain output — including house pagination fields — belongs in `structuredContent`** validated by `outputSchema`, so the agent can observe it. Only auxiliary house metadata belongs under a namespaced `_meta` key (e.g. `com.example/chunks`); `_meta` may not be surfaced to the model.
-- `errors` is **not** a native `tools/call` or `Tool` field. Documented error catalogs are a convention extension (see `examples.md` §1).
+- **Declared domain output — including house pagination fields — belongs in `structuredContent`** validated by `outputSchema`, so the agent can observe it.
+  Only auxiliary house metadata belongs under a namespaced `_meta` key (e.g. `com.example/chunks`); `_meta` may not be surfaced to the model.
+- `errors` is **not** a native `tools/call` or `Tool` field.
+  Documented error catalogs are a convention extension (see `examples.md` §1).
 
 ## Tasks (experimental — MCP 2025-11-25)
 
@@ -75,7 +80,8 @@ Native casing throughout: `taskId`, `status`, `statusMessage` (optional), `creat
 | `tasks/result` | the underlying tool result; **MUST** carry `io.modelcontextprotocol/related-task` in `_meta` |
 | `notifications/tasks/status` | optional push of full task state; requestors MUST NOT rely on receiving it |
 
-`ttl` and `pollInterval` are milliseconds. Carry `io.modelcontextprotocol/related-task` in `_meta` only where the payload does not already name the task (required on `tasks/result`; `tasks/get`/`tasks/list`/`tasks/cancel` SHOULD NOT include it).
+`ttl` and `pollInterval` are milliseconds.
+Carry `io.modelcontextprotocol/related-task` in `_meta` only where the payload does not already name the task (required on `tasks/result`; `tasks/get`/`tasks/list`/`tasks/cancel` SHOULD NOT include it).
 `tasks/result` blocks until the task is terminal and always returns the underlying result; on `input_required` the requestor SHOULD call it preemptively and hold it open — the pending input request arrives as a separate receiver-to-requestor request (tagged with related-task `_meta`) while the call is pending, not as the `tasks/result` response.
 A `CreateTaskResult` MAY carry `io.modelcontextprotocol/model-immediate-response` (a string) in `_meta` for the host to hand the model while the task runs.
 See `contract-checklist.md` §7 and `examples.md` §11 for the full task contract and the labeled domain-specific fallback.
