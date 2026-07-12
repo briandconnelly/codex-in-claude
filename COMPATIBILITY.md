@@ -102,6 +102,26 @@ like the sandbox/approval `-c` denials below, it is bounded by the **`--profile`
 boundary** — an opaque profile this server cannot inspect could re-enable the feature, so only enable
 that knob with profiles you control.
 
+## Auto-loaded workspace context (`AGENTS.md`, `.agents/skills/`, #300)
+
+`codex exec` **automatically loads** the resolved workspace's `AGENTS.md` into model context and
+**auto-discovers** skills under `.agents/skills/` (name/description metadata up front; a skill's
+body loads when the skill is selected). This happens before any tool-directed read, on every
+model-bearing call, so that content can reach OpenAI even when the caller's prompt never mentions
+those files. Verified empirically against codex-cli 0.144.1 (2026-07-12, issue #300) via marker
+tests; the behavior is invisible in `codex exec --help` (no flag, no subcommand), so the mechanical
+help-drift check cannot catch upstream changes to it. Upstream docs:
+[AGENTS guidance](https://developers.openai.com/codex/concepts/customization#agents-guidance) and
+[skills](https://developers.openai.com/codex/concepts/customization#skills).
+
+**The isolation flags do not suppress it.** `--ignore-user-config` and `--ignore-rules` cover
+`$CODEX_HOME` state — `config.toml` and execpolicy `.rules` respectively — not project-level
+`AGENTS.md` or `.agents/skills/`; no `isolation` value changes this. For the delegate tools the
+throwaway worktree is seeded from the git baseline, so the **committed** `AGENTS.md`/skills
+auto-load there too. Not verified (do not assume): whether `.claude/skills/` is also discovered,
+whether parent-directory `AGENTS.md` files load, or whether `project_doc_max_bytes=0` fully
+disables loading. The assumption is recorded in `cli_contract.py`.
+
 ## Flag classes
 
 - **ALWAYS_SEND_FLAGS** — guarantee-bearing (sandbox, cd, json, output-last-message, isolation,

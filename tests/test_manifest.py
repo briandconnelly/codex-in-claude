@@ -7,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "452f4f7223934bd488ec817f4f437bf3806e9c4bc484caa0a26ca7c0a982ddd9"
+EXPECTED_MANIFEST_HASH = "2cd91d7a43cac0aa4efb4501ce220693bfa8a3dfdef3122035f4968808ab1885"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
