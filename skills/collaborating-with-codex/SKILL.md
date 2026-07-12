@@ -82,8 +82,10 @@ gate fails, make one call or none and move on.
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
 - **Privacy:** Do not target a workspace containing secrets you cannot disclose. Every supplied
   prompt and context field is sent to OpenAI raw, and during every active call — including consult —
-  Codex may read other files in the resolved workspace. Redaction is best-effort protection for
-  gathered diffs and returned output only; it does not protect supplied input or files Codex reads.
+  Codex may read other files in the resolved workspace; it auto-loads the workspace's `AGENTS.md`
+  and `.agents/skills/` skills even if the prompt never mentions them, and the isolation flags do
+  not suppress this. Redaction is best-effort protection for gathered diffs and returned output
+  only; it does not protect supplied input, auto-loaded context, or files Codex reads.
 - **Verification:** Treat findings, summaries, verdicts, and proposed changes as unverified claims.
   Run the applicable project checks yourself; read-only consult/review is not proof tests ran.
 - **Delegation:** Never apply a delegated diff before reviewing it. The plugin does not apply it to

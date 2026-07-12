@@ -189,7 +189,12 @@ reporting (`meta.rate_limit`), background-job semantics, and workspace selection
   your task and repo context to OpenAI.
 - Supplied prompts and context (`question`, `task`, `extra_context`, and similar author input) are
   sent raw. During every active call — including consult — Codex may read other files in the
-  resolved workspace. Best-effort redaction protects gathered diffs and returned free text
+  resolved workspace, and it also auto-loads context from that workspace: the project's `AGENTS.md`
+  and any skills under `.agents/skills/` can be sent to OpenAI even if your prompt never mentions
+  them (for delegate, the versions seeded into the throwaway worktree auto-load there). The
+  plugin's isolation flags do not suppress this project-level context; details and the unverified
+  edge cases are in [`COMPATIBILITY.md`](COMPATIBILITY.md). Best-effort redaction protects
+  gathered diffs and returned free text
   (`summary`, `findings`, `raw_response.text`): secret-looking file hunks are dropped, and inline
   matches become `[redacted: secret value]`. It is output/diff defense-in-depth, not input
   protection or a guarantee; do not target a workspace containing secrets you cannot disclose.

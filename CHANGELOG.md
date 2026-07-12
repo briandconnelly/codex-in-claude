@@ -5,6 +5,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Egress caveats now disclose Codex's auto-loaded workspace context** (#300). `codex exec`
+  automatically loads the resolved workspace's `AGENTS.md` and auto-discovers skills under
+  `.agents/skills/` (verified against codex-cli 0.144.1), so their content can be sent to OpenAI
+  even when the caller's prompt never mentions them — and the plugin's isolation flags do not
+  suppress it. Every egress/privacy caveat (server instructions, `codex_status` caveat, tool
+  descriptions and docstrings, `README.md`, `COMPATIBILITY.md`, `SECURITY.md`, the
+  `collaborating-with-codex` skill) now states this; the behavioral assumption is recorded in
+  `cli_contract.py`. Wording-only
+  disclosure fix — no tool, field, or behavior changed; `fingerprint` `schema-37` → `schema-38`.
+
 ## [0.9.0] - 2026-07-11
 
 A security-and-hardening release, centered on `codex_transfer` robustness and shutting off Codex's
