@@ -166,6 +166,27 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 - The **95% coverage floor** is enforced in CI. Live tests that hit the real `codex` CLI are marked
   `integration` and excluded by default (`uv run pytest -m integration --no-cov`).
 
+## Agent identity
+
+Agent sessions in this repo run under the `briandconnelly-agent[bot]` GitHub App identity: commits,
+pushes, `gh` calls, and PRs attribute to the bot, while the maintainer's own git operations on the
+same machine keep the personal account. Setup and mechanism live in the `agent-bot-identity` skill;
+what matters here is what the identity does and does not buy.
+
+- **The bot identity buys attribution, not containment.** The agent runs as the maintainer's OS user
+  and can reach the personal GitHub credentials on that machine, so it holds *both* identities. The
+  ruleset's required review binds the **bot token**, not the agent. Everything in Git / PRs below —
+  never merging, never self-approving — is a convention the agent upholds, not a boundary that stops
+  it. The only hard boundaries are the App's installation list and this repo's server-side rulesets.
+- **The App holds no Workflows permission, so GitHub rejects bot pushes that touch
+  `.github/workflows/`.** This is enforced server-side, not a convention: a change under that path
+  has to come from the maintainer (that is why #295's workflow removal could not be pushed by the
+  bot). CI logic *outside* that path — scripts the workflows invoke, composite actions — is still
+  writable by the bot, which is part of why the human review gate matters.
+- **A GitHub App bot actor cannot be an issue assignee.** `gh issue edit --add-assignee` fails for
+  the bot, and `Issues: write` is already the widest grant, so no permission fixes it. The label-based
+  claim protocol in Git / PRs exists to work around this.
+
 ## Git / PRs
 
 - **Conventional Commits** for every commit and PR title. Allowed types: `feat`, `fix`, `chore`,
@@ -177,13 +198,51 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   title must itself be a valid Conventional Commit**. Keep each PR to one logical change — if the
   title needs an "and", split the PR.
 - Branch names are `<type>/<slug>` matching the commit type (e.g. `feat/async-jobs`, `docs/conventions`).
-- **Claim an issue before working it, and never work one assigned to someone else.** Only work an
-  issue that has no assignees or where you are the sole assignee. Before starting, check the
-  assignees (`gh issue view ISSUE_NUMBER --json assignees,title`); if anyone else is assigned, stop — do not
-  start work. To claim an unassigned issue, self-assign (`gh issue edit ISSUE_NUMBER --add-assignee @me`),
-  then re-check (`gh issue view ISSUE_NUMBER --json assignees`) and begin only if you are the sole assignee —
-  `--add-assignee` is additive and will not fail if someone claimed the issue first, so the re-check
-  is what closes that race.
+- **Claim an issue before working it, and never work one someone else has taken.** Before starting,
+  check the assignees (`gh issue view ISSUE_NUMBER --json assignees,title`) and run the active-claim
+  query below. Stop if either is taken: the issue is assigned to anyone other than the maintainer
+  directing your session, or it carries an active claim that is not yours.
+- **The claim is a comment, and its identity is that comment's id.** Every agent session posts as the
+  same actor (`briandconnelly-agent[bot]`), so neither the author nor the `agent:in-progress` label
+  can tell two sessions apart — the comment id is the only unique key, and every rule below turns on
+  it. Claim by commenting first, with `<!-- agent-claim -->` as the first line; **record the `id` the
+  API returns** — that is your claim for the rest of the issue's life. The label is shared state with
+  no owner: an index for humans and search, written only by the agent that wins the race below.
+- **An active claim is a claim comment whose id no release names — and only the bot's comments are
+  protocol data.** A release comment's first line is exactly `<!-- agent-release:CLAIM_ID -->`, naming
+  the one claim it releases. The query below keys both markers on the bot's immutable account id
+  (rename-proof, unlike the login), so a claim or release posted by any other account can neither take
+  nor free an issue, and it fetches **every** comments page (`--paginate`), so a claim or release past
+  page one still counts. It prints the winning active claim, or nothing if the issue is free. A
+  non-zero exit means a page fetch or parse failed — discard any output and re-run; never treat a
+  failed run as "free":
+
+  ```sh
+  set -o pipefail
+  gh api repos/briandconnelly/codex-in-claude/issues/ISSUE_NUMBER/comments --paginate | jq -s '
+    add
+    | map(select(.user.id == 292553156))    # briandconnelly-agent[bot]
+    | [ .[] | .body
+          | capture("^<!-- agent-release:(?<id>[0-9]+) -->(\r?\n|$)").id | tonumber ] as $released
+    | [ .[] | select(.body | test("^<!-- agent-claim -->(\r?\n|$)")) ]
+    | map(select(.id as $i | ($released | index($i)) | not)) | min_by(.id) // empty'
+  ```
+
+  Both markers must be the *entire* first line — trailing text on the marker line makes it inert.
+
+- **Resolve a race by lowest claim id, then take the label.** After commenting, re-run that query.
+  The active claim with the lowest `id` wins: REST ids are unique ascending integers, so they never
+  tie and every racing agent computes the same winner. (`gh issue view --json comments` returns
+  opaque GraphQL node ids — `IC_kwDO…` — which carry no order and cannot decide this; use REST.) If
+  the winner is your claim id, take the label (`gh issue edit ISSUE_NUMBER --add-label
+  agent:in-progress`). If it is not, release your own claim, **leave the label alone** — it belongs
+  to the winner — and stop.
+- **Release your own claim whenever you stop working the issue** — you lost the race, the work
+  landed, or you abandoned it. Post `<!-- agent-release:CLAIM_ID -->` naming the id of *your* claim,
+  and remove the label (`gh issue edit ISSUE_NUMBER --remove-label agent:in-progress`) only if you
+  held the winning claim. **Never release a claim id that is not yours** — that hands the issue to
+  the next agent while its owner is still working. A stale claim blocks the next agent. (The bot
+  cannot self-assign — see Agent identity.)
 - Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
   body (`Closes #N`); label the PR with a type and (for issues) a priority.
 - Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
