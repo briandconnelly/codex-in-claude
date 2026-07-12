@@ -1,10 +1,23 @@
 # MCP Server Design Workflow
 
-Use this workflow when designing a new MCP server or redesigning an existing one. The output is a server whose tools, resources, and prompts pass `contract-checklist.md` end to end — that is, a contract an agent can plan against from the schema and structured responses alone, never undocumented prose outside the schema.
+Use this workflow when designing a new MCP server or redesigning an existing one.
+The output is a server whose tools, resources, and prompts pass `contract-checklist.md` end to end — that is, a contract an agent can plan against from the schema and structured responses alone, never undocumented prose outside the schema.
 
 The steps are deliberately re-entrant: a later step often surfaces a flaw in an earlier decision (a granularity choice that breaks the schema, a discovery design that breaks under eval, an error taxonomy that exposes a missing primitive).
 Re-entering Step N from Step N+3 is normal — treat earlier outputs as drafts until the eval at Step 8 holds.
 The checkpoint links at each step point at the relevant `contract-checklist.md` sections; consult them as you work, not only at the end.
+
+**On this page:**
+
+- [Step 1: Enumerate user/agent tasks](#step-1-enumerate-useragent-tasks)
+- [Step 2: Choose the right primitive per task](#step-2-choose-the-right-primitive-per-task)
+- [Step 3: Decide tool granularity](#step-3-decide-tool-granularity)
+- [Step 4: Write input schemas](#step-4-write-input-schemas)
+- [Step 5: Design the discovery surface](#step-5-design-the-discovery-surface)
+- [Step 6: Design failure recovery](#step-6-design-failure-recovery)
+- [Step 7: Design long-running behavior](#step-7-design-long-running-behavior)
+- [Step 8: Build evaluations grounded in real tasks](#step-8-build-evaluations-grounded-in-real-tasks)
+- [Step 9: Iterate against the eval, including transcript review](#step-9-iterate-against-the-eval-including-transcript-review)
 
 ## Step 1: Enumerate user/agent tasks
 
@@ -24,10 +37,15 @@ Checkpoint: §1, §3 granularity rule.
 
 For each task, pick tool, resource, or prompt scaffold.
 
-- State-changing or operational? Tool. Annotate with `destructiveHint` / `idempotentHint` honestly.
-- Read-only and browseable, with stable URIs the agent will quote back? Resource.
-- Multi-step orchestration scaffolding the agent invokes by name? Prompt — but never load-bearing for correctness.
-- A "write resource" is a tool. A "prompt that defines argument shapes" is a tool schema in disguise; reclassify it.
+- State-changing or operational?
+  Tool.
+  Annotate with `destructiveHint` / `idempotentHint` honestly.
+- Read-only and browseable, with stable URIs the agent will quote back?
+  Resource.
+- Multi-step orchestration scaffolding the agent invokes by name?
+  Prompt — but never load-bearing for correctness.
+- A "write resource" is a tool.
+  A "prompt that defines argument shapes" is a tool schema in disguise; reclassify it.
 
 Output: per-task primitive assignment (tool / resource / prompt) with one-line justification each.
 Checkpoint: §3, §4, §5.
@@ -36,7 +54,8 @@ Checkpoint: §3, §4, §5.
 
 For each tool, choose task-completing vs composable primitive, and record the reason.
 
-- Default to task-completing. Hide internal step granularity unless the steps are themselves separately useful tasks.
+- Default to task-completing.
+  Hide internal step granularity unless the steps are themselves separately useful tasks.
 - Split into composable primitives only when a named exception applies or an eval (Step 8) shows the split helps a code-execution client — not on speculation.
 - Named split exceptions: intermediate state inspection, branching on intermediate results, streaming large results, step reuse across workflows, and human-approval boundaries.
 - Endpoint-shaped tools are an anti-pattern: collapse endpoint chains into the task they serve.
@@ -47,7 +66,8 @@ Checkpoint: §3 granularity rule.
 
 ## Step 4: Write input schemas
 
-Treat the schema as the authoritative contract. Write it before behavior.
+Treat the schema as the authoritative contract.
+Write it before behavior.
 
 - Required vs optional discipline: required parameters are necessary; optional ones declare their omission semantics in the schema description, with `default` only where the server actually applies that value (§3).
 - Strict types: enums for fixed value sets; formats (`date-time`, `uri`, `email`); `integer` vs `number` chosen deliberately.
@@ -69,8 +89,10 @@ Decide how an agent finds the right primitive at the lowest cost its clients all
 - Expose the summary through a resource, discovery tool, or instructions field, whichever the client honors.
   Treat `instructions` as supplemental because some clients do not surface it to the model.
 - Make compact definitions your baseline (§2), then, if you need progressive disclosure, pick a mechanism by cost axis: host-managed context disclosure, server-managed catalog disclosure, or client-independent surface reduction — only the last helps a client that preloads and never lazy-loads.
-- Make discovery selective, but through a discovery tool, resource catalog, or authorization-scoped catalog — native `tools/list` takes only a pagination cursor and has no filter parameters. A flat list of 80 tools is undiscoverable.
-- Index resources; do not inline bodies. Catalog entries carry triage metadata only.
+- Make discovery selective, but through a discovery tool, resource catalog, or authorization-scoped catalog — native `tools/list` takes only a pagination cursor and has no filter parameters.
+  A flat list of 80 tools is undiscoverable.
+- Index resources; do not inline bodies.
+  Catalog entries carry triage metadata only.
 - Publish `resources/templates/list` for URI-shaped resources that cannot or should not be fully enumerated.
 - Implement `completion/complete` for prompt arguments and resource-template variables with dynamic value sets when `server.capabilities.completions` is negotiated.
   Document that completion does not cover arbitrary tool arguments.
@@ -93,7 +115,8 @@ Design the error surface as deliberately as the success surface.
 - Repair hints reference real callable surfaces — tool names, parameter names, valid enum values — not free-form prose.
 - Capability failures name the missing negotiated capability and the fallback path (`capability_not_negotiated`, `required_capability`, `fallback`).
 - If the server can use elicitation for missing input or sensitive external flows, define both the elicitation path and the non-elicitation fallback error.
-- Draft a worked JSON payload for each top failure mode — not just a field inventory. Concrete payloads expose contradictions a field list hides.
+- Draft a worked JSON payload for each top failure mode — not just a field inventory.
+  Concrete payloads expose contradictions a field list hides.
 
 Output: error taxonomy with example payloads for the top failure modes per tool, including correlation context (`request_id`, offending parameter).
 Checkpoint: §6. See `examples.md` §6 for an actionable error payload.
@@ -126,7 +149,8 @@ Build an eval suite from the Step 1 task list before iterating further.
 - Add a `host_capture` fixture per target client: record the serialized `tools/list` payload as that client receives it and real `tools/call` arguments as observed at the server, and treat what hosts actually do — stringify containers, truncate descriptions, hide annotations, cache stale schemas, expose resources poorly — as compatibility constraints on the design, not protocol facts.
   Captures gate the §3 stringified-argument shim and the §2 retrieval-phrasing note: neither applies without observed evidence.
 
-A worked fixture for one task makes the metrics runnable rather than aspirational. Each fixture pairs a prompt with an assertion the harness can check against the transcript:
+A worked fixture for one task makes the metrics runnable rather than aspirational.
+Each fixture pairs a prompt with an assertion the harness can check against the transcript:
 
 ```json
 {
@@ -153,7 +177,8 @@ A worked fixture for one task makes the metrics runnable rather than aspirationa
 }
 ```
 
-Score each run for first-call correctness (did `expect_first_call` match?), first-repair correctness (did the injected error resolve in one hop?), and the two budgets. A fixture that no current transcript can satisfy is a finding against the schema, not a flaky test.
+Score each run for first-call correctness (did `expect_first_call` match?), first-repair correctness (did the injected error resolve in one hop?), and the two budgets.
+A fixture that no current transcript can satisfy is a finding against the schema, not a flaky test.
 
 Output: at least one eval task suite covering the high-value tasks from Step 1, with metrics for first-call correctness, first-repair correctness, token consumption, and tool-call count.
 Checkpoint: §2, §3, §6, §7, §8, §9 — the eval should exercise discovery, tool selection, error repair, long-running behavior, token consumption, and upgrade behavior.

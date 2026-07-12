@@ -1,2 +1,6 @@
 #!/usr/bin/env bash
-exec env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL "$@"
+if [ "$#" -eq 0 ]; then
+  echo "usage: as-me <command> [args...]" >&2
+  exit 2
+fi
+exec env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -- "$@"

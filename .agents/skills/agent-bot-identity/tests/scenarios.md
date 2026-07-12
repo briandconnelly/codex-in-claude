@@ -244,11 +244,55 @@ An independent review (2026-06-10, finding H1) established that `gh pr checks` u
 > (5) the Variant B verification adds an `as-me` check, since the guard re-sets the bot identity every command.
 > Assertion 4's "emits nothing" was reworded to "emits no bot env" to match (3); the 9/9 row above predates these edits and was not re-scored against the new wording.
 
-### Scenario 5 — broken Variant B guard setup (added 2026-06-16)
+### Scenario 5 — broken Variant B guard setup (added 2026-06-16, first run 2026-07-07)
 
 | Date | Scenario | Run | Assertions passed | Notes |
 | --- | --- | --- | --- | --- |
-| 2026-06-16 | 5 (broken guard) | not yet run | n/a | Added to cover issue #22: a hook-time executable preflight can fail during non-blocking `SessionStart` before installing the per-command guard, leaving later Bash commands able to run personal. |
+| 2026-07-07 | 5 (broken guard) | baseline | 4/6 | Unusually strong on the core bug: fail-open install path identified as the top Critical with the SessionStart-is-advisory reasoning (1); validation moved into the guard line itself (2); capture kept and garbage output rejected fail-closed, via regex validation rather than eval-abort (3, met in substance); silent personal attribution named as the incident (4). Missed: pre-git verification specifics — no `ghs_` prefix or command-scope helper checks, used `git var GIT_AUTHOR_IDENT` only (5); replaced the routing model wholesale with `includeIf`-based gitconfig as source of truth plus a PreToolUse deny backstop, abandoning per-command env routing and calling the `CLAUDE_ENV_FILE` semantics unverified (6). Baseline bonus adopted into the skill: a compound `cd <org-repo> && git commit` is classified by the starting directory — a real silent-personal gap, now documented with the split-the-commands guidance. |
+| 2026-07-07 | 5 (broken guard) | with-skill | 6/6 | All assertions satisfied. Fail-open install path as the top Critical with the exact incident mechanics and the mid-session vs session-start asymmetry (1); all availability checking moved into the per-command guard line, hook installs unconditionally (2); capture-then-eval kept with malformed-shell abort (3); silent human attribution named as the headline failure mode (4); pre-git verification with `ghs_` prefix, command-scope helper, and the broken-guard abort regression (5); routing model preserved — org-remote verdicts, ambiguity→bot, personal repos emit no bot env (6). Unprompted bonuses: `__bot_env` unset hygiene, and the guard-line idempotence migration hazard (old line survives a text change in a resumed session) — both adopted into the skill/scripts. |
+
+> [!NOTE]
+> **Hardening after dual-model review (2026-07-07, Claude Fable review cross-checked with Codex).** Applied without changing the design:
+> (1) `bot-env` now derives extra `insteadOf` pairs from the matched remotes themselves — git's `insteadOf` match is literal and case-sensitive while GitHub accepts mixed-case hosts/orgs, so the canonical pair alone could take a bot verdict yet let pushes silently ride the personal SSH key (`git@github.com:Acme/`); verified against 12 remote-URL cases including live rewrite checks, with all spoof cases still resolving personal;
+> (2) `as-me` refuses zero arguments (bare `env` would print the whole environment, `GH_TOKEN` included);
+> (3) documented: the Variant B verdict binds to a command's starting directory (compound `cd <org-repo> && git commit` is a silent-personal gap — split the commands), Variant A's session-static env follows the session into other directories, the personal verdict clobbers user-set `GH_TOKEN`/`GIT_AUTHOR_*`/`GIT_CONFIG_*` in agent commands, the guard-line idempotence migration hazard, and `bot-token`'s benign double-mint race;
+> (4) the `CLAUDE_ENV_FILE` per-command mechanism now cites the official hooks reference ("Persist environment variables") instead of resting on the 2.1.172 probe alone;
+> (5) frontmatter description trimmed to triggering conditions (~450 chars); the PATH-shim mechanism detail/adapter contract and the approval-laundering mitigation ladder moved to `references/` with load-bearing facts kept inline.
+> All five scenarios were re-run with-skill against the edited skill the same day — see the rows below.
+
+### Post-hardening re-validation (2026-07-07, edited skill with `references/`)
+
+| Date | Scenario | Run | Assertions passed | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-07-07 | 1 (set up) | with-skill | 10/10 | All assertions satisfied against the restructured skill, including assertion 10 (Verified-badge caveat — the historical compression casualty — surfaced in both the env-block notes and the gpgsign rationale). The plan also reproduced the new content: literal/case-sensitive `insteadOf` caveat with the normalize-remotes fix, `as-me` zero-arg refusal, Variant A session-follows-not-directory behavior, and the no-lock mint note. Depth note: the PATH-shim rationale said "PATH-frozen, non-login shell snapshot" without repeating the ZDOTDIR detail (present inline in the skill; compressed in the output). |
+| 2026-07-07 | 2 (audit) | with-skill | 9/10 | Bypass actor top Critical with removal-only remediation; Workflows write with the forfeited-server-side-control framing; all-repos install flagged incl. the negative-test-impossible insight; zshrc shim called dead code under the frozen snapshot plus the personal-PATH leak risk; both token-script flaws plus timeout and double-parse bonuses; ungated-global env antipattern with A-or-B remediation; gpgsign mismatch; public-repo negative test debunked on both grounds; runbook corrected with both-identities laundering and scoping-as-routing. **Miss: assertion 10's architectural-containment clause (separate OS user/container/VM) was not repeated** — the framing landed attribution-not-containment, and the fact remains inline in When Not to Use and What This Enforces, so this is recorded as run-level output compression rather than a skill gap; watch on future runs. |
+| 2026-07-07 | 3 (mixed contribution) | with-skill | 5/5 | All assertions satisfied; cited the new Common Mistakes inversion row by name, added the Verified-signature false-attestation angle, the three-autonomous-paths coverage argument, and the session-mode "pair flag" leak-into-subagents trap. |
+| 2026-07-07 | 4 (user-level) | with-skill | 9/9 | All assertions satisfied; the design additionally carried the new material — remote-derived `insteadOf` pairs for mixed-case/`ssh://` forms, the compound-command starting-directory quirk with split-the-commands guidance, the personal-verdict env-clobbering cost, the fresh-sessions-after-guard-change migration note, and the selective in-org opt-out → stay-on-Variant-A trade-off. |
+| 2026-07-07 | 5 (broken guard) | with-skill | 6/6 | All assertions satisfied; also derived the fixed-chmod-recovers-next-command contrast, the mixed-old-and-new guard-line convergence behavior, and the incident-remediation path (`--amend --reset-author` mirror image, force-push ruleset coordination). |
+
+> [!NOTE]
+> **Context/constraints separation pass (2026-07-07, separating-context-from-constraints audit).** Four semantic-preserving rewrites: the Variant A normalize-remotes directive now leads its bullet as an imperative instead of trailing an explainer sentence (R1); "keep `bot-env` small" became a testable dependency constraint, with the Phase 5 re-run obligation split into its own sentence (R3) — the constraint's first wording ("shells out only to `git` and `bot-token`") was inaccurate (the script also uses `tr`/`cat`) and was refined in Copilot review round 3 to the current no-network-calls property; the allowlist and per-command-network prohibitions split into separate sentences (R4); the Phase 6 closing sentence unbundled into three (R4).
+> Spot-check re-runs of scenarios 1 and 4 (the assertions exercising the rewritten passages): 10/10 and 9/9; the normalize-remotes rule and the no-network-calls constraint both surfaced in the outputs.
+
+### Scenario 3 — mixed contribution (first run 2026-07-07)
+
+| Date | Scenario | Run | Assertions passed | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-07-07 | 3 (mixed contribution) | baseline | 2/5 | Strong instincts on the two assertions it passed: rejected the inversion on asymmetric-misattribution grounds incl. the false-attestation framing of GPG-signed bot work (1), and called the bot subagent a prompt-level control that shares env/HOME/ssh-agent with the parent (4). Failed exactly as predicted: designed a three-mode scheme where *interactive agent sessions default to personal credentials* (a session-mode toggle, not a per-command escape) (2); brought a personal fine-grained PAT into agent sessions for interactive work (3); keyed the use rule on session supervision mode with launcher-set env, not explicit per-unit-of-work human marking (5). |
+| 2026-07-07 | 3 (mixed contribution) | with-skill | 5/5 | All assertions satisfied. Inversion rejected on fail-direction grounds with the amend-recoverability asymmetry and the unattended-path framing (1); bot stays the session default with `as-me` as the per-command escape (2); escape authorship-only, pushes/`gh`/PRs on the bot token, laundering surface preserved (3); subagent env inheritance stated, per-command wrapping named as the only real granularity, headless/scheduled noted as top-level sessions a subagent scheme cannot cover (4); explicit-direction-only use rule with subagents/headless/scheduled bot-attributed by construction (5). Bonus: named the honest residual friction (unsigned `as-me` commits where a repo requires signatures). |
+
+### Post-restructure spot-check (2026-07-07, core + adapter split)
+
+> [!NOTE]
+> **Restructure regression check.** The skill was split into a harness-neutral core (`SKILL.md`, whose Phase 4 states the adapter routing contract) plus per-harness adapter references (`references/adapters/claude-code.md`, `references/adapters/codex.md`).
+> Scenarios 1 and 4 exercise the passages that moved, so both were re-run with-skill against the restructured skill.
+> Adapter discoverability was part of the test: each run was pointed only at `SKILL.md` and told it might need other files under `references/`, never at the adapter directly.
+> Both runs found `claude-code.md` through the Phase 4 links unaided, and both matched their post-hardening scores.
+
+| Date | Scenario | Run | Assertions passed | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-07-07 | 1 (set up) | with-skill (restructured skill) | 10/10 | All assertions satisfied through the core-plus-adapter path; the run read `SKILL.md`, followed Phase 4 to `references/adapters/claude-code.md`, and also pulled `references/approval-laundering.md` and the bundled scripts. The moved Claude mechanism detail all surfaced: the `SessionStart` → `$CLAUDE_ENV_FILE` hook with the full snapshot rationale (non-login `$HOME/.zshrc`, `.zprofile` skipped, ZDOTDIR ignored, frozen PATH) and the GH_TOKEN-is-dynamic argument (6); Checks **and** Actions read with the rollup rationale and the exact "Resource not accessible by integration" string (2); atomic `0600` cache via `mkstemp`+`os.replace` with `expires_at` parsed (4); Verified-badge caveat on the verification path (10). Assertion 9 met in substance: the run mandates walking agent-friendly-github §2 per enrolled repo and names `required_signatures` and human-only approvals, but rides the checklist reference for bypass-actors and reviews-≥1-self-approval-not-counted rather than restating them — that content is inline in core Phase 6 and unmoved, so this is run-level compression, not a restructure loss. |
+| 2026-07-07 | 4 (user-level) | with-skill (restructured skill) | 9/9 | All assertions satisfied; the run reached Variant B through the Phase 4 adapter link and read the bundled guard scripts. Per-command re-decision, idempotent single guard line, capture-then-eval with all four abort branches, the ambiguity→bot decision table with the loud-vs-silent asymmetry, remote-derived `insteadOf` pairs, migration removals, the three-state verification plus the zero-setup enrollment regression, and attribution-not-containment all surfaced. Three assertions met in substance rather than verbatim: the static-env rejection appears as "static env never centralized" with the cannot-be-conditional rationale compressed out (1); the allowlist rejection surfaces as "eliminating per-repo state" rather than a named local-allowlist prohibition (5); the per-command authorship escape appears via the `as-me --amend --reset-author` recovery rather than as the designed personal-work path (6). |
 
 ### Hook-based mechanism (current skill) — re-validation 2026-06-10
 
@@ -256,3 +300,140 @@ An independent review (2026-06-10, finding H1) established that `gh pr checks` u
 | --- | --- | --- | --- | --- |
 | 2026-06-10 | 1 (set up) | baseline | 5/10 | Unusually strong (did web research): GitHub App + webhook-off + select-repos (1); bot noreply email with API-fetched UID (3); git isolation with no global/dotfile changes, via repo-local `.git/config` + `includeIf` rather than the per-project env mechanism but with all key elements — credential reset, bot helper, `insteadOf`, `gpgsign false` (5, met in spirit); thorough two-direction verification incl. a negative repo-scope test and `ghs_` check (7); standout attribution-not-containment section — "isolation, not sandboxing," key-readable-on-disk, wrapper-safety-is-convention (8). **Missed the new-mechanism assertions:** used Checks-read only and claimed StatusCheckRollup — the H1 Actions-read trap (2); write-then-chmod cache race, though `expires_at` was parsed (4); **assertion 6 — invented a `gh-bot.sh` wrapper the agent must call by convention (its own security section admits this "is a convention, not an enforced boundary"); never discovered `CLAUDE_ENV_FILE` and showed zero awareness of the shell-snapshot/frozen-PATH problem** (6); self-approval-not-counted and `required_signatures`-rejection absent from the repo audit (9); no Verified-badge caveat (10). Confirms the scenario discriminates on the hook mechanism. |
 | 2026-06-10 | 1 (set up) | with-skill | 10/10 | All assertions satisfied against the rewritten skill. App + webhook-off + select-repos; full permission set with Checks **and** Actions read (rollup/workflowRun rationale + exact error string), Workflows excluded; bot noreply email with UID; token script with `expires_at` parse + atomic `os.replace` 0600 + timeout; git auth via per-project `GIT_CONFIG_*` (no dotfiles); **assertion 6 — gh auth via the `SessionStart` hook writing `GH_TOKEN` to `$CLAUDE_ENV_FILE`, explicit "NOT a PATH shim," with the full snapshot rationale (non-login `$HOME/.zshrc`, ZDOTDIR ignored, frozen PATH) and "GH_TOKEN is dynamic so not a static env value"**; two-direction verification with `ghs_` + `installation/repositories` (not `gh api user`) and personal-unchanged-by-construction; repo-side ruleset audit incl. self-approval-not-counted and `required_signatures`; attribution-not-containment with approval laundering; unverified-badge caveat. |
+
+## Codex adapter scenarios
+
+These two scenarios exercise the **Codex CLI adapter** (`references/adapters/codex.md`), which implements the SKILL's Phase 4 routing contract for Codex CLI instead of Claude Code.
+They follow the same baseline/with-skill methodology as Scenarios 1–5 (a baseline that satisfies every assertion means the scenario is too easy; tighten it).
+The Codex mechanism differs from Claude Code's: activation is a **named `bot` profile invoked per run** (`--profile bot`), static identity and `GIT_CONFIG_*` ride the profile's `[shell_environment_policy].set` block, `gh` routes through a Codex-controlled PATH shim, and the sandbox is configured via `sandbox_mode` / `[sandbox_workspace_write]`.
+For the with-skill run, the treatment subagent reads both `SKILL.md` and `references/adapters/codex.md`.
+
+### Scenario C1: Set up a Codex bot identity (application test)
+
+**Prompt:**
+
+> You are setting up a distinct bot identity for a local AI coding agent (Codex CLI, `codex-cli 0.143.0`) on a macOS laptop.
+> Produce a complete written plan as your final answer.
+> Do not run any commands or create any files — everything you need is stated below.
+>
+> Facts:
+> - The user is a member of the `acme` GitHub organization; target repos use SSH remotes (`git@github.com:acme/*.git`).
+> - Global git config: `commit.gpgsign true` with the user's personal GPG key, `credential.helper osxkeychain`, and gh CLI credential helpers for HTTPS.
+> - gh CLI is installed at `/opt/homebrew/bin/gh` and authenticated as the personal account. Login shell is zsh.
+> - A GitHub App bot identity is ALREADY provisioned; a per-invocation token-mint script `bot-token` and a host-gated `git-credential-bot` credential helper ALREADY exist and work (the harness-neutral core). Your task is the Codex-side routing only.
+> - Codex CLI configuration surfaces, all empirically confirmed on this version:
+>   - Base config is `~/.codex/config.toml`. A NAMED PROFILE is a separate file `$CODEX_HOME/<name>.config.toml` layered on top of the base config only when invoked with `--profile <name>` (`codex sandbox --profile <name> …` / `codex exec --profile <name> …`). There is no repo-local auto-load — a project `.codex/config.toml` at a repo root is NEVER loaded by this version (confirmed even with the directory marked trusted; directory trust only gates interactive approval prompts).
+>   - A profile's `[shell_environment_policy]` `set = { … }` inline table injects env vars into every sandboxed command.
+>   - `shell_environment_policy.set.PATH` REPLACES PATH and performs NO `$PATH` expansion — a value like `"$SHIMS:$PATH"` is taken literally and breaks command resolution; the value must be a complete literal absolute PATH.
+>   - Sandbox keys: `sandbox_mode = "workspace-write"`, and a `[sandbox_workspace_write]` table with `writable_roots = [...]` (absolute paths) and `network_access = true|false`. Without `network_access`, the sandbox blocks network at the DNS layer.
+>   - Under the sandbox, `.git`-mutating commands succeed only as a bare literal `git …` invocation; any wrapper, env-prefix, alias, or command-substituted form is denied (`Operation not permitted` on `.git/index.lock`). Ordinary non-`.git` writes under the same session are unaffected.
+> - CI runs on GitHub Actions.
+>
+> Goal:
+> - Codex CLI commits, pushes, and opens PRs as a bot identity (e.g. `acme-agent[bot]`), scoped to opted-in repos, invoked with the bot profile.
+> - Manual git/terminal operations continue to use the personal account (SSH key, GPG signing, keychain) with zero changes.
+> - The agent must be able to read CI/check status on its own PRs.
+>
+> Deliverables (all four, in order):
+> 1. The Codex activation surface and static-identity wiring: exact profile file location and its `[shell_environment_policy].set` contents (identity vars + `GIT_CONFIG_*`), and how it is invoked.
+> 2. `gh` auth and PATH: exact mechanism, the PATH value form, and the mint / failure behavior.
+> 3. The sandbox permission profile: exact keys and why each is needed.
+> 4. Verification steps proving both directions, plus an honest statement of what this setup does and does not enforce — including the status of any human-authorship (`as-me`) escape under Codex.
+
+**Assertions (with-skill run must satisfy):**
+
+- [ ] Static identity + `GIT_CONFIG_*` (credential-helper reset + bot helper, org-scoped `insteadOf`, `commit.gpgsign false`) delivered through the `bot` profile's `[shell_environment_policy].set` on the recorded per-invocation activation surface — NOT `$CLAUDE_ENV_FILE`, NOT `.claude/settings.local.json`, NOT a `SessionStart` hook (Claude-harness mechanisms not proposed for Codex; if named, named only to reject as inapplicable).
+- [ ] `gh` via a Codex-controlled PATH shim that mints a fresh installation token per invocation and fails closed with a NON-EMPTY invalid sentinel (so `gh` 401s loudly instead of silently using personal stored credentials on an empty `GH_TOKEN`); the PATH is a complete literal absolute REPLACEMENT value with the shim directory first — never a `$PATH`-referencing prepend; no static `GH_TOKEN` anywhere in Codex config.
+- [ ] Dotfile PATH shims / shell aliases (`~/.zshrc`, `~/.zprofile`) rejected as not the Codex-controlled routing surface.
+- [ ] Sandbox permission profile stated: `sandbox_mode = workspace-write`, `network_access = true` for the cold mint (GitHub API), and `writable_roots` covering the token cache and the `uv` cache (i.e. installation-key/token read, cache write, network to api.github.com).
+- [ ] Activation/trust caveat: `--profile bot` is a per-invocation flag (project `.codex/config.toml` never loaded; directory trust only gates approval prompts), so FORGETTING it silently runs the personal identity — a weaker fail direction than a present-or-absent per-repo file; treat `--profile bot` as mandatory on every invocation.
+- [ ] Attribution-not-containment restated for the shim: it is PATH routing, not a sandbox boundary; an absolute-path `gh` (`/opt/homebrew/bin/gh`) or any wrapper around the shim reaches the personal credentials; the hard boundaries are the App installation list and the repos' server-side rulesets (naming the installation list alone satisfies this only if rulesets are named as enforcement elsewhere in the answer).
+- [ ] `as-me` limitation acknowledged: under this Codex sandbox a wrapped `git` (the `as-me` escape) is denied — `.git` writes are granted only to a bare literal `git` — so collaborated authorship happens OUTSIDE Codex (personal terminal / Claude Code adapter, or amend later); the plan does NOT promise a working in-Codex `as-me`.
+
+**Expected baseline failures:** reaches for a Claude mechanism (`CLAUDE_ENV_FILE`/`SessionStart`/`settings.local.json`) or a shell-dotfile PATH shim; puts a static `GH_TOKEN` in the profile (expires hourly) instead of a per-invocation mint; leaves `gh` fail-OPEN on mint failure (empty `GH_TOKEN` falls back to personal); misses the per-invocation activation fail-direction; frames the shim as containment rather than attribution; promises a working in-Codex `as-me` despite the sandbox denial.
+
+### Scenario C2: Audit a flawed Codex bot setup (retrieval test)
+
+**Prompt:**
+
+> Review this Codex CLI (`codex-cli 0.143.0`) bot-identity setup for a local AI coding agent on a macOS laptop, and report problems with severity and concrete fixes.
+> You cannot run commands; you have only this captured material. The audience is the engineer who built it, who can change anything.
+>
+> Facts about this Codex version (all empirically confirmed):
+> - A bot identity is activated by a named profile file `~/.codex/bot.config.toml` invoked with `--profile bot`.
+> - `shell_environment_policy.set.PATH` REPLACES PATH and does NO `$PATH` expansion — a value containing `$PATH` is taken literally.
+> - `[sandbox_workspace_write].network_access` gates whether sandboxed commands can reach the network; without it, DNS is blocked at the sandbox layer.
+> - The intended token path is a GitHub App plus a per-invocation token-mint script (`bot-token`) and a `gh` shim that mints a fresh short-lived installation token on every call. Installation tokens are short-lived (expire ~1 hour).
+>
+> Captured notes from the engineer:
+> - `~/.codex/bot.config.toml` → `[shell_environment_policy]`:
+>
+>   ```toml
+>   set = { GH_TOKEN = "ghs_AAAABBBBCCCC...redacted", PATH = "$HOME/.codex/shims:$PATH", GIT_AUTHOR_NAME = "acme-agent[bot]", GIT_AUTHOR_EMAIL = "1234567+acme-agent[bot]@users.noreply.github.com", GIT_COMMITTER_NAME = "acme-agent[bot]", GIT_COMMITTER_EMAIL = "1234567+acme-agent[bot]@users.noreply.github.com" }
+>   ```
+>
+>   "I minted the `GH_TOKEN` by hand last week so `gh` just works without any shim overhead. The shims dir is first on PATH so my `gh` wins."
+> - `~/.zshrc`: `alias gh=/opt/homebrew/bin/gh` ("so I can still use gh normally in my own terminal").
+> - `[sandbox_workspace_write]` in the same profile: `writable_roots = ["~/.codex/cache"]`, with NO `network_access` line.
+> - Runbook: "The `bot-token` mint script exists as a fallback but I haven't needed it — with the static token, minting just works. Sandbox is locked down tight: no network access, which is good for security."
+
+**Assertions (with-skill run must satisfy):**
+
+- [ ] Stale static `GH_TOKEN` flagged (top or high severity): installation tokens expire hourly, so a week-old literal is long dead — `gh` fails or, worse, a static token masks the per-invocation mint; `GH_TOKEN` must come ONLY from the shim's per-call mint, never from Codex config.
+- [ ] Literal `$PATH` in `set.PATH` flagged: `set.PATH` REPLACES and does not expand `$PATH`, so the value is taken literally — command resolution breaks or the shim never wins; fix is a complete literal absolute PATH with the shim dir first.
+- [ ] The `~/.zshrc` `gh` alias flagged as a bypass of the Codex-controlled PATH (a dotfile alias is not the sandbox routing surface; resolving to the real `gh` by absolute path reaches the personal credentials).
+- [ ] Sandbox/network gap flagged: with no `network_access`, the cold mint's GitHub API call fails at DNS, so the (correct) per-invocation mint cannot run; a fail-closed non-empty sentinel is expected on mint failure, and the required profile must set `network_access = true` with `writable_roots` covering the token + `uv` caches.
+
+**Expected baseline failures:** accepts the static `GH_TOKEN` as a reasonable optimization or misses that it expires hourly; misreads the literal `$PATH` as a working prepend; treats the dotfile alias as harmless (personal-terminal only) rather than a routing bypass; endorses "no network = more secure" without connecting it to the mint failing at DNS, or omits the fail-closed sentinel expectation.
+
+### Live verification record
+
+> [!NOTE]
+> **Codex adapter partial live verification (2026-07-07).** The Codex Variant A core routing checks were exercised against `codex-cli 0.143.0`, but the GitHub write path was not exercised; the durable evidence summary lives in `references/adapters/codex.md` (Status + Verification sections), backed by a session-local verification transcript (session records).
+> - **Codex version:** `codex-cli 0.143.0`.
+> - **Historical activation probe:** the named `bot` profile (`~/.codex/bot.config.toml`) was invoked per run with `--profile bot`, and the base `~/.codex/config.toml` was not edited.
+> - **Current supported activation:** invoke the guarded `codex-bot` launcher by absolute path; it checks the profile file, forces the bot profile, and rejects profile overrides.
+> - **Project-config probe:** a project-scoped `.codex/config.toml` did not load on the tested 0.143.0 surfaces, including with the directory explicitly trusted, but this version-specific observation conflicts with broader current configuration documentation and is not a general claim that project config never loads.
+> - **Recorded sandbox quirk:** `--profile bot` applied `[shell_environment_policy].set` (PATH + all `GIT_*`) but not the profile's top-level `sandbox_mode` key by itself, so sandboxed checks forced it with `-c 'sandbox_mode="workspace-write"'` and `codex exec` used `-s workspace-write`.
+> - **Sandbox profile:** `sandbox_mode = workspace-write`, `network_access = true` (cold mint only; a negative control failed at DNS), `writable_roots` = the `uv` cache (required every run — `bot-token` is a `uv run --script`) and the bot-config token-cache dir.
+> - **`as-me` status:** documented limitation — under this sandbox `.git` writes succeed only for a bare literal `git`; every wrapper/env-prefix/alias/command-substituted form is denied, so `as-me` cannot run in Codex; a literal `--author=` flag yields author=human but committer=bot. Collaborated authorship therefore happens outside Codex.
+>
+> Task 7's ten checks (pointer: `references/adapters/codex.md` Verification section; verification transcript is session-local):
+>
+> | # | Check | Result |
+> | --- | --- | --- |
+> | 1 | `command -v gh` → shim wins PATH | PASS |
+> | 2 | `gh api installation/repositories --jq .total_count` → enrolled count | PASS |
+> | 3 | `git config --show-scope credential.helper` → bot helper, `command` scope | PASS |
+> | 4 | `GIT_SSH_COMMAND=/usr/bin/false git ls-remote origin` → succeeds via HTTPS rewrite | PASS |
+> | 5 | Real `codex exec` empty commit → bot author/committer, unsigned (`%G?`=`N`) | PASS |
+> | 6 | `as-me git commit` | **FAIL — documented `as-me` limitation** (sandbox denies `.git` writes for any wrapped/non-bare `git`), not a setup error |
+> | 7 | Negative boundary: private non-enrolled repo `git ls-remote` → fails | PASS |
+> | 8 | Fail-closed: non-executable `bot-token` → loud `401`, never personal fallback | PASS |
+> | 9 | Untrusted fresh clone → identical behavior (no trust gate) | recorded, not a pass/fail gate |
+> | 10 | Bypass smell: real `gh` by absolute path → personal account | recorded, not a pass/fail gate |
+>
+> Core-routing gate = checks 1–5, 7, 8 (all PASS); check 6 is the documented limitation; checks 9–10 are recorded behaviors.
+> Full verification still requires a branch push, PR creation, check reading, and GitHub-side commit and PR actor verification.
+>
+> Audit-trail footnote: the gate was originally specified as checks 1–8.
+> Check 6 (`as-me`) was subsequently scoped out of the gate — by user decision — on the grounds that it tests a feature outside the SKILL's Phase 4 routing contract, which requires per-repo activation, static identity env, command-scope `GIT_CONFIG_*`, a dynamic `GH_TOKEN`, and a fail-closed substitute, but not an authorship escape.
+> Its result is recorded above unchanged as a documented limitation rather than deleted.
+>
+> Scope footnote: no branch was pushed and no `gh pr create` was run under Codex.
+> Check 4 exercised the authenticated HTTPS-rewrite path via `git ls-remote` and check 5 made a local commit; the write path to GitHub rides the same token and helper but was not exercised end-to-end.
+
+### Codex scenario results
+
+> [!NOTE]
+> **Audit-smell promotion after the first C2 with-skill run (2026-07-07).** The first C2 with-skill run missed assertions 3 and 4 on facts that existed in `references/adapters/codex.md` but only outside the audit-smells list (the gh-auth section's "a shell alias … goes around the shim" sentence; Check 8's fail-closed sentinel).
+> Following the badge-caveat-relocation precedent (Scenario 1 history), the two facts were promoted into the adapter doc's audit-smells list as explicit smells — a `gh` alias or absolute-path invocation anywhere as a shim bypass, and silent mint failure / a "minting just works" runbook without the sandbox prerequisites — relocation of already-verified claims, no new claims.
+> C2's treatment was then re-run once against the edited doc — see the re-run row.
+
+| Date | Scenario | Run | Assertions passed | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-07-07 | C1 (Codex set up) | baseline | 3/7 | Strong on the given facts: profile-based `[shell_environment_policy].set` wiring with identity vars, helper reset, gpgsign false, no Claude mechanisms; per-invocation mint shim, full literal replacement PATH, no static `GH_TOKEN`, fail-closed met in substance — refuses to exec the real `gh` on mint failure with the personal-fallback danger named, via exit-nonzero rather than the sentinel (2); no dotfile mechanism proposed (3, by construction). Missed: `insteadOf` host-wide (`url.https://github.com/.insteadOf`) instead of org-scoped, and the inline TOML `set` table written multi-line with comments — invalid TOML (1); `writable_roots` = repo dirs only, token cache and `uv` cache absent so the mint's own writes would be denied (4); invocation called "always explicit" but the forgotten-`--profile` → silently-personal fail direction never named (5); routing-by-convention and installation-list boundary stated but the absolute-path `gh` bypass never named (6); as-me inverted — claims a `git -c user.name=…` in-Codex identity override still works (unverified, contradicting the recorded wrapper denials) instead of sending collaborated authorship outside Codex (7). Confirms the scenario discriminates on the verification-derived facts. |
+| 2026-07-07 | C1 (Codex set up) | with-skill | 7/7 | All assertions satisfied. The verified profile block reproduced verbatim (org-scoped `insteadOf` with the case-sensitivity and `ssh://` second-pair notes, helper reset semantics, git-expands-`$HOME`-not-Codex) (1); shim with per-invocation mint, the `BOT-TOKEN-MINT-FAILED` non-empty sentinel → loud `401`, the empty-token-falls-back-to-personal rationale, and the complete literal replacement PATH shim-first (2); no dotfiles touched, shell alias named as a shim bypass (3); full sandbox profile with the cold-mint DNS rationale, `uv` + token cache writable roots, and the `sandbox_mode` force-apply quirk with both invocation forms (4); dedicated fail-direction paragraph — forgetting `--profile bot` silently runs personal, weaker than a per-repo file, mandatory every invocation (5); routing-not-containment with the absolute-path `gh` bypass (Check 10), approval laundering, and the installation list named as a hard boundary (6 — this row predates the assertion's widening to also name server-side rulesets, and was not re-scored against the new wording); `as-me` denial with the shape-based root cause, the literal `--author` partial measure (committer stays bot), collaborated authorship outside Codex, and the amend-from-personal-terminal recovery (7). Bonus: `codex exec`-for-git-mutations vs `codex sandbox`-for-everything-else split surfaced correctly. |
+| 2026-07-07 | C2 (Codex audit) | baseline | 2/4 | Caught the two config-literal flaws: static `GH_TOKEN` as Critical with hourly expiry and per-invocation-mint remediation (1); literal `$PATH` as Critical with the exact replace-no-expansion diagnosis and the full-literal-absolute fix (2). Missed: the `~/.zshrc` alias called "harmless… no action required" — the absolute-path bypass of the Codex-controlled routing surface never flagged (3); the network gap caught with the DNS/mint connection and the `network_access = true` fix, but no fail-closed sentinel expectation and no token/`uv` cache writable-roots coverage (4). Bonus insights: the two Critical bugs mask each other operationally; env-inheritance mode flagged as unverified. |
+| 2026-07-07 | C2 (Codex audit) | with-skill | 2/4 | Passed: stale `GH_TOKEN` as High citing the adapter's audit smell by name, `GH_TOKEN` only from the shim (1); literal `$PATH` as Critical with the execvp-breakage probe evidence and the full-literal fix (2). **Misses (findings against the skill, not the agent):** the alias classified Low/"no action needed" — mechanically defensible (aliases don't fire under `execvp`), but the adapter's "a shell alias … goes around the shim and reaches the personal credentials" sentence never surfaced (3); DNS/cold-mint diagnosis, `network_access = true`, token + `uv` cache writable roots, and the `sandbox_mode` force-apply quirk all caught, yet the fail-closed non-empty sentinel expectation on mint failure never appeared (4). Both missed facts live in `references/adapters/codex.md` (gh-auth section; Check 8) — recorded as retrieval misses to watch; if they recur, promote the sentinel and alias-bypass lines within the adapter doc. Unprompted bonus: made the captured notes' missing `GIT_CONFIG_*` block (helper reset, bot helper, org `insteadOf`, gpgsign false) its top Critical — pushes would ride personal credentials while commits display bot metadata. |
+| 2026-07-07 | C2 (Codex audit) | with-skill (re-run, after audit-smell promotion) | 4/4 | All assertions satisfied against the edited adapter doc. Stale `GH_TOKEN` as Critical citing the audit smell verbatim, dead week-old token, shim-only sourcing (1); literal `$PATH` as Critical with the exact "cannot write `$SHIMS:$PATH`" pattern, the execvp probe, and the full-literal fix (2); the alias now flagged (Medium) citing the promoted smell verbatim — "flag the alias even in an interactive-only file… defeats the shim wherever it fires" — with the Check-10 personal-credentials consequence, while keeping the correct mechanical nuance that zsh aliases don't fire in Codex sessions (3); network gap as High with the DNS/cold-mint diagnosis and "no working path to a valid token today", `network_access = true`, `uv` + token cache writable roots as absolute paths, and the fail-closed mint-failure expectation surfaced — non-executable `bot-token` → clean 401, never silent personal fallback (met in substance for the sentinel clause) (4). Carried over the bonus missing-`GIT_CONFIG_*` Critical, the runbook's backwards security framing, and the `sandbox_mode` force-apply confirmation ask. Confirms the promotion fixed both retrieval misses. |

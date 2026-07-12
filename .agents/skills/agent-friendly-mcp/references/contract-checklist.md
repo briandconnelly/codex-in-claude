@@ -1,6 +1,20 @@
 # MCP Server Contract Checklist
 
-This is the normative standard for the skill, used by both `design-workflow.md` and `review-workflow.md`. The section order serves audit walks: discovery first (what an agent sees first), then the primitives that get invoked, then the cross-cutting concerns that span all primitives, then versioning. Walk it top to bottom when designing or reviewing a server.
+This is the normative standard for the skill, used by both `design-workflow.md` and `review-workflow.md`.
+The section order serves audit walks: discovery first (what an agent sees first), then the primitives that get invoked, then the cross-cutting concerns that span all primitives, then versioning.
+Walk it top to bottom when designing or reviewing a server.
+
+**On this page:**
+
+- [1. Server-Level](#1-server-level)
+- [2. Discovery Primitives](#2-discovery-primitives)
+- [3. Tools](#3-tools)
+- [4. Resources](#4-resources)
+- [5. Prompts](#5-prompts)
+- [6. Failure Recovery](#6-failure-recovery)
+- [7. Long-Running Operations](#7-long-running-operations)
+- [8. Token Efficiency](#8-token-efficiency)
+- [9. Versioning and Compatibility](#9-versioning-and-compatibility)
 
 ---
 
@@ -8,17 +22,23 @@ This is the normative standard for the skill, used by both `design-workflow.md` 
 
 *Worked shapes: `examples.md` §7 (server capability summary), §8a (roots-aware workspace behavior).*
 
-- **Name the server distinctively.** Use a descriptive, agent-facing name with no version numbers, not a host-language convention. The name shows up in tool selection across multi-server contexts and is part of the discovery surface.
+- **Name the server distinctively.** Use a descriptive, agent-facing name with no version numbers, not a host-language convention.
+  The name shows up in tool selection across multi-server contexts and is part of the discovery surface.
 
-- **Avoid generic service names.** Names like `api`, `data`, or `tools` collide silently in multiplexed clients. Pick a name a human could disambiguate at a glance.
+- **Avoid generic service names.** Names like `api`, `data`, or `tools` collide silently in multiplexed clients.
+  Pick a name a human could disambiguate at a glance.
 
-- **Choose transport explicitly.** Use `stdio` for local single-client; use streamable HTTP for shared or remote. Document the choice in the capability summary.
+- **Choose transport explicitly.** Use `stdio` for local single-client; use streamable HTTP for shared or remote.
+  Document the choice in the capability summary.
 
-- **`stdio` servers MUST NOT log to stdout.** Stdout is the JSON-RPC channel; mixing log output corrupts the protocol stream. Send logs to stderr or a file.
+- **`stdio` servers MUST NOT log to stdout.** Stdout is the JSON-RPC channel; mixing log output corrupts the protocol stream.
+  Send logs to stderr or a file.
 
-- **Declare the auth model when it affects agent behavior.** State required scopes and permission boundaries that change capability availability, result shape, or repair. Keep credential setup mechanics out of the first-read summary unless the agent can act on them.
+- **Declare the auth model when it affects agent behavior.** State required scopes and permission boundaries that change capability availability, result shape, or repair.
+  Keep credential setup mechanics out of the first-read summary unless the agent can act on them.
 
-- **Distinguish credential failure modes.** "Missing credential," "wrong credential," and "insufficient scope" are three different repair paths. Collapsing them forces the agent to guess.
+- **Distinguish credential failure modes.** "Missing credential," "wrong credential," and "insufficient scope" are three different repair paths.
+  Collapsing them forces the agent to guess.
 
 - **Declare agent-actionable implicit state.** List workspace/project context, default resources, caches, session data, or configuration only when it affects tool choice, results, permissions, or repair.
   Hidden deployment details belong in operator docs, not the first-read surface.
@@ -58,7 +78,8 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
 - **Provide a server capability summary.** A concise overview of what the server does, what it does not do, and any prerequisites that affect whether or how an agent should use it.
   Expose it via a resource, discovery tool, or instructions field, whichever the client honors.
 
-- **State negative scope explicitly.** What the server does NOT do is as important as what it does. Negative scope prevents wasted exploration and wrong-tool selection.
+- **State negative scope explicitly.** What the server does NOT do is as important as what it does.
+  Negative scope prevents wasted exploration and wrong-tool selection.
 
 - **Write the capability summary and `instructions` prose as rules-then-context.** Lead with what the server does and does not do.
   Then state each binding rule — prerequisite, ordering requirement, safety constraint — as its own imperative sentence or list item whose strength is explicit: mandatory (e.g. external sends require an approved `sender_id`) or a default with its override condition (e.g. prefer `detail: "summary"` unless the task needs full field density).
@@ -107,12 +128,15 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
 
 - **The discovery surface itself is contract.** Renaming a tool, changing its namespace, or removing it from a catalog is a discoverable change to clients; treat it as a versioned event (see §9).
 
-- **Resource catalogs are part of discovery.** A catalog that omits new resources or returns inconsistent metadata silently breaks agent planning. Treat the catalog as authoritative.
+- **Resource catalogs are part of discovery.** A catalog that omits new resources or returns inconsistent metadata silently breaks agent planning.
+  Treat the catalog as authoritative.
 
 - **Include the capability fingerprint in discovery responses where you publish one (§9).**
   Clients can short-circuit a re-walk if nothing has changed.
 
-- **Discovery may vary by authorization context, but never by hidden side effects.** The tool and resource lists an agent sees may legitimately differ across auth scopes — an unauthorized scope simply does not see a capability. They MUST NOT drift as a side effect of unrelated calls within a connection: the same authorized client gets the same surface in the same order (see §9), so a cached client can trust it. Make differences auth-scoped, declared, and stable, not per-request surprises.
+- **Discovery may vary by authorization context, but never by hidden side effects.** The tool and resource lists an agent sees may legitimately differ across auth scopes — an unauthorized scope simply does not see a capability.
+  They MUST NOT drift as a side effect of unrelated calls within a connection: the same authorized client gets the same surface in the same order (see §9), so a cached client can trust it.
+  Make differences auth-scoped, declared, and stable, not per-request surprises.
 
 Audit prompt: On the clients this server actually targets, what must an agent load before its first useful call — and is that the smallest surface those clients allow, given that the least-capable realistic client preloads every tool definition?
 
@@ -122,18 +146,22 @@ Audit prompt: On the clients this server actually targets, what must an agent lo
 
 *Worked shapes: `examples.md` §1 (namespaced tool schema), §2 (structured tool response), §2a (dispatched-but-unconfirmed mutation result), §10 (worked task: API mirroring vs. task completion), §12 (response-delivery artifact), §13 (tool result with resource link).*
 
-- **Name with `snake_case`, prefix, verb, noun.** `slack_send_message`, not `send_message`. Generic verbs collide across servers in multi-server contexts.
+- **Name with `snake_case`, prefix, verb, noun.** `slack_send_message`, not `send_message`.
+  Generic verbs collide across servers in multi-server contexts.
   Omit the service prefix only when every target host — including code-execution surfaces that flatten tools into one module namespace — preserves a per-server namespace, and document that host assumption if you do.
 
-- **Reuse verbs consistently.** `list`, `get`, `create`, `update`, `delete`, `send`, `search` should mean the same thing across tools. Inconsistent verbs make the agent second-guess otherwise-obvious calls.
+- **Reuse verbs consistently.** `list`, `get`, `create`, `update`, `delete`, `send`, `search` should mean the same thing across tools.
+  Inconsistent verbs make the agent second-guess otherwise-obvious calls.
 
-- **Write descriptions that are narrow and unambiguous.** Cover when to use, edge cases, and an example invocation. Descriptions are the primary input to tool selection.
+- **Write descriptions that are narrow and unambiguous.** Cover when to use, edge cases, and an example invocation.
+  Descriptions are the primary input to tool selection.
 
 - **Separate binding constraints from background in description prose.** Each constraint is its own sentence with explicit strength — mandatory or default-with-override — phrased against observable behavior: "set `purge: true` only for messages the user explicitly asked to hard-delete", not "be careful with `purge`".
   Mechanics, rationale, and history stay out of the constraint sentences, so a reader can extract every rule without parsing narrative.
   The same rules-then-context discipline as the §2 capability summary applies here in compact form.
 
-- **Disambiguate parameter names.** Use `user_id`, not `user`; `channel_id`, not `channel`; `started_after`, not `since`. Ambiguous names cause wrong-shape arguments on the first call.
+- **Disambiguate parameter names.** Use `user_id`, not `user`; `channel_id`, not `channel`; `started_after`, not `since`.
+  Ambiguous names cause wrong-shape arguments on the first call.
 
 - **Apply required-vs-optional discipline strictly.** Required parameters must be necessary; every optional parameter declares its omission semantics — what the server does when the field is absent — in its schema description.
   Use JSON Schema `default` only when the server actually applies that value; `default` is annotation, not behavior, and no validator injects it into the call.
@@ -198,6 +226,7 @@ Audit prompt: On the clients this server actually targets, what must an agent lo
 - **Prefer resource or resource-link delivery for large results.** Return large results as resources or resource links with TTL metadata where you can; reserve the response-delivery-artifact pattern for cases where an inline or linked resource does not fit.
 
 - **Disclose response-delivery artifacts through the structured response and the description.** Use a structured response field (e.g., `result_artifact: {path, ttl_hours, mime_type}` — a house convention object, so its sub-fields use `snake_case`, not the native `Resource.mimeType`) and the tool description, never annotation flipping.
+  The local-path artifact pattern is valid only when server and caller share a filesystem (co-located stdio); a server reachable over HTTP or by remote clients must return the result as a fetchable resource, `resource_link`, or URL instead, because a returned filesystem path is dead weight to a remote client.
   See `examples.md` §12 for a worked response-delivery artifact.
 
 - **Annotations are hints, not security.** Declare them so agents can plan; do not rely on them for access control.
@@ -235,13 +264,18 @@ Audit prompt: On the clients this server actually targets, what must an agent lo
 
 - **Declare every parameter the tool reads.** Hidden parameters that affect behavior belong in the agent-actionable implicit state declaration (see §1), not implicit in tool behavior.
 
-- **Design tool surfaces to survive code-execution clients.** When an agent imports the server as a code API instead of calling tools through a chat UI (see [mcp-vs-cli.md](mcp-vs-cli.md)), tool and parameter names become identifiers in source and errors cross a language boundary. Keep names import-friendly (`snake_case`, no collisions when flattened into one module namespace), keep `structuredContent` the authoritative return so it maps to a native value, and choose symbolic error `code`s that translate cleanly into language-native exceptions. A task-completing tool composes in code far better than an endpoint chain the agent must re-orchestrate by hand.
+- **Design tool surfaces to survive code-execution clients.** When an agent imports the server as a code API instead of calling tools through a chat UI (see [mcp-vs-cli.md](mcp-vs-cli.md)), tool and parameter names become identifiers in source and errors cross a language boundary.
+  Keep names import-friendly (`snake_case`, no collisions when flattened into one module namespace), keep `structuredContent` the authoritative return so it maps to a native value, and choose symbolic error `code`s that translate cleanly into language-native exceptions.
+  A task-completing tool composes in code far better than an endpoint chain the agent must re-orchestrate by hand.
 
 ### Anti-patterns
 
-- **Wrapping every API endpoint as a tool.** More tools dilute discovery, increase token cost on every definition load, and make selection harder. A 60-tool server where every tool maps to a REST endpoint typically expresses 6–10 actual user tasks. Collapse endpoint chains into the task they serve.
+- **Wrapping every API endpoint as a tool.** More tools dilute discovery, increase token cost on every definition load, and make selection harder.
+  A 60-tool server where every tool maps to a REST endpoint typically expresses 6–10 actual user tasks.
+  Collapse endpoint chains into the task they serve.
 
-- **Burying side effects, idempotency, or rate limits in description prose.** Agents do not reliably read prose for safety-relevant signals. If a tool mutates state, say so via `destructiveHint`; if it can be retried safely, say so via `idempotentHint`; if it has a per-minute call limit, surface that in the response, not the description.
+- **Burying side effects, idempotency, or rate limits in description prose.** Agents do not reliably read prose for safety-relevant signals.
+  If a tool mutates state, say so via `destructiveHint`; if it can be retried safely, say so via `idempotentHint`; if it has a per-minute call limit, surface that in the response, not the description.
 
 - **Using `readOnlyHint` as a substitute for artifact disclosure.** Disclose transient response artifacts through the structured response and the tool description — flipping the annotation is not disclosure.
   Under this skill's observable-scope reading, the tool stays `readOnlyHint: true`, because clients use `false` to gate auto-approval and a semantically read-only call gains friction without safety.
@@ -280,7 +314,8 @@ Audit prompt: For each tool, can an agent decide to use it, call it correctly, a
 
 - **Use stable, hierarchical, predictable URI patterns.** Resource URIs are identifiers agents quote back to the server and may cache; instability breaks repeat calls.
 
-- **URI segments use stable domain nouns.** Not internal identifiers that change between deployments. The URI is part of the contract.
+- **URI segments use stable domain nouns.** Not internal identifiers that change between deployments.
+  The URI is part of the contract.
 
 - **Distinguish lightweight indexes from bodies.** Resource lists return summaries with metadata sufficient for the agent to decide whether to fetch the body.
 
@@ -293,7 +328,8 @@ Audit prompt: For each tool, can an agent decide to use it, call it correctly, a
 - **Every chunk needs a callable fetch path.** Native `resources/read` takes only a URI, so give each chunk its own URI (and publish the pattern as a resource template) or provide a labeled tool fallback that accepts the chunk id.
   A chunk catalog under `_meta` is auxiliary metadata some clients never surface to the model; the in-band next-chunk pointer in the body (`next_chunk_id`/`next_chunk_uri`) and the chunk URIs are what the agent can actually act on.
 
-- **Include the metadata fields agents use to triage.** Use native `Resource` fields: `title`, `description`, `mimeType`, `size`, and `annotations.lastModified`. Missing metadata pushes the agent into fetching bodies blindly; custom triage fields with no native home go under a namespaced `_meta` key, not a new top-level field.
+- **Include the metadata fields agents use to triage.** Use native `Resource` fields: `title`, `description`, `mimeType`, `size`, and `annotations.lastModified`.
+  Missing metadata pushes the agent into fetching bodies blindly; custom triage fields with no native home go under a namespaced `_meta` key, not a new top-level field.
 
 - **Expose URI-shaped resources through resource templates.** When resources are parameterized by a URI pattern, publish `resourceTemplates` via `resources/templates/list` (with `uriTemplate`, `name`, `title`, `description`, `mimeType`) so agents can discover the shape without enumerating every instance.
   Templates are a native discovery primitive distinct from the resource list itself.
@@ -301,7 +337,8 @@ Audit prompt: For each tool, can an agent decide to use it, call it correctly, a
 - **Pair resource templates with completion where values are dynamic.** For template variables such as `{project}`, `{channel_id}`, `{schema}`, or `{path}`, implement `completion/complete` when clients negotiate `completions`.
   This gives agents a proactive way to build valid URIs instead of learning the value space through failed reads.
 
-- **Keep summaries short.** Resource summaries are at most three sentences, never paragraphs. They appear in lists of dozens; long summaries defeat the index.
+- **Keep summaries short.** Resource summaries are at most three sentences, never paragraphs.
+  They appear in lists of dozens; long summaries defeat the index.
 
 - **Resource `description` prose follows the §3 constraint-separation rule.** Any binding constraint in a resource or resource-template description is its own explicit-strength sentence, kept apart from background — same discipline, compact form.
 
@@ -327,21 +364,26 @@ Audit prompt: Can an agent decide whether to fetch a resource — and which chun
 
 - **State when to use the prompt explicitly.** The agent needs to recognize the matching task, not infer it from the title.
 
-- **List prerequisites.** Which tools, which resources, and which permission or context assumptions the prompt relies on. Missing prerequisites surface as confusing failures partway through execution.
+- **List prerequisites.** Which tools, which resources, and which permission or context assumptions the prompt relies on.
+  Missing prerequisites surface as confusing failures partway through execution.
 
 - **Offer completion for prompt arguments with dynamic value sets.** If a prompt argument asks for a project, workspace, repository, environment, channel, or similar value the agent should not guess, support `completion/complete` when `server.capabilities.completions` is negotiated.
 
 - **Reference expected follow-on tools and resources by name.** A prompt that doesn't tell the agent what to invoke next is half a scaffold.
 
-- **Keep prompts as orchestration scaffolding, not contract.** Essential behavior — argument shapes, side effects, error shapes — belongs in tool and resource schemas. See `examples.md` §5 for a prompt scaffold that references tools and resources without redefining them.
+- **Keep prompts as orchestration scaffolding, not contract.** Essential behavior — argument shapes, side effects, error shapes — belongs in tool and resource schemas.
+  See `examples.md` §5 for a prompt scaffold that references tools and resources without redefining them.
 
-- **Prompts may reference; they may not redefine.** A prompt may name a tool by canonical name, but it must not redefine the tool's contract or override its arguments. The schema is authoritative.
+- **Prompts may reference; they may not redefine.** A prompt may name a tool by canonical name, but it must not redefine the tool's contract or override its arguments.
+  The schema is authoritative.
 
 - **Prompts are optional.** A server with no prompts is fine; a server whose prompts are load-bearing for correctness is broken.
 
 ### Anti-patterns
 
-- **Prompts as contract container.** Encoding required behavior in prompt text rather than schema means the agent must read prose to call correctly, and any client that bypasses prompts (most code-execution clients do) will call incorrectly. Orchestration scaffolding is not a substitute for schema. If behavior is essential, encode it in tool/resource schemas.
+- **Prompts as contract container.** Encoding required behavior in prompt text rather than schema means the agent must read prose to call correctly, and any client that bypasses prompts (most code-execution clients do) will call incorrectly.
+  Orchestration scaffolding is not a substitute for schema.
+  If behavior is essential, encode it in tool/resource schemas.
 
 Audit prompt: If every prompt on this server were removed, would any tool or resource become incorrect or unsafe to call?
 
@@ -351,7 +393,8 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 
 *(Cross-cutting; co-equal with first-call success.)*
 
-- **Use stable, machine-readable error codes.** Codes are symbolic strings (e.g., `not_found`, `rate_limited`, `invalid_field`), not numeric exit codes. The symbolic code is the authoritative branch key for agents.
+- **Use stable, machine-readable error codes.** Codes are symbolic strings (e.g., `not_found`, `rate_limited`, `invalid_field`), not numeric exit codes.
+  The symbolic code is the authoritative branch key for agents.
 
 - **Document every error code per tool — without bloating every definition.** An undocumented code is an undiscoverable code; agents cannot branch on it reliably.
   But a full error catalog embedded in every `tools/list` entry inflates the definition each preloading client pays for (see §2), so choose placement by cost: keep only selection- and repair-critical codes inline in the definition, and serve the complete per-tool catalog through an on-demand surface (`describe_tool`, a resource, or the capability summary) that repair hints can reference.
@@ -361,12 +404,16 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 
 - **Provide field-level validation feedback.** Which field, why it's invalid, and which values are allowed. "Invalid input" without a field name forces the agent to guess.
 
-- **Include the offending value when safe.** The agent's repair attempt depends on knowing what it sent. Redact when sensitive; never omit silently.
+- **Include the offending value when safe.** The agent's repair attempt depends on knowing what it sent.
+  Redact when sensitive; never omit silently.
 
-- **Signal retryability and rate limits explicitly.** Use `retry_after_ms`, `temporary: true|false`, and `rate_limit_remaining` where applicable. Agents need to distinguish "wait and retry" from "stop and reconsider."
-  Define the invariants so servers don't emit incompatible combinations: `temporary: true` means *the same operation, unchanged, may succeed later* (transient condition); `temporary: false` means it will not — repair or escalate instead. `retry_after_ms` is a non-negative integer only when a delay is known, and `null` otherwise; it must be `null` when `temporary: false`. Retryability is independent of repairability: a `temporary: false` error can still carry a `repair` (a *different* corrective call), and a `temporary: true` one may carry none.
+- **Signal retryability and rate limits explicitly.** Use `retry_after_ms`, `temporary: true|false`, and `rate_limit_remaining` where applicable.
+  Agents need to distinguish "wait and retry" from "stop and reconsider."
+  Define the invariants so servers don't emit incompatible combinations: `temporary: true` means *the same operation, unchanged, may succeed later* (transient condition); `temporary: false` means it will not — repair or escalate instead. `retry_after_ms` is a non-negative integer only when a delay is known, and `null` otherwise; it must be `null` when `temporary: false`.
+  Retryability is independent of repairability: a `temporary: false` error can still carry a `repair` (a *different* corrective call), and a `temporary: true` one may carry none.
 
-- **Include "what to do next" repair hints.** The corrective call, parameter, or filter. The first repair attempt is as important as the first call.
+- **Include "what to do next" repair hints.** The corrective call, parameter, or filter.
+  The first repair attempt is as important as the first call.
 
 - **Repair preserves caller intent.** When corrected arguments are already known, `repair.tool` names the failing tool and `repair.arguments` carries every still-valid, non-sensitive original argument plus the minimal correction; route to a different tool only when the correction must first be discovered or performed there.
   Forcing the agent to re-orchestrate a task that one corrected argument would have completed wastes the repair.
@@ -388,11 +435,15 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 
 - **Name the error carrier in the capability summary.** State where the envelope travels — `structuredContent` on the tool result, JSON-RPC `error.data`, and any disclosed degraded mode (below) — so agents know where to parse a failure before the first one occurs.
 
-- **Errors include correlation context.** A `request_id`, the offending parameter, and (where applicable) the resource URI. Agents need to correlate failures with the requests that caused them.
+- **Errors include correlation context.** A `request_id`, the offending parameter, and (where applicable) the resource URI.
+  Agents need to correlate failures with the requests that caused them.
 
 ### One error envelope, two carriers
 
-The failure-recovery contract is **one envelope** with identical field semantics regardless of where it surfaces. Tool-result errors carry it in `structuredContent` (alongside `isError: true`); resource and other non-tool RPC failures carry it in JSON-RPC `error.data`. The *only* permitted divergence is renaming `code`/`message` on the JSON-RPC side, because the native `code`/`message` already occupy those keys — every other field is the same name, shape, and cardinality on both surfaces. Do not invent surface-specific aliases (e.g. `repair_hints`) or surface-specific flags (e.g. `recoverable`).
+The failure-recovery contract is **one envelope** with identical field semantics regardless of where it surfaces.
+Tool-result errors carry it in `structuredContent` (alongside `isError: true`); resource and other non-tool RPC failures carry it in JSON-RPC `error.data`.
+The *only* permitted divergence is renaming `code`/`message` on the JSON-RPC side, because the native `code`/`message` already occupy those keys — every other field is the same name, shape, and cardinality on both surfaces.
+Do not invent surface-specific aliases (e.g. `repair_hints`) or surface-specific flags (e.g. `recoverable`).
 
 | Field | Tool result (`structuredContent`) | JSON-RPC (`error.data`) | Required? | Notes |
 | --- | --- | --- | --- | --- |
@@ -410,17 +461,22 @@ The failure-recovery contract is **one envelope** with identical field semantics
   Translate internal names at the MCP boundary; never expose internal or synthetic names the surface does not accept (an internal `office_id` for a tool that takes `office`, a synthetic `bbox` for tools that take `south`/`west`/`north`/`east`).
   Include `value` only when safe and meaningful; error-code-specific detail keys (such as `required_scopes` on an `insufficient_scope` error) are permitted alongside `reason` when documented with the code.
 
-- **Presence convention.** Fields marked *yes* are always emitted on both surfaces — `retry_after_ms` is the one nullable required field (it is bound to the always-present `temporary`, and `null` meaningfully signals "no known delay"). Every other field is omitted entirely when it does not apply; do not send a placeholder `null` or empty array for an absent optional field.
+- **Presence convention.** Fields marked *yes* are always emitted on both surfaces — `retry_after_ms` is the one nullable required field (it is bound to the always-present `temporary`, and `null` meaningfully signals "no known delay").
+  Every other field is omitted entirely when it does not apply; do not send a placeholder `null` or empty array for an absent optional field.
 
-- **`repair` is one object, not an array, on both surfaces.** Its shape is `{next_step, tool, arguments, alternative}`: `next_step` a stable symbolic label, `tool` and `arguments` the single primary corrective call (a real, callable surface), and `alternative` an *optional human-readable* fallback sentence for when the primary call doesn't fit. A single deterministic next action beats a ranked list the agent must choose from; if no corrective call exists, omit `repair` entirely rather than emitting `null` or an empty array. `alternative` is the one prose field in the envelope — it is fallback guidance for a human/agent to interpret, not a second machine-actionable hint (contrast the "real, callable surfaces" rule, which governs `tool`/`arguments`). The §3 dispatched-vs-applied rule reuses this exact `{next_step, tool, arguments, alternative}` object as a success-side `follow_up`; only the carrying field name differs, so there is one next-step vocabulary, not two.
+- **`repair` is one object, not an array, on both surfaces.** Its shape is `{next_step, tool, arguments, alternative}`: `next_step` a stable symbolic label, `tool` and `arguments` the single primary corrective call (a real, callable surface), and `alternative` an *optional human-readable* fallback sentence for when the primary call doesn't fit.
+  A single deterministic next action beats a ranked list the agent must choose from; if no corrective call exists, omit `repair` entirely rather than emitting `null` or an empty array. `alternative` is the one prose field in the envelope — it is fallback guidance for a human/agent to interpret, not a second machine-actionable hint (contrast the "real, callable surfaces" rule, which governs `tool`/`arguments`).
+  The §3 dispatched-vs-applied rule reuses this exact `{next_step, tool, arguments, alternative}` object as a success-side `follow_up`; only the carrying field name differs, so there is one next-step vocabulary, not two.
 
 - **A degraded carrier is disclosed, never silent.** The two carriers above are the only contract carriers.
   As a disclosed degraded mode only — when a framework cannot place `structuredContent` on an `isError: true` result — `content[0].text` MAY carry the serialized envelope JSON: the capability summary names the limitation and its trigger, the envelope shape stays identical, and the mirror is removed once the framework supports the native carrier.
   An undisclosed text-only envelope is a third contract, not a fallback.
 
-- **There is no `recoverable` flag.** Whether the *same* resource or operation can succeed again is already carried by the symbolic `code`/`machine_code` (e.g. `resource_gone`) plus `temporary`; whether recovery is possible by *another* path is carried by the presence of a `repair`. A separate `recoverable` boolean is redundant and was prone to contradicting an accompanying repair.
+- **There is no `recoverable` flag.** Whether the *same* resource or operation can succeed again is already carried by the symbolic `code`/`machine_code` (e.g. `resource_gone`) plus `temporary`; whether recovery is possible by *another* path is carried by the presence of a `repair`.
+  A separate `recoverable` boolean is redundant and was prone to contradicting an accompanying repair.
 
-Audit prompt: For each failure mode, does the agent receive enough structured signal to either retry, repair, or escalate — without parsing the message field? And does the same failure carry the identical envelope whether it surfaces as a tool-result or a JSON-RPC error?
+Audit prompt: For each failure mode, does the agent receive enough structured signal to either retry, repair, or escalate — without parsing the message field?
+And does the same failure carry the identical envelope whether it surfaces as a tool-result or a JSON-RPC error?
 
 ---
 
@@ -467,9 +523,11 @@ Audit prompt: Can an agent monitor, cancel, and recover a long-running operation
 
 *(Cross-cutting; rules apply to both tools and resources.)*
 
-- **Default to a concise response.** Offer richer variants via an explicit detail toggle (e.g., `detail: "summary" | "full"`), not a free `response_format` parameter. See `examples.md` §2 for the concise-vs-detailed response pattern.
+- **Default to a concise response.** Offer richer variants via an explicit detail toggle (e.g., `detail: "summary" | "full"`), not a free `response_format` parameter.
+  See `examples.md` §2 for the concise-vs-detailed response pattern.
 
-- **Detail is orthogonal to format.** Changing detail level changes the density of fields included, not the schema's shape. The same parser handles both modes.
+- **Detail is orthogonal to format.** Changing detail level changes the density of fields included, not the schema's shape.
+  The same parser handles both modes.
   Make the concise fields a strict subset of the detailed fields — never rename a field between modes (a `preview` that becomes `text` in detail mode is two contracts, not one).
 
 - **Detail toggles change field density, never row count.** A result that scales with a requested window or range needs its own default bound, independent of the detail level: a server-side cap with `truncated: true` and a hint naming a callable narrowing or aggregation parameter, or an aggregate default whose explicit raw mode is itself bounded or paginated.
@@ -479,18 +537,25 @@ Audit prompt: Can an agent monitor, cancel, and recover a long-running operation
 - **Declare cursor lifetime and expiry recovery.** Cursors are state handles (§1): declare how long they stay valid, return a stable `cursor_expired` error with restart guidance when one lapses, and say whether a paginated walk sees a consistent snapshot or best-effort consistency — silent skips and duplicates mid-walk break agent planning.
   A cursor that encodes state rather than referencing it follows the §3 two-mode handle rule: integrity-protected, with authorization, expiry, and budget checks re-applied on every continuation.
 
-- **Native list methods use the protocol pagination shape, not a house convention.** `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` accept an optional opaque `cursor` request param and return an optional `nextCursor` in the result; **absence of `nextCursor` signals completion**. There is no native `has_more`, `next_cursor`, `estimated_total`, or `limit` on these methods, and page size is server-selected — do not rename `nextCursor` to snake_case or bolt a house convention onto a native list. See [native-wire-shapes.md](native-wire-shapes.md).
+- **Native list methods use the protocol pagination shape, not a house convention.** `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` accept an optional opaque `cursor` request param and return an optional `nextCursor` in the result; **absence of `nextCursor` signals completion**.
+  There is no native `has_more`, `next_cursor`, `estimated_total`, or `limit` on these methods, and page size is server-selected — do not rename `nextCursor` to snake_case or bolt a house convention onto a native list.
+  See [native-wire-shapes.md](native-wire-shapes.md).
 
-- **A tool's own result payload MAY carry a documented house pagination convention.** When a `tools/call` result paginates domain data (not a native list method), `has_more` is acceptable: if `has_more` is true, include a navigation token (`next_cursor`) and, where available, `estimated_total`. These are declared domain output and belong in `structuredContent` under the tool's `outputSchema` so the agent can observe them — not under `_meta`, which clients may not surface to the model. Label them as convention, never as protocol fields.
+- **A tool's own result payload MAY carry a documented house pagination convention.** When a `tools/call` result paginates domain data (not a native list method), `has_more` is acceptable: if `has_more` is true, include a navigation token (`next_cursor`) and, where available, `estimated_total`.
+  These are declared domain output and belong in `structuredContent` under the tool's `outputSchema` so the agent can observe them — not under `_meta`, which clients may not surface to the model.
+  Label them as convention, never as protocol fields.
 
-- **Provide filters that meaningfully reduce response size.** `since=`, `query=`, `category=`, `field=`. Filters that don't change wire size are noise.
+- **Provide filters that meaningfully reduce response size.** `since=`, `query=`, `category=`, `field=`.
+  Filters that don't change wire size are noise.
 
-- **Truncate explicitly with a repair hint.** `"truncated": true, "truncation_hint": "hit cap of 200; narrow with since= or query="`. Silent truncation breaks agent planning.
+- **Truncate explicitly with a repair hint.** `"truncated": true, "truncation_hint": "hit cap of 200; narrow with since= or query="`.
+  Silent truncation breaks agent planning.
   Truncation bounds the result set; pagination continues it: `truncated` means items beyond a cap will never be returned by paging, so it is not a synonym for `has_more` — a response may legitimately carry both (more pages exist, and the set they page through is capped).
 
 - **Choose identifiers by role.** Domain IDs with natural meaning can stay readable; state handles use opaque stable IDs with labels or summaries; security-sensitive references are opaque and never leak structure.
 
-- **Support per-capability detail levels.** Progressive disclosure applies to both definitions (in discovery, see §2) and responses. The agent should be able to ask for "summary" before "full" at every level.
+- **Support per-capability detail levels.** Progressive disclosure applies to both definitions (in discovery, see §2) and responses.
+  The agent should be able to ask for "summary" before "full" at every level.
 
 - **Strip null and default-valued fields from concise responses.** Where they add no information, they cost tokens and clutter parsing; detail mode may include them for completeness.
   Exception: fields a contract marks always-present — such as the §6 error envelope's `retry_after_ms` — are emitted even when `null`.
@@ -536,16 +601,21 @@ Audit prompt: Could an agent complete a typical task on this server in a single 
   Where a fingerprint is published, disclose its coverage in documented agent-readable metadata such as a `covers` field (see `examples.md` §9); the disclosure does not permit excluding any agent-visible surface.
   A separately named schema-only hash, if published, is per-capability diagnostic metadata; it must not be used to decide that discovery can be skipped, and it never narrows or replaces the fingerprint.
 
-- **Define deprecation semantics.** How a tool, resource, or prompt is marked deprecated, how long it remains available, and what replaces it. Deprecation is a contract, not a sticky note.
+- **Define deprecation semantics.** How a tool, resource, or prompt is marked deprecated, how long it remains available, and what replaces it.
+  Deprecation is a contract, not a sticky note.
 
-- **Deprecated capabilities remain discoverable.** They continue to appear in discovery (see §2) until removal, with a deprecation marker and a pointer to the replacement. Silently dropping them breaks cached clients.
+- **Deprecated capabilities remain discoverable.** They continue to appear in discovery (see §2) until removal, with a deprecation marker and a pointer to the replacement.
+  Silently dropping them breaks cached clients.
 
-- **Adding optional fields is safe.** Removing or renaming fields, codes, or tools is a breaking change — bump the fingerprint where you publish one. Document the migration in the deprecation marker.
+- **Adding optional fields is safe.** Removing or renaming fields, codes, or tools is a breaking change — bump the fingerprint where you publish one.
+  Document the migration in the deprecation marker.
 
-- **Treat tool rename as remove-plus-add.** Renaming a tool is a discovery-surface change (see §2) — clients that cached the old surface will break silently otherwise. Keep the old name with a deprecation pointer for the documented window.
+- **Treat tool rename as remove-plus-add.** Renaming a tool is a discovery-surface change (see §2) — clients that cached the old surface will break silently otherwise.
+  Keep the old name with a deprecation pointer for the documented window.
   A rename sweeps every agent-visible reference atomically with the alias window: repair hints (`repair.tool`), server `instructions`, the capability summary, prompts, and other tools' descriptions.
 
-- **Declare stability tiers if used.** `stable`, `preview`, `experimental`. Mixing tiers without labels makes every capability look stable, which is worse than labeling some as risky.
+- **Declare stability tiers if used.** `stable`, `preview`, `experimental`.
+  Mixing tiers without labels makes every capability look stable, which is worse than labeling some as risky.
 
 - **Stability tier is discovery metadata.** Each capability's tier is part of its discovery record so agents can filter by tier (see §2).
 
