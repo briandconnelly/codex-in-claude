@@ -166,6 +166,27 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 - The **95% coverage floor** is enforced in CI. Live tests that hit the real `codex` CLI are marked
   `integration` and excluded by default (`uv run pytest -m integration --no-cov`).
 
+## Agent identity
+
+Agent sessions in this repo run under the `briandconnelly-agent[bot]` GitHub App identity: commits,
+pushes, `gh` calls, and PRs attribute to the bot, while the maintainer's own git operations on the
+same machine keep the personal account. Setup and mechanism live in the `agent-bot-identity` skill;
+what matters here is what the identity does and does not buy.
+
+- **The bot identity buys attribution, not containment.** The agent runs as the maintainer's OS user
+  and can reach the personal GitHub credentials on that machine, so it holds *both* identities. The
+  ruleset's required review binds the **bot token**, not the agent. Everything in Git / PRs below —
+  never merging, never self-approving — is a convention the agent upholds, not a boundary that stops
+  it. The only hard boundaries are the App's installation list and this repo's server-side rulesets.
+- **The App holds no Workflows permission, so GitHub rejects bot pushes that touch
+  `.github/workflows/`.** This is enforced server-side, not a convention: a change under that path
+  has to come from the maintainer (that is why #295's workflow removal could not be pushed by the
+  bot). CI logic *outside* that path — scripts the workflows invoke, composite actions — is still
+  writable by the bot, which is part of why the human review gate matters.
+- **A GitHub App bot actor cannot be an issue assignee.** `gh issue edit --add-assignee` fails for
+  the bot, and `Issues: write` is already the widest grant, so no permission fixes it. The label-based
+  claim protocol in Git / PRs exists to work around this.
+
 ## Git / PRs
 
 - **Conventional Commits** for every commit and PR title. Allowed types: `feat`, `fix`, `chore`,
@@ -177,13 +198,19 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
   title must itself be a valid Conventional Commit**. Keep each PR to one logical change — if the
   title needs an "and", split the PR.
 - Branch names are `<type>/<slug>` matching the commit type (e.g. `feat/async-jobs`, `docs/conventions`).
-- **Claim an issue before working it, and never work one assigned to someone else.** Only work an
-  issue that has no assignees or where you are the sole assignee. Before starting, check the
-  assignees (`gh issue view ISSUE_NUMBER --json assignees,title`); if anyone else is assigned, stop — do not
-  start work. To claim an unassigned issue, self-assign (`gh issue edit ISSUE_NUMBER --add-assignee @me`),
-  then re-check (`gh issue view ISSUE_NUMBER --json assignees`) and begin only if you are the sole assignee —
-  `--add-assignee` is additive and will not fail if someone claimed the issue first, so the re-check
-  is what closes that race.
+- **Claim an issue before working it, and never work one someone else has taken.** Before starting,
+  read both claim signals (`gh issue view ISSUE_NUMBER --json assignees,labels,title`) and stop if
+  either is taken: the issue is assigned to anyone other than the maintainer directing your session,
+  or it already carries `agent:in-progress` from a claim that is not yours.
+- **Claim with the `agent:in-progress` label and a claim comment.** Add the label
+  (`gh issue edit ISSUE_NUMBER --add-label agent:in-progress`), then comment that you are starting.
+  The label is the claim; the comment carries the actor and timestamp that a label cannot, and it is
+  what closes the race — after claiming, re-read the comments
+  (`gh issue view ISSUE_NUMBER --json comments`), and if an earlier claim from someone else is
+  there, remove your label (`--remove-label`) and stop. (The bot cannot self-assign — see Agent
+  identity.)
+- **Release the claim when you stop working the issue.** Remove `agent:in-progress` when the work
+  lands or you abandon it; a stale claim blocks the next agent.
 - Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
   body (`Closes #N`); label the PR with a type and (for issues) a priority.
 - Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
