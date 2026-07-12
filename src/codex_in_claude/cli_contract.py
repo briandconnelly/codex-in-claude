@@ -155,8 +155,8 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 #
 # RULE: every egress-caveat prose site — the server instructions, the codex_status
 # caveat, the tool capability descriptions and docstrings, README.md, COMPATIBILITY.md,
-# and the collaborating-with-codex skill — must disclose this. No feature-detection
-# logic exists here by design.
+# SECURITY.md, and the collaborating-with-codex skill — must disclose this. No
+# feature-detection logic exists here by design.
 
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
