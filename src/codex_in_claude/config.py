@@ -176,9 +176,12 @@ _DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_envir
 # root in _DENIED_CONFIG_KEY_ROOTS: the root machinery's `model_` prefix match would also
 # refuse `model_provider` — the passthrough's motivating use case (#231, above). For the same
 # reason `model_reasoning_effort` stays allowed until the effort surface lands (#309), which
-# reserves it alongside its replacement controls. NOTE: an opaque `--profile` can still set
-# `model` — the same documented operator-trust boundary that bounds every `-c` denial
-# (COMPATIBILITY.md).
+# reserves it alongside its replacement controls. The check runs on the normalized key, so
+# it also refuses lookalike spellings (`Model`, quoted segments) that codex's own `-c`
+# parser — a naive '.'-split with literal, case-sensitive segments — would treat as junk
+# keys rather than `model`: deliberate, harmless over-denial matching the #287 treatment.
+# NOTE: an opaque `--profile` can still set `model` — the same documented operator-trust
+# boundary that bounds every `-c` denial (COMPATIBILITY.md).
 _RESERVED_META_CONFIG_KEYS = frozenset({"model"})
 
 

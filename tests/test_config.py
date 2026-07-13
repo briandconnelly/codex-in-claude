@@ -410,11 +410,14 @@ def test_extra_args_allows_non_plugin_owned_features(monkeypatch, raw):
         "-c model=gpt-5-codex",  # short config flag
         "--config model=gpt-5-codex",  # long config flag
         "--config=model=gpt-5-codex",  # attached long config flag
-        '-c " model =gpt-5-codex"',  # whitespace around the key (codex trims it)
-        "-c Model=gpt-5-codex",  # case normalization, matching the #287 treatment
-        # A quoted TOML key segment that SURVIVES shlex (single-quoted whole value
-        # preserves the inner double-quotes) and resolves to `model` in codex.
-        "-c '\"model\"=gpt-5-codex'",
+        '-c " model =gpt-5-codex"',  # whitespace around the key (codex trims the whole key)
+        # Lookalike spellings, conservatively refused: codex's -c parser is a naive
+        # '.'-split with literal, case-sensitive segments (no quote stripping — verified
+        # against codex-rs 0.144.3 config_override.rs), so `Model` and `"model"` would be
+        # junk keys codex never reads, not aliases of `model`. Denying them anyway costs
+        # nothing and matches the #287 Remote_Plugin/quoted-segment treatment.
+        "-c Model=gpt-5-codex",
+        "-c '\"model\"=gpt-5-codex'",  # escaped quotes survive shlex
     ],
 )
 def test_extra_args_reserves_model_key(monkeypatch, raw):
