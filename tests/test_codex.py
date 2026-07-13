@@ -479,3 +479,154 @@ def test_classify_attributes_config_flag_token_drift_to_extra_args():
         ),
     )
     assert err.code == "extra_args_rejected"
+
+
+# --- Reasoning-effort control (#309) ----------------------------------------------
+_EFFORT_KEY = cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY
+# The real backend rejection captured from codex-cli 0.144.3 (2026-07-13, probe with
+# `-c model_reasoning_effort=totally-bogus-effort` on a valid model).
+_EFFORT_REJECTION_EVENT = (
+    '{"type":"error","message":"{\\"type\\": \\"error\\", \\"error\\": {\\"type\\": '
+    '\\"invalid_request_error\\", \\"message\\": \\"[ReasoningEffortParam] '
+    "[reasoning.effort] [invalid_enum_value] Invalid value: 'totally-bogus-effort'. "
+    "Supported values are: 'none', 'minimal', 'low', 'medium', 'high', and "
+    '\'xhigh\'.\\"}, \\"status\\": 400}"}'
+)
+
+
+def test_build_exec_command_passes_reasoning_effort_as_config_override(tmp_path):
+    cmd, dropped = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="high",
+        flag_support=_ALL_FLAGS,
+    )
+    assert f"{_EFFORT_KEY}=high" in cmd
+    assert cmd[cmd.index(f"{_EFFORT_KEY}=high") - 1] == "-c"
+    assert dropped == []
+
+
+def test_build_exec_command_omits_reasoning_effort_when_none(tmp_path):
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort=None,
+        flag_support=_ALL_FLAGS,
+    )
+    assert not any(_EFFORT_KEY in tok for tok in cmd)
+
+
+def test_build_exec_command_passes_empty_reasoning_effort_through(tmp_path):
+    # Whole-domain rule: an explicit "" is the caller's value, passed through for
+    # codex/the backend to judge — never silently coalesced to a default or dropped.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="",
+        flag_support=_ALL_FLAGS,
+    )
+    assert f"{_EFFORT_KEY}=" in cmd
+
+
+def test_build_exec_command_reasoning_effort_survives_model_gating(tmp_path):
+    # --model is help-gated and may be dropped; the effort -c pair is a config
+    # override, never gated, and must survive intact (it then applies to whatever
+    # model codex resolves).
+    cmd, dropped = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        flag_support=_NO_MODEL,
+    )
+    assert dropped == ["--model"]
+    assert f"{_EFFORT_KEY}=xhigh" in cmd
+
+
+def test_build_exec_command_reasoning_effort_precedes_extra_args_and_sentinel(tmp_path):
+    # Plugin-owned tokens come before operator extra_args and the stdin sentinel.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="low",
+        extra_args=("-p", "work"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd.index(f"{_EFFORT_KEY}=low") < cmd.index("-p")
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+
+
+def test_classify_backend_effort_rejection_when_effort_sent():
+    # The backend 400 for a bad effort VALUE contains "Invalid value", which matches
+    # the drift patterns — but when this run sent a first-class effort override, it is
+    # the caller's argument, not contract drift (#309).
+    err = codex.classify_failure(
+        CommandRun(_EFFORT_REJECTION_EVENT, "", 1, 1, False),
+        events=_EFFORT_REJECTION_EVENT,
+        extra_args=config.ExtraArgs(),
+        reasoning_effort="totally-bogus-effort",
+    )
+    assert err.code == "invalid_reasoning_effort"
+    assert err.temporary is False
+    assert err.details is not None and err.details.field == "reasoning_effort"
+    assert err.repair is not None
+    assert err.repair.next_step == "correct_arguments"
+    assert err.repair.tool == "codex_models"
+    # The rejected value is never echoed back (it is caller input).
+    assert "totally-bogus-effort" not in err.message
+
+
+def test_classify_effort_marker_without_sent_effort_stays_contract_changed():
+    # No first-class effort was sent, so an effort-flavored rejection cannot be the
+    # caller's argument; the fail-loud drift classification stands.
+    err = codex.classify_failure(
+        CommandRun(_EFFORT_REJECTION_EVENT, "", 1, 1, False),
+        events=_EFFORT_REJECTION_EVENT,
+        extra_args=config.ExtraArgs(),
+        reasoning_effort=None,
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_classify_key_only_rejection_stays_contract_changed():
+    # A future codex rejecting the CONFIG KEY itself (drift) names the key, not the
+    # backend's reasoning.effort markers — it must stay cli_contract_changed even
+    # though an effort was sent.
+    err = codex.classify_failure(
+        CommandRun("", f"error: invalid value 'high' for '{_EFFORT_KEY}'", 2, 1, False),
+        extra_args=config.ExtraArgs(),
+        reasoning_effort="high",
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_classify_extra_args_attribution_beats_effort_attribution():
+    # A drift codex explicitly attributes to an operator passthrough entry keeps the
+    # extra_args_rejected classification even when an effort override was also sent.
+    blob = "error: unexpected argument '--profile' found"
+    err = codex.classify_failure(
+        CommandRun("", blob, 2, 1, False),
+        extra_args=_extra(["--profile", "work"]),
+        reasoning_effort="high",
+    )
+    assert err.code == "extra_args_rejected"
+
+
+def test_classify_auth_beats_effort_rejection():
+    # Auth failure classification runs before drift/effort attribution.
+    err = codex.classify_failure(
+        CommandRun("", f"not logged in\n{_EFFORT_REJECTION_EVENT}", 1, 1, False),
+        extra_args=config.ExtraArgs(),
+        reasoning_effort="high",
+    )
+    assert err.code == "codex_auth_required"

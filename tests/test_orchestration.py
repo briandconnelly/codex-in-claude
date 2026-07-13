@@ -291,3 +291,105 @@ def test_run_review_forwards_on_event(monkeypatch):
         )
     )
     assert captured["on_event"] is sentinel
+
+
+# --- Reasoning-effort threading (#309) ---------------------------------------------
+def test_run_consult_forwards_reasoning_effort(monkeypatch):
+    captured: dict = {}
+
+    async def fake_exec(prompt, **kwargs):
+        captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=None)
+
+    monkeypatch.setattr(orchestration.codex, "run_codex_exec", fake_exec)
+    meta = _make_meta()
+    anyio.run(
+        lambda: orchestration.run_consult(
+            "q",
+            ".",
+            meta,
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            reasoning_effort="high",
+        )
+    )
+    assert captured["reasoning_effort"] == "high"
+
+
+def test_run_review_forwards_reasoning_effort(monkeypatch):
+    from types import SimpleNamespace
+
+    from codex_in_claude._core import gitdiff
+
+    captured: dict = {}
+
+    async def fake_exec(prompt, **kwargs):
+        captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+        return codex.CodexExecResult(
+            run=CommandRun("", "", 0, 1, False),
+            last_message='{"summary":"s","verdict":"pass","confidence":"high"}',
+        )
+
+    fake_diff = SimpleNamespace(
+        summary=SimpleNamespace(files_changed=1, lines_added=1, lines_removed=0),
+        redacted_paths=[],
+        truncated=False,
+        truncation_hint=None,
+        text="diff --git a/foo b/foo\n+added",
+    )
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: fake_diff)
+    monkeypatch.setattr(orchestration.codex, "run_codex_exec", fake_exec)
+    meta = _make_meta()
+    anyio.run(
+        lambda: orchestration.run_review(
+            ".",
+            meta,
+            scope="working_tree",
+            base=None,
+            commit=None,
+            paths=None,
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            reasoning_effort="xhigh",
+            git_timeout=30,
+            max_bytes=1_000_000,
+        )
+    )
+    assert captured["reasoning_effort"] == "xhigh"
+
+
+def test_stamp_meta_classifies_effort_rejection_from_meta(monkeypatch):
+    # The failure classifier must learn the sent effort from meta, so a backend
+    # effort rejection maps to invalid_reasoning_effort — not cli_contract_changed.
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    rejection = (
+        '{"type":"error","message":"[ReasoningEffortParam] [reasoning.effort] '
+        "[invalid_enum_value] Invalid value: 'bogus'.\"}"
+    )
+    meta = _make_meta()
+    meta.reasoning_effort = "bogus"
+    result = codex.CodexExecResult(
+        run=CommandRun(rejection, "", 1, 12, False), last_message=None, events=rejection
+    )
+    out = orchestration._stamp_meta(result, meta)
+    assert out is not None
+    assert out["error"]["code"] == "invalid_reasoning_effort"
+
+
+def test_stamp_meta_effort_rejection_without_sent_effort_is_drift(monkeypatch):
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    rejection = (
+        '{"type":"error","message":"[reasoning.effort] [invalid_enum_value] '
+        "Invalid value: 'bogus'.\"}"
+    )
+    meta = _make_meta()  # meta.reasoning_effort is None
+    result = codex.CodexExecResult(
+        run=CommandRun(rejection, "", 1, 12, False), last_message=None, events=rejection
+    )
+    out = orchestration._stamp_meta(result, meta)
+    assert out is not None
+    assert out["error"]["code"] == "cli_contract_changed"

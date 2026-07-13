@@ -25,18 +25,27 @@ def test_defaults_builtin(clean_env):
     assert d.sandbox == "read-only"
     assert d.isolation == "inherit"
     assert d.model is None
+    assert d.reasoning_effort is None
     assert d.timeout_seconds == config.DEFAULT_TIMEOUT_SECONDS
 
 
 def test_defaults_env_overrides(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_TIER_DEFAULT", "propose")
     clean_env.setenv("CODEX_IN_CLAUDE_MODEL", "gpt-5.4")
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "high")
     clean_env.setenv("CODEX_IN_CLAUDE_TIMEOUT_SECONDS", "42")
     d = config.defaults()
     assert d.tier == "propose"
     assert d.sandbox == "workspace-write"  # tier default
     assert d.model == "gpt-5.4"
+    assert d.reasoning_effort == "high"
     assert d.timeout_seconds == 42
+
+
+def test_blank_reasoning_effort_env_is_unset(clean_env):
+    # Same convention as CODEX_IN_CLAUDE_MODEL: a blank env value means "not set".
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "")
+    assert config.defaults().reasoning_effort is None
 
 
 def test_invalid_tier_falls_back(clean_env):
@@ -445,10 +454,6 @@ def test_extra_args_model_denial_is_not_the_remote_plugin_message(monkeypatch):
     [
         "-c model_provider=azure",  # the passthrough's motivating use case (#231)
         "-c model_providers.x.base_url=http://localhost:8000/v1",  # provider table
-        # Allowed until the reasoning-effort surface lands (#309): denying it today
-        # would remove the operator's only effort control while contradicting nothing
-        # in meta (no effort field exists yet). #309 reserves it with its replacement.
-        "-c model_reasoning_effort=high",
         "-c model_verbosity=low",  # any other model_* key stays allowed
     ],
 )
@@ -456,3 +461,38 @@ def test_extra_args_allows_other_model_keys(monkeypatch, raw):
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
     ea = config.extra_args()
     assert ea.valid is True
+
+
+# --- #309: `model_reasoning_effort` joins `model` in the reserved set -----------------
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "-c model_reasoning_effort=high",  # short config flag
+        "--config model_reasoning_effort=high",  # long config flag
+        "--config=model_reasoning_effort=high",  # attached long config flag
+        '-c " model_reasoning_effort =high"',  # whitespace around the key
+        # Lookalike spellings, conservatively refused — same #287/#310 treatment: codex's
+        # -c parser is literal and case-sensitive, so these are junk keys codex never
+        # reads, but denying them costs nothing and keeps the denylist unprobeable.
+        "-c Model_Reasoning_Effort=high",
+        "-c '\"model_reasoning_effort\"=high'",  # escaped quotes survive shlex
+    ],
+)
+def test_extra_args_reserves_reasoning_effort_key(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    # The refusal must point the operator at the first-class replacements for THIS key.
+    assert "CODEX_IN_CLAUDE_REASONING_EFFORT" in ea.error
+    assert "reasoning_effort" in ea.error
+    # The -c VALUE is never echoed in an error envelope.
+    assert "=high" not in ea.error
+
+
+def test_extra_args_model_denial_names_model_controls_not_effort(monkeypatch):
+    # Each reserved key's refusal names its own first-class controls.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model=gpt-5-codex")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "CODEX_IN_CLAUDE_MODEL" in ea.error
+    assert "CODEX_IN_CLAUDE_REASONING_EFFORT" not in ea.error

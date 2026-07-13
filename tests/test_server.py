@@ -96,6 +96,7 @@ async def _run_consult_direct(tmp_path, question="q", **kw):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     )
     return await orchestration.run_consult(
@@ -120,6 +121,7 @@ async def _run_review_direct(
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
         scope=scope,
         base=base,
@@ -151,6 +153,7 @@ async def _run_delegate_direct(tmp_path, *, task="do work", **kw):
         sandbox="workspace-write",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     )
     return await delegate.run_delegate(
@@ -275,8 +278,9 @@ def test_capability_summary_splits_inventory_from_model_discovery():
     coexisting somewhere (server.py CAPABILITY_SUMMARY discovery rules)."""
     summary = server.CAPABILITY_SUMMARY
     assert (
-        "Use codex_capabilities for the full inventory. Before overriding the model, use "
-        "codex_models (or the codex://models resource) to discover valid model slugs." in summary
+        "Use codex_capabilities for the full inventory. Before overriding the model or "
+        "reasoning_effort, use codex_models (or the codex://models resource) to discover "
+        "valid model slugs and each model's advertised reasoning-effort set" in summary
     )
 
 
@@ -885,6 +889,7 @@ async def test_run_delegate_envelope_redacts_secrets(monkeypatch, clean_env, tmp
         sandbox="workspace-write",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=60,
         elapsed_ms=0,
     )
@@ -950,6 +955,7 @@ async def test_run_delegate_reports_worktree_parent(monkeypatch, clean_env, tmp_
         sandbox="workspace-write",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=60,
         elapsed_ms=0,
     )
@@ -993,6 +999,7 @@ async def test_run_delegate_invalid_cap_falls_back_to_default(
         sandbox="workspace-write",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=60,
         elapsed_ms=0,
     )
@@ -1437,6 +1444,7 @@ def _done_envelope():
         sandbox="workspace-write",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=1800,
     ).model_dump(mode="json")
     return {"ok": True, "tool": "codex_delegate", "summary": "did it", "diff": "d", "meta": meta}
@@ -1775,7 +1783,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-41"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-42"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -1941,6 +1949,7 @@ async def test_job_result_detail_controls_raw_text(monkeypatch, clean_env, tmp_p
             sandbox="workspace-write",
             isolation="inherit",
             model=None,
+            reasoning_effort=None,
             timeout_seconds=1800,
         ).model_dump(mode="json")
         return {
@@ -2089,6 +2098,7 @@ def _done_consult_envelope():
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=1800,
     ).model_dump(mode="json")
     return {"ok": True, "tool": "codex_consult", "summary": "answer", "meta": meta}
@@ -2102,6 +2112,7 @@ def _done_review_envelope():
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=1800,
     ).model_dump(mode="json")
     return {
@@ -2858,6 +2869,7 @@ def _meta_for(tmp_path):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     )
 
@@ -3285,6 +3297,7 @@ def _offloop_meta(tmp_path):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=60,
     )
 
@@ -4262,6 +4275,7 @@ def _consult_success_envelope(
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     ).model_dump(mode="json")
     return {
@@ -4283,6 +4297,7 @@ def _timeout_error_envelope(cwd: str):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     )
     return server.serialize_error(
@@ -4365,6 +4380,7 @@ async def test_sync_review_runs_through_job_store(clean_env, tmp_path, monkeypat
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
         scope="working_tree",
     ).model_dump(mode="json")
@@ -4397,6 +4413,7 @@ async def test_sync_delegate_runs_through_job_store(clean_env, tmp_path, monkeyp
         sandbox="workspace-write",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     ).model_dump(mode="json")
     envelope = {
@@ -4492,6 +4509,7 @@ async def test_sync_cancellation_cancels_job(clean_env, tmp_path, monkeypatch):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=60,
     )
     handle = await server._start_job(
@@ -4519,6 +4537,7 @@ def _await_job_result_meta(cwd: str, timeout_seconds: int = 180):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=timeout_seconds,
     )
 
@@ -4606,6 +4625,7 @@ async def test_sync_run_failure_reports_is_error_true(clean_env, tmp_path, monke
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
     )
     envelope = server.serialize_error(
@@ -4871,6 +4891,7 @@ async def test_consult_sync_reattach_classifies_incompatibility(monkeypatch, cle
             sandbox="read-only",
             isolation="inherit",
             model=None,
+            reasoning_effort=None,
             timeout_seconds=180,
         ).model_dump(mode="json"),
     }
@@ -4897,6 +4918,7 @@ async def test_consult_sync_replay_marks_replayed(monkeypatch, clean_env, tmp_pa
             sandbox="read-only",
             isolation="inherit",
             model=None,
+            reasoning_effort=None,
             timeout_seconds=180,
         ).model_dump(mode="json"),
     }
@@ -4927,6 +4949,7 @@ def _consult_meta(cwd):
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=1,
     )
 
@@ -5158,7 +5181,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-41")
+    assert result["fingerprint"].endswith("schema-42")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -5626,3 +5649,166 @@ async def test_every_free_tool_envelope_carries_server_version(clean_env, tmp_pa
             assert payload.get("ok") is True, f"{tool} did not return a SUCCESS envelope: {payload}"
             carrier = payload.get("meta", payload)  # meta-bearing or top-level
             assert carrier.get("server_version") == __version__, f"{tool} lost server_version"
+
+
+# --- Reasoning-effort surface (#309) ------------------------------------------------
+def _capture_run_sync(monkeypatch):
+    calls: dict = {}
+
+    async def fake_run_sync(meta, cwd, **kw):
+        calls.update({"meta": meta, "cwd": cwd, **kw})
+        return {"ok": True, "_captured": True}
+
+    monkeypatch.setattr(server, "_run_sync", fake_run_sync)
+    return calls
+
+
+async def test_consult_reasoning_effort_call_beats_server_default(monkeypatch, clean_env, tmp_path):
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "low")
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_consult("q", workspace_root=str(tmp_path), reasoning_effort="xhigh")
+    assert calls["meta"].reasoning_effort == "xhigh"
+    assert calls["spec"]["reasoning_effort"] == "xhigh"
+
+
+async def test_consult_reasoning_effort_falls_back_to_server_default(
+    monkeypatch, clean_env, tmp_path
+):
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "low")
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert calls["meta"].reasoning_effort == "low"
+    assert calls["spec"]["reasoning_effort"] == "low"
+
+
+async def test_consult_empty_reasoning_effort_is_passed_through(monkeypatch, clean_env, tmp_path):
+    # Whole-domain rule: an explicit "" is the caller's value, not "unset" — it must
+    # not silently fall back to the server default.
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "low")
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_consult("q", workspace_root=str(tmp_path), reasoning_effort="")
+    assert calls["meta"].reasoning_effort == ""
+    assert calls["spec"]["reasoning_effort"] == ""
+
+
+async def test_spec_without_effort_matches_legacy_hash(monkeypatch, clean_env, tmp_path):
+    # Regression (#309): a run with no effort override must build a spec byte-identical
+    # to the pre-#309 shape, so live idempotency dedup entries survive the upgrade.
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_consult(
+        "q", workspace_root=str(tmp_path), extra_context="ctx", timeout_seconds=60
+    )
+    spec = calls["spec"]
+    assert "reasoning_effort" not in spec
+    legacy_spec = {
+        "kind": "codex_consult",
+        "question": "q",
+        "extra_context": "ctx",
+        "cwd": spec["cwd"],
+        "workspace_source": spec["workspace_source"],
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": "inherit",
+        "model": None,
+        "timeout_seconds": 60,
+    }
+    assert spec == legacy_spec
+    assert server._arg_hash_for_spec(spec) == server._arg_hash_for_spec(legacy_spec)
+
+
+async def test_review_and_delegate_specs_carry_reasoning_effort(monkeypatch, clean_env, tmp_path):
+    calls = _capture_run_sync(monkeypatch)
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    await server.codex_review_changes(workspace_root=str(tmp_path), reasoning_effort="medium")
+    assert calls["spec"]["reasoning_effort"] == "medium"
+    await server.codex_delegate("do work", workspace_root=str(tmp_path), reasoning_effort="high")
+    assert calls["spec"]["reasoning_effort"] == "high"
+
+
+async def test_status_reports_reasoning_effort_defaults(monkeypatch, clean_env):
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "medium")
+    monkeypatch.setattr(server.codex, "codex_version", lambda *a, **k: "codex-cli 0.144.1")
+    monkeypatch.setattr(server.codex, "login_status", lambda *a, **k: (True, "ok"))
+    res = server.codex_status()
+    assert res["raw_defaults"]["reasoning_effort"] == "medium"
+    assert res["resolved_defaults"]["reasoning_effort"] == "medium"
+
+
+async def test_status_reasoning_effort_default_null_when_unset(monkeypatch, clean_env):
+    monkeypatch.setattr(server.codex, "codex_version", lambda *a, **k: "codex-cli 0.144.1")
+    monkeypatch.setattr(server.codex, "login_status", lambda *a, **k: (True, "ok"))
+    res = server.codex_status()
+    assert res["raw_defaults"]["reasoning_effort"] is None
+    assert res["resolved_defaults"]["reasoning_effort"] is None
+
+
+async def test_dry_run_echoes_model_and_reasoning_effort(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="diff --git a/x b/x\n+y",
+            summary=gitdiff.DiffSummary(1, 1, 0),
+            redacted_paths=[],
+        ),
+    )
+    res = await server.codex_dry_run(
+        scope="working_tree",
+        workspace_root=str(tmp_path),
+        model="gpt-5.5",
+        reasoning_effort="xhigh",
+    )
+    assert res["ok"] is True
+    assert res["model"] == "gpt-5.5"
+    assert res["reasoning_effort"] == "xhigh"
+
+
+async def test_dry_run_effort_defaults_from_env(monkeypatch, clean_env, tmp_path):
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "low")
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="", summary=gitdiff.DiffSummary(0, 0, 0), redacted_paths=[]
+        ),
+    )
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["model"] is None
+    assert res["reasoning_effort"] == "low"
+
+
+async def test_delegate_dry_run_echoes_model_and_reasoning_effort(monkeypatch, clean_env, tmp_path):
+    _init_repo(tmp_path)
+    res = await server.codex_delegate_dry_run(
+        "add a feature",
+        workspace_root=str(tmp_path),
+        model="gpt-5.5",
+        reasoning_effort="max",
+    )
+    assert res["ok"] is True
+    assert res["model"] == "gpt-5.5"
+    assert res["reasoning_effort"] == "max"
+
+
+async def test_capabilities_advertise_reasoning_effort(clean_env):
+    res = server.codex_capabilities()
+    details = {t["name"]: t for t in res["tool_details"]}
+    effort_tools = (
+        "codex_consult",
+        "codex_consult_async",
+        "codex_review_changes",
+        "codex_review_changes_async",
+        "codex_delegate",
+        "codex_delegate_async",
+        "codex_dry_run",
+        "codex_delegate_dry_run",
+    )
+    for name in effort_tools:
+        assert "reasoning_effort" in details[name]["key_optional_params"], name
+    # The backend effort rejection is reachable on every Codex-running tool.
+    for name in effort_tools[:6]:
+        assert "invalid_reasoning_effort" in details[name]["error_codes"], name
+    # The dry runs never call Codex, so the code would be a false contract there.
+    for name in effort_tools[6:]:
+        assert "invalid_reasoning_effort" not in details[name]["error_codes"], name

@@ -13,6 +13,7 @@ from codex_in_claude import cli_contract, config, normalize, preflight
 from codex_in_claude._core import redaction, runtime
 from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
+from codex_in_claude.schemas import ErrorDetail
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,6 +74,7 @@ def build_exec_command(
     isolation: str,
     output_last_message_path: str,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     output_schema_path: str | None = None,
     add_dirs: tuple[str, ...] = (),
     skip_git_repo_check: bool = False,
@@ -113,6 +115,15 @@ def build_exec_command(
         tokens += ["--output-schema", output_schema_path]
     if model:
         tokens += [cli_contract.MODEL_FLAG, model]
+    # Reasoning effort rides the `model_reasoning_effort` config key (0.144 has no
+    # dedicated flag). A config key cannot be help-gated, so it is sent whenever the
+    # caller/server requested one — including an explicit "" (whole-domain honesty:
+    # the backend, not this plugin, judges the value) — and fails loudly on drift.
+    if reasoning_effort is not None:
+        tokens += [
+            "-c",
+            f"{cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY}={reasoning_effort}",
+        ]
     cmd, dropped = _gate_optional(tokens, fs)
     # Operator passthrough goes in AFTER gating (never gated/dropped) and before the
     # stdin sentinel; already allowlist-validated in config.extra_args().
@@ -130,6 +141,7 @@ async def run_codex_exec(
     isolation: str,
     timeout_seconds: int,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     output_schema: dict | None = None,
     add_dirs: tuple[str, ...] = (),
     skip_git_repo_check: bool = False,
@@ -154,6 +166,7 @@ async def run_codex_exec(
             isolation=isolation,
             output_last_message_path=last_msg_path,
             model=model,
+            reasoning_effort=reasoning_effort,
             output_schema_path=schema_path,
             add_dirs=add_dirs,
             skip_git_repo_check=skip_git_repo_check,
@@ -245,6 +258,18 @@ def contract_changed_error() -> ErrorInfo:
     )
 
 
+def _invalid_reasoning_effort_error() -> ErrorInfo:
+    """Error for a backend rejection of the reasoning_effort this run requested (#309).
+
+    Static, value-free message: the rejected effort is caller input (the caller already
+    holds it), matching the no-echo policy of invalid_arguments/ErrorDetail."""
+    return make_error(
+        "invalid_reasoning_effort",
+        "The Codex backend rejected the requested reasoning_effort for this model/account.",
+        details=ErrorDetail(field="reasoning_effort"),
+    )
+
+
 def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
     """Error for a drift that codex attributes to an operator-supplied extra arg (#231).
 
@@ -299,6 +324,7 @@ def classify_failure(
     last_message: str | None = None,
     events: str | None = None,
     extra_args: config.ExtraArgs | None = None,
+    reasoning_effort: str | None = None,
 ) -> ErrorInfo:
     """Classify a non-success `codex exec` run into a recoverable ErrorInfo.
 
@@ -308,7 +334,13 @@ def classify_failure(
 
     `extra_args` (defaulting to a fresh env read) lets a drift codex attributes to an
     operator's CODEX_IN_CLAUDE_EXTRA_ARGS entry be reported as `extra_args_rejected`
-    rather than `cli_contract_changed` (#231)."""
+    rather than `cli_contract_changed` (#231).
+
+    `reasoning_effort` is the effort override this run sent through the plugin's
+    first-class controls, or None when none was sent. The backend rejects a bad
+    effort VALUE with a message that also matches the generic drift patterns, so
+    when one was sent and the backend's effort markers are present the failure is
+    the caller's argument (`invalid_reasoning_effort`), not contract drift (#309)."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
@@ -324,6 +356,14 @@ def classify_failure(
         matched = _extra_args_drift_match(extra_args, run.stderr, run.stdout, event_error)
         if matched is not None:
             return _extra_args_rejected_error(matched)
+        # Only when THIS run sent a first-class effort override AND the blob carries
+        # the backend's request-level markers (reasoning.effort/ReasoningEffortParam).
+        # A rejection naming only the config key means codex dropped the key itself —
+        # genuine drift that must stay fail-loud (the markers exclude the key name).
+        if reasoning_effort is not None and cli_contract.is_reasoning_effort_rejection(
+            run.stderr, run.stdout, event_error
+        ):
+            return _invalid_reasoning_effort_error()
         return contract_changed_error()
     if cli_contract.is_rate_limited(run.stderr, run.stdout, last_message, event_error):
         retry_after = cli_contract.parse_retry_after_ms(

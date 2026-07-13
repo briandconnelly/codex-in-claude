@@ -116,3 +116,70 @@ def test_model_slug_pattern_rejects_junk():
     assert cli_contract.MODEL_SLUG_PATTERN.match("gpt-5.5")
     assert not cli_contract.MODEL_SLUG_PATTERN.match("bad slug!")
     assert not cli_contract.MODEL_SLUG_PATTERN.match("")
+
+
+# --- Reasoning-effort config override (#309) --------------------------------------
+# The real backend rejection captured from codex-cli 0.144.3 on 2026-07-13
+# (`-c model_reasoning_effort=totally-bogus-effort` on a valid model):
+_REAL_EFFORT_REJECTION = (
+    '{"type": "error", "error": {"type": "invalid_request_error", "message": '
+    '"[ReasoningEffortParam] [reasoning.effort] [invalid_enum_value] Invalid value: '
+    "'totally-bogus-effort'. Supported values are: 'none', 'minimal', 'low', "
+    "'medium', 'high', and 'xhigh'.\"}, \"status\": 400}"
+)
+
+
+def test_reasoning_effort_config_key():
+    assert cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY == "model_reasoning_effort"
+
+
+def test_effort_rejection_markers_never_include_the_config_key():
+    # A future codex that rejects the config key ITSELF is contract drift and must
+    # stay fail-loud; only the backend's request-level markers identify a bad VALUE.
+    for marker in cli_contract.REASONING_EFFORT_REJECTION_MARKERS:
+        assert "model_reasoning_effort" not in marker
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _REAL_EFFORT_REJECTION,
+        "[reasoning.effort] [invalid_enum_value] Invalid value: 'wat'",
+        "ReasoningEffortParam rejected the request",
+    ],
+)
+def test_is_reasoning_effort_rejection_true(text):
+    assert cli_contract.is_reasoning_effort_rejection(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The config key alone (a CLI-side key rejection) is drift, not a bad value.
+        "error: invalid value 'wat' for 'model_reasoning_effort'",
+        "error: unexpected argument '-c' found",
+        "reasoning effort was fine",  # no dotted/param marker
+        "done",
+        "",
+    ],
+)
+def test_is_reasoning_effort_rejection_false(text):
+    assert not cli_contract.is_reasoning_effort_rejection(text, None)
+
+
+def test_reasoning_effort_backend_rejection_also_matches_drift_patterns():
+    # Pins WHY classify_failure must check the effort rejection before falling back
+    # to cli_contract_changed: the backend message contains "Invalid value", which
+    # the drift patterns match.
+    assert cli_contract.is_contract_drift(_REAL_EFFORT_REJECTION)
+
+
+def test_reasoning_effort_token_pattern():
+    for token in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
+        assert cli_contract.REASONING_EFFORT_TOKEN_PATTERN.match(token), token
+    for junk in ("", " ", "two words", "a" * 33, "-leading", "tab\there"):
+        assert not cli_contract.REASONING_EFFORT_TOKEN_PATTERN.match(junk), junk
+
+
+def test_supported_efforts_cap_is_positive():
+    assert cli_contract.SUPPORTED_EFFORTS_MAX_ENTRIES > 0

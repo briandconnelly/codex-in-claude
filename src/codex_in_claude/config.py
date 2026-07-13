@@ -64,6 +64,7 @@ class Defaults:
     sandbox: str
     isolation: str
     model: str | None
+    reasoning_effort: str | None
     timeout_seconds: int
 
 
@@ -89,6 +90,7 @@ def defaults() -> Defaults:
         sandbox=sandbox,
         isolation=isolation,
         model=os.environ.get(f"{ENV_PREFIX}MODEL") or None,
+        reasoning_effort=os.environ.get(f"{ENV_PREFIX}REASONING_EFFORT") or None,
         timeout_seconds=_env_int(f"{ENV_PREFIX}TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
     )
 
@@ -169,20 +171,29 @@ _DENIED_CONFIG_KEYS = frozenset(
 _DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_environment_policy"})
 
 # Config keys refused because they would contradict provenance the result envelope reports
-# (#310): `model` has first-class, meta-reported controls — the per-call `model` parameter and
-# CODEX_IN_CLAUDE_MODEL — which flow into resolved_defaults and meta.model. A passthrough
-# `-c model=…` would run on the operator's model while meta.model still reports the
-# per-call/server value (null in the common case). Deliberately an EXACT-key set, not a new
-# root in _DENIED_CONFIG_KEY_ROOTS: the root machinery's `model_` prefix match would also
-# refuse `model_provider` — the passthrough's motivating use case (#231, above). For the same
-# reason `model_reasoning_effort` stays allowed until the effort surface lands (#309), which
-# reserves it alongside its replacement controls. The check runs on the normalized key, so
-# it also refuses lookalike spellings (`Model`, quoted segments) that codex's own `-c`
-# parser — a naive '.'-split with literal, case-sensitive segments — would treat as junk
-# keys rather than `model`: deliberate, harmless over-denial matching the #287 treatment.
-# NOTE: an opaque `--profile` can still set `model` — the same documented operator-trust
-# boundary that bounds every `-c` denial (COMPATIBILITY.md).
-_RESERVED_META_CONFIG_KEYS = frozenset({"model"})
+# (#310, #309): each has first-class, meta-reported controls — a per-call parameter and a
+# CODEX_IN_CLAUDE_* env default — which flow into resolved_defaults and the named meta field.
+# A passthrough `-c model=…` (or `-c model_reasoning_effort=…`) would run on the operator's
+# value while the meta field still reports the per-call/server value (null in the common
+# case). Deliberately EXACT keys, not a new root in _DENIED_CONFIG_KEY_ROOTS: the root
+# machinery's `model_` prefix match would also refuse `model_provider` — the passthrough's
+# motivating use case (#231, above) — and `model_verbosity`, which stay allowed. The check
+# runs on the normalized key, so it also refuses lookalike spellings (`Model`, quoted
+# segments) that codex's own `-c` parser — a naive '.'-split with literal, case-sensitive
+# segments — would treat as junk keys rather than the real key: deliberate, harmless
+# over-denial matching the #287 treatment. NOTE: an opaque `--profile` can still set these —
+# the same documented operator-trust boundary that bounds every `-c` denial
+# (COMPATIBILITY.md). Values are (meta field, env var, per-call parameter, issue) used to
+# build the value-free refusal message.
+_RESERVED_META_CONFIG_KEYS: dict[str, tuple[str, str, str, str]] = {
+    "model": ("meta.model", f"{ENV_PREFIX}MODEL", "model", "#310"),
+    cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY: (
+        "meta.reasoning_effort",
+        f"{ENV_PREFIX}REASONING_EFFORT",
+        "reasoning_effort",
+        "#309",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -289,13 +300,15 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         "override cannot re-enable them"
                     ),
                 )
-            if _normalize_config_key(key) in _RESERVED_META_CONFIG_KEYS:
+            reserved = _RESERVED_META_CONFIG_KEYS.get(_normalize_config_key(key))
+            if reserved is not None:
+                meta_field, env_var, param, issue = reserved
                 return ExtraArgs(
                     configured=True,
                     error=(
                         f"config key '{key.strip()}' is reserved — it would contradict the "
-                        "model provenance reported in result envelopes (meta.model); set "
-                        f"{ENV_PREFIX}MODEL or the per-call model parameter instead (#310)"
+                        f"provenance reported in result envelopes ({meta_field}); set "
+                        f"{env_var} or the per-call {param} parameter instead ({issue})"
                     ),
                 )
             tokens += [flag, value]

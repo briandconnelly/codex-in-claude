@@ -48,7 +48,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-41"
+FINGERPRINT = "codex-in-claude/0.1/schema-42"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -64,7 +64,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-41"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 1
+RESULT_FORMAT: int = 2
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -199,6 +199,13 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
+    # The Codex backend rejected the reasoning_effort this run requested through the
+    # plugin's first-class controls (the per-call parameter or
+    # CODEX_IN_CLAUDE_REASONING_EFFORT) — a caller/operator value to correct, NOT a
+    # plugin contract drift. Only emitted when an effort override was actually sent
+    # and the failure carries the backend's request-level markers; a rejection of the
+    # config key itself stays cli_contract_changed (#309).
+    "invalid_reasoning_effort",
     # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
     # (an unaccepted option / config key / profile). Operator config to fix, NOT a
     # plugin contract drift — kept distinct from cli_contract_changed so the fail-loud
@@ -442,6 +449,24 @@ class Meta(BaseModel):
             "for an inspected background job's kind)."
         ),
     )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description=(
+            "The reasoning effort requested through the plugin's first-class controls for "
+            "the Codex run this envelope describes — the per-call `reasoning_effort` "
+            "parameter or the server's CODEX_IN_CLAUDE_REASONING_EFFORT default, sent to "
+            "codex as a `model_reasoning_effort` config override. Like meta.model it is "
+            "override provenance, not backend attestation: null means effort resolution "
+            "happened outside those controls (Codex's own default, the operator's "
+            "config.toml, or an opaque --profile), and the plugin cannot know what it "
+            "resolved to. The generic `-c model_reasoning_effort=…` extra-args spelling is "
+            "refused at parse time so a passthrough cannot contradict this field (#309). A "
+            "retrieved background-job result carries the ORIGINATING run's value; an error "
+            "envelope GENERATED before a Codex run was prepared reports the server-default "
+            "resolution, or null when no default is set — the same cases meta.model "
+            "documents."
+        ),
+    )
     scope: str | None = None  # review scope: working_tree|branch|commit
     base: str | None = None
     commit: str | None = None
@@ -659,6 +684,7 @@ class ResolvedDefaults(BaseModel):
     sandbox: Sandbox
     isolation: Isolation
     model: str | None = None
+    reasoning_effort: str | None = None
     timeout_seconds: int
     timeout_bounds: list[int]  # [min, max] clamp range for timeout_seconds
 
@@ -669,6 +695,7 @@ class RawDefaults(BaseModel):
     sandbox: str
     isolation: str
     model: str | None = None
+    reasoning_effort: str | None = None
     timeout_seconds: int
 
 
@@ -820,6 +847,13 @@ class ModelInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     slug: str
     display_name: str | None = None
+    # Advisory reasoning-effort discovery for the optional `reasoning_effort` param
+    # (#309), read from Codex's on-disk cache. None = the cache advertised nothing
+    # usable (the static fallback always reports None); an empty list is an explicitly
+    # empty advertised set. NOT authoritative: the backend's accepted set varies by
+    # model and account, and an unlisted effort may still work.
+    default_reasoning_effort: str | None = None
+    supported_reasoning_efforts: list[str] | None = None
 
 
 class ModelCatalogResult(BaseModel):
@@ -952,6 +986,12 @@ class DryRunResult(BaseModel):
     tier: Tier
     sandbox: Sandbox
     isolation: Isolation
+    # The model/effort overrides the previewed paid call would send — the per-call
+    # params or the server defaults, same override-provenance semantics as
+    # meta.model/meta.reasoning_effort. null = Codex would resolve them itself. The
+    # preview does not validate either value (#309).
+    model: str | None = None
+    reasoning_effort: str | None = None
     scope: str | None = None
     base: str | None = None
     commit: str | None = None
@@ -997,6 +1037,9 @@ class DelegateDryRunResult(BaseModel):
     tier: Tier = "propose"
     sandbox: Sandbox = "workspace-write"
     isolation: Isolation
+    # The model/effort overrides the previewed delegate would send (see DryRunResult).
+    model: str | None = None
+    reasoning_effort: str | None = None
     prompt_bytes: int  # full UTF-8 size of the delegate prompt that would be sent
     max_input_bytes: int  # the task byte limit the real run enforces
     worktree_plan: WorktreePlan

@@ -16,9 +16,10 @@ from codex_in_claude._core.jsoncache import read_bounded_json
 from codex_in_claude.schemas import ModelCatalogResult, ModelInfo
 
 _ADVISORY = (
-    "Advisory model list for the `model` param — not authoritative. Codex validates "
-    "the slug at run time; an unlisted slug may still work and a listed one may be "
-    "unavailable to your account."
+    "Advisory model list for the `model` and `reasoning_effort` params — not "
+    "authoritative. Codex validates the slug (and the backend the effort) at run "
+    "time; an unlisted value may still work and a listed one may be unavailable to "
+    "your account."
 )
 _UNAVAILABLE = (
     "No model catalog found: Codex has not written its on-disk cache yet (a fresh "
@@ -38,6 +39,33 @@ def _codex_home() -> Path | None:
         return Path(env).expanduser() if env else Path.home() / ".codex"
     except RuntimeError:
         return None
+
+
+def _effort_token(value: object) -> str | None:
+    """A cache-supplied effort token, or None when it fails the defensive shape."""
+    if not isinstance(value, str) or not cli_contract.REASONING_EFFORT_TOKEN_PATTERN.match(value):
+        return None
+    return value
+
+
+def _supported_efforts(raw: object) -> list[str] | None:
+    """Effort tokens from a cache entry's supported_reasoning_levels, or None.
+
+    The 0.144 cache advertises a list of objects ({effort, description, ...}); only
+    the effort tokens are surfaced (the descriptions are UI copy). Entries failing
+    the defensive shape are dropped, duplicates are kept once (order preserved), and
+    the list is capped. None = absent or unusable (a non-list, or a non-empty list
+    that yielded nothing); [] = an explicitly empty advertised set."""
+    if not isinstance(raw, list):
+        return None
+    efforts: list[str] = []
+    for entry in raw[: cli_contract.SUPPORTED_EFFORTS_MAX_ENTRIES]:
+        token = _effort_token(entry.get("effort")) if isinstance(entry, dict) else None
+        if token is not None and token not in efforts:
+            efforts.append(token)
+    if raw and not efforts:
+        return None
+    return efforts
 
 
 def _parse_models(raw: object) -> tuple[list[ModelInfo], str | None, str | None] | None:
@@ -61,7 +89,16 @@ def _parse_models(raw: object) -> tuple[list[ModelInfo], str | None, str | None]
             continue
         display = entry.get("display_name")
         display = display if isinstance(display, str) and len(display) <= 128 else None
-        models.append(ModelInfo(slug=slug, display_name=display))
+        models.append(
+            ModelInfo(
+                slug=slug,
+                display_name=display,
+                default_reasoning_effort=_effort_token(entry.get("default_reasoning_level")),
+                supported_reasoning_efforts=_supported_efforts(
+                    entry.get("supported_reasoning_levels")
+                ),
+            )
+        )
     if not models:
         return None
     fetched_at = raw.get("fetched_at")

@@ -75,6 +75,10 @@ def _meta_from_spec(spec: dict) -> Meta:
         sandbox=cast("Sandbox", spec["sandbox"]),
         isolation=spec["isolation"],
         model=spec.get("model"),
+        # Absent from a legacy (pre-#309) spec and from any run without an override
+        # (the key is written only when an effort was set, preserving idempotency
+        # hashes); .get() reads both as None.
+        reasoning_effort=spec.get("reasoning_effort"),
         timeout_seconds=spec["timeout_seconds"],
         elapsed_ms=0,
         scope=spec.get("scope"),
@@ -143,6 +147,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 isolation=spec["isolation"],
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
+                reasoning_effort=spec.get("reasoning_effort"),
                 git_timeout=spec["git_timeout"],
                 max_diff_bytes=spec.get("max_diff_bytes"),
                 on_worktree_parent=lambda parent: _write_cleanup_manifest(job_dir, parent),
@@ -157,6 +162,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 isolation=spec["isolation"],
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
+                reasoning_effort=spec.get("reasoning_effort"),
                 extra_context=spec.get("extra_context", ""),
                 on_event=on_event,
             )
@@ -172,6 +178,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 isolation=spec["isolation"],
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
+                reasoning_effort=spec.get("reasoning_effort"),
                 git_timeout=spec["git_timeout"],
                 max_bytes=spec["max_bytes"],
                 extra_context=spec.get("extra_context", ""),

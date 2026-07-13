@@ -80,6 +80,7 @@ async def run_delegate(
     isolation: str,
     timeout_seconds: int,
     model: str | None,
+    reasoning_effort: str | None = None,
     git_timeout: int,
     max_diff_bytes: int | None = None,
     on_worktree_parent: Callable[[str], None] | None = None,
@@ -130,12 +131,18 @@ async def run_delegate(
             isolation=isolation,
             timeout_seconds=timeout_seconds,
             model=model,
+            reasoning_effort=reasoning_effort,
             on_event=on_event,
         )
         _apply_run_meta(meta, result)
         if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
             err = codex.classify_failure(
-                result.run, last_message=result.last_message, events=result.events
+                result.run,
+                last_message=result.last_message,
+                events=result.events,
+                # See orchestration._stamp_meta: a backend effort rejection is the
+                # caller's argument, not contract drift (#309).
+                reasoning_effort=meta.reasoning_effort,
             )
             return serialize_error(ErrorResult(error=err, meta=meta))
         diff = worktree.capture_diff(wt.path, timeout=git_timeout)

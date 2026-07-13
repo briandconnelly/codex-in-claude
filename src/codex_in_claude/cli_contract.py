@@ -194,6 +194,43 @@ HELP_GATED_FLAGS = {
     MODEL_FLAG: True,  # falls back to the configured/default Codex model
 }
 
+# --- Reasoning-effort config override (issue #309) --------------------------------
+# `codex exec` 0.144.3 has no dedicated reasoning-effort flag (verified against
+# `codex exec --help` 2026-07-13); the only route is the `model_reasoning_effort`
+# config key, sent as `-c model_reasoning_effort=<value>`. A config KEY cannot be
+# help-gated — `--help` advertises flags, not config keys — so when a caller (or the
+# CODEX_IN_CLAUDE_REASONING_EFFORT default) requests an effort it is sent
+# unconditionally, matching the ALWAYS_SEND fail-closed posture: if a future codex
+# rejects the `-c` flag or the key itself, the run fails at arg-parse/startup (zero
+# spend) and classify_failure labels it cli_contract_changed.
+#
+# The VALUE is an open per-model string, validated by the backend at request time,
+# not by the CLI and not by this plugin: the CLI accepts any string silently, and the
+# backend's accepted set varies by model and account (probed 2026-07-13: gpt-5.5 via
+# ChatGPT advertises none|minimal|low|medium|high|xhigh; the models cache advertises
+# max/ultra for other slugs). Discovery is advisory only (codex_models).
+MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
+
+# Markers identifying the BACKEND's rejection of a bad reasoning-effort VALUE (a
+# caller error), as distinct from a CLI rejection of the config key itself (contract
+# drift). The backend 400 reads "[ReasoningEffortParam] [reasoning.effort]
+# [invalid_enum_value] Invalid value: '<v>'..." — which also matches the "invalid
+# value" drift pattern above, so classify_failure must check these markers first or a
+# caller's typo would be misreported as cli_contract_changed. Deliberately EXCLUDES
+# "model_reasoning_effort": a rejection naming only the key means codex no longer
+# accepts the key — genuine drift that must stay fail-loud.
+REASONING_EFFORT_REJECTION_MARKERS = ("reasoning.effort", "reasoningeffortparam")
+
+# Conservative shape for an effort token read from the UNDOCUMENTED models cache
+# (same defensive posture as MODEL_SLUG_PATTERN): entries failing it are dropped so a
+# malformed/hostile cache cannot surface junk to an agent. Never applied to the
+# caller's own reasoning_effort parameter, which is passed through for the backend to
+# validate.
+REASONING_EFFORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+# Ignore anything past this many supported-effort entries per model (the real cache
+# advertises ≤ 6).
+SUPPORTED_EFFORTS_MAX_ENTRIES = 16
+
 # --- Model catalog (advisory discovery) -----------------------------------------
 # Codex caches its authoritative model list at $CODEX_HOME/models_cache.json (default
 # ~/.codex). It is an UNDOCUMENTED internal file, written lazily by real Codex sessions
@@ -345,6 +382,16 @@ def is_contract_drift(*texts: str | None) -> bool:
     `codex` surfaces it."""
     blob = "\n".join(t for t in texts if t).lower()
     return any(pattern in blob for pattern in CONTRACT_DRIFT_STDERR_PATTERNS)
+
+
+def is_reasoning_effort_rejection(*texts: str | None) -> bool:
+    """Whether any provided text carries the backend's bad-reasoning-effort markers.
+
+    True only for the request-level rejection of an effort VALUE (see
+    REASONING_EFFORT_REJECTION_MARKERS); a rejection naming only the config key is
+    contract drift and deliberately does not match."""
+    blob = "\n".join(t for t in texts if t).lower()
+    return any(marker in blob for marker in REASONING_EFFORT_REJECTION_MARKERS)
 
 
 def is_auth_failure(*texts: str | None) -> bool:
