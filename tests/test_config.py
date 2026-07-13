@@ -401,3 +401,58 @@ def test_extra_args_allows_non_plugin_owned_features(monkeypatch, raw):
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
     ea = config.extra_args()
     assert ea.valid is True
+
+
+# --- #310: `model` is reserved for the first-class, meta-reported controls ------------
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "-c model=gpt-5-codex",  # short config flag
+        "--config model=gpt-5-codex",  # long config flag
+        "--config=model=gpt-5-codex",  # attached long config flag
+        '-c " model =gpt-5-codex"',  # whitespace around the key (codex trims the whole key)
+        # Lookalike spellings, conservatively refused: codex's -c parser is a naive
+        # '.'-split with literal, case-sensitive segments (no quote stripping — verified
+        # against codex-rs 0.144.3 config_override.rs), so `Model` and `"model"` would be
+        # junk keys codex never reads, not aliases of `model`. Denying them anyway costs
+        # nothing and matches the #287 Remote_Plugin/quoted-segment treatment.
+        "-c Model=gpt-5-codex",
+        "-c '\"model\"=gpt-5-codex'",  # escaped quotes survive shlex
+    ],
+)
+def test_extra_args_reserves_model_key(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    # The refusal must point the operator at the first-class replacements.
+    assert "CODEX_IN_CLAUDE_MODEL" in ea.error
+    # The -c VALUE is never echoed in an error envelope.
+    assert "gpt-5-codex" not in ea.error
+
+
+def test_extra_args_model_denial_is_not_the_remote_plugin_message(monkeypatch):
+    # The reserved-key refusal must carry its own explanation, not the
+    # remote_plugin security-guarantee text (#287) or the sandbox-roots text.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model=gpt-5-codex")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "remote_plugin" not in ea.error
+    assert "sandbox" not in ea.error
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "-c model_provider=azure",  # the passthrough's motivating use case (#231)
+        "-c model_providers.x.base_url=http://localhost:8000/v1",  # provider table
+        # Allowed until the reasoning-effort surface lands (#309): denying it today
+        # would remove the operator's only effort control while contradicting nothing
+        # in meta (no effort field exists yet). #309 reserves it with its replacement.
+        "-c model_reasoning_effort=high",
+        "-c model_verbosity=low",  # any other model_* key stays allowed
+    ],
+)
+def test_extra_args_allows_other_model_keys(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is True

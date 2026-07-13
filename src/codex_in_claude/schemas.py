@@ -48,7 +48,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-40"
+FINGERPRINT = "codex-in-claude/0.1/schema-41"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -424,7 +424,24 @@ class Meta(BaseModel):
         )
     )
     isolation: Isolation
-    model: str | None = None
+    model: str | None = Field(
+        default=None,
+        description=(
+            "The model slug requested through the plugin's first-class controls for the Codex "
+            "run this envelope describes — the per-call `model` parameter or the server's "
+            "CODEX_IN_CLAUDE_MODEL default. On success envelopes it is also mirrored to "
+            "raw_response.model. It is override provenance, not backend attestation: null "
+            "means model selection happened outside those controls (Codex's own default, the "
+            "operator's config.toml, or an opaque --profile), and the plugin cannot know which "
+            "model that resolved to. The generic `-c model=…` extra-args spelling is refused "
+            "at parse time so a passthrough cannot contradict this field (#310). A retrieved "
+            "background-job result carries the ORIGINATING run's value. An error envelope "
+            "GENERATED before a Codex run was prepared — argument validation, job-lifecycle "
+            "(codex_job_*) calls — does not attest to the rejected call's model: it reports "
+            "the server-default resolution, or null when no default is set (see meta.job_kind "
+            "for an inspected background job's kind)."
+        ),
+    )
     scope: str | None = None  # review scope: working_tree|branch|commit
     base: str | None = None
     commit: str | None = None

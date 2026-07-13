@@ -159,6 +159,18 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   codex's own `-c` parser trims it before this check, so a leading/segment space cannot slip a denied
   key past. A `-c` value may hold a secret, so it is never echoed in `codex_status` or an error
   envelope.
+- **`model` is reserved for the first-class controls** (#310). `meta.model` (and
+  `raw_response.model`) report the model the per-call `model` parameter or `CODEX_IN_CLAUDE_MODEL`
+  requested; a passthrough `-c model=…` would make the run use the operator's model while the
+  envelope reports the per-call/server value (null in the common case), so the exact `model` key
+  is refused at parse time. The parser also conservatively refuses case- and quote-varied
+  lookalikes (`Model`, `"model"`) that codex-rs 0.144.3 treats as distinct junk keys, not
+  aliases. Set `CODEX_IN_CLAUDE_MODEL` or the per-call parameter instead — those flow into
+  `resolved_defaults` and `meta.model` correctly. This is not a `model_*` root reservation:
+  `model_provider`/`model_providers.*` (this knob's motivating use case) and other `model_*`
+  keys still pass through, and `model_reasoning_effort` stays allowed until the reasoning-effort
+  surface (#309) lands its first-class replacement and reserves it. An opaque
+  `--profile` can still set `model` — the operator-trust boundary below, restated, not closed.
 - **`remote_plugin` is wholly plugin-owned in the passthrough.** Both `--enable remote_plugin` and
   `--disable remote_plugin`, and any `-c features.remote_plugin=…` (either spelling, since
   `--enable X` == `-c features.X=true`), are refused — the server manages this feature as a documented
