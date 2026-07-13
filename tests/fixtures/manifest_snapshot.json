@@ -921,6 +921,7 @@
                 "type": "null"
               }
             ],
+            "description": "codex-in-claude package version attributed to this result. A replayed done-job result preserves the version of the run that produced it; every freshly built envelope reports the responding server. Null when a stored payload predates this field — never backfilled.",
             "title": "Server Version"
           },
           "stability": {
@@ -1489,6 +1490,7 @@
                     "type": "null"
                   }
                 ],
+                "description": "codex-in-claude package version attributed to this result. A replayed done-job result preserves the version of the run that produced it; every freshly built envelope reports the responding server. Null when a stored payload predates this field — never backfilled.",
                 "title": "Server Version"
               },
               "session_id": {
@@ -2480,6 +2482,7 @@
                 "type": "null"
               }
             ],
+            "description": "codex-in-claude package version attributed to this result. A replayed done-job result preserves the version of the run that produced it; every freshly built envelope reports the responding server. Null when a stored payload predates this field — never backfilled.",
             "title": "Server Version"
           },
           "session_id": {
@@ -2997,6 +3000,7 @@
                 "type": "null"
               }
             ],
+            "description": "codex-in-claude package version attributed to this result. A replayed done-job result preserves the version of the run that produced it; every freshly built envelope reports the responding server. Null when a stored payload predates this field — never backfilled.",
             "title": "Server Version"
           },
           "version_supported": {

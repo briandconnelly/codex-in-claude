@@ -65,7 +65,15 @@ FINGERPRINT = "codex-in-claude/0.1/schema-39"
 # and on replay it must stay ABSENT rather than be stamped with the replaying server's
 # version (see server.py::_finished_job_envelope).
 def _server_version_field() -> Any:
-    return Field(default_factory=lambda: __version__)
+    return Field(
+        default_factory=lambda: __version__,
+        description=(
+            "codex-in-claude package version attributed to this result. A replayed done-job "
+            "result preserves the version of the run that produced it; every freshly built "
+            "envelope reports the responding server. Null when a stored payload predates this "
+            "field — never backfilled."
+        ),
+    )
 
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running

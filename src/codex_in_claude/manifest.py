@@ -31,10 +31,10 @@ _FASTMCP_META_KEY = "fastmcp"
 # JSON-Schema arrays that are semantically sets — sorted for order-independence
 # (enum order is explicitly non-contractual; see tests/test_server.py).
 _SETLIKE_ARRAY_KEYS = frozenset({"enum", "required"})
-# capabilities fields excluded: ``version`` and ``server_version`` are both
-# release-variable (the latter added alongside ``server_version`` on every other
-# result envelope; it echoes ``version`` in the live payload) and ``fingerprint``
-# echoes FINGERPRINT itself (would self-reference the guard).
+# capabilities fields excluded from the snapshot: ``version`` and ``server_version``
+# both carry the release-variable package version in the LIVE payload (they are equal
+# there), so snapshotting either would churn the golden on every release; ``fingerprint``
+# echoes FINGERPRINT itself, which would make the guard self-referential.
 _CAPABILITIES_EXCLUDE = frozenset({"version", "server_version", "fingerprint"})
 
 
