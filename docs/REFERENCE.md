@@ -48,11 +48,24 @@ questions and are not interchangeable:
   run. Provenance, not a cache key — it lets a downstream consumer (an MCP error audit, say) scope
   an analysis to a release instead of guessing from timestamps.
 
-`server_version` is nullable. A result replayed from a background job reports the `server_version`
-of the run that **produced** it, never the version of the server replaying it — replaying never
-overwrites provenance with the replaying process's own identity. A job result persisted before this
-field existed replays with `server_version` **absent** (omitted, not backfilled), rather than being
-stamped with a plausible-but-wrong version.
+`server_version` is nullable. A **result** reply — a `done` job replaying its stored payload —
+reports the `server_version` of the run that **produced** it, never the version of the server
+replaying it: replaying never overwrites provenance with the replaying process's own identity. A
+job result persisted before this field existed replays with `server_version` **absent** (omitted,
+not backfilled), rather than being stamped with a plausible-but-wrong version.
+
+A job in a non-`done` terminal state (`failed`, `timeout`, `cancelled`) or not found has no stored
+payload to replay: the server synthesizes an error envelope for it, and that envelope's
+`server_version` is the **polling** server's own version, not any producing worker's — the job
+record persists no worker version, so there is nothing to preserve. A consumer reading synthesized
+error envelopes (an error audit, say) must attribute `server_version` on those envelopes to whichever
+server answered the poll, not to the run that failed.
+
+**Read version fields by exact key, never by pattern.** `codex_capabilities` returns three
+version-ish keys on one payload: `version` and `server_version` are identical and both name *this*
+server's release; `codex_version` is the **Codex CLI's** version — the external binary this server
+shells out to — not this server's own. Match the exact key you mean; pattern-matching key names
+containing "version" risks reading the wrong software's version.
 
 Secret-looking values are redacted from every free-text surface before it leaves the plugin —
 `summary`, `findings`/`questions`/`assumptions`/`next_steps`, and `raw_response.text` — in addition
@@ -104,10 +117,13 @@ records that sync runs also create). Operational semantics:
 - **Retention.** Results are retained `ttl_seconds` **after** a job completes, so `expires_at` is
   `null` while it runs and is set once it finishes. Records are also evicted oldest-terminal-first
   past a per-workspace count cap (`CODEX_IN_CLAUDE_JOB_MAX_COUNT`).
-- **`server_version` provenance.** A `codex_job_result`/`codex_job_consume_result` reply carries the
-  `server_version` of the run that *produced* the job's result, not the version of the server
-  currently serving the poll — replaying never re-stamps provenance. A result from a job persisted
-  before this field existed replays with `server_version` absent. See Result envelopes above.
+- **`server_version` provenance.** For a `done` job, a `codex_job_result`/`codex_job_consume_result`
+  reply replays the stored payload and carries the `server_version` of the run that *produced* it,
+  not the version of the server currently serving the poll — replaying never re-stamps provenance. A
+  result from a job persisted before this field existed replays with `server_version` absent. For a
+  job in any other terminal state (`failed`, `timeout`, `cancelled`) or not found, there is no stored
+  payload: the reply is a synthesized error envelope whose `server_version` is the *polling* server's
+  own version. See Result envelopes above.
 
 ## Rate-limit reporting
 
