@@ -5,6 +5,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Every result envelope now reports the server release it came from** (`server_version`),
+  beside the existing `fingerprint`. The two answer different questions and are not
+  interchangeable: `fingerprint` is contract identity (which surface does this conform to —
+  a cache key), `server_version` is release identity (which build produced this run). A
+  downstream consumer — an MCP error audit, say — can now scope an analysis to a release
+  instead of guessing from dates. Result `fingerprint` moves
+  (`codex-in-claude/0.1/schema-38` → `codex-in-claude/0.1/schema-39`).
+
+  A background job's result replays with the version of the run that *produced* it, never
+  the version replaying it; a result persisted before this field existed replays with no
+  version at all, rather than being stamped with a plausible-but-wrong one.
+
 ## [0.10.0] - 2026-07-12
 
 A documentation-and-disclosure release. Nothing changed about what the tools do — no tool, field,

@@ -7,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "4f55356797e101529391c71aaa045e0cc8aa20caeabdb82d103e35380fa5be42"
+EXPECTED_MANIFEST_HASH = "d5a60387610688207475132064336cbcc960d33d71be8c9d4f916ef55e05328a"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -120,6 +120,10 @@ async def test_build_manifest_excludes_dynamic_fields():
     # Release-variable / self-referential capability fields are excluded.
     assert "version" not in m["capabilities"]
     assert "fingerprint" not in m["capabilities"]
+    # server_version echoes `version` (both == __version__) in the live capabilities
+    # payload; excluded for the identical release-variable reason, or every release
+    # would move the golden snapshot with no contract change (#see manifest.py).
+    assert "server_version" not in m["capabilities"]
     # Resource METADATA for codex://models is present; its dynamic CONTENT is not read.
     uris = {r["uri"] for r in m["resources"]}
     assert "codex://models" in uris

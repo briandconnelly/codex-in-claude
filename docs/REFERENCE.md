@@ -38,6 +38,22 @@ Absent optional fields are omitted from the payload (no placeholder nulls), exce
 — useful for planning recovery, but not a closed contract. The envelope shape is versioned by
 `fingerprint`; clients can cache by it.
 
+Every result envelope also carries `server_version` beside `fingerprint`. The two answer different
+questions and are not interchangeable:
+
+- `fingerprint` — **contract identity**: which agent-visible surface (tool/field shapes, error
+  codes, documented meaning) this result conforms to. A client cache key — bump it and a cached
+  client re-fetches the contract.
+- `server_version` — **release identity**: which build of `codex-in-claude` actually produced this
+  run. Provenance, not a cache key — it lets a downstream consumer (an MCP error audit, say) scope
+  an analysis to a release instead of guessing from timestamps.
+
+`server_version` is nullable. A result replayed from a background job reports the `server_version`
+of the run that **produced** it, never the version of the server replaying it — replaying never
+overwrites provenance with the replaying process's own identity. A job result persisted before this
+field existed replays with `server_version` **absent** (omitted, not backfilled), rather than being
+stamped with a plausible-but-wrong version.
+
 Secret-looking values are redacted from every free-text surface before it leaves the plugin —
 `summary`, `findings`/`questions`/`assumptions`/`next_steps`, and `raw_response.text` — in addition
 to gathered diffs. Inline matches become `[redacted: secret value]`. This is **best-effort
@@ -88,6 +104,10 @@ records that sync runs also create). Operational semantics:
 - **Retention.** Results are retained `ttl_seconds` **after** a job completes, so `expires_at` is
   `null` while it runs and is set once it finishes. Records are also evicted oldest-terminal-first
   past a per-workspace count cap (`CODEX_IN_CLAUDE_JOB_MAX_COUNT`).
+- **`server_version` provenance.** A `codex_job_result`/`codex_job_consume_result` reply carries the
+  `server_version` of the run that *produced* the job's result, not the version of the server
+  currently serving the poll — replaying never re-stamps provenance. A result from a job persisted
+  before this field existed replays with `server_version` absent. See Result envelopes above.
 
 ## Rate-limit reporting
 

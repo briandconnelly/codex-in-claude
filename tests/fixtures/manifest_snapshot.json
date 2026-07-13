@@ -833,7 +833,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-38",
+            "default": "codex-in-claude/0.1/schema-39",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -911,6 +911,17 @@
             },
             "title": "Scope",
             "type": "array"
+          },
+          "server_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Version"
           },
           "stability": {
             "title": "Stability",
@@ -1341,7 +1352,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-38",
+                "default": "codex-in-claude/0.1/schema-39",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1468,6 +1479,17 @@
                 },
                 "title": "Security Warnings",
                 "type": "array"
+              },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Server Version"
               },
               "session_id": {
                 "anyOf": [
@@ -2321,7 +2343,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-38",
+            "default": "codex-in-claude/0.1/schema-39",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2448,6 +2470,17 @@
             },
             "title": "Security Warnings",
             "type": "array"
+          },
+          "server_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Version"
           },
           "session_id": {
             "anyOf": [
@@ -2915,7 +2948,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-38",
+            "default": "codex-in-claude/0.1/schema-39",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2954,6 +2987,17 @@
           },
           "resolved_defaults": {
             "$ref": "#/$defs/ResolvedDefaults"
+          },
+          "server_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Version"
           },
           "version_supported": {
             "anyOf": [
@@ -3109,6 +3153,16 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "stability": {
                 "type": "string"
@@ -3603,6 +3657,16 @@
               "poll_after_ms": {
                 "type": "integer"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "started_at": {
                 "type": "string"
               },
@@ -4070,6 +4134,16 @@
               "poll_after_ms": {
                 "type": "integer"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "started_at": {
                 "type": "string"
               },
@@ -4228,6 +4302,16 @@
                   "workspace-write"
                 ],
                 "type": "string"
+              },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "tier": {
                 "enum": [
@@ -4566,6 +4650,16 @@
                 },
                 "type": "array"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "tier": {
                 "enum": [
                   "apply",
@@ -4768,6 +4862,16 @@
               },
               "result_available": {
                 "type": "boolean"
+              },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "started_at": {
                 "type": "string"
@@ -5052,6 +5156,16 @@
                 "const": true,
                 "type": "boolean"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "workspace": {
                 "additionalProperties": false,
                 "properties": {
@@ -5333,6 +5447,16 @@
               "result_available": {
                 "type": "boolean"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "started_at": {
                 "type": "string"
               },
@@ -5499,6 +5623,16 @@
               "ok": {
                 "const": true,
                 "type": "boolean"
+              },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "source": {
                 "enum": [
@@ -6080,6 +6214,16 @@
               "poll_after_ms": {
                 "type": "integer"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "started_at": {
                 "type": "string"
               },
@@ -6238,6 +6382,16 @@
                 "description": "Resolved effective defaults; full schema at resource codex://status-result",
                 "type": "object"
               },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "version_supported": {
                 "anyOf": [
                   {
@@ -6387,6 +6541,16 @@
               },
               "resume_command": {
                 "type": "string"
+              },
+              "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "source_path": {
                 "type": "string"

@@ -846,8 +846,8 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     assert lc.activity_support == "codex_events"
 
 
-def test_fingerprint_bumped_to_schema_38():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-38"
+def test_fingerprint_bumped_to_schema_39():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-39"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
