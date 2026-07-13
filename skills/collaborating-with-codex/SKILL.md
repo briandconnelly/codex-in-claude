@@ -24,7 +24,10 @@ and verification skills instead of replacing them.
    operator-configuration detail.
 2. Treat `rate_limit` as advisory. It is the latest usable quota snapshot emitted by a paid run, not
    a live query. A paid run that emits no usable quota data leaves the previous snapshot, or the
-   unknown state, unchanged. Check `status`, `is_stale`, and `as_of` before deciding to spend.
+   unknown state, unchanged. Decide spend from it: proceed on `available`; defer non-urgent calls
+   on `limited` or `exhausted`; treat `unknown`, a stale snapshot (`is_stale`, `as_of`), or
+   `home_unverified: true` as uncertainty — neither permission nor denial. Read `note` for
+   plain-language caveats before relying on the snapshot.
 3. Select one route below and load only its needed reference. Use a free dry-run when one exists.
 4. Declare the paid-call cap before the first active call, then stay within it.
 5. Branch on `ok`, then on the concrete tool/result type. Verify claims before acting.
@@ -69,6 +72,18 @@ gate fails, make one call or none and move on.
 - Treat live tool schemas and `codex_capabilities` as authoritative for exact inputs, outputs, error
   codes, and defaults.
 
+## Data exposure
+
+Facts to weigh before any active call:
+
+- Every supplied prompt and context field is sent to OpenAI raw.
+- During every active call — including consult — Codex may read other files in the resolved
+  workspace.
+- Codex auto-loads the workspace's `AGENTS.md` and `.agents/skills/` skills even if the prompt never
+  mentions them; the isolation flags do not suppress this.
+- Redaction is best-effort protection for gathered diffs and returned output only. It never protects
+  supplied input, auto-loaded context, or files Codex reads.
+
 ## Binding rules
 
 - **Spend — one call per decision point:** Make one active call per ordinary decision point. Each
@@ -80,12 +95,9 @@ gate fails, make one call or none and move on.
   references).
 - **Workspace:** Pass an absolute `workspace_root` for every repo-grounded call, including consult,
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
-- **Privacy:** Do not target a workspace containing secrets you cannot disclose. Every supplied
-  prompt and context field is sent to OpenAI raw, and during every active call — including consult —
-  Codex may read other files in the resolved workspace; it auto-loads the workspace's `AGENTS.md`
-  and `.agents/skills/` skills even if the prompt never mentions them, and the isolation flags do
-  not suppress this. Redaction is best-effort protection for gathered diffs and returned output
-  only; it does not protect supplied input, auto-loaded context, or files Codex reads.
+- **Privacy:** Do not make an active call when the supplied prompt, the supplied context, or any
+  file Codex may inspect in the resolved workspace contains something you cannot disclose (see
+  Data exposure).
 - **Verification:** Treat findings, summaries, verdicts, and proposed changes as unverified claims.
   Run the applicable project checks yourself; read-only consult/review is not proof tests ran.
 - **Delegation:** Never apply a delegated diff before reviewing it. The plugin does not apply it to
@@ -93,11 +105,16 @@ gate fails, make one call or none and move on.
 - **Retry:** Never loop paid retries. After an ambiguous transport failure, retry the same concrete
   tool with the same arguments and `idempotency_key`; never switch between sync and async expecting
   that key to replay the run.
-- **Polling:** Honor `poll_after_ms`, use the same absolute workspace, and fetch the result only after
-  `result_available` is true. Do not busy-poll.
-- **Independence:** Run Codex before drafting, or keep the Claude draft outside every workspace and
-  baseline Codex can inspect. If Codex can see the draft, classify the operation as critique and do
-  not claim independence.
+- **Polling — pacing:** Wait at least the current `poll_after_ms` between job-status calls; never
+  busy-poll.
+- **Polling — workspace:** Pass the same absolute workspace to every lifecycle call for a job.
+- **Polling — fetch:** Fetch a job's result only after `result_available` is true.
+- **Independence — ordering:** Finalize Claude's attempt before Codex's answer enters context:
+  start the `_async` call and draft before fetching, or draft before a sync call.
+- **Independence — draft placement:** Keep the Claude draft outside every workspace and baseline
+  Codex can inspect.
+- **Independence — reclassification:** If Codex can see the draft, or Codex's answer arrived before
+  Claude's attempt was finalized, classify the operation as critique and do not claim independence.
 - **Git state:** Never stash, commit, switch branches, or create a clean worktree solely to
   manufacture independence unless the user explicitly authorizes it and preservation checks show
   their state will remain safe.

@@ -249,10 +249,18 @@ and logs clean disconnects (EOF / broken pipe / `SIGINT` / `SIGTERM`) as shutdow
 — so the server logs tell you whether it died or was stopped.
 
 If the MCP server is down, you can fall back to the `codex` CLI directly for a read-only consult or
-review — `codex exec --sandbox read-only --skip-git-repo-check -` (prompt on stdin) — but this
-bypasses the plugin's diff gathering, secret redaction, input-byte bounding, and structured envelope,
-so sanitize input yourself and prefer restoring the server. See the `collaborating-with-codex` skill
-for the full fallback guidance.
+review (prompt on stdin; set `WORKSPACE` to a directory you approve for disclosure):
+
+```sh
+WORKSPACE=/absolute/approved/path codex exec --sandbox read-only --ephemeral \
+  --ignore-user-config --ignore-rules --disable remote_plugin \
+  --cd "$WORKSPACE" --skip-git-repo-check -
+```
+
+Keep every flag — together they apply the plugin's guarantee-bearing flags at its strictest config
+isolation — but this still bypasses the plugin's diff gathering, secret redaction, input-byte
+bounding, and structured envelope, so sanitize input yourself and prefer restoring the server. See
+the `collaborating-with-codex` skill for the full fallback guidance.
 
 ## Local development
 
