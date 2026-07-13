@@ -5,6 +5,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-13
+
+A result-provenance release. Every result envelope now says which server release produced it, and
+replaying a stored job result written by a different release is reported honestly as
+incompatibility instead of corruption. Both changes are backward-compatible additions (a new field,
+a new error code); the result `fingerprint` moves twice
+(`codex-in-claude/0.1/schema-38` → `schema-40`), so clients that cache by `fingerprint` re-fetch
+the contract.
+
 ### Added
 
 - **Replaying a stored job result written by a different release is now reported as
