@@ -70,8 +70,8 @@ def _server_version_field() -> Any:
         description=(
             "codex-in-claude package version attributed to this result. A replayed done-job "
             "result preserves the version of the run that produced it; every freshly built "
-            "envelope reports the responding server. Null when a stored payload predates this "
-            "field — never backfilled."
+            "envelope reports the responding server. Omitted entirely when a stored payload "
+            "predates this field — never backfilled, and never sent as null."
         ),
     )
 

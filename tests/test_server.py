@@ -1430,6 +1430,8 @@ async def test_delegate_async_returns_job_id(monkeypatch, clean_env, tmp_path):
     assert res["job_id"] == "job-abc"
     assert res["kind"] == "codex_delegate"
     assert res["status"] == "running"
+    # JobStarted's only wire path — unreachable from the free-tool walk (#304).
+    assert res["server_version"] == __version__
     # the spawned command targets the worker module
     assert "codex_in_claude._worker" in store.started[0]["cmd"]
     assert store.started[0]["spec"]["task"] == "do x"
@@ -1487,6 +1489,9 @@ async def test_job_status_done(monkeypatch, clean_env, tmp_path):
     assert res["job_id"] == "job-abc"
     assert res["status"] == "done"
     assert res["result_available"] is True
+    # JobStatus is freshly built, so it reports the RESPONDING server — the one wire path
+    # for this model, which the free-tool walk can't reach (#304).
+    assert res["server_version"] == __version__
 
 
 async def test_job_status_includes_workspace(monkeypatch, clean_env, tmp_path):
@@ -4821,6 +4826,8 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
     assert result["fingerprint"].endswith("schema-39")
+    # TransferResult's only wire path — unreachable from the free-tool walk (#304).
+    assert result["server_version"] == __version__
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
@@ -5248,16 +5255,19 @@ async def test_every_free_tool_envelope_carries_server_version(clean_env, tmp_pa
     the wire too, but via the ERROR path in test_error_envelope_carries_server_version
     above (every error envelope carries a Meta), not this SUCCESS walk.
 
-    STRUCTURALLY-COVERED ONLY, not exercised here: JobStarted and the SUCCESS variant of
-    JobStatus are returned only once a background job exists, which requires a paid
-    codex_delegate_async/etc. call — out of scope for a free-only test. TransferResult
-    is returned only by codex_transfer, which spawns a child `codex app-server`
-    subprocess — too heavy/flaky for a unit test and deliberately excluded. All three are
-    instead guaranteed structurally, by field-declaration introspection over every model
-    in schemas.py that declares `fingerprint`, in
-    test_schemas.py::test_every_fingerprint_bearing_model_carries_server_version. That
-    guard is real (not vacuous): it fails if server_version is removed from ANY of the
-    10 models, including these three.
+    WIRE-COVERED ELSEWHERE (not reachable from this free-tool walk, which only calls tools
+    that need no job record or subprocess, but asserted on a real emitted envelope all the
+    same): JobStarted in test_delegate_async_returns_job_id, the SUCCESS variant of
+    JobStatus in test_job_status_done — both via the fake job store — and TransferResult in
+    test_transfer_success_notification, via a mocked app-server outcome. None of the three
+    needs a paid call.
+
+    All 10 are ALSO guaranteed structurally, by field-declaration introspection in
+    test_schemas.py::test_every_fingerprint_bearing_model_carries_server_version. That guard
+    is real (it fails if server_version is removed from any model) but it is not sufficient
+    on its own: it inspects the model, so it cannot see a construction or serialization path
+    that drops or nulls the field before the wire. Hence the wire assertions above and in
+    those three tests.
 
     Only FREE tools are called below — no paid Codex/OpenAI spend, and codex_transfer is
     deliberately omitted (see above) even though codex_capabilities lists it as free."""
