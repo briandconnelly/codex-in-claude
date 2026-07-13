@@ -168,6 +168,19 @@ _DENIED_CONFIG_KEYS = frozenset(
 # COMPATIBILITY.md); this denylist covers only the inspectable `-c` surface.
 _DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_environment_policy"})
 
+# Config keys refused because they would contradict provenance the result envelope reports
+# (#310): `model` has first-class, meta-reported controls — the per-call `model` parameter and
+# CODEX_IN_CLAUDE_MODEL — which flow into resolved_defaults and meta.model. A passthrough
+# `-c model=…` would run on the operator's model while meta.model still reports the
+# per-call/server value (null in the common case). Deliberately an EXACT-key set, not a new
+# root in _DENIED_CONFIG_KEY_ROOTS: the root machinery's `model_` prefix match would also
+# refuse `model_provider` — the passthrough's motivating use case (#231, above). For the same
+# reason `model_reasoning_effort` stays allowed until the effort surface lands (#309), which
+# reserves it alongside its replacement controls. NOTE: an opaque `--profile` can still set
+# `model` — the same documented operator-trust boundary that bounds every `-c` denial
+# (COMPATIBILITY.md).
+_RESERVED_META_CONFIG_KEYS = frozenset({"model"})
+
 
 @dataclass(frozen=True)
 class ExtraArgs:
@@ -271,6 +284,15 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         f"config key '{key.strip()}' is refused: the plugin disables the "
                         "remote_plugin connectors as a security guarantee (#287); an operator "
                         "override cannot re-enable them"
+                    ),
+                )
+            if _normalize_config_key(key) in _RESERVED_META_CONFIG_KEYS:
+                return ExtraArgs(
+                    configured=True,
+                    error=(
+                        f"config key '{key.strip()}' is reserved: it would contradict the "
+                        "model provenance reported in result envelopes (meta.model); set "
+                        f"{ENV_PREFIX}MODEL or the per-call model parameter instead (#310)"
                     ),
                 )
             tokens += [flag, value]

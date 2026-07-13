@@ -5,6 +5,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses `-c model=…` (all spellings — long/attached flags,
+  whitespace, case, and quoted key segments) at parse time with `extra_args_rejected`, before any
+  spend: a passthrough model ran on the operator's model while `meta.model` (and
+  `raw_response.model`) still reported the per-call/server value — null in the common case — so the
+  envelope's provenance was wrong. Set `CODEX_IN_CLAUDE_MODEL` or the per-call `model` parameter
+  instead; both flow into `resolved_defaults` and `meta.model` correctly. Other `model_*` keys are
+  untouched — `model_provider`/`model_providers.*` (the passthrough's motivating use case) and
+  `model_reasoning_effort` (allowed until #309 lands its first-class replacement, which reserves it)
+  still pass through. An opaque `--profile` can still set `model` uninspectably — the documented
+  operator-trust boundary (COMPATIBILITY.md) is restated, not closed. `meta.model` now carries a
+  published description defining it as override provenance (first-class controls only), not backend
+  attestation. Result `fingerprint` moves
+  (`codex-in-claude/0.1/schema-40` → `codex-in-claude/0.1/schema-41`).
+
 ## [0.11.0] - 2026-07-13
 
 A result-provenance release. Every result envelope now says which server release produced it, and
