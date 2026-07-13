@@ -2954,6 +2954,92 @@ async def test_job_result_valid_stored_error_message_preserved_when_clean(
     assert res["error"]["message"] == "git failed near ref AKIAIOSFODNN7EXAMPLE"
 
 
+# --- replay preserves the originating run's server_version, never normalizes it ---
+# server_version is PROVENANCE about the run that produced a stored payload, unlike
+# `fingerprint` (contract identity), which _finished_job_envelope deliberately overwrites
+# with the current surface. These four cases pin that asymmetry.
+
+
+async def test_replayed_error_preserves_the_originating_version(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    stored["meta"]["server_version"] = "0.1.0"  # an older run's stamped release
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["meta"]["server_version"] == "0.1.0"  # NOT __version__
+    assert res["meta"]["server_version"] != __version__
+
+
+async def test_replayed_error_without_a_version_stays_unattributed(
+    monkeypatch, clean_env, tmp_path
+):
+    """THE regression test. A payload written before this field existed must replay with
+    NO version — an honest unknown — not with the replaying server's current version."""
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    del stored["meta"]["server_version"]  # simulate a pre-upgrade worker's payload
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert "server_version" not in res["meta"]
+
+
+async def test_replayed_success_preserves_and_omits_the_same_way(monkeypatch, clean_env, tmp_path):
+    stored_with = _done_envelope()
+    stored_with["meta"]["server_version"] = "0.1.0"
+    store = _FakeStore(record=_ok_record("done"), result_json=stored_with)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["meta"]["server_version"] == "0.1.0"
+
+    stored_without = _done_envelope()
+    del stored_without["meta"]["server_version"]
+    store2 = _FakeStore(record=_ok_record("done"), result_json=stored_without)
+    monkeypatch.setattr(server.config, "job_store", lambda: store2)
+    res2 = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res2["ok"] is True
+    assert "server_version" not in res2["meta"]
+
+
+async def test_replay_normalizes_fingerprint_but_not_version(monkeypatch, clean_env, tmp_path):
+    """Pins the deliberate asymmetry so a future tidy-up cannot 'harmonize' it away.
+
+    fingerprint = contract identity -> normalized to THIS server's surface, because a
+    client caching on a stale contract id would be misled.
+    server_version = provenance about a past run -> preserved, because rewriting it would
+    be a lie about which build produced the error.
+    """
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    stored["meta"]["server_version"] = "0.1.0"
+    stored["meta"]["fingerprint"] = "codex-in-claude/0.1/schema-1"  # a pre-upgrade worker
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["meta"]["fingerprint"] == FINGERPRINT  # normalized
+    assert res["meta"]["server_version"] == "0.1.0"  # preserved
+
+
 async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
 
     def cancel(*a, **k):

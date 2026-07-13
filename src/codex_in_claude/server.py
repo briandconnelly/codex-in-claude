@@ -3577,10 +3577,20 @@ def _finished_job_envelope(
             return apply_detail(_validate_job_success(payload, kind, meta), detail_v)
         # An error payload (ok: false) should be an ErrorResult; validate it too, since
         # a disk-backed result.json could be partially written or corrupted.
+        stored_meta = payload.get("meta")
+        stored_version = (
+            stored_meta.get("server_version") if isinstance(stored_meta, dict) else None
+        )
         try:
             validated = ErrorResult.model_validate(payload)
         except ValidationError as exc:
             return _job_result_corrupt(f"stored error result was malformed: {exc}", meta)
+        # server_version is PROVENANCE about the run that produced this payload — unlike
+        # `fingerprint` (patched above), it must NOT be normalized to this server. Validation
+        # would otherwise fire Meta's default_factory and stamp the CURRENT version onto a
+        # pre-upgrade run's error, misattributing old failures to the newest release.
+        # Absent stays absent: an honest unknown beats a plausible-but-wrong value.
+        validated.meta.server_version = stored_version
         # Boundary redact (#186/F10): a schema-valid payload written by a pre-fix worker
         # (still within its TTL) could carry unredacted exception text in its message. Scope
         # this belt-and-braces pass to `internal_error` — the code every raw-exception sink
