@@ -12,7 +12,7 @@ import pytest
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
-from codex_in_claude import codex, delegate, orchestration, server
+from codex_in_claude import __version__, codex, delegate, orchestration, server
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
     FINGERPRINT,
@@ -5112,3 +5112,57 @@ async def test_delegate_dry_run_preflights_invalid_extra_args(monkeypatch, clean
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
     res = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
     await _assert_extra_args_rejected(res)
+
+
+# --- server_version reaches the wire, on every surface (#304, Task 2) --------
+# server_version defaulting correctly IN THE MODEL (Task 1) proves nothing about what
+# a client actually receives — an exclude_none path, a custom dump, or middleware could
+# still drop it before the envelope reaches the wire. These assert on the real emitted
+# payload through the in-process MCP Client boundary (mirroring the existing MCP-
+# boundary tests above), success AND error, not on the Pydantic model directly.
+
+
+async def test_success_envelope_carries_server_version(clean_env):
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("codex_status", {})
+    payload = json.loads(result.content[0].text)
+    assert payload["server_version"] == __version__
+
+
+async def test_error_envelope_carries_server_version(clean_env, tmp_path, monkeypatch):
+    """The error path is the one an audit reads — assert it directly on the emitted
+    envelope, not via the model (#304)."""
+    from fastmcp import Client
+
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_job_status",
+            {"job_id": "does-not-exist", "workspace_root": str(tmp_path)},
+            raise_on_error=False,
+        )
+    payload = json.loads(result.content[0].text)
+    assert payload["ok"] is False
+    assert payload["meta"]["server_version"] == __version__
+
+
+async def test_every_free_tool_envelope_carries_server_version(clean_env, tmp_path, monkeypatch):
+    """A future result model added without server_version must fail here, not silently
+    become an 'unknown' bucket in someone's audit (#304). Only FREE tools — no paid
+    Codex/OpenAI spend."""
+    from fastmcp import Client
+
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    free_calls = [
+        ("codex_status", {}),
+        ("codex_capabilities", {}),
+        ("codex_job_list", {"workspace_root": str(tmp_path)}),
+    ]
+    async with Client(server.mcp) as client:
+        for tool, params in free_calls:
+            result = await client.call_tool(tool, params)
+            payload = json.loads(result.content[0].text)
+            carrier = payload.get("meta", payload)  # meta-bearing or top-level
+            assert carrier.get("server_version") == __version__, f"{tool} lost server_version"
