@@ -12,7 +12,7 @@ import pytest
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
-from codex_in_claude import codex, delegate, orchestration, server
+from codex_in_claude import __version__, codex, delegate, orchestration, server
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
     FINGERPRINT,
@@ -1430,6 +1430,8 @@ async def test_delegate_async_returns_job_id(monkeypatch, clean_env, tmp_path):
     assert res["job_id"] == "job-abc"
     assert res["kind"] == "codex_delegate"
     assert res["status"] == "running"
+    # JobStarted's only wire path — unreachable from the free-tool walk (#304).
+    assert res["server_version"] == __version__
     # the spawned command targets the worker module
     assert "codex_in_claude._worker" in store.started[0]["cmd"]
     assert store.started[0]["spec"]["task"] == "do x"
@@ -1487,6 +1489,9 @@ async def test_job_status_done(monkeypatch, clean_env, tmp_path):
     assert res["job_id"] == "job-abc"
     assert res["status"] == "done"
     assert res["result_available"] is True
+    # JobStatus is freshly built, so it reports the RESPONDING server — the one wire path
+    # for this model, which the free-tool walk can't reach (#304).
+    assert res["server_version"] == __version__
 
 
 async def test_job_status_includes_workspace(monkeypatch, clean_env, tmp_path):
@@ -1748,8 +1753,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_38():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-38"
+def test_fingerprint_is_schema_39():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-39"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2952,6 +2957,92 @@ async def test_job_result_valid_stored_error_message_preserved_when_clean(
     assert res["error"]["code"] == "git_unavailable"
     # Non-internal_error stored messages are returned untouched (no boundary redaction).
     assert res["error"]["message"] == "git failed near ref AKIAIOSFODNN7EXAMPLE"
+
+
+# --- replay preserves the originating run's server_version, never normalizes it ---
+# server_version is PROVENANCE about the run that produced a stored payload, unlike
+# `fingerprint` (contract identity), which _finished_job_envelope deliberately overwrites
+# with the current surface. These four cases pin that asymmetry.
+
+
+async def test_replayed_error_preserves_the_originating_version(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    stored["meta"]["server_version"] = "0.1.0"  # an older run's stamped release
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["meta"]["server_version"] == "0.1.0"  # NOT __version__
+    assert res["meta"]["server_version"] != __version__
+
+
+async def test_replayed_error_without_a_version_stays_unattributed(
+    monkeypatch, clean_env, tmp_path
+):
+    """THE regression test. A payload written before this field existed must replay with
+    NO version — an honest unknown — not with the replaying server's current version."""
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    del stored["meta"]["server_version"]  # simulate a pre-upgrade worker's payload
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert "server_version" not in res["meta"]
+
+
+async def test_replayed_success_preserves_and_omits_the_same_way(monkeypatch, clean_env, tmp_path):
+    stored_with = _done_envelope()
+    stored_with["meta"]["server_version"] = "0.1.0"
+    store = _FakeStore(record=_ok_record("done"), result_json=stored_with)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["meta"]["server_version"] == "0.1.0"
+
+    stored_without = _done_envelope()
+    del stored_without["meta"]["server_version"]
+    store2 = _FakeStore(record=_ok_record("done"), result_json=stored_without)
+    monkeypatch.setattr(server.config, "job_store", lambda: store2)
+    res2 = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res2["ok"] is True
+    assert "server_version" not in res2["meta"]
+
+
+async def test_replay_normalizes_fingerprint_but_not_version(monkeypatch, clean_env, tmp_path):
+    """Pins the deliberate asymmetry so a future tidy-up cannot 'harmonize' it away.
+
+    fingerprint = contract identity -> normalized to THIS server's surface, because a
+    client caching on a stale contract id would be misled.
+    server_version = provenance about a past run -> preserved, because rewriting it would
+    be a lie about which build produced the error.
+    """
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    stored["meta"]["server_version"] = "0.1.0"
+    stored["meta"]["fingerprint"] = "codex-in-claude/0.1/schema-1"  # a pre-upgrade worker
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["meta"]["fingerprint"] == FINGERPRINT  # normalized
+    assert res["meta"]["server_version"] == "0.1.0"  # preserved
 
 
 async def test_boundary_propagates_cancellation(monkeypatch, clean_env, tmp_path):
@@ -4734,7 +4825,9 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-38")
+    assert result["fingerprint"].endswith("schema-39")
+    # TransferResult's only wire path — unreachable from the free-tool walk (#304).
+    assert result["server_version"] == __version__
 
 
 async def test_transfer_success_from_ledger(monkeypatch):
@@ -5112,3 +5205,91 @@ async def test_delegate_dry_run_preflights_invalid_extra_args(monkeypatch, clean
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")
     res = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
     await _assert_extra_args_rejected(res)
+
+
+# --- server_version reaches the wire, on every surface (#304, Task 2) --------
+# server_version defaulting correctly IN THE MODEL (Task 1) proves nothing about what
+# a client actually receives — an exclude_none path, a custom dump, or middleware could
+# still drop it before the envelope reaches the wire. These assert on the real emitted
+# payload through the in-process MCP Client boundary (mirroring the existing MCP-
+# boundary tests above), success AND error, not on the Pydantic model directly.
+
+
+async def test_success_envelope_carries_server_version(clean_env):
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("codex_status", {})
+    payload = json.loads(result.content[0].text)
+    assert payload["server_version"] == __version__
+
+
+async def test_error_envelope_carries_server_version(clean_env, tmp_path, monkeypatch):
+    """The error path is the one an audit reads — assert it directly on the emitted
+    envelope, not via the model (#304)."""
+    from fastmcp import Client
+
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "codex_job_status",
+            {"job_id": "does-not-exist", "workspace_root": str(tmp_path)},
+            raise_on_error=False,
+        )
+    payload = json.loads(result.content[0].text)
+    assert payload["ok"] is False
+    assert payload["meta"]["server_version"] == __version__
+
+
+async def test_every_free_tool_envelope_carries_server_version(clean_env, tmp_path, monkeypatch):
+    """A future SUCCESS result model added without server_version must fail here, not
+    silently become an 'unknown' bucket in someone's audit (#304).
+
+    Coverage split across the 10 models that carry a top-level `fingerprint` field
+    (`VERSION_BEARING_MODELS` in tests/test_schemas.py):
+
+    WIRE-COVERED here (a real SUCCESS envelope observed over the in-process MCP Client
+    boundary): StatusResult (codex_status), CapabilitiesResult (codex_capabilities),
+    JobListResult (codex_job_list), ModelCatalogResult (codex_models), DryRunResult
+    (codex_dry_run), DelegateDryRunResult (codex_delegate_dry_run). Meta is covered on
+    the wire too, but via the ERROR path in test_error_envelope_carries_server_version
+    above (every error envelope carries a Meta), not this SUCCESS walk.
+
+    WIRE-COVERED ELSEWHERE (not reachable from this free-tool walk, which only calls tools
+    that need no job record or subprocess, but asserted on a real emitted envelope all the
+    same): JobStarted in test_delegate_async_returns_job_id, the SUCCESS variant of
+    JobStatus in test_job_status_done — both via the fake job store — and TransferResult in
+    test_transfer_success_notification, via a mocked app-server outcome. None of the three
+    needs a paid call.
+
+    All 10 are ALSO guaranteed structurally, by field-declaration introspection in
+    test_schemas.py::test_every_fingerprint_bearing_model_carries_server_version. That guard
+    is real (it fails if server_version is removed from any model) but it is not sufficient
+    on its own: it inspects the model, so it cannot see a construction or serialization path
+    that drops or nulls the field before the wire. Hence the wire assertions above and in
+    those three tests.
+
+    Only FREE tools are called below — no paid Codex/OpenAI spend, and codex_transfer is
+    deliberately omitted (see above) even though codex_capabilities lists it as free."""
+    from fastmcp import Client
+
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _init_repo(tmp_path)  # codex_dry_run / codex_delegate_dry_run need a real git repo
+    # to reach their SUCCESS branch rather than a not_a_git_repo ErrorResult.
+    free_calls = [
+        ("codex_status", {}),
+        ("codex_capabilities", {}),
+        ("codex_job_list", {"workspace_root": str(tmp_path)}),
+        ("codex_models", {}),
+        ("codex_dry_run", {"scope": "working_tree", "workspace_root": str(tmp_path)}),
+        ("codex_delegate_dry_run", {"task": "add a feature", "workspace_root": str(tmp_path)}),
+    ]
+    async with Client(server.mcp) as client:
+        for tool, params in free_calls:
+            result = await client.call_tool(tool, params)
+            payload = json.loads(result.content[0].text)
+            # Guard the guard: a SUCCESS assertion on an accidental ERROR envelope would
+            # silently validate the wrong model and prove nothing about the target.
+            assert payload.get("ok") is True, f"{tool} did not return a SUCCESS envelope: {payload}"
+            carrier = payload.get("meta", payload)  # meta-bearing or top-level
+            assert carrier.get("server_version") == __version__, f"{tool} lost server_version"

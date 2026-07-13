@@ -3,8 +3,16 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from codex_in_claude import __version__
 from codex_in_claude import schemas as s
-from codex_in_claude.schemas import ErrorDetail, ErrorInfo, Repair
+from codex_in_claude.schemas import (
+    ERROR_ENVELOPE_SCHEMA,
+    RESULT_META_SCHEMA,
+    ErrorDetail,
+    ErrorInfo,
+    Meta,
+    Repair,
+)
 
 
 def test_repair_next_step_is_symbolic_and_optional_fields_default_none():
@@ -75,6 +83,131 @@ def test_errordetail_rejects_duplicate_fields():
     # Uniqueness is advertised in the published schema, not merely runtime-enforced,
     # so schema-driven clients see the same contract (Copilot review).
     assert "uniqueItems" in json.dumps(ErrorDetail.model_json_schema()["properties"]["fields"])
+
+
+# ---------------------------------------------------------------------------
+# Task 1: server_version on every fingerprint-bearing model
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def meta_factory():
+    def _make(**overrides):
+        defaults = dict(
+            cwd="/tmp",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=180,
+            elapsed_ms=0,
+        )
+        defaults.update(overrides)
+        return Meta(**defaults)
+
+    return _make
+
+
+# Every result model that carries a contract fingerprint must also carry a release
+# version: `fingerprint` answers "which surface?", `server_version` answers "which build?".
+#
+# Discovered by INTROSPECTING schemas.py (see _fingerprint_bearing_models below), not a
+# hand-written list — a hardcoded tuple would go stale the moment a new fingerprint-bearing
+# model is added without being appended here, silently narrowing the guard below back to
+# exactly the gap this test exists to close (#304). VERSION_BEARING_MODELS is kept only as
+# a pinned expectation (test_fingerprint_bearing_models_matches_known_set) so an addition or
+# removal to the discovered set is a visible, reviewable diff rather than a silent expansion.
+VERSION_BEARING_MODELS = (
+    "Meta",
+    "StatusResult",
+    "CapabilitiesResult",
+    "ModelCatalogResult",
+    "TransferResult",
+    "JobStarted",
+    "JobStatus",
+    "DryRunResult",
+    "DelegateDryRunResult",
+    "JobListResult",
+)
+
+
+def _fingerprint_bearing_models():
+    """Every pydantic model in schemas.py that declares a top-level `fingerprint` field
+    defaulting to FINGERPRINT — the actual contract surface, found by introspecting the
+    live module rather than trusting a maintained list to stay in sync with it."""
+    from pydantic import BaseModel
+
+    from codex_in_claude import schemas
+
+    return [
+        obj
+        for obj in vars(schemas).values()
+        if isinstance(obj, type)
+        and issubclass(obj, BaseModel)
+        and "fingerprint" in obj.model_fields
+        and obj.model_fields["fingerprint"].default == schemas.FINGERPRINT
+    ]
+
+
+def test_fingerprint_bearing_models_matches_known_set():
+    """Pin the discovered set against VERSION_BEARING_MODELS so an addition/removal of a
+    fingerprint-bearing model is a visible diff here, not a silent change in what the
+    structural guard below covers."""
+    discovered = {m.__name__ for m in _fingerprint_bearing_models()}
+    assert discovered == set(VERSION_BEARING_MODELS)
+
+
+def test_every_fingerprint_bearing_model_carries_server_version():
+    """Every model declaring `fingerprint` must also declare `server_version`.
+
+    Assert on the FIELD DECLARATION, not on `model()` — most of these models have
+    required fields (StatusResult, JobStatus, …) and cannot be constructed bare.
+    Runtime population is asserted on real emitted envelopes in Task 2, which is
+    where it actually matters.
+
+    The model set is discovered by introspection (`_fingerprint_bearing_models`), so this
+    genuinely covers every current and future fingerprint-bearing model — not just the
+    ten named in VERSION_BEARING_MODELS at the time this test was written.
+    """
+    models = _fingerprint_bearing_models()
+    assert models  # the introspection itself must find something, or this is vacuous
+
+    for model in models:
+        name = model.__name__
+        assert "server_version" in model.model_fields, f"{name} has no server_version"
+        factory = model.model_fields["server_version"].default_factory
+        assert factory is not None, f"{name}.server_version must use a default_factory"
+        assert factory() == __version__
+
+
+def test_server_version_is_populated_by_default(meta_factory):
+    # `meta_factory` builds a valid Meta (cwd/tier/sandbox/isolation/timeout/elapsed are
+    # required, so `Meta()` cannot be constructed bare).
+    assert meta_factory().server_version == __version__
+
+
+def test_server_version_emits_no_schema_default():
+    """THE regression guard for release churn.
+
+    A literal default would embed the release into the published schema; that schema is
+    snapshotted and guarded, so every release would trip the manifest guard. Assert on the
+    LIVE published schemas, not just the snapshot — fixing only the snapshot would leave
+    the real codex://result-meta schema churning while CI stayed green.
+    """
+    for schema in (RESULT_META_SCHEMA, ERROR_ENVELOPE_SCHEMA):
+        prop = _find_server_version_property(schema)
+        assert prop is not None, "server_version missing from a published schema"
+        assert "default" not in prop, f"server_version must not publish a default: {prop}"
+
+
+def _find_server_version_property(schema):
+    """The server_version property, wherever the model sits in the schema's $defs."""
+    if "properties" in schema and "server_version" in schema["properties"]:
+        return schema["properties"]["server_version"]
+    for definition in (schema.get("$defs") or {}).values():
+        props = definition.get("properties") or {}
+        if "server_version" in props:
+            return props["server_version"]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -713,8 +846,8 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     assert lc.activity_support == "codex_events"
 
 
-def test_fingerprint_bumped_to_schema_38():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-38"
+def test_fingerprint_bumped_to_schema_39():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-39"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
