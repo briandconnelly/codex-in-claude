@@ -8,9 +8,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Fixed
 
 - **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
-  `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses `-c model=…` (all spellings — long/attached flags,
-  whitespace, case, and quoted key segments) at parse time with `extra_args_rejected`, before any
-  spend: a passthrough model ran on the operator's model while `meta.model` (and
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses the exact `model` key via `-c`/`--config` (plus, conservatively,
+  case- and quote-varied lookalikes codex treats as distinct junk keys) at parse time with
+  `extra_args_rejected`, before any spend: a passthrough model ran on the operator's model while `meta.model` (and
   `raw_response.model`) still reported the per-call/server value — null in the common case — so the
   envelope's provenance was wrong. Set `CODEX_IN_CLAUDE_MODEL` or the per-call `model` parameter
   instead; both flow into `resolved_defaults` and `meta.model` correctly. Other `model_*` keys are
