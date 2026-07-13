@@ -6,9 +6,10 @@ explains invariants without duplicating their full schemas.
 ## Optional controls
 
 - Discover valid model slugs — and each model's advertised reasoning-effort set — with
-  `codex_models` before overriding `model` or `reasoning_effort`; Codex and its backend perform
-  final validation. A backend-rejected effort fails as `invalid_reasoning_effort`: correct the
-  value or omit the override (the discovery data is advisory).
+  `codex_models` before overriding `model` or `reasoning_effort`. Codex and its backend perform
+  final validation; the discovery data is advisory.
+- On `invalid_reasoning_effort` (a backend-rejected effort), correct the value or omit the
+  override.
 - Use `isolation` only when its effect on user configuration and repository rules is intended.
 - Synchronous active tools accept a bounded `timeout_seconds`; async runs use the server's job
   deadline instead.

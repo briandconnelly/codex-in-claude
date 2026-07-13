@@ -12,8 +12,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   now take an optional `reasoning_effort` parameter, with a `CODEX_IN_CLAUDE_REASONING_EFFORT` server
   default (per-call value wins; exact-`None` precedence, so an explicit empty string is passed
   through, not coalesced). It is sent as a `-c model_reasoning_effort=…` config override — codex-cli
-  0.144 has no dedicated flag — unconditionally when requested (a config key cannot be help-gated),
-  failing loudly as `cli_contract_changed` on drift. The value is an open per-model string the
+  0.144 has no dedicated flag — unconditionally when requested (a config key cannot be help-gated).
+  Removal of the `-c` flag itself fails loudly as `cli_contract_changed`; a rename/removal of the
+  key drifts silently (codex tolerates unknown `-c` keys) and is guarded by the manual
+  re-verification step in `docs/UPGRADING-CODEX.md`. The value is an open per-model string the
   backend validates; a backend rejection of a sent override is classified as the new
   `invalid_reasoning_effort` error (a caller argument to correct, with a `codex_models` repair —
   never masked as contract drift, and never claimed for a rejection of the config key itself).
@@ -50,7 +52,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   envelope's provenance was wrong. Set `CODEX_IN_CLAUDE_MODEL` or the per-call `model` parameter
   instead; both flow into `resolved_defaults` and `meta.model` correctly. Other `model_*` keys are
   untouched — `model_provider`/`model_providers.*` (the passthrough's motivating use case) still
-  passes through; `model_reasoning_effort` was allowed at the time and is reserved by #309's
+  pass through; `model_reasoning_effort` was allowed at the time and is reserved by #309's
   first-class replacement in this same release (see Changed above). An opaque `--profile` can still set `model` uninspectably — the documented
   operator-trust boundary (COMPATIBILITY.md) is restated, not closed. `meta.model` now carries a
   published description defining it as override provenance (first-class controls only), not backend

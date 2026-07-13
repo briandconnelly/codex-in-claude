@@ -141,10 +141,13 @@ whether `project_doc_max_bytes=0` fully disables loading. The assumption is reco
 `codex exec --help`, 2026-07-13), so the per-call `reasoning_effort` parameter and
 `CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
 `-c model_reasoning_effort=<value>`. A config key cannot be help-gated — `--help` advertises flags,
-not config keys — so a requested effort is sent unconditionally, the ALWAYS_SEND posture: if a
-future `codex` drops the `-c` flag or the key itself, the run fails loudly as
-`cli_contract_changed` with zero spend. (Verified 2026-07-13: a CLI `-c` override survives
-`--ignore-user-config`, so an explicit effort stays effective under every isolation mode.)
+not config keys — so a requested effort is sent unconditionally. Drift coverage is **narrower than
+ALWAYS_SEND**: only removal of the `-c` flag itself fails loudly as `cli_contract_changed` with
+zero spend. If a future `codex` renames or removes the **key**, the drift is **silent** — codex
+tolerates unknown `-c` keys as junk it never reads (the same tolerance recorded for lookalike keys
+below) — and the requested effort is quietly ignored; the re-verification probe in
+`docs/UPGRADING-CODEX.md` is the guard for that case. (Verified 2026-07-13: a CLI `-c` override
+survives `--ignore-user-config`, so an explicit effort stays effective under every isolation mode.)
 
 The **value** is an open per-model string this plugin never validates: the CLI accepts any string
 silently, and the **backend** rejects a bad one at request time with a 400 whose message carries

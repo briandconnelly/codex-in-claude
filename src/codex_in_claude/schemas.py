@@ -98,6 +98,29 @@ def _server_version_field() -> Any:
 # poll_after_ms and this constant can never drift.
 JOB_POLL_AFTER_MS = DEFAULT_POLL_AFTER_MS
 
+# Reasoning-effort description constants (#309), shared between the model fields that
+# carry them and _KEPT_DESCRIPTIONS (which lets them survive schema-noise stripping so
+# the null/[] semantics are agent-visible in the advertised outputSchemas).
+_DEFAULT_EFFORT_DESC = (
+    "This model's default reasoning effort as advertised by Codex's on-disk cache; "
+    "advisory only. null = the cache advertised nothing usable (the static fallback "
+    "never carries effort data)."
+)
+_SUPPORTED_EFFORTS_DESC = (
+    "Effort tokens this model advertises in Codex's on-disk cache; advisory only — "
+    "the backend's accepted set varies by account and an unlisted effort may still "
+    "work. null = the cache advertised nothing usable; [] = an explicitly empty "
+    "advertised set."
+)
+_DRY_RUN_MODEL_DESC = (
+    "Model override the previewed paid call would send (per-call param or server "
+    "default); null = Codex would resolve it itself. Unvalidated by the preview."
+)
+_DRY_RUN_EFFORT_DESC = (
+    "Reasoning-effort override the previewed paid call would send (per-call param or "
+    "server default); null = Codex would resolve it itself. Unvalidated by the preview."
+)
+
 Severity = Literal["critical", "high", "medium", "low", "nit"]
 Verdict = Literal["pass", "concerns", "fail", "unknown"]
 Confidence = Literal["low", "medium", "high"]
@@ -848,12 +871,15 @@ class ModelInfo(BaseModel):
     slug: str
     display_name: str | None = None
     # Advisory reasoning-effort discovery for the optional `reasoning_effort` param
-    # (#309), read from Codex's on-disk cache. None = the cache advertised nothing
-    # usable (the static fallback always reports None); an empty list is an explicitly
-    # empty advertised set. NOT authoritative: the backend's accepted set varies by
-    # model and account, and an unlisted effort may still work.
-    default_reasoning_effort: str | None = None
-    supported_reasoning_efforts: list[str] | None = None
+    # (#309), read from Codex's on-disk cache. NOT authoritative: the backend's
+    # accepted set varies by model and account, and an unlisted effort may still work.
+    # These two descriptions (and the dry-run echo descriptions) are in
+    # _KEPT_DESCRIPTIONS so the null/[] semantics survive schema-noise stripping and
+    # reach the advertised outputSchema.
+    default_reasoning_effort: str | None = Field(default=None, description=_DEFAULT_EFFORT_DESC)
+    supported_reasoning_efforts: list[str] | None = Field(
+        default=None, description=_SUPPORTED_EFFORTS_DESC
+    )
 
 
 class ModelCatalogResult(BaseModel):
@@ -986,12 +1012,10 @@ class DryRunResult(BaseModel):
     tier: Tier
     sandbox: Sandbox
     isolation: Isolation
-    # The model/effort overrides the previewed paid call would send — the per-call
-    # params or the server defaults, same override-provenance semantics as
-    # meta.model/meta.reasoning_effort. null = Codex would resolve them itself. The
-    # preview does not validate either value (#309).
-    model: str | None = None
-    reasoning_effort: str | None = None
+    # Same override-provenance semantics as meta.model/meta.reasoning_effort (#309);
+    # descriptions kept through stripping via _KEPT_DESCRIPTIONS.
+    model: str | None = Field(default=None, description=_DRY_RUN_MODEL_DESC)
+    reasoning_effort: str | None = Field(default=None, description=_DRY_RUN_EFFORT_DESC)
     scope: str | None = None
     base: str | None = None
     commit: str | None = None
@@ -1037,9 +1061,10 @@ class DelegateDryRunResult(BaseModel):
     tier: Tier = "propose"
     sandbox: Sandbox = "workspace-write"
     isolation: Isolation
-    # The model/effort overrides the previewed delegate would send (see DryRunResult).
-    model: str | None = None
-    reasoning_effort: str | None = None
+    # Same override-provenance semantics as DryRunResult's model/reasoning_effort;
+    # shared description constants keep the two previews from drifting.
+    model: str | None = Field(default=None, description=_DRY_RUN_MODEL_DESC)
+    reasoning_effort: str | None = Field(default=None, description=_DRY_RUN_EFFORT_DESC)
     prompt_bytes: int  # full UTF-8 size of the delegate prompt that would be sent
     max_input_bytes: int  # the task byte limit the real run enforces
     worktree_plan: WorktreePlan
@@ -1118,7 +1143,9 @@ _OPAQUE_RATE_LIMIT = {"type": "object", "description": _RATE_LIMIT_POINTER_DESC}
 _OPAQUE_RAW_DEFAULTS = {"type": "object", "description": _RAW_DEFAULTS_POINTER_DESC}
 _OPAQUE_RESOLVED_DEFAULTS = {"type": "object", "description": _RESOLVED_DEFAULTS_POINTER_DESC}
 
-# Descriptions that survive _strip_schema_noise: the intentional resource pointers.
+# Descriptions that survive _strip_schema_noise: the intentional resource pointers,
+# plus the reasoning-effort field semantics (#309) whose null/[] distinctions an agent
+# cannot recover from the bare types.
 _KEPT_DESCRIPTIONS = frozenset(
     {
         _ERROR_POINTER_DESC,
@@ -1127,6 +1154,10 @@ _KEPT_DESCRIPTIONS = frozenset(
         _RATE_LIMIT_POINTER_DESC,
         _RAW_DEFAULTS_POINTER_DESC,
         _RESOLVED_DEFAULTS_POINTER_DESC,
+        _DEFAULT_EFFORT_DESC,
+        _SUPPORTED_EFFORTS_DESC,
+        _DRY_RUN_MODEL_DESC,
+        _DRY_RUN_EFFORT_DESC,
     }
 )
 

@@ -145,8 +145,8 @@ CAPABILITY_SUMMARY = (
     # Discovery rules — still actionable, so kept ahead of the background paragraph.
     "Use codex_capabilities for the full inventory. Before overriding the model or "
     "reasoning_effort, use codex_models (or the codex://models resource) to discover valid "
-    "model slugs and each model's advertised reasoning-effort set (advisory; the backend "
-    "validates the real values). "
+    "model slugs and each model's advertised reasoning-effort set (the listing is advisory; "
+    "codex and the backend validate the real values). "
     "To preview a call without spending, use codex_dry_run for a review or "
     "codex_delegate_dry_run for a delegate's worktree baseline. "
     # Background context, last.
@@ -615,11 +615,13 @@ ReasoningEffortParam = Annotated[
     str | None,
     Field(
         description="Override the Codex reasoning effort for this call (sent as a "
-        "`model_reasoning_effort` config override); defaults to the server default "
-        "(CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution when unset. An "
+        "`model_reasoning_effort` config override); omit (or pass null) for the server "
+        "default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An "
         "open per-model string the Codex backend validates at run time — commonly "
         "minimal|low|medium|high|xhigh; codex_models lists each model's advertised set "
-        "(advisory). A backend-rejected value fails as invalid_reasoning_effort."
+        "(advisory). A backend-rejected value fails as invalid_reasoning_effort; an "
+        "explicit empty string is sent as-is (and rejected by the backend), never "
+        "treated as unset."
     ),
 ]
 TimeoutSecondsParam = Annotated[
@@ -717,16 +719,20 @@ TaskDryRunParam = Annotated[
 ModelDryRunParam = Annotated[
     str | None,
     Field(
-        description="The Codex model slug the previewed paid call would use; this "
-        "dry run does not call Codex or validate the model."
+        description="The Codex model slug the previewed paid call would use; defaults "
+        "to the server default (CODEX_IN_CLAUDE_MODEL) when unset, so the preview "
+        "mirrors the paid call's resolution. This dry run does not call Codex or "
+        "validate the model."
     ),
 ]
 ReasoningEffortDryRunParam = Annotated[
     str | None,
     Field(
         description="The reasoning effort the previewed paid call would send (as a "
-        "`model_reasoning_effort` config override); this dry run does not call Codex "
-        "or validate the value."
+        "`model_reasoning_effort` config override); defaults to the server default "
+        "(CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the "
+        "paid call's resolution. This dry run does not call Codex or validate the "
+        "value."
     ),
 ]
 
@@ -3186,7 +3192,7 @@ async def codex_dry_run(
     review to inspect the scope and the reported redactions; redaction is
     best-effort, so treat the preview as a check on scope, not as confirmation
     that no secret remains. Pass the same `extra_context` you would give the
-    review so `prompt_bytes` reflects it; the result echoes the effective
+    review so `prompt_bytes` reflects it. The result echoes the effective
     `model`/`reasoning_effort` overrides the paid call would send (unvalidated)."""
     d = config.defaults()
     # Mirror _prepare_review's resolution so the preview reports what the paid call

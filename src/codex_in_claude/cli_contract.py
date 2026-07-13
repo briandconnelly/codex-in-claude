@@ -200,9 +200,12 @@ HELP_GATED_FLAGS = {
 # config key, sent as `-c model_reasoning_effort=<value>`. A config KEY cannot be
 # help-gated — `--help` advertises flags, not config keys — so when a caller (or the
 # CODEX_IN_CLAUDE_REASONING_EFFORT default) requests an effort it is sent
-# unconditionally, matching the ALWAYS_SEND fail-closed posture: if a future codex
-# rejects the `-c` flag or the key itself, the run fails at arg-parse/startup (zero
-# spend) and classify_failure labels it cli_contract_changed.
+# unconditionally. Drift coverage is NARROWER than ALWAYS_SEND: only removal of the
+# `-c` flag itself fails loudly (arg-parse, zero spend, cli_contract_changed). A
+# rename/removal of the KEY drifts SILENTLY — codex tolerates unknown `-c` keys as
+# junk it never reads (verified for 0.144.3, #312) — so the effort would be quietly
+# ignored; the manual re-verification probe in docs/UPGRADING-CODEX.md is the only
+# guard for that case.
 #
 # The VALUE is an open per-model string, validated by the backend at request time,
 # not by the CLI and not by this plugin: the CLI accepts any string silently, and the
