@@ -158,14 +158,14 @@ def _recorded_treatment_passes(scenarios_text: str) -> set[str]:
     'treatment' and its Passed cell is exactly 'pass', optionally followed by a parenthesized
     qualifier (e.g. 'pass (A-F)'). Escaped pipes (\\|) inside a cell do not split it.
     """
-    parts = scenarios_text.split("\n## Run record", 1)
-    if len(parts) < 2:
+    heading = re.search(r"(?m)^## Run record\s*$", scenarios_text)
+    if heading is None:
         return set()
     recorded = set()
-    for line in parts[1].splitlines():
+    for line in scenarios_text[heading.end() :].splitlines():
         masked = line.replace("\\|", "\x00")
         cells = [cell.replace("\x00", "|").strip() for cell in masked.strip().strip("|").split("|")]
-        # Run-record row: | Date | Scenario | Run | Model | Harness/version | Passed | Evidence |
+        # Row: | Date | Scenario | Run | Model | Harness/version | Passed | Evidence/artifact |
         if (
             len(cells) == 7
             and re.fullmatch(r"S\d+", cells[1])
@@ -202,6 +202,11 @@ def test_recorded_treatment_passes_ignores_rows_outside_run_record():
     row = ROW.format(sid="S1", run="treatment", passed="pass", evidence="e")
     text = f"## S1: Example\n\n{row}\n\n## Run record\n\n(no rows yet)\n"
     assert _recorded_treatment_passes(text) == set()
+
+
+def test_recorded_treatment_passes_finds_heading_at_start_of_file():
+    row = ROW.format(sid="S1", run="treatment", passed="pass", evidence="e")
+    assert _recorded_treatment_passes(f"## Run record\n\n{row}\n") == {"S1"}
 
 
 def test_skill_scenarios_have_recorded_treatment_runs():
