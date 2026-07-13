@@ -151,6 +151,73 @@ def test_skills_present_with_frontmatter():
     assert {"independent-attempt.md", "review-revise.md"} <= references
 
 
+def _recorded_treatment_passes(scenarios_text: str) -> set[str]:
+    """Scenario ids with a passing treatment row in the '## Run record' table.
+
+    Only rows after the '## Run record' heading count. A row passes when its Run cell starts with
+    'treatment' and its Passed cell is exactly 'pass', optionally followed by a parenthesized
+    qualifier (e.g. 'pass (A-F)'). Escaped pipes (\\|) inside a cell do not split it.
+    """
+    parts = scenarios_text.split("\n## Run record", 1)
+    if len(parts) < 2:
+        return set()
+    recorded = set()
+    for line in parts[1].splitlines():
+        masked = line.replace("\\|", "\x00")
+        cells = [cell.replace("\x00", "|").strip() for cell in masked.strip().strip("|").split("|")]
+        # Run-record row: | Date | Scenario | Run | Model | Harness/version | Passed | Evidence |
+        if (
+            len(cells) == 7
+            and re.fullmatch(r"S\d+", cells[1])
+            and cells[2].startswith("treatment")
+            and re.fullmatch(r"pass(\s*\(.*\))?", cells[5])
+        ):
+            recorded.add(cells[1])
+    return recorded
+
+
+ROW = "| 2026-07-12 | {sid} | {run} | m | h | {passed} | {evidence} |"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # Counted: plain pass and parenthesized-qualifier pass.
+        (ROW.format(sid="S1", run="treatment", passed="pass", evidence="e"), {"S1"}),
+        (ROW.format(sid="S1", run="treatment", passed="pass (A-F)", evidence="e"), {"S1"}),
+        # Counted: an escaped pipe inside the evidence cell does not split the row.
+        (ROW.format(sid="S1", run="treatment", passed="pass", evidence=r"a \| b"), {"S1"}),
+        # Not counted: baseline runs, non-pass results, and 'pass'-prefixed non-pass values.
+        (ROW.format(sid="S1", run="baseline (abc)", passed="pass", evidence="e"), set()),
+        (ROW.format(sid="S1", run="treatment", passed="fail", evidence="e"), set()),
+        (ROW.format(sid="S1", run="treatment", passed="pass pending", evidence="e"), set()),
+    ],
+)
+def test_recorded_treatment_passes_row_forms(body, expected):
+    text = f"## S1: Example\n\n## Run record\n\n{body}\n"
+    assert _recorded_treatment_passes(text) == expected
+
+
+def test_recorded_treatment_passes_ignores_rows_outside_run_record():
+    row = ROW.format(sid="S1", run="treatment", passed="pass", evidence="e")
+    text = f"## S1: Example\n\n{row}\n\n## Run record\n\n(no rows yet)\n"
+    assert _recorded_treatment_passes(text) == set()
+
+
+def test_skill_scenarios_have_recorded_treatment_runs():
+    """Every behavioral scenario has a checked-in passing treatment run in the run record.
+
+    A scenario landing without a run artifact is aspirational, not protective — the current skill
+    text was never exercised against it. Run the scenario per the harness protocol in scenarios.md
+    and append the row before landing the scenario (or a skill-text change that invalidates it).
+    """
+    text = (ROOT / "skills/collaborating-with-codex/tests/scenarios.md").read_text()
+    scenario_ids = set(re.findall(r"(?m)^## (S\d+):", text))
+    assert scenario_ids, "no scenarios found in scenarios.md"
+    missing = scenario_ids - _recorded_treatment_passes(text)
+    assert not missing, f"scenarios without a recorded passing treatment run: {sorted(missing)}"
+
+
 @pytest.mark.parametrize(
     "text",
     [

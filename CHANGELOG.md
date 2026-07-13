@@ -7,6 +7,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`collaborating-with-codex` skill: close the isolation and independence gaps found by the
+  2026-07-12 skill audit.** The server-down CLI fallback now carries the plugin's guarantee-bearing
+  isolation flags at its strictest config isolation (`--ephemeral`, `--ignore-user-config`,
+  `--ignore-rules`, `--disable remote_plugin`, explicit `--cd`) instead of `--sandbox read-only`
+  alone, a rejected flag stops the fallback as CLI drift, and the guidance states that the
+  read-only sandbox bounds writes, not reads (README's fallback one-liner matches). The independent-attempt
+  workflow now requires Claude's attempt to be finalized before Codex's answer enters context
+  (async-start, draft, then fetch — or draft before a sync call) instead of asking for unobservable
+  non-conditioning after a sync call. The quota-snapshot guidance states a spend policy (defer
+  non-urgent calls on `limited`/`exhausted`; treat `unknown`, stale, or `home_unverified` snapshots
+  as uncertainty, neither permission nor denial) and covers `note`. The privacy rule is now atomic,
+  with its facts moved to a new "Data exposure" section, and the polling rule is split into atomic
+  obligations. Behavioral scenarios S11–S13 land with recorded baseline and treatment runs, and a
+  packaging test now fails any scenario lacking a recorded passing treatment run. Skill files are
+  not part of the MCP-discovered surface — no `fingerprint` change.
+
 - **Egress caveats now disclose Codex's auto-loaded workspace context** (#300). `codex exec`
   automatically loads the resolved workspace's `AGENTS.md` and auto-discovers skills under
   `.agents/skills/` (verified against codex-cli 0.144.1), so their content can be sent to OpenAI
