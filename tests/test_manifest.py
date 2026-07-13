@@ -122,7 +122,7 @@ async def test_build_manifest_excludes_dynamic_fields():
     assert "fingerprint" not in m["capabilities"]
     # server_version echoes `version` (both == __version__) in the live capabilities
     # payload; excluded for the identical release-variable reason, or every release
-    # would move the golden snapshot with no contract change (#see manifest.py).
+    # would move the golden snapshot with no contract change (see manifest.py).
     assert "server_version" not in m["capabilities"]
     # Resource METADATA for codex://models is present; its dynamic CONTENT is not read.
     uris = {r["uri"] for r in m["resources"]}
