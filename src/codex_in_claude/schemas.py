@@ -434,7 +434,11 @@ class Meta(BaseModel):
             "own default, the operator's config.toml, or an opaque --profile — a documented "
             "operator-trust boundary), and the plugin cannot know which model that resolved "
             "to. The generic `-c model=…` extra-args spelling is refused at parse time so a "
-            "passthrough cannot contradict this field (#310)."
+            "passthrough cannot contradict this field (#310). Like tier, it describes the run "
+            "this envelope is about — a retrieved background-job result carries the ORIGINATING "
+            "run's value; job-lifecycle (codex_job_*) GENERATED error envelopes run no Codex "
+            "and report the server-default resolution, not the inspected job's model (see "
+            "meta.job_kind)."
         ),
     )
     scope: str | None = None  # review scope: working_tree|branch|commit

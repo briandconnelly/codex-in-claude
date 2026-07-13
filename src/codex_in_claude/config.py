@@ -290,7 +290,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is reserved: it would contradict the "
+                        f"config key '{key.strip()}' is reserved — it would contradict the "
                         "model provenance reported in result envelopes (meta.model); set "
                         f"{ENV_PREFIX}MODEL or the per-call model parameter instead (#310)"
                     ),

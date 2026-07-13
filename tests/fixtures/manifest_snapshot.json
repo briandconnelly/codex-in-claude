@@ -1420,7 +1420,7 @@
                   }
                 ],
                 "default": null,
-                "description": "The model slug the plugin's first-class controls requested for this run — the per-call `model` parameter or the server's CODEX_IN_CLAUDE_MODEL default (also mirrored to raw_response.model). It is override provenance, not backend attestation: null means model selection happened outside those controls (Codex's own default, the operator's config.toml, or an opaque --profile — a documented operator-trust boundary), and the plugin cannot know which model that resolved to. The generic `-c model=…` extra-args spelling is refused at parse time so a passthrough cannot contradict this field (#310).",
+                "description": "The model slug the plugin's first-class controls requested for this run — the per-call `model` parameter or the server's CODEX_IN_CLAUDE_MODEL default (also mirrored to raw_response.model). It is override provenance, not backend attestation: null means model selection happened outside those controls (Codex's own default, the operator's config.toml, or an opaque --profile — a documented operator-trust boundary), and the plugin cannot know which model that resolved to. The generic `-c model=…` extra-args spelling is refused at parse time so a passthrough cannot contradict this field (#310). Like tier, it describes the run this envelope is about — a retrieved background-job result carries the ORIGINATING run's value; job-lifecycle (codex_job_*) GENERATED error envelopes run no Codex and report the server-default resolution, not the inspected job's model (see meta.job_kind).",
                 "title": "Model"
               },
               "paths": {
@@ -2413,7 +2413,7 @@
               }
             ],
             "default": null,
-            "description": "The model slug the plugin's first-class controls requested for this run — the per-call `model` parameter or the server's CODEX_IN_CLAUDE_MODEL default (also mirrored to raw_response.model). It is override provenance, not backend attestation: null means model selection happened outside those controls (Codex's own default, the operator's config.toml, or an opaque --profile — a documented operator-trust boundary), and the plugin cannot know which model that resolved to. The generic `-c model=…` extra-args spelling is refused at parse time so a passthrough cannot contradict this field (#310).",
+            "description": "The model slug the plugin's first-class controls requested for this run — the per-call `model` parameter or the server's CODEX_IN_CLAUDE_MODEL default (also mirrored to raw_response.model). It is override provenance, not backend attestation: null means model selection happened outside those controls (Codex's own default, the operator's config.toml, or an opaque --profile — a documented operator-trust boundary), and the plugin cannot know which model that resolved to. The generic `-c model=…` extra-args spelling is refused at parse time so a passthrough cannot contradict this field (#310). Like tier, it describes the run this envelope is about — a retrieved background-job result carries the ORIGINATING run's value; job-lifecycle (codex_job_*) GENERATED error envelopes run no Codex and report the server-default resolution, not the inspected job's model (see meta.job_kind).",
             "title": "Model"
           },
           "paths": {
