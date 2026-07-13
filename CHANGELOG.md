@@ -7,6 +7,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **Replaying a stored job result written by a different release is now reported as
+  incompatibility, not corruption** (#305). Each job record carries the writer's persisted-format
+  version (`RESULT_FORMAT`, stamped at spawn); a stored result that fails validation under a
+  *different* recorded format returns the new `job_result_incompatible` error — `temporary: false`
+  with a `start_new_job` repair — instead of `internal_error`'s dishonest "retry" advice (no retry
+  can make a downgraded reader understand a newer payload). Same-format, missing-format, or
+  unusable-format failures remain `internal_error` (corruption). Advertised on the five tools that
+  can return a finished stored envelope (`codex_consult`, `codex_review_changes`, `codex_delegate`,
+  `codex_job_result`, `codex_job_consume_result`). Downgrade replay itself remains unsupported —
+  see COMPATIBILITY.md. Result `fingerprint` moves
+  (`codex-in-claude/0.1/schema-39` → `codex-in-claude/0.1/schema-40`).
+
+  Replay validation now also runs against the stored bytes as written: previously the reader
+  patched `meta.job_id`/`meta.fingerprint` *before* validating, silently healing a corrupt value
+  in those fields; such records now surface as `internal_error`. A committed snapshot
+  (`tests/fixtures/result_format_snapshot.json`) guards the persisted format the way the manifest
+  snapshot guards `FINGERPRINT`.
+
 - **Every result envelope now reports the server release it came from** (`server_version`),
   beside the existing `fingerprint`. The two answer different questions and are not
   interchangeable: `fingerprint` is contract identity (which surface does this conform to —

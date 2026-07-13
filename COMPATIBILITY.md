@@ -281,14 +281,18 @@ read that resource rather than hard-code the shape.
 on `ok` first; the full envelope shape lives solely at `codex://error-envelope`. This keeps the
 preloaded `tools/list` catalog compact.
 
-**Pre-upgrade job results:** a background-job *success* result written by a pre-upgrade server
-instance is still returned (its `meta.fingerprint` is re-stamped to the current surface).
-A stored *error* result whose shape predates this release no longer matches the schema-16 error
-envelope; it is treated as corrupt and returned as an `internal_error` result (message
-`"job result could not be returned: …"`, with guidance to start a new job), rather than the stale
-shape.
-Pre-upgrade *error* results are therefore effectively invalidated; compatible success results are
-not.
+**Stored job results across releases:** a persisted `result.json` is guaranteed readable only by
+the release that wrote it. A backward-compatible *newer* release generally still reads it (added
+fields are optional, and a compatible pre-upgrade payload is returned with `meta.fingerprint`
+re-stamped to the current surface — pre-1.0, a breaking field removal/retype can end that).
+**Cross-format replay is unsupported** (notably downgrade — the same code fires in the upgrade
+direction after a breaking format change): each job record carries the writer's persisted-format
+version (`RESULT_FORMAT`, stamped at spawn), and a stored result that fails validation under a
+*different* recorded format is returned as `job_result_incompatible` — `temporary: false`, repair
+`start_new_job` — because no retry can make this release able to read it (a reused
+`idempotency_key` cannot succeed either; use a new one or none). A result that fails
+validation under the *same*, a missing, or an unusable recorded format is corruption and stays
+`internal_error` (message `"job result could not be returned: …"`).
 (Records that have actually expired past their TTL still return `job_not_found`.)
 
 ## When `codex` changes

@@ -27,6 +27,7 @@ from codex_in_claude.schemas import (
     RawResponse,
     ReviewResult,
     ReviewScope,
+    dump_success,
 )
 
 if TYPE_CHECKING:
@@ -96,25 +97,29 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
         return err
     structured, raw = _success_common(result, meta)
     if structured is not None:
-        return ConsultResult(
-            summary=_summary_of(structured),
-            findings=normalize.coerce_findings(structured.get("findings")),
-            questions=_str_list(structured.get("questions")),
-            assumptions=_str_list(structured.get("assumptions")),
-            next_steps=_str_list(structured.get("next_steps")),
-            raw_response=raw,
-            meta=meta,
-        ).model_dump(mode="json")
+        return dump_success(
+            ConsultResult(
+                summary=_summary_of(structured),
+                findings=normalize.coerce_findings(structured.get("findings")),
+                questions=_str_list(structured.get("questions")),
+                assumptions=_str_list(structured.get("assumptions")),
+                next_steps=_str_list(structured.get("next_steps")),
+                raw_response=raw,
+                meta=meta,
+            )
+        )
     # Deliberate prose-passthrough exception (#159): consult is Q&A, so a plain-language
     # answer is itself a valid result. Unlike review (whose value is the structured
     # verdict/findings), there is nothing to mislead here — the prose maps onto `summary`
     # — so exit-0 non-JSON is surfaced as the answer rather than the
     # invalid_json/schema_violation error the strict review path now raises.
-    return ConsultResult(
-        summary=(raw.text or "").strip() or "(codex returned no message)",
-        raw_response=raw,
-        meta=meta,
-    ).model_dump(mode="json")
+    return dump_success(
+        ConsultResult(
+            summary=(raw.text or "").strip() or "(codex returned no message)",
+            raw_response=raw,
+            meta=meta,
+        )
+    )
 
 
 def _review_invalid_response_error(code: str, last_message: str | None, meta: Meta) -> dict:
@@ -153,19 +158,21 @@ def finalize_review(result: codex.CodexExecResult, *, meta: Meta) -> dict:
         session_id=meta.session_id,
         model=meta.model,
     )
-    return ReviewResult(
-        summary=_summary_of(structured),
-        verdict=_enum(
-            structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"
-        ),
-        confidence=_enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
-        findings=normalize.coerce_findings(structured.get("findings")),
-        questions=_str_list(structured.get("questions")),
-        assumptions=_str_list(structured.get("assumptions")),
-        next_steps=_str_list(structured.get("next_steps")),
-        raw_response=raw,
-        meta=meta,
-    ).model_dump(mode="json")
+    return dump_success(
+        ReviewResult(
+            summary=_summary_of(structured),
+            verdict=_enum(
+                structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"
+            ),
+            confidence=_enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
+            findings=normalize.coerce_findings(structured.get("findings")),
+            questions=_str_list(structured.get("questions")),
+            assumptions=_str_list(structured.get("assumptions")),
+            next_steps=_str_list(structured.get("next_steps")),
+            raw_response=raw,
+            meta=meta,
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -315,12 +322,14 @@ async def run_review(
     meta.truncation_hint = diff.truncation_hint
 
     if diff.summary.files_changed == 0 and not diff.text.strip():
-        return ReviewResult(
-            summary=f"No changes to review for scope={scope}.",
-            verdict="pass",
-            confidence="high",
-            meta=meta,
-        ).model_dump(mode="json")
+        return dump_success(
+            ReviewResult(
+                summary=f"No changes to review for scope={scope}.",
+                verdict="pass",
+                confidence="high",
+                meta=meta,
+            )
+        )
 
     prompt = prompts.build_review_prompt(
         diff.text, review_label(scope, base, commit), extra_context or ""

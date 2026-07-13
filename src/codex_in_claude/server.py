@@ -67,6 +67,7 @@ from codex_in_claude.schemas import (
     JOB_STATUS_SCHEMA,
     JSON_SCHEMA_DIALECT,
     MODEL_CATALOG_SCHEMA,
+    RESULT_FORMAT,
     RESULT_META_SCHEMA,
     REVIEW_RESULT_SCHEMA,
     STATUS_RESULT_SCHEMA,
@@ -1246,6 +1247,11 @@ _IDEMPOTENCY_ERRORS: tuple[ErrorCode, ...] = (
     "idempotency_in_progress",
 )
 _JOB_READ_ERRORS: tuple[ErrorCode, ...] = (*_WORKSPACE_ERRORS, "job_not_found", "internal_error")
+# Advertised only where a FINISHED stored envelope is validated for return: the three
+# sync tools (whose await/reattach path shares _finished_job_envelope) and the two
+# job-result fetch tools. Async starters and status/list/cancel never validate one,
+# so this code on them would be a false contract.
+_FINISHED_RESULT_ERRORS: tuple[ErrorCode, ...] = ("job_result_incompatible",)
 _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     *_JOB_READ_ERRORS,
     # unsupported_detail omitted: `detail` is a Literal param; over MCP a bad value
@@ -1254,6 +1260,7 @@ _JOB_RESULT_ERRORS: tuple[ErrorCode, ...] = (
     "job_cancelled",
     "job_timeout",
     "job_failed",
+    *_FINISHED_RESULT_ERRORS,
 )
 
 
@@ -1293,6 +1300,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
         _IDEMPOTENCY_ERRORS,
+        _FINISHED_RESULT_ERRORS,
     ),
     "codex_consult_async": _err_codes(
         _WORKSPACE_ERRORS,
@@ -1306,6 +1314,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         ("input_too_large", "context_too_large"),
         _RUNTIME_ERRORS,
         _IDEMPOTENCY_ERRORS,
+        _FINISHED_RESULT_ERRORS,
     ),
     "codex_review_changes_async": _err_codes(
         _WORKSPACE_ERRORS,
@@ -1323,6 +1332,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         ),
         _RUNTIME_ERRORS,
         _IDEMPOTENCY_ERRORS,
+        _FINISHED_RESULT_ERRORS,
     ),
     "codex_delegate_async": _err_codes(
         _WORKSPACE_ERRORS,
@@ -2660,7 +2670,14 @@ async def _start_job(meta: Meta, cwd: str, *, kind: str, spec: dict, deadline: i
     # resulting job before re-raising (keyed jobs are intentionally durable across cancel,
     # so this guard is only for the unkeyed path).
     start_fut = asyncio.ensure_future(
-        asyncio.to_thread(store.start, _worker_cmd, cwd, kind=kind, write_spec=spec)
+        asyncio.to_thread(
+            store.start,
+            _worker_cmd,
+            cwd,
+            kind=kind,
+            extra={"result_format": RESULT_FORMAT},
+            write_spec=spec,
+        )
     )
     try:
         job_id, started_at = await asyncio.shield(start_fut)
@@ -2712,6 +2729,7 @@ async def _start_async(
             tool=tool,
             key=idempotency_key,
             arg_hash=_arg_hash_for_spec(spec),
+            extra={"result_format": RESULT_FORMAT},
             write_spec=spec,
             lock_timeout=_IDEM_LOCK_ACQUIRE_TIMEOUT_S,
         )
@@ -2916,6 +2934,7 @@ async def _run_sync(
                 tool=tool,
                 key=idempotency_key,
                 arg_hash=arg_hash,
+                extra={"result_format": RESULT_FORMAT},
                 write_spec=spec,
                 lock_timeout=_IDEM_LOCK_ACQUIRE_TIMEOUT_S,
             )
@@ -3491,23 +3510,72 @@ _JOB_RESULT_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
-def _validate_job_success(payload: dict, kind: str, meta: Meta) -> dict:
+def _validate_job_success(payload: dict, kind: str, rec: dict, meta: Meta) -> dict:
     """Return a done job's success payload after checking it matches the expected
     result type for its kind. A delegate result carries no verdict/confidence (#31),
     so those are dropped first (an older worker may still have written them). An
-    unknown kind or a payload that does not validate is surfaced as internal_error
-    rather than passed through as an arbitrary envelope."""
+    unknown kind or a payload that does not validate is classified via the record's
+    stored result-format version — cross-release incompatibility or corruption (#305)
+    — rather than passed through as an arbitrary envelope."""
     if kind == "codex_delegate":
         payload.pop("verdict", None)
         payload.pop("confidence", None)
     model = _JOB_RESULT_MODELS.get(kind)
     if model is None:
-        return _job_result_corrupt(f"unknown job kind {kind!r}", meta)
+        return _job_result_unreadable(f"unknown job kind {kind!r}", rec, payload, meta)
     try:
         model.model_validate(payload)
     except ValidationError as exc:
-        return _job_result_corrupt(f"stored {kind} result did not match its schema: {exc}", meta)
+        return _job_result_unreadable(
+            f"stored {kind} result did not match its schema: {exc}", rec, payload, meta
+        )
     return payload
+
+
+def _stored_result_format(rec: dict) -> int | None:
+    """The result-format version stamped on the job record at spawn, or None when it
+    is absent or unusable. The record's `extra` is opaque JSON that can hold anything
+    after corruption, and bool/float compare equal to int (True == 1), so only an
+    exact `int` >= 1 is trusted as a discriminator."""
+    extra = rec.get("extra")
+    value = extra.get("result_format") if isinstance(extra, dict) else None
+    return value if type(value) is int and value >= 1 else None
+
+
+def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) -> dict:
+    """Classify a stored payload that failed strict validation. A record stamped with
+    a DIFFERENT persisted result format was written by another release and can never
+    be read by this one — job_result_incompatible, permanent, never retryable. An
+    equal, missing, or unusable stamp means corruption — internal_error, unchanged.
+    Classification never inspects the validation-error types: a newer release's
+    additions can fail as extra_forbidden OR literal_error, and a differing format
+    makes the record unreadable whichever field tripped (#305)."""
+    fmt = _stored_result_format(rec)
+    if fmt is None or fmt == RESULT_FORMAT:
+        return _job_result_corrupt(detail, meta)
+    stored_meta = payload.get("meta")
+    version = stored_meta.get("server_version") if isinstance(stored_meta, dict) else None
+    fingerprint = stored_meta.get("fingerprint") if isinstance(stored_meta, dict) else None
+    provenance = f"result_format {fmt}; this release reads {RESULT_FORMAT}"
+    if isinstance(version, str) and version:
+        provenance += f", producer server_version {version}"
+    if isinstance(fingerprint, str) and fingerprint:
+        provenance += f", producer fingerprint {fingerprint}"
+    # The provenance strings and `detail` echo stored payload fragments, so redact the
+    # whole composed message at this single sink and bound its size, mirroring
+    # _job_result_corrupt.
+    message = (
+        f"stored job result was written under a different result format ({provenance}): {detail}"
+    )
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "job_result_incompatible",
+                (redaction.redact_text(message) or "")[:500],
+            ),
+            meta=meta,
+        )
+    )
 
 
 def _job_result_corrupt(detail: str, meta: Meta) -> dict:
@@ -3565,28 +3633,35 @@ def _finished_job_envelope(
     the job-fetch tools and the sync await path so the two can never diverge."""
     state = rec["status"]
     if state == "done" and payload is not None:
-        if isinstance(payload.get("meta"), dict):
-            # Patch the stored envelope's meta with the job_id so callers can correlate,
-            # and stamp the CURRENT fingerprint: a payload written by a pre-upgrade
-            # worker carries an older fingerprint, but we are normalizing it (below) to
-            # this server's surface, so a stale fingerprint would mislead clients that
-            # cache/branch on it.
-            payload["meta"]["job_id"] = job_id
-            payload["meta"]["fingerprint"] = FINGERPRINT
-        if payload.get("ok") is True:
-            return apply_detail(_validate_job_success(payload, kind, meta), detail_v)
-        # An error payload (ok: false) should be an ErrorResult; validate it too, since
-        # a disk-backed result.json could be partially written or corrupted.
+        # Validation must see the STORED bytes: patching meta first would silently heal a
+        # corrupt job_id/fingerprint and destroy the producer-fingerprint evidence (#305).
+        # job_id (caller correlation) and the CURRENT fingerprint (the payload is
+        # normalized to this server's surface, so a stale contract id would mislead
+        # clients that cache/branch on it) are stamped only AFTER validation succeeds.
         stored_meta = payload.get("meta")
         stored_version = (
             stored_meta.get("server_version") if isinstance(stored_meta, dict) else None
         )
+        if payload.get("ok") is True:
+            validated_payload = _validate_job_success(payload, kind, rec, meta)
+            if validated_payload.get("ok") is True and isinstance(
+                validated_payload.get("meta"), dict
+            ):
+                validated_payload["meta"]["job_id"] = job_id
+                validated_payload["meta"]["fingerprint"] = FINGERPRINT
+            return apply_detail(validated_payload, detail_v)
+        # An error payload (ok: false) should be an ErrorResult; validate it too, since
+        # a disk-backed result.json could be partially written or corrupted.
         try:
             validated = ErrorResult.model_validate(payload)
         except ValidationError as exc:
-            return _job_result_corrupt(f"stored error result was malformed: {exc}", meta)
+            return _job_result_unreadable(
+                f"stored error result was malformed: {exc}", rec, payload, meta
+            )
+        validated.meta.job_id = job_id
+        validated.meta.fingerprint = FINGERPRINT
         # server_version is PROVENANCE about the run that produced this payload — unlike
-        # `fingerprint` (patched above), it must NOT be normalized to this server. Validation
+        # `fingerprint` (stamped above), it must NOT be normalized to this server. Validation
         # would otherwise fire Meta's default_factory and stamp the CURRENT version onto a
         # pre-upgrade run's error, misattributing old failures to the newest release.
         # Absent stays absent: an honest unknown beats a plausible-but-wrong value.
@@ -3639,7 +3714,8 @@ async def codex_job_result(
     answer), or codex_review_changes_async (a review with `verdict`). Use when
     codex_job_status reports result_available=true; the envelope matches the job's
     kind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-
-    out/failed job returns an error envelope. To fetch and delete, use
+    out/failed job returns an error envelope — as does a done job whose stored result
+    this release cannot read (job_result_incompatible). To fetch and delete, use
     codex_job_consume_result.
 
     `detail="summary"` (default) omits the raw model text; pass `detail="full"` for

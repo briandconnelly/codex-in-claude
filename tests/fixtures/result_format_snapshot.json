@@ -1,0 +1,3384 @@
+{
+  "result_format": 1,
+  "schemas": {
+    "ConsultResult": {
+      "$defs": {
+        "ContextSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "files_changed": {
+              "default": 0,
+              "title": "Files Changed",
+              "type": "integer"
+            },
+            "lines_added": {
+              "default": 0,
+              "title": "Lines Added",
+              "type": "integer"
+            },
+            "lines_removed": {
+              "default": 0,
+              "title": "Lines Removed",
+              "type": "integer"
+            }
+          },
+          "title": "ContextSummary",
+          "type": "object"
+        },
+        "Finding": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "title": "Evidence",
+              "type": "string"
+            },
+            "file": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "File"
+            },
+            "line": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line"
+            },
+            "line_end": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line End"
+            },
+            "recommendation": {
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "risk": {
+              "title": "Risk",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "nit"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "title",
+            "evidence",
+            "risk",
+            "recommendation"
+          ],
+          "title": "Finding",
+          "type": "object"
+        },
+        "Meta": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base"
+            },
+            "command_exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Command Exit Code"
+            },
+            "commit": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit"
+            },
+            "compat_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Compat Warnings",
+              "type": "array"
+            },
+            "context_summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cwd": {
+              "title": "Cwd",
+              "type": "string"
+            },
+            "elapsed_ms": {
+              "title": "Elapsed Ms",
+              "type": "integer"
+            },
+            "fingerprint": {
+              "default": "<fingerprint>",
+              "title": "Fingerprint",
+              "type": "string"
+            },
+            "idempotency_replayed": {
+              "anyOf": [
+                {
+                  "const": true,
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idempotency Replayed"
+            },
+            "isolation": {
+              "enum": [
+                "inherit",
+                "ignore-config",
+                "ignore-rules"
+              ],
+              "title": "Isolation",
+              "type": "string"
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "job_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Kind"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paths"
+            },
+            "rate_limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimit"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "redacted_paths": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Redacted Paths",
+              "type": "array"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "sandbox": {
+              "enum": [
+                "read-only",
+                "workspace-write",
+                "danger-full-access"
+              ],
+              "title": "Sandbox",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "security_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Security Warnings",
+              "type": "array"
+            },
+            "server_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Server Version"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "tier": {
+              "enum": [
+                "consult",
+                "propose",
+                "apply"
+              ],
+              "title": "Tier",
+              "type": "string"
+            },
+            "timeout_seconds": {
+              "title": "Timeout Seconds",
+              "type": "integer"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "truncation_hint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Truncation Hint"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "workspace_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Source"
+            },
+            "workspace_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Warning"
+            }
+          },
+          "required": [
+            "cwd",
+            "tier",
+            "sandbox",
+            "isolation",
+            "timeout_seconds",
+            "elapsed_ms"
+          ],
+          "title": "Meta",
+          "type": "object"
+        },
+        "RateLimit": {
+          "additionalProperties": false,
+          "properties": {
+            "age_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Age Seconds"
+            },
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "As Of"
+            },
+            "home_unverified": {
+              "default": false,
+              "title": "Home Unverified",
+              "type": "boolean"
+            },
+            "is_stale": {
+              "default": false,
+              "title": "Is Stale",
+              "type": "boolean"
+            },
+            "limiting_window": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "primary",
+                    "secondary"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Limiting Window"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Note"
+            },
+            "plan_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Type"
+            },
+            "primary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "source": {
+              "default": "plugin_cache",
+              "enum": [
+                "current_run",
+                "plugin_cache"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "available",
+                "limited",
+                "exhausted",
+                "unknown"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "RateLimit",
+          "type": "object"
+        },
+        "RateLimitWindow": {
+          "additionalProperties": false,
+          "properties": {
+            "remaining_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remaining Percent"
+            },
+            "reset_passed": {
+              "default": false,
+              "title": "Reset Passed",
+              "type": "boolean"
+            },
+            "resets_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resets At"
+            },
+            "seconds_until_reset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seconds Until Reset"
+            },
+            "used_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Used Percent"
+            },
+            "window_minutes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Minutes"
+            }
+          },
+          "title": "RateLimitWindow",
+          "type": "object"
+        },
+        "RawResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text"
+            }
+          },
+          "title": "RawResponse",
+          "type": "object"
+        },
+        "Usage": {
+          "additionalProperties": false,
+          "properties": {
+            "cached_input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cached Input Tokens"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "total_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total Tokens"
+            }
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "next_steps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Steps",
+          "type": "array"
+        },
+        "ok": {
+          "const": true,
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "questions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "raw_response": {
+          "$ref": "#/$defs/RawResponse"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "tool": {
+          "const": "codex_consult",
+          "default": "codex_consult",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "meta"
+      ],
+      "title": "ConsultResult",
+      "type": "object"
+    },
+    "DelegateResult": {
+      "$defs": {
+        "ContextSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "files_changed": {
+              "default": 0,
+              "title": "Files Changed",
+              "type": "integer"
+            },
+            "lines_added": {
+              "default": 0,
+              "title": "Lines Added",
+              "type": "integer"
+            },
+            "lines_removed": {
+              "default": 0,
+              "title": "Lines Removed",
+              "type": "integer"
+            }
+          },
+          "title": "ContextSummary",
+          "type": "object"
+        },
+        "Finding": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "title": "Evidence",
+              "type": "string"
+            },
+            "file": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "File"
+            },
+            "line": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line"
+            },
+            "line_end": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line End"
+            },
+            "recommendation": {
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "risk": {
+              "title": "Risk",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "nit"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "title",
+            "evidence",
+            "risk",
+            "recommendation"
+          ],
+          "title": "Finding",
+          "type": "object"
+        },
+        "Meta": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base"
+            },
+            "command_exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Command Exit Code"
+            },
+            "commit": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit"
+            },
+            "compat_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Compat Warnings",
+              "type": "array"
+            },
+            "context_summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cwd": {
+              "title": "Cwd",
+              "type": "string"
+            },
+            "elapsed_ms": {
+              "title": "Elapsed Ms",
+              "type": "integer"
+            },
+            "fingerprint": {
+              "default": "<fingerprint>",
+              "title": "Fingerprint",
+              "type": "string"
+            },
+            "idempotency_replayed": {
+              "anyOf": [
+                {
+                  "const": true,
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idempotency Replayed"
+            },
+            "isolation": {
+              "enum": [
+                "inherit",
+                "ignore-config",
+                "ignore-rules"
+              ],
+              "title": "Isolation",
+              "type": "string"
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "job_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Kind"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paths"
+            },
+            "rate_limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimit"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "redacted_paths": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Redacted Paths",
+              "type": "array"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "sandbox": {
+              "enum": [
+                "read-only",
+                "workspace-write",
+                "danger-full-access"
+              ],
+              "title": "Sandbox",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "security_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Security Warnings",
+              "type": "array"
+            },
+            "server_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Server Version"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "tier": {
+              "enum": [
+                "consult",
+                "propose",
+                "apply"
+              ],
+              "title": "Tier",
+              "type": "string"
+            },
+            "timeout_seconds": {
+              "title": "Timeout Seconds",
+              "type": "integer"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "truncation_hint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Truncation Hint"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "workspace_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Source"
+            },
+            "workspace_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Warning"
+            }
+          },
+          "required": [
+            "cwd",
+            "tier",
+            "sandbox",
+            "isolation",
+            "timeout_seconds",
+            "elapsed_ms"
+          ],
+          "title": "Meta",
+          "type": "object"
+        },
+        "RateLimit": {
+          "additionalProperties": false,
+          "properties": {
+            "age_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Age Seconds"
+            },
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "As Of"
+            },
+            "home_unverified": {
+              "default": false,
+              "title": "Home Unverified",
+              "type": "boolean"
+            },
+            "is_stale": {
+              "default": false,
+              "title": "Is Stale",
+              "type": "boolean"
+            },
+            "limiting_window": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "primary",
+                    "secondary"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Limiting Window"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Note"
+            },
+            "plan_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Type"
+            },
+            "primary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "source": {
+              "default": "plugin_cache",
+              "enum": [
+                "current_run",
+                "plugin_cache"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "available",
+                "limited",
+                "exhausted",
+                "unknown"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "RateLimit",
+          "type": "object"
+        },
+        "RateLimitWindow": {
+          "additionalProperties": false,
+          "properties": {
+            "remaining_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remaining Percent"
+            },
+            "reset_passed": {
+              "default": false,
+              "title": "Reset Passed",
+              "type": "boolean"
+            },
+            "resets_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resets At"
+            },
+            "seconds_until_reset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seconds Until Reset"
+            },
+            "used_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Used Percent"
+            },
+            "window_minutes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Minutes"
+            }
+          },
+          "title": "RateLimitWindow",
+          "type": "object"
+        },
+        "RawResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text"
+            }
+          },
+          "title": "RawResponse",
+          "type": "object"
+        },
+        "Usage": {
+          "additionalProperties": false,
+          "properties": {
+            "cached_input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cached Input Tokens"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "total_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total Tokens"
+            }
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "diff": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Diff"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "next_steps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Steps",
+          "type": "array"
+        },
+        "ok": {
+          "const": true,
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "questions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "raw_response": {
+          "$ref": "#/$defs/RawResponse"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "tool": {
+          "const": "codex_delegate",
+          "default": "codex_delegate",
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "meta"
+      ],
+      "title": "DelegateResult",
+      "type": "object"
+    },
+    "ErrorResult": {
+      "$defs": {
+        "ContextSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "files_changed": {
+              "default": 0,
+              "title": "Files Changed",
+              "type": "integer"
+            },
+            "lines_added": {
+              "default": 0,
+              "title": "Lines Added",
+              "type": "integer"
+            },
+            "lines_removed": {
+              "default": 0,
+              "title": "Lines Removed",
+              "type": "integer"
+            }
+          },
+          "title": "ContextSummary",
+          "type": "object"
+        },
+        "ErrorDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_values": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Allowed Values"
+            },
+            "field": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Field"
+            },
+            "fields": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fields"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            }
+          },
+          "title": "ErrorDetail",
+          "type": "object"
+        },
+        "ErrorInfo": {
+          "additionalProperties": false,
+          "properties": {
+            "actual_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Actual Bytes"
+            },
+            "app_server_stderr_tail": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "App Server Stderr Tail"
+            },
+            "candidate_roots": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Roots"
+            },
+            "code": {
+              "enum": [
+                "codex_not_found",
+                "codex_auth_required",
+                "codex_auth_indeterminate",
+                "unexpanded_env_placeholder",
+                "unsupported_tier",
+                "unsupported_sandbox",
+                "unsupported_isolation",
+                "unsupported_detail",
+                "invalid_scope",
+                "invalid_base",
+                "invalid_commit",
+                "invalid_paths",
+                "invalid_arguments",
+                "invalid_workspace_root",
+                "workspace_outside_roots",
+                "input_too_large",
+                "not_a_git_repo",
+                "git_unavailable",
+                "worktree_error",
+                "context_too_large",
+                "resource_not_found",
+                "timeout",
+                "nonzero_exit",
+                "invalid_json",
+                "schema_violation",
+                "internal_error",
+                "cli_contract_changed",
+                "extra_args_rejected",
+                "transfer_unsupported",
+                "transfer_failed",
+                "transfer_incomplete",
+                "codex_rate_limited",
+                "job_not_found",
+                "job_running",
+                "job_cancelled",
+                "job_timeout",
+                "job_failed",
+                "job_result_incompatible",
+                "idempotency_conflict",
+                "idempotency_result_unavailable",
+                "idempotency_in_progress"
+              ],
+              "title": "Code",
+              "type": "string"
+            },
+            "details": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ErrorDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "invalid_arguments": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/InvalidArgument"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Invalid Arguments"
+            },
+            "limit_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Limit Bytes"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "repair": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Repair"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "retry_after_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Retry After Ms"
+            },
+            "temporary": {
+              "title": "Temporary",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "temporary",
+            "retry_after_ms"
+          ],
+          "title": "ErrorInfo",
+          "type": "object"
+        },
+        "InvalidArgument": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_values": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Allowed Values"
+            },
+            "field": {
+              "title": "Field",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "reason"
+          ],
+          "title": "InvalidArgument",
+          "type": "object"
+        },
+        "Meta": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base"
+            },
+            "command_exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Command Exit Code"
+            },
+            "commit": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit"
+            },
+            "compat_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Compat Warnings",
+              "type": "array"
+            },
+            "context_summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cwd": {
+              "title": "Cwd",
+              "type": "string"
+            },
+            "elapsed_ms": {
+              "title": "Elapsed Ms",
+              "type": "integer"
+            },
+            "fingerprint": {
+              "default": "<fingerprint>",
+              "title": "Fingerprint",
+              "type": "string"
+            },
+            "idempotency_replayed": {
+              "anyOf": [
+                {
+                  "const": true,
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idempotency Replayed"
+            },
+            "isolation": {
+              "enum": [
+                "inherit",
+                "ignore-config",
+                "ignore-rules"
+              ],
+              "title": "Isolation",
+              "type": "string"
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "job_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Kind"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paths"
+            },
+            "rate_limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimit"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "redacted_paths": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Redacted Paths",
+              "type": "array"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "sandbox": {
+              "enum": [
+                "read-only",
+                "workspace-write",
+                "danger-full-access"
+              ],
+              "title": "Sandbox",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "security_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Security Warnings",
+              "type": "array"
+            },
+            "server_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Server Version"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "tier": {
+              "enum": [
+                "consult",
+                "propose",
+                "apply"
+              ],
+              "title": "Tier",
+              "type": "string"
+            },
+            "timeout_seconds": {
+              "title": "Timeout Seconds",
+              "type": "integer"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "truncation_hint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Truncation Hint"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "workspace_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Source"
+            },
+            "workspace_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Warning"
+            }
+          },
+          "required": [
+            "cwd",
+            "tier",
+            "sandbox",
+            "isolation",
+            "timeout_seconds",
+            "elapsed_ms"
+          ],
+          "title": "Meta",
+          "type": "object"
+        },
+        "RateLimit": {
+          "additionalProperties": false,
+          "properties": {
+            "age_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Age Seconds"
+            },
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "As Of"
+            },
+            "home_unverified": {
+              "default": false,
+              "title": "Home Unverified",
+              "type": "boolean"
+            },
+            "is_stale": {
+              "default": false,
+              "title": "Is Stale",
+              "type": "boolean"
+            },
+            "limiting_window": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "primary",
+                    "secondary"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Limiting Window"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Note"
+            },
+            "plan_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Type"
+            },
+            "primary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "source": {
+              "default": "plugin_cache",
+              "enum": [
+                "current_run",
+                "plugin_cache"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "available",
+                "limited",
+                "exhausted",
+                "unknown"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "RateLimit",
+          "type": "object"
+        },
+        "RateLimitWindow": {
+          "additionalProperties": false,
+          "properties": {
+            "remaining_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remaining Percent"
+            },
+            "reset_passed": {
+              "default": false,
+              "title": "Reset Passed",
+              "type": "boolean"
+            },
+            "resets_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resets At"
+            },
+            "seconds_until_reset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seconds Until Reset"
+            },
+            "used_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Used Percent"
+            },
+            "window_minutes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Minutes"
+            }
+          },
+          "title": "RateLimitWindow",
+          "type": "object"
+        },
+        "Repair": {
+          "additionalProperties": false,
+          "properties": {
+            "alternative": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Alternative"
+            },
+            "arguments": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Arguments"
+            },
+            "next_step": {
+              "enum": [
+                "retry_after_delay",
+                "correct_arguments",
+                "use_allowed_value",
+                "reduce_input",
+                "use_workspace_in_roots",
+                "poll_job_status",
+                "list_jobs",
+                "list_resources",
+                "start_new_job",
+                "authenticate",
+                "install_codex",
+                "install_git",
+                "init_git_repo",
+                "update_plugin",
+                "correct_config",
+                "inspect_and_retry",
+                "retry_then_report",
+                "use_new_idempotency_key"
+              ],
+              "title": "Next Step",
+              "type": "string"
+            },
+            "tool": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tool"
+            }
+          },
+          "required": [
+            "next_step"
+          ],
+          "title": "Repair",
+          "type": "object"
+        },
+        "Usage": {
+          "additionalProperties": false,
+          "properties": {
+            "cached_input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cached Input Tokens"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "total_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total Tokens"
+            }
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorInfo"
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "ok": {
+          "const": false,
+          "default": false,
+          "title": "Ok",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "error",
+        "meta"
+      ],
+      "title": "ErrorResult",
+      "type": "object"
+    },
+    "ReviewResult": {
+      "$defs": {
+        "ContextSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "files_changed": {
+              "default": 0,
+              "title": "Files Changed",
+              "type": "integer"
+            },
+            "lines_added": {
+              "default": 0,
+              "title": "Lines Added",
+              "type": "integer"
+            },
+            "lines_removed": {
+              "default": 0,
+              "title": "Lines Removed",
+              "type": "integer"
+            }
+          },
+          "title": "ContextSummary",
+          "type": "object"
+        },
+        "Finding": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "title": "Evidence",
+              "type": "string"
+            },
+            "file": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "File"
+            },
+            "line": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line"
+            },
+            "line_end": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Line End"
+            },
+            "recommendation": {
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "risk": {
+              "title": "Risk",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "nit"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "title",
+            "evidence",
+            "risk",
+            "recommendation"
+          ],
+          "title": "Finding",
+          "type": "object"
+        },
+        "Meta": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base"
+            },
+            "command_exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Command Exit Code"
+            },
+            "commit": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit"
+            },
+            "compat_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Compat Warnings",
+              "type": "array"
+            },
+            "context_summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContextSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "cwd": {
+              "title": "Cwd",
+              "type": "string"
+            },
+            "elapsed_ms": {
+              "title": "Elapsed Ms",
+              "type": "integer"
+            },
+            "fingerprint": {
+              "default": "<fingerprint>",
+              "title": "Fingerprint",
+              "type": "string"
+            },
+            "idempotency_replayed": {
+              "anyOf": [
+                {
+                  "const": true,
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idempotency Replayed"
+            },
+            "isolation": {
+              "enum": [
+                "inherit",
+                "ignore-config",
+                "ignore-rules"
+              ],
+              "title": "Isolation",
+              "type": "string"
+            },
+            "job_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Id"
+            },
+            "job_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Kind"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paths"
+            },
+            "rate_limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimit"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "redacted_paths": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Redacted Paths",
+              "type": "array"
+            },
+            "request_id": {
+              "title": "Request Id",
+              "type": "string"
+            },
+            "sandbox": {
+              "enum": [
+                "read-only",
+                "workspace-write",
+                "danger-full-access"
+              ],
+              "title": "Sandbox",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "security_warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Security Warnings",
+              "type": "array"
+            },
+            "server_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Server Version"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "tier": {
+              "enum": [
+                "consult",
+                "propose",
+                "apply"
+              ],
+              "title": "Tier",
+              "type": "string"
+            },
+            "timeout_seconds": {
+              "title": "Timeout Seconds",
+              "type": "integer"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "truncation_hint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Truncation Hint"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "workspace_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Source"
+            },
+            "workspace_warning": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Warning"
+            }
+          },
+          "required": [
+            "cwd",
+            "tier",
+            "sandbox",
+            "isolation",
+            "timeout_seconds",
+            "elapsed_ms"
+          ],
+          "title": "Meta",
+          "type": "object"
+        },
+        "RateLimit": {
+          "additionalProperties": false,
+          "properties": {
+            "age_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Age Seconds"
+            },
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "As Of"
+            },
+            "home_unverified": {
+              "default": false,
+              "title": "Home Unverified",
+              "type": "boolean"
+            },
+            "is_stale": {
+              "default": false,
+              "title": "Is Stale",
+              "type": "boolean"
+            },
+            "limiting_window": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "primary",
+                    "secondary"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Limiting Window"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Note"
+            },
+            "plan_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Type"
+            },
+            "primary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RateLimitWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "source": {
+              "default": "plugin_cache",
+              "enum": [
+                "current_run",
+                "plugin_cache"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "available",
+                "limited",
+                "exhausted",
+                "unknown"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "RateLimit",
+          "type": "object"
+        },
+        "RateLimitWindow": {
+          "additionalProperties": false,
+          "properties": {
+            "remaining_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remaining Percent"
+            },
+            "reset_passed": {
+              "default": false,
+              "title": "Reset Passed",
+              "type": "boolean"
+            },
+            "resets_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resets At"
+            },
+            "seconds_until_reset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seconds Until Reset"
+            },
+            "used_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Used Percent"
+            },
+            "window_minutes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Minutes"
+            }
+          },
+          "title": "RateLimitWindow",
+          "type": "object"
+        },
+        "RawResponse": {
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text"
+            }
+          },
+          "title": "RawResponse",
+          "type": "object"
+        },
+        "Usage": {
+          "additionalProperties": false,
+          "properties": {
+            "cached_input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cached Input Tokens"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "total_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total Tokens"
+            }
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "confidence": {
+          "default": "medium",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "next_steps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Steps",
+          "type": "array"
+        },
+        "ok": {
+          "const": true,
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "questions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "raw_response": {
+          "$ref": "#/$defs/RawResponse"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "tool": {
+          "const": "codex_review_changes",
+          "default": "codex_review_changes",
+          "title": "Tool",
+          "type": "string"
+        },
+        "verdict": {
+          "default": "unknown",
+          "enum": [
+            "pass",
+            "concerns",
+            "fail",
+            "unknown"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "meta"
+      ],
+      "title": "ReviewResult",
+      "type": "object"
+    }
+  },
+  "serialized": {
+    "consult_success": {
+      "assumptions": [],
+      "findings": [],
+      "meta": {
+        "base": null,
+        "command_exit_code": null,
+        "commit": null,
+        "compat_warnings": [],
+        "context_summary": null,
+        "cwd": "/repo",
+        "elapsed_ms": 1,
+        "fingerprint": "<fingerprint>",
+        "idempotency_replayed": null,
+        "isolation": "inherit",
+        "job_id": null,
+        "job_kind": null,
+        "model": null,
+        "paths": null,
+        "rate_limit": null,
+        "redacted_paths": [],
+        "request_id": "00000000000000000000000000000000",
+        "sandbox": "read-only",
+        "scope": null,
+        "security_warnings": [],
+        "server_version": "0.0.0",
+        "session_id": null,
+        "tier": "consult",
+        "timeout_seconds": 1,
+        "truncated": false,
+        "truncation_hint": null,
+        "usage": null,
+        "workspace_source": null,
+        "workspace_warning": null
+      },
+      "next_steps": [],
+      "ok": true,
+      "questions": [],
+      "raw_response": {
+        "model": null,
+        "session_id": null,
+        "text": null
+      },
+      "summary": "s",
+      "tool": "codex_consult"
+    },
+    "delegate_success": {
+      "assumptions": [],
+      "diff": null,
+      "findings": [],
+      "meta": {
+        "base": null,
+        "command_exit_code": null,
+        "commit": null,
+        "compat_warnings": [],
+        "context_summary": null,
+        "cwd": "/repo",
+        "elapsed_ms": 1,
+        "fingerprint": "<fingerprint>",
+        "idempotency_replayed": null,
+        "isolation": "inherit",
+        "job_id": null,
+        "job_kind": null,
+        "model": null,
+        "paths": null,
+        "rate_limit": null,
+        "redacted_paths": [],
+        "request_id": "00000000000000000000000000000000",
+        "sandbox": "read-only",
+        "scope": null,
+        "security_warnings": [],
+        "server_version": "0.0.0",
+        "session_id": null,
+        "tier": "consult",
+        "timeout_seconds": 1,
+        "truncated": false,
+        "truncation_hint": null,
+        "usage": null,
+        "workspace_source": null,
+        "workspace_warning": null
+      },
+      "next_steps": [],
+      "ok": true,
+      "questions": [],
+      "raw_response": {
+        "model": null,
+        "session_id": null,
+        "text": null
+      },
+      "summary": "s",
+      "tool": "codex_delegate"
+    },
+    "error": {
+      "error": {
+        "code": "internal_error",
+        "message": "m",
+        "repair": {
+          "alternative": "Retry; if it persists, run codex_status and inspect the repo.",
+          "next_step": "retry_then_report"
+        },
+        "retry_after_ms": null,
+        "temporary": true
+      },
+      "meta": {
+        "compat_warnings": [],
+        "cwd": "/repo",
+        "elapsed_ms": 1,
+        "fingerprint": "<fingerprint>",
+        "isolation": "inherit",
+        "redacted_paths": [],
+        "request_id": "00000000000000000000000000000000",
+        "sandbox": "read-only",
+        "security_warnings": [],
+        "server_version": "0.0.0",
+        "tier": "consult",
+        "timeout_seconds": 1,
+        "truncated": false
+      },
+      "ok": false
+    },
+    "review_success": {
+      "assumptions": [],
+      "confidence": "medium",
+      "findings": [],
+      "meta": {
+        "base": null,
+        "command_exit_code": null,
+        "commit": null,
+        "compat_warnings": [],
+        "context_summary": null,
+        "cwd": "/repo",
+        "elapsed_ms": 1,
+        "fingerprint": "<fingerprint>",
+        "idempotency_replayed": null,
+        "isolation": "inherit",
+        "job_id": null,
+        "job_kind": null,
+        "model": null,
+        "paths": null,
+        "rate_limit": null,
+        "redacted_paths": [],
+        "request_id": "00000000000000000000000000000000",
+        "sandbox": "read-only",
+        "scope": null,
+        "security_warnings": [],
+        "server_version": "0.0.0",
+        "session_id": null,
+        "tier": "consult",
+        "timeout_seconds": 1,
+        "truncated": false,
+        "truncation_hint": null,
+        "usage": null,
+        "workspace_source": null,
+        "workspace_warning": null
+      },
+      "next_steps": [],
+      "ok": true,
+      "questions": [],
+      "raw_response": {
+        "model": null,
+        "session_id": null,
+        "text": null
+      },
+      "summary": "s",
+      "tool": "codex_review_changes",
+      "verdict": "unknown"
+    }
+  }
+}
