@@ -1774,7 +1774,7 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_39():
+def test_fingerprint_is_pinned():
     assert FINGERPRINT == "codex-in-claude/0.1/schema-40"
 
 
@@ -3122,6 +3122,7 @@ async def test_error_payload_from_different_format_is_incompatible(
     assert res["error"]["temporary"] is False
     assert res["error"]["retry_after_ms"] is None
     assert res["error"]["repair"]["next_step"] == "start_new_job"
+    assert res["meta"]["job_id"] == "job-abc"  # callers keep the job correlation
 
 
 async def test_success_payload_from_different_format_is_incompatible(
@@ -3160,6 +3161,7 @@ async def test_unknown_key_with_matching_format_is_corruption(monkeypatch, clean
     res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT), stored)
     assert res["ok"] is False
     assert res["error"]["code"] == "internal_error"
+    assert res["meta"]["job_id"] == "job-abc"  # corruption errors correlate too
 
 
 async def test_unknown_key_with_missing_format_is_corruption(monkeypatch, clean_env, tmp_path):

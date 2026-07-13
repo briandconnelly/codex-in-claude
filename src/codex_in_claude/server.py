@@ -3631,6 +3631,11 @@ def _finished_job_envelope(
 ) -> dict:
     """Map a terminal-or-running job record to the caller-facing envelope. Shared by
     the job-fetch tools and the sync await path so the two can never diverge."""
+    # Every envelope built here is ABOUT job_id, including the generated failure ones
+    # (corrupt/incompatible/state errors), so stamp the correlation onto the fallback
+    # meta up front. A validated stored payload carries its own meta and gets the same
+    # job_id stamped after validation below.
+    meta.job_id = job_id
     state = rec["status"]
     if state == "done" and payload is not None:
         # Validation must see the STORED bytes: patching meta first would silently heal a
