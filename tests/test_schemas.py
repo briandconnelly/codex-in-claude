@@ -3,8 +3,16 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from codex_in_claude import __version__
 from codex_in_claude import schemas as s
-from codex_in_claude.schemas import ErrorDetail, ErrorInfo, Repair
+from codex_in_claude.schemas import (
+    ERROR_ENVELOPE_SCHEMA,
+    RESULT_META_SCHEMA,
+    ErrorDetail,
+    ErrorInfo,
+    Meta,
+    Repair,
+)
 
 
 def test_repair_next_step_is_symbolic_and_optional_fields_default_none():
@@ -75,6 +83,93 @@ def test_errordetail_rejects_duplicate_fields():
     # Uniqueness is advertised in the published schema, not merely runtime-enforced,
     # so schema-driven clients see the same contract (Copilot review).
     assert "uniqueItems" in json.dumps(ErrorDetail.model_json_schema()["properties"]["fields"])
+
+
+# ---------------------------------------------------------------------------
+# Task 1: server_version on every fingerprint-bearing model
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def meta_factory():
+    def _make(**overrides):
+        defaults = dict(
+            cwd="/tmp",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=180,
+            elapsed_ms=0,
+        )
+        defaults.update(overrides)
+        return Meta(**defaults)
+
+    return _make
+
+
+# Every result model that carries a contract fingerprint must also carry a release
+# version: `fingerprint` answers "which surface?", `server_version` answers "which build?".
+VERSION_BEARING_MODELS = (
+    "Meta",
+    "StatusResult",
+    "CapabilitiesResult",
+    "ModelCatalogResult",
+    "TransferResult",
+    "JobStarted",
+    "JobStatus",
+    "DryRunResult",
+    "DelegateDryRunResult",
+    "JobListResult",
+)
+
+
+def test_every_fingerprint_bearing_model_carries_server_version():
+    """Every model declaring `fingerprint` must also declare `server_version`.
+
+    Assert on the FIELD DECLARATION, not on `model()` — most of these models have
+    required fields (StatusResult, JobStatus, …) and cannot be constructed bare.
+    Runtime population is asserted on real emitted envelopes in Task 2, which is
+    where it actually matters.
+    """
+    from codex_in_claude import schemas
+
+    for name in VERSION_BEARING_MODELS:
+        model = getattr(schemas, name)
+        assert "server_version" in model.model_fields, f"{name} has no server_version"
+        factory = model.model_fields["server_version"].default_factory
+        assert factory is not None, f"{name}.server_version must use a default_factory"
+        assert factory() == __version__
+
+
+def test_server_version_is_populated_by_default(meta_factory):
+    # `meta_factory` builds a valid Meta (cwd/tier/sandbox/isolation/timeout/elapsed are
+    # required, so `Meta()` cannot be constructed bare).
+    assert meta_factory().server_version == __version__
+
+
+def test_server_version_emits_no_schema_default():
+    """THE regression guard for release churn.
+
+    A literal default would embed the release into the published schema; that schema is
+    snapshotted and guarded, so every release would trip the manifest guard. Assert on the
+    LIVE published schemas, not just the snapshot — fixing only the snapshot would leave
+    the real codex://result-meta schema churning while CI stayed green.
+    """
+    for schema in (RESULT_META_SCHEMA, ERROR_ENVELOPE_SCHEMA):
+        prop = _find_server_version_property(schema)
+        assert prop is not None, "server_version missing from a published schema"
+        assert "default" not in prop, f"server_version must not publish a default: {prop}"
+
+
+def _find_server_version_property(schema):
+    """The server_version property, wherever the model sits in the schema's $defs."""
+    if "properties" in schema and "server_version" in schema["properties"]:
+        return schema["properties"]["server_version"]
+    for definition in (schema.get("$defs") or {}).values():
+        props = definition.get("properties") or {}
+        if "server_version" in props:
+            return props["server_version"]
+    return None
 
 
 # ---------------------------------------------------------------------------

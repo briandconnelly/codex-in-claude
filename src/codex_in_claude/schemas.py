@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+from codex_in_claude import __version__
 from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 
 # The agent-visible surface the FINGERPRINT covers, as granular machine-readable
@@ -48,6 +49,24 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
 FINGERPRINT = "codex-in-claude/0.1/schema-38"
+
+
+# The release that produced this envelope. Beside `fingerprint` on every result surface:
+# fingerprint = contract identity ("which surface does this conform to?", a cache key),
+# server_version = release identity ("which build produced this run?", provenance).
+#
+# default_factory, NOT a literal default, for two independent reasons:
+#   1. A literal default leaks its value into the published JSON schemas
+#      (RESULT_META_SCHEMA, ERROR_ENVELOPE_SCHEMA), which are snapshotted and guarded —
+#      it would trip the manifest guard on EVERY release.
+#   2. It cannot be forgotten at a construction site, unlike explicit population.
+#
+# `| None` is load-bearing: a job payload persisted by an older build carries no version,
+# and on replay it must stay ABSENT rather than be stamped with the replaying server's
+# version (see server.py::_finished_job_envelope).
+def _server_version_field() -> Any:
+    return Field(default_factory=lambda: __version__)
+
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
@@ -415,6 +434,7 @@ class Meta(BaseModel):
     idempotency_replayed: Literal[True] | None = None
     request_id: str = Field(default_factory=lambda: uuid4().hex)
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class _SuccessBase(BaseModel):
@@ -623,6 +643,7 @@ class StatusResult(BaseModel):
     )
     caveat: str
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class AsyncLifecycle(BaseModel):
@@ -691,6 +712,7 @@ class CapabilitiesResult(BaseModel):
     name: str
     version: str
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
     # What a change to the fingerprint may signal, as granular machine-readable identifiers
     # (audit F6, #178). A client can key its cache-invalidation reasoning off these categories
     # rather than treating every fingerprint change as opaque. Any change within one of these
@@ -764,6 +786,7 @@ class ModelCatalogResult(BaseModel):
     # Set only when source == "none" (no cache and no static fallback).
     unavailable_reason: str | None = None
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 ThreadIdSource = Literal["import_notification", "ledger"]
@@ -802,6 +825,7 @@ class TransferResult(BaseModel):
     source_path: str  # realpath of the transferred transcript
     meta: TransferMeta
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class JobStarted(BaseModel):
@@ -822,6 +846,7 @@ class JobStarted(BaseModel):
     expires_at: str | None = None
     meta: Meta
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class JobStatus(BaseModel):
@@ -856,6 +881,7 @@ class JobStatus(BaseModel):
     event_age_ms: int | None = None  # now - last_event (to completion if terminal)
     workspace: Workspace  # the resolved workspace this status was looked up in (#54)
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class DryRunResult(BaseModel):
@@ -883,6 +909,7 @@ class DryRunResult(BaseModel):
     redacted_paths: list[str] = Field(default_factory=list)
     security_warnings: list[str] = Field(default_factory=list)
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class WorktreePlan(BaseModel):
@@ -918,6 +945,7 @@ class DelegateDryRunResult(BaseModel):
     max_input_bytes: int  # the task byte limit the real run enforces
     worktree_plan: WorktreePlan
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 class JobSummary(BaseModel):
@@ -939,6 +967,7 @@ class JobListResult(BaseModel):
     jobs: list[JobSummary] = Field(default_factory=list)
     workspace: Workspace  # the resolved workspace these jobs were listed from (#54)
     fingerprint: str = FINGERPRINT
+    server_version: str | None = _server_version_field()
 
 
 _OPAQUE_ERROR_BRANCH = {
