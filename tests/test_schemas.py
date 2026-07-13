@@ -109,6 +109,13 @@ def meta_factory():
 
 # Every result model that carries a contract fingerprint must also carry a release
 # version: `fingerprint` answers "which surface?", `server_version` answers "which build?".
+#
+# Discovered by INTROSPECTING schemas.py (see _fingerprint_bearing_models below), not a
+# hand-written list — a hardcoded tuple would go stale the moment a new fingerprint-bearing
+# model is added without being appended here, silently narrowing the guard below back to
+# exactly the gap this test exists to close (#304). VERSION_BEARING_MODELS is kept only as
+# a pinned expectation (test_fingerprint_bearing_models_matches_known_set) so an addition or
+# removal to the discovered set is a visible, reviewable diff rather than a silent expansion.
 VERSION_BEARING_MODELS = (
     "Meta",
     "StatusResult",
@@ -123,6 +130,32 @@ VERSION_BEARING_MODELS = (
 )
 
 
+def _fingerprint_bearing_models():
+    """Every pydantic model in schemas.py that declares a top-level `fingerprint` field
+    defaulting to FINGERPRINT — the actual contract surface, found by introspecting the
+    live module rather than trusting a maintained list to stay in sync with it."""
+    from pydantic import BaseModel
+
+    from codex_in_claude import schemas
+
+    return [
+        obj
+        for obj in vars(schemas).values()
+        if isinstance(obj, type)
+        and issubclass(obj, BaseModel)
+        and "fingerprint" in obj.model_fields
+        and obj.model_fields["fingerprint"].default == schemas.FINGERPRINT
+    ]
+
+
+def test_fingerprint_bearing_models_matches_known_set():
+    """Pin the discovered set against VERSION_BEARING_MODELS so an addition/removal of a
+    fingerprint-bearing model is a visible diff here, not a silent change in what the
+    structural guard below covers."""
+    discovered = {m.__name__ for m in _fingerprint_bearing_models()}
+    assert discovered == set(VERSION_BEARING_MODELS)
+
+
 def test_every_fingerprint_bearing_model_carries_server_version():
     """Every model declaring `fingerprint` must also declare `server_version`.
 
@@ -130,11 +163,16 @@ def test_every_fingerprint_bearing_model_carries_server_version():
     required fields (StatusResult, JobStatus, …) and cannot be constructed bare.
     Runtime population is asserted on real emitted envelopes in Task 2, which is
     where it actually matters.
-    """
-    from codex_in_claude import schemas
 
-    for name in VERSION_BEARING_MODELS:
-        model = getattr(schemas, name)
+    The model set is discovered by introspection (`_fingerprint_bearing_models`), so this
+    genuinely covers every current and future fingerprint-bearing model — not just the
+    ten named in VERSION_BEARING_MODELS at the time this test was written.
+    """
+    models = _fingerprint_bearing_models()
+    assert models  # the introspection itself must find something, or this is vacuous
+
+    for model in models:
+        name = model.__name__
         assert "server_version" in model.model_fields, f"{name} has no server_version"
         factory = model.model_fields["server_version"].default_factory
         assert factory is not None, f"{name}.server_version must use a default_factory"

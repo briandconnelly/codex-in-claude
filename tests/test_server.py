@@ -5149,20 +5149,51 @@ async def test_error_envelope_carries_server_version(clean_env, tmp_path, monkey
 
 
 async def test_every_free_tool_envelope_carries_server_version(clean_env, tmp_path, monkeypatch):
-    """A future result model added without server_version must fail here, not silently
-    become an 'unknown' bucket in someone's audit (#304). Only FREE tools — no paid
-    Codex/OpenAI spend."""
+    """A future SUCCESS result model added without server_version must fail here, not
+    silently become an 'unknown' bucket in someone's audit (#304).
+
+    Coverage split across the 10 models that carry a top-level `fingerprint` field
+    (`VERSION_BEARING_MODELS` in tests/test_schemas.py):
+
+    WIRE-COVERED here (a real SUCCESS envelope observed over the in-process MCP Client
+    boundary): StatusResult (codex_status), CapabilitiesResult (codex_capabilities),
+    JobListResult (codex_job_list), ModelCatalogResult (codex_models), DryRunResult
+    (codex_dry_run), DelegateDryRunResult (codex_delegate_dry_run). Meta is covered on
+    the wire too, but via the ERROR path in test_error_envelope_carries_server_version
+    above (every error envelope carries a Meta), not this SUCCESS walk.
+
+    STRUCTURALLY-COVERED ONLY, not exercised here: JobStarted and the SUCCESS variant of
+    JobStatus are returned only once a background job exists, which requires a paid
+    codex_delegate_async/etc. call — out of scope for a free-only test. TransferResult
+    is returned only by codex_transfer, which spawns a child `codex app-server`
+    subprocess — too heavy/flaky for a unit test and deliberately excluded. All three are
+    instead guaranteed structurally, by field-declaration introspection over every model
+    in schemas.py that declares `fingerprint`, in
+    test_schemas.py::test_every_fingerprint_bearing_model_carries_server_version. That
+    guard is real (not vacuous): it fails if server_version is removed from ANY of the
+    10 models, including these three.
+
+    Only FREE tools are called below — no paid Codex/OpenAI spend, and codex_transfer is
+    deliberately omitted (see above) even though codex_capabilities lists it as free."""
     from fastmcp import Client
 
     monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _init_repo(tmp_path)  # codex_dry_run / codex_delegate_dry_run need a real git repo
+    # to reach their SUCCESS branch rather than a not_a_git_repo ErrorResult.
     free_calls = [
         ("codex_status", {}),
         ("codex_capabilities", {}),
         ("codex_job_list", {"workspace_root": str(tmp_path)}),
+        ("codex_models", {}),
+        ("codex_dry_run", {"scope": "working_tree", "workspace_root": str(tmp_path)}),
+        ("codex_delegate_dry_run", {"task": "add a feature", "workspace_root": str(tmp_path)}),
     ]
     async with Client(server.mcp) as client:
         for tool, params in free_calls:
             result = await client.call_tool(tool, params)
             payload = json.loads(result.content[0].text)
+            # Guard the guard: a SUCCESS assertion on an accidental ERROR envelope would
+            # silently validate the wrong model and prove nothing about the target.
+            assert payload.get("ok") is True, f"{tool} did not return a SUCCESS envelope: {payload}"
             carrier = payload.get("meta", payload)  # meta-bearing or top-level
             assert carrier.get("server_version") == __version__, f"{tool} lost server_version"
