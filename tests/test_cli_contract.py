@@ -183,3 +183,9 @@ def test_reasoning_effort_token_pattern():
 
 def test_supported_efforts_cap_is_positive():
     assert cli_contract.SUPPORTED_EFFORTS_MAX_ENTRIES > 0
+
+
+def test_reasoning_effort_token_pattern_rejects_trailing_newline():
+    # Codex-review regression (#309): `$` with re.match admits "high\n"; the pattern
+    # must anchor with \Z so a malformed cache token cannot carry a control character.
+    assert not cli_contract.REASONING_EFFORT_TOKEN_PATTERN.match("high\n")

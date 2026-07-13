@@ -611,9 +611,19 @@ ModelParam = Annotated[
         "server/Codex default when unset."
     ),
 ]
+# Bounds on the reasoning-effort VALUE, enforced at the MCP boundary (like
+# IdempotencyKeyParam's length bounds): the set stays open — the backend judges the
+# value — but a control character or an argv-scale string would fail locally in
+# confusing ways (a NUL breaks Popen; an oversized argv maps to a misleading
+# codex_not_found), so those never reach the subprocess. Real efforts are ≤ ~7 chars;
+# 128 is generous headroom.
+_REASONING_EFFORT_MAX_LENGTH = 128
+_REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F]*$"  # no control characters
 ReasoningEffortParam = Annotated[
     str | None,
     Field(
+        max_length=_REASONING_EFFORT_MAX_LENGTH,
+        pattern=_REASONING_EFFORT_VALUE_PATTERN,
         description="Override the Codex reasoning effort for this call (sent as a "
         "`model_reasoning_effort` config override); omit (or pass null) for the server "
         "default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An "
@@ -621,7 +631,8 @@ ReasoningEffortParam = Annotated[
         "minimal|low|medium|high|xhigh; codex_models lists each model's advertised set "
         "(advisory). A backend-rejected value fails as invalid_reasoning_effort; an "
         "explicit empty string is sent as-is (and rejected by the backend), never "
-        "treated as unset."
+        "treated as unset. Control characters and values over "
+        f"{_REASONING_EFFORT_MAX_LENGTH} chars are rejected as invalid_arguments.",
     ),
 ]
 TimeoutSecondsParam = Annotated[
@@ -728,11 +739,14 @@ ModelDryRunParam = Annotated[
 ReasoningEffortDryRunParam = Annotated[
     str | None,
     Field(
+        max_length=_REASONING_EFFORT_MAX_LENGTH,
+        pattern=_REASONING_EFFORT_VALUE_PATTERN,
         description="The reasoning effort the previewed paid call would send (as a "
         "`model_reasoning_effort` config override); defaults to the server default "
         "(CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the "
         "paid call's resolution. This dry run does not call Codex or validate the "
-        "value."
+        "value beyond the paid params' shape bounds (no control characters, "
+        f"≤{_REASONING_EFFORT_MAX_LENGTH} chars).",
     ),
 ]
 
@@ -763,6 +777,21 @@ async def _roots_from_ctx(ctx: Context | None) -> list[str]:
             if path and Path(path).is_absolute():
                 paths.append(path)
     return paths
+
+
+def _dry_run_effective_model(requested: str | None) -> str | None:
+    """The model override the previewed paid call would actually SEND.
+
+    Mirrors the paid path: --model is help-gated (build_exec_command drops it when the
+    installed CLI does not advertise it, and reconcile_dropped_model then nulls
+    meta.model), so a preview that echoed the requested slug on such a CLI would claim
+    an override the paid run silently drops. The probe is process-cached
+    (HELP_CACHE_TTL_SECONDS) and fails open, like the paid path."""
+    if requested is None:
+        return None
+    if not preflight.is_supported(codex.cli_contract.MODEL_FLAG, preflight.flag_support()):
+        return None
+    return requested
 
 
 def _resolve_isolation(value: str | None) -> tuple[str | None, ErrorInfo | None]:
@@ -3327,7 +3356,7 @@ async def codex_dry_run(
         tier="consult",
         sandbox="read-only",
         isolation=cast("Isolation", isolation_v),
-        model=model or d.model,
+        model=_dry_run_effective_model(model or d.model),
         reasoning_effort=effort,
         scope=scope,
         base=base,
@@ -3474,7 +3503,7 @@ async def codex_delegate_dry_run(
         workspace_source=wres.source,
         workspace_warning=workspace_warning_for(wres.source, cwd),
         isolation=cast("Isolation", isolation_v),
-        model=model or d.model,
+        model=_dry_run_effective_model(model or d.model),
         reasoning_effort=effort,
         prompt_bytes=len(prompt.encode("utf-8")),
         max_input_bytes=limit,

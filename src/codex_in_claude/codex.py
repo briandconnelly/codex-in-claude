@@ -354,7 +354,14 @@ def classify_failure(
         # Only re-attribute to the operator's passthrough when codex actually named one
         # of its descriptors; otherwise a real plugin-flag drift must stay fail-loud.
         matched = _extra_args_drift_match(extra_args, run.stderr, run.stdout, event_error)
-        if matched is not None:
+        # When a first-class reasoning effort was sent, the plugin ITSELF emitted a
+        # bare `-c` pair, so a rejection naming only that shared flag token is
+        # ambiguous between the operator's passthrough and the plugin's own tokens —
+        # and the documented fail-loud `-c` guarantee must win. Operator attribution
+        # requires a descriptor the plugin does not also send (a config key, profile/
+        # feature name, or another flag).
+        plugin_owns_dash_c = reasoning_effort is not None
+        if matched is not None and not (plugin_owns_dash_c and set(matched) <= {"-c"}):
             return _extra_args_rejected_error(matched)
         # Only when THIS run sent a first-class effort override AND the blob carries
         # the backend's request-level markers (reasoning.effort/ReasoningEffortParam).

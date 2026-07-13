@@ -229,7 +229,9 @@ REASONING_EFFORT_REJECTION_MARKERS = ("reasoning.effort", "reasoningeffortparam"
 # malformed/hostile cache cannot surface junk to an agent. Never applied to the
 # caller's own reasoning_effort parameter, which is passed through for the backend to
 # validate.
-REASONING_EFFORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+# \Z, not $: `$` also matches before a trailing newline, so a malformed cache token
+# like "high\n" would slip the shape check under re.match.
+REASONING_EFFORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}\Z")
 # Ignore anything past this many supported-effort entries per model (the real cache
 # advertises ≤ 6).
 SUPPORTED_EFFORTS_MAX_ENTRIES = 16

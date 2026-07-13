@@ -5812,3 +5812,61 @@ async def test_capabilities_advertise_reasoning_effort(clean_env):
     # The dry runs never call Codex, so the code would be a false contract there.
     for name in effort_tools[6:]:
         assert "invalid_reasoning_effort" not in details[name]["error_codes"], name
+
+
+async def test_dry_run_model_echo_reconciles_help_gated_drop(monkeypatch, clean_env, tmp_path):
+    # Codex-review regression (#309): on a CLI without --model the paid call DROPS the
+    # flag and nulls meta.model; the preview's echo must not claim the dropped override.
+    from codex_in_claude import cli_contract, preflight
+
+    monkeypatch.setattr(
+        server.preflight,
+        "flag_support",
+        lambda force=False: preflight.FlagSupport(
+            supported=frozenset(cli_contract.ALWAYS_SEND_FLAGS), help_parsed=True
+        ),
+    )
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="", summary=gitdiff.DiffSummary(0, 0, 0), redacted_paths=[]
+        ),
+    )
+    res = await server.codex_dry_run(
+        scope="working_tree",
+        workspace_root=str(tmp_path),
+        model="gpt-5.5",
+        reasoning_effort="high",
+    )
+    assert res["ok"] is True
+    assert res["model"] is None  # would be help-gate-dropped by the paid call
+    assert res["reasoning_effort"] == "high"  # the -c pair is never gated
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "with\x00nul",  # would crash Popen (ValueError) before any classification
+        "with\x07bell",  # control character
+        "x" * 129,  # over the documented max length
+    ],
+)
+async def test_reasoning_effort_shape_bounds_rejected_at_boundary(clean_env, bad_value):
+    # Codex-review regression (#309): argv-hostile values are rejected as
+    # invalid_arguments at the MCP boundary, never reaching the subprocess.
+    res = await server.mcp.call_tool(
+        "codex_consult", {"question": "q", "reasoning_effort": bad_value}
+    )
+    assert res.is_error is True
+    sc = res.structured_content
+    assert sc["error"]["code"] == "invalid_arguments"
+    assert sc["error"]["details"]["field"] == "reasoning_effort"
+
+
+async def test_reasoning_effort_max_length_boundary_accepted(monkeypatch, clean_env, tmp_path):
+    # The documented boundary value itself is accepted and passed through.
+    calls = _capture_run_sync(monkeypatch)
+    value = "x" * 128
+    await server.codex_consult("q", workspace_root=str(tmp_path), reasoning_effort=value)
+    assert calls["spec"]["reasoning_effort"] == value

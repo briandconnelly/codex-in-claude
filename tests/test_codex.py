@@ -630,3 +630,52 @@ def test_classify_auth_beats_effort_rejection():
         reasoning_effort="high",
     )
     assert err.code == "codex_auth_required"
+
+
+def test_classify_shared_dash_c_rejection_stays_contract_changed_when_effort_sent():
+    # Codex-review regression (#309): the plugin itself sends a bare `-c` pair for a
+    # first-class effort, so a rejection naming ONLY the shared `-c` flag must stay
+    # fail-loud cli_contract_changed even when an operator passthrough also uses `-c`.
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '-c' found", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("-c", "model_provider=azure"),
+            descriptors=("-c", "model_provider"),
+            option_count=1,
+            configured=True,
+        ),
+        reasoning_effort="high",
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_classify_dash_c_rejection_attributes_to_extra_args_without_effort():
+    # Without a first-class effort the plugin sent no `-c` of its own, so the
+    # operator's passthrough keeps the attribution (pre-#309 behavior).
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '-c' found", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("-c", "model_provider=azure"),
+            descriptors=("-c", "model_provider"),
+            option_count=1,
+            configured=True,
+        ),
+        reasoning_effort=None,
+    )
+    assert err.code == "extra_args_rejected"
+
+
+def test_classify_key_naming_rejection_still_attributes_to_extra_args_with_effort():
+    # A rejection that names an operator-owned KEY (not just the shared flag) is
+    # unambiguous and keeps the extra-args attribution even when an effort was sent.
+    err = codex.classify_failure(
+        CommandRun("", "error: invalid value for '-c': 'model_provider'", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("-c", "model_provider=azure"),
+            descriptors=("-c", "model_provider"),
+            option_count=1,
+            configured=True,
+        ),
+        reasoning_effort="high",
+    )
+    assert err.code == "extra_args_rejected"
