@@ -44,9 +44,11 @@ questions and are not interchangeable:
 - `fingerprint` — **contract identity**: which agent-visible surface (tool/field shapes, error
   codes, documented meaning) this result conforms to. A client cache key — bump it and a cached
   client re-fetches the contract.
-- `server_version` — **release identity**: which build of `codex-in-claude` actually produced this
-  run. Provenance, not a cache key — it lets a downstream consumer (an MCP error audit, say) scope
-  an analysis to a release instead of guessing from timestamps.
+- `server_version` — **release identity**: the installed `codex-in-claude` package version attributed
+  to this result. Provenance, not a cache key — it lets a downstream consumer (an MCP error audit,
+  say) scope an analysis to a release instead of guessing from timestamps. It is a *package* version,
+  not a per-commit build id: an unreleased build reports the release it was cut from, so two runs
+  sharing a `server_version` may still differ in code (and, if the surface moved, in `fingerprint`).
 
 `server_version` is nullable. A **result** reply — a `done` job replaying its stored payload —
 reports the `server_version` of the run that **produced** it, never the version of the server
@@ -61,11 +63,13 @@ record persists no worker version, so there is nothing to preserve. A consumer r
 error envelopes (an error audit, say) must attribute `server_version` on those envelopes to whichever
 server answered the poll, not to the run that failed.
 
-**Read version fields by exact key, never by pattern.** `codex_capabilities` returns three
-version-ish keys on one payload: `version` and `server_version` are identical and both name *this*
-server's release; `codex_version` is the **Codex CLI's** version — the external binary this server
-shells out to — not this server's own. Match the exact key you mean; pattern-matching key names
-containing "version" risks reading the wrong software's version.
+**Read version fields by exact key, never by pattern.** Two tools carry version-ish keys, and they
+do not name the same software. `codex_capabilities` returns `version` and `server_version` — both
+*this* server's installed package version. `codex_status` returns `server_version` for this server
+and `codex_version` for the **Codex CLI** — the external binary this server shells out to (its
+companion `version_supported` is a boolean about that CLI, not about this server). Match the exact
+key you mean; pattern-matching key names containing "version" risks reading the wrong software's
+version.
 
 Secret-looking values are redacted from every free-text surface before it leaves the plugin —
 `summary`, `findings`/`questions`/`assumptions`/`next_steps`, and `raw_response.text` — in addition
@@ -117,13 +121,15 @@ records that sync runs also create). Operational semantics:
 - **Retention.** Results are retained `ttl_seconds` **after** a job completes, so `expires_at` is
   `null` while it runs and is set once it finishes. Records are also evicted oldest-terminal-first
   past a per-workspace count cap (`CODEX_IN_CLAUDE_JOB_MAX_COUNT`).
-- **`server_version` provenance.** For a `done` job, a `codex_job_result`/`codex_job_consume_result`
-  reply replays the stored payload and carries the `server_version` of the run that *produced* it,
-  not the version of the server currently serving the poll — replaying never re-stamps provenance. A
-  result from a job persisted before this field existed replays with `server_version` absent. For a
-  job in any other terminal state (`failed`, `timeout`, `cancelled`) or not found, there is no stored
-  payload: the reply is a synthesized error envelope whose `server_version` is the *polling* server's
-  own version. See Result envelopes above.
+- **`server_version` provenance.** Only a *replayed* payload carries the producing run's version;
+  every freshly built envelope carries the responding server's. For a `done` job, a
+  `codex_job_result`/`codex_job_consume_result` reply replays the stored payload and carries the
+  `server_version` of the run that *produced* it, not the version of the server currently serving the
+  poll — replaying never re-stamps provenance. A result from a job persisted before this field existed
+  replays with `server_version` absent. Everything else is freshly constructed and therefore reports
+  the *responding* server: `codex_job_status`, `codex_job_list`, and a successful `codex_job_cancel`,
+  plus the synthesized error envelope for a job in another terminal state (`failed`, `timeout`,
+  `cancelled`) or not found — those have no stored payload to preserve. See Result envelopes above.
 
 ## Rate-limit reporting
 
