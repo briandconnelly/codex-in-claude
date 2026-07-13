@@ -787,6 +787,7 @@ class JobStore:
         tool: str,
         key: str,
         arg_hash: str,
+        extra: dict | None = None,
         write_spec: dict | None = None,
         lock_timeout: float | None = None,
     ) -> dict:
@@ -806,6 +807,10 @@ class JobStore:
         - ``{"kind": "io_error"}`` — reading the existing entry raised a transient
           ``OSError`` (the record may be intact); retry the same key rather than starting
           a new paid run under a fresh one.
+
+        ``extra`` is opaque caller metadata persisted on the record like :meth:`start`'s
+        ``extra``, merged with the store-owned ``idempotency_key_digest`` entry (the
+        digest wins a key collision; the caller's dict is not mutated).
 
         The whole reserve→spawn→publish critical section runs under both the process
         ``_LOCK`` and the index's cross-process flock; cross-process exclusivity on the
@@ -853,7 +858,13 @@ class JobStore:
                             cmd_factory,
                             cwd,
                             kind=kind,
-                            extra={"idempotency_key_digest": idempotency.key_digest(tool, key)},
+                            # Caller extra is opaque record metadata, same as start()'s;
+                            # the digest is protocol data the store owns, so it wins any
+                            # key collision.
+                            extra={
+                                **(extra or {}),
+                                "idempotency_key_digest": idempotency.key_digest(tool, key),
+                            },
                             write_spec=write_spec,
                         )
                     except BaseException:

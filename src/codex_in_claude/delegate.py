@@ -23,6 +23,7 @@ from codex_in_claude.schemas import (
     Meta,
     RawResponse,
     Usage,
+    dump_success,
 )
 
 if TYPE_CHECKING:
@@ -171,10 +172,14 @@ async def run_delegate(
         valid_cap = isinstance(max_diff_bytes, int) and max_diff_bytes > 0
         cap = max_diff_bytes if valid_cap else config.max_delegate_diff_bytes()
         diff = _bound_diff(diff, meta, cap)
-    return DelegateResult(
-        summary=summary,
-        diff=diff or None,
-        raw_response=RawResponse(text=last_message, session_id=meta.session_id, model=meta.model),
-        next_steps=["Review the returned diff; apply it to your tree only if correct."],
-        meta=meta,
-    ).model_dump(mode="json")
+    return dump_success(
+        DelegateResult(
+            summary=summary,
+            diff=diff or None,
+            raw_response=RawResponse(
+                text=last_message, session_id=meta.session_id, model=meta.model
+            ),
+            next_steps=["Review the returned diff; apply it to your tree only if correct."],
+            meta=meta,
+        )
+    )

@@ -596,6 +596,27 @@ async def test_transfer_advertises_both_auth_error_codes():
     assert "codex_auth_indeterminate" in transfer["error_codes"]
 
 
+def test_job_result_incompatible_advertised_on_exactly_the_emitters():
+    # Only the tools that validate a FINISHED stored envelope can produce it: the three
+    # sync tools (their keyed/unkeyed await path reattaches via _finished_job_envelope)
+    # and the two job-result fetch tools. Async starters and status/list/cancel never
+    # validate a finished envelope, so advertising it there would be a false contract.
+    caps = server.codex_capabilities()
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    emitters = {
+        "codex_consult",
+        "codex_review_changes",
+        "codex_delegate",
+        "codex_job_result",
+        "codex_job_consume_result",
+    }
+    for name, tool in by_name.items():
+        if name in emitters:
+            assert "job_result_incompatible" in tool["error_codes"], name
+        else:
+            assert "job_result_incompatible" not in tool["error_codes"], name
+
+
 async def test_dry_run_advertises_returnable_error_codes():
     # codex_dry_run can return these via its pre-flight checks; capabilities must
     # advertise each (input_too_large from extra_context, the placeholder guard). It
@@ -1753,8 +1774,8 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
-def test_fingerprint_is_schema_39():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-39"
+def test_fingerprint_is_pinned():
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-40"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3020,6 +3041,202 @@ async def test_replayed_success_preserves_and_omits_the_same_way(monkeypatch, cl
     assert "server_version" not in res2["meta"]
 
 
+async def test_replayed_success_corrupt_fingerprint_type_is_not_healed(
+    monkeypatch, clean_env, tmp_path
+):
+    # Strict validation must see the STORED bytes: patching job_id/fingerprint before
+    # validating would silently heal a corrupt known field (#305).
+    stored = _done_envelope()
+    stored["meta"]["fingerprint"] = 3  # wrong type: corruption, not a pre-upgrade string
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_replayed_success_corrupt_job_id_type_is_not_healed(monkeypatch, clean_env, tmp_path):
+    stored = _done_envelope()
+    stored["meta"]["job_id"] = 42
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_replayed_error_corrupt_fingerprint_type_is_not_healed(
+    monkeypatch, clean_env, tmp_path
+):
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(error=_make_error("job_failed", "x"), meta=_meta_for(tmp_path))
+    )
+    stored["meta"]["fingerprint"] = 3
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+# --- #305: a payload written under a DIFFERENT persisted format is incompatibility, ---
+# --- not corruption — and never advertised as retryable. --------------------------
+
+
+def _stored_error_envelope(tmp_path, code="job_failed", message="x"):
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    return _serialize_error(
+        _ErrorResult(error=_make_error(code, message), meta=_meta_for(tmp_path))
+    )
+
+
+def _record_with_format(fmt):
+    rec = _ok_record("done")
+    rec["extra"] = {"result_format": fmt}
+    return rec
+
+
+async def _replay(monkeypatch, tmp_path, rec, stored):
+    store = _FakeStore(record=rec, result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    return await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+
+
+async def test_error_payload_from_different_format_is_incompatible(
+    monkeypatch, clean_env, tmp_path
+):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["field_from_the_future"] = "x"  # a newer release's Meta addition
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT + 1), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_result_incompatible"
+    assert res["error"]["temporary"] is False
+    assert res["error"]["retry_after_ms"] is None
+    assert res["error"]["repair"]["next_step"] == "start_new_job"
+    assert res["meta"]["job_id"] == "job-abc"  # callers keep the job correlation
+
+
+async def test_success_payload_from_different_format_is_incompatible(
+    monkeypatch, clean_env, tmp_path
+):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _done_envelope()
+    stored["field_from_the_future"] = "x"
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT + 1), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_result_incompatible"
+    assert res["error"]["temporary"] is False
+
+
+async def test_new_literal_value_from_different_format_is_incompatible(
+    monkeypatch, clean_env, tmp_path
+):
+    # A newer release can also add ErrorCode/RepairStep Literal values; that fails
+    # validation as literal_error, not extra_forbidden — classification must not
+    # depend on the error type (#305).
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _stored_error_envelope(tmp_path)
+    stored["error"]["code"] = "code_from_the_future"
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT + 1), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_result_incompatible"
+
+
+async def test_unknown_key_with_matching_format_is_corruption(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["field_from_the_future"] = "x"
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert res["meta"]["job_id"] == "job-abc"  # corruption errors correlate too
+
+
+async def test_unknown_key_with_missing_format_is_corruption(monkeypatch, clean_env, tmp_path):
+    # Pre-#305 records carry no result_format; missing evidence is not provenance.
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["field_from_the_future"] = "x"
+    res = await _replay(monkeypatch, tmp_path, _ok_record("done"), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+@pytest.mark.parametrize("bad_format", [True, 2.0, "2", None, [2], {"v": 2}])
+async def test_unusable_format_value_is_corruption(monkeypatch, clean_env, tmp_path, bad_format):
+    # Job metadata is opaque JSON; a corrupt discriminator must not classify (note
+    # True == 1 and 2.0 == 2 in Python — only an exact int is trusted).
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["field_from_the_future"] = "x"
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(bad_format), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+
+
+async def test_known_field_failure_from_different_format_is_incompatible(
+    monkeypatch, clean_env, tmp_path
+):
+    # Format-only classification: a differing persisted format makes the record
+    # unreadable by THIS release whichever field tripped validation.
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _done_envelope()
+    stored["summary"] = 42  # known field, wrong type
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT + 1), stored)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_result_incompatible"
+
+
+async def test_incompatible_message_names_provenance_and_redacts(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["server_version"] = "9.9.9"
+    stored["meta"]["field_from_the_future"] = "AKIAIOSFODNN7EXAMPLE"
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT + 1), stored)
+    assert res["error"]["code"] == "job_result_incompatible"
+    msg = res["error"]["message"]
+    assert "9.9.9" in msg  # the producing release, for diagnosis
+    assert "AKIAIOSFODNN7EXAMPLE" not in msg  # stored values must stay redacted
+    assert len(msg) <= 500
+
+
+async def test_incompatible_repair_prose_addresses_idempotency_replay(
+    monkeypatch, clean_env, tmp_path
+):
+    # A reused idempotency_key replays the same unreadable record, so the repair
+    # must steer the caller to a fresh or omitted key.
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["field_from_the_future"] = "x"
+    res = await _replay(monkeypatch, tmp_path, _record_with_format(RESULT_FORMAT + 1), stored)
+    assert "idempotency_key" in res["error"]["repair"]["alternative"]
+
+
+async def test_consume_result_classifies_incompatibility_too(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    stored = _stored_error_envelope(tmp_path)
+    stored["meta"]["field_from_the_future"] = "x"
+    store = _FakeStore(record=_record_with_format(RESULT_FORMAT + 1), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result("job-abc", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "job_result_incompatible"
+    assert store.consumed == ["job-abc"]  # consume-before-validate is #306, unchanged here
+
+
 async def test_replay_normalizes_fingerprint_but_not_version(monkeypatch, clean_env, tmp_path):
     """Pins the deliberate asymmetry so a future tidy-up cannot 'harmonize' it away.
 
@@ -3178,6 +3395,80 @@ async def test_keyed_sync_start_idempotent_runs_off_event_loop(monkeypatch, clea
     )
     assert res["error"]["code"] == "idempotency_conflict"
     assert seen["thread"] is not threading.main_thread()
+
+
+async def test_unkeyed_start_stamps_result_format(monkeypatch, clean_env, tmp_path):
+    # The job record must carry the writer's persisted-format version so replay can
+    # tell a cross-release payload from a corrupt one (#305).
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    seen = {}
+
+    class _Store:
+        def start(self, *a, **k):
+            seen["extra"] = k.get("extra")
+            return ("job-1", "t")
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    await server._start_job(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        deadline=60,
+    )
+    assert seen["extra"] == {"result_format": RESULT_FORMAT}
+
+
+async def test_keyed_async_start_stamps_result_format(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    seen = {}
+
+    class _Store:
+        def start_idempotent(self, *a, **k):
+            seen["extra"] = k.get("extra")
+            return {"kind": "created", "job_id": "job-1", "started_at": "t"}
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    await server._start_async(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        tool="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        deadline=60,
+        idempotency_key="k1",
+    )
+    assert seen["extra"] == {"result_format": RESULT_FORMAT}
+
+
+async def test_keyed_sync_start_stamps_result_format(monkeypatch, clean_env, tmp_path):
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    seen = {}
+
+    class _Store:
+        def start_idempotent(self, *a, **k):
+            seen["extra"] = k.get("extra")
+            return {"kind": "conflict"}  # short-circuits before any await loop
+
+    store = _Store()
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    await server._run_sync(
+        _offloop_meta(tmp_path),
+        str(tmp_path),
+        kind="codex_consult",
+        tool="codex_consult",
+        spec={"kind": "codex_consult", "cwd": str(tmp_path)},
+        timeout=60,
+        detail_v="summary",
+        ctx=None,
+        idempotency_key="k1",
+    )
+    assert seen["extra"] == {"result_format": RESULT_FORMAT}
 
 
 async def test_unkeyed_start_cancel_during_spawn_cancels_job(monkeypatch, clean_env, tmp_path):
@@ -4462,7 +4753,17 @@ class _FakeIdemStore(_FakeStore):
         self.idem_calls = []
 
     def start_idempotent(
-        self, cmd_factory, cwd, *, kind, tool, key, arg_hash, write_spec=None, lock_timeout=None
+        self,
+        cmd_factory,
+        cwd,
+        *,
+        kind,
+        tool,
+        key,
+        arg_hash,
+        extra=None,
+        write_spec=None,
+        lock_timeout=None,
     ):
         self.idem_calls.append(
             {
@@ -4548,6 +4849,38 @@ async def test_consult_async_created_has_no_replayed_flag(monkeypatch, clean_env
     res = await server.codex_consult_async("q", workspace_root=str(tmp_path), idempotency_key="k1")
     assert res["ok"] is True and res["status"] == "running"
     assert res["meta"].get("idempotency_replayed") is None  # only set on a replay
+
+
+async def test_consult_sync_reattach_classifies_incompatibility(monkeypatch, clean_env, tmp_path):
+    # The sync tools share _finished_job_envelope via the keyed reattach path, so they
+    # can surface job_result_incompatible too (#305).
+    from codex_in_claude.schemas import RESULT_FORMAT
+
+    done = _ok_record("done")
+    done["kind"] = "codex_consult"
+    done["extra"] = {"result_format": RESULT_FORMAT + 1}
+    env = {
+        "ok": True,
+        "tool": "codex_consult",
+        "summary": "answer",
+        "field_from_the_future": "x",
+        "meta": server._base_meta(
+            str(tmp_path),
+            "param",
+            tier="consult",
+            sandbox="read-only",
+            isolation="inherit",
+            model=None,
+            timeout_seconds=180,
+        ).model_dump(mode="json"),
+    }
+    store = _FakeIdemStore(
+        {"kind": "replay", "job_id": "job-abc"}, snapshot=done, record=done, result_json=env
+    )
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), idempotency_key="k1")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_result_incompatible"
 
 
 async def test_consult_sync_replay_marks_replayed(monkeypatch, clean_env, tmp_path):
@@ -4825,7 +5158,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-39")
+    assert result["fingerprint"].endswith("schema-40")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

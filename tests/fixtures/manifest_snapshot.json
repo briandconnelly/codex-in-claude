@@ -96,6 +96,7 @@
           "idempotency_conflict",
           "idempotency_result_unavailable",
           "idempotency_in_progress",
+          "job_result_incompatible",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -194,6 +195,7 @@
           "idempotency_conflict",
           "idempotency_result_unavailable",
           "idempotency_in_progress",
+          "job_result_incompatible",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -297,6 +299,7 @@
           "idempotency_conflict",
           "idempotency_result_unavailable",
           "idempotency_in_progress",
+          "job_result_incompatible",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -399,6 +402,7 @@
           "job_cancelled",
           "job_timeout",
           "job_failed",
+          "job_result_incompatible",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -424,6 +428,7 @@
           "job_cancelled",
           "job_timeout",
           "job_failed",
+          "job_result_incompatible",
           "invalid_arguments"
         ],
         "key_optional_params": [
@@ -736,6 +741,7 @@
                     "job_cancelled",
                     "job_failed",
                     "job_not_found",
+                    "job_result_incompatible",
                     "job_running",
                     "job_timeout",
                     "nonzero_exit",
@@ -833,7 +839,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-39",
+            "default": "codex-in-claude/0.1/schema-40",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1145,6 +1151,7 @@
                   "job_cancelled",
                   "job_failed",
                   "job_not_found",
+                  "job_result_incompatible",
                   "job_running",
                   "job_timeout",
                   "nonzero_exit",
@@ -1353,7 +1360,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-39",
+                "default": "codex-in-claude/0.1/schema-40",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2345,7 +2352,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-39",
+            "default": "codex-in-claude/0.1/schema-40",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2951,7 +2958,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-39",
+            "default": "codex-in-claude/0.1/schema-40",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -5245,7 +5252,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Fetch a finished background Codex job's result WITHOUT deleting the record.\n\nWorks for any async job or sync consult/review/delegate (whose `meta.job_id` names\nits record) — codex_delegate_async (a `diff`), codex_consult_async (a consult\nanswer), or codex_review_changes_async (a review with `verdict`). Use when\ncodex_job_status reports result_available=true; the envelope matches the job's\nkind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-\nout/failed job returns an error envelope. To fetch and delete, use\ncodex_job_consume_result.\n\n`detail=\"summary\"` (default) omits the raw model text; pass `detail=\"full\"` for\nthe complete raw output and metadata (#56).",
+      "description": "Fetch a finished background Codex job's result WITHOUT deleting the record.\n\nWorks for any async job or sync consult/review/delegate (whose `meta.job_id` names\nits record) — codex_delegate_async (a `diff`), codex_consult_async (a consult\nanswer), or codex_review_changes_async (a review with `verdict`). Use when\ncodex_job_status reports result_available=true; the envelope matches the job's\nkind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-\nout/failed job returns an error envelope — as does a done job whose stored result\nthis release cannot read (job_result_incompatible). To fetch and delete, use\ncodex_job_consume_result.\n\n`detail=\"summary\"` (default) omits the raw model text; pass `detail=\"full\"` for\nthe complete raw output and metadata (#56).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

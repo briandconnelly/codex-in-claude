@@ -231,6 +231,17 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
     ),
     "job_cancelled": ("start_new_job", None, False, "Start a new job."),
     "job_timeout": ("start_new_job", None, False, "Start a new job."),
+    "job_result_incompatible": (
+        "start_new_job",
+        None,
+        False,
+        # No "restore the writing release" promise: codex_job_consume_result deletes the
+        # record before validation, so the stored copy may already be gone (#306).
+        "This stored result was written by a different codex-in-claude release and cannot "
+        "be read by the one now running; retrying cannot succeed. Start a new job under "
+        "the current release, with a new (or no) idempotency_key — a reused old key can "
+        "replay this same unreadable record while it still exists.",
+    ),
     "job_failed": (
         "inspect_and_retry",
         None,

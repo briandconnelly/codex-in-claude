@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_in_claude._core import idempotency
 from codex_in_claude._core.jobs import JobStore
 
 # A snippet (run with cwd=job_dir) that writes the final envelope to result.json.
@@ -975,6 +976,83 @@ def test_idempotent_consumed_result_is_unavailable(tmp_path):
         _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
     )
     assert b["kind"] == "unavailable"
+
+
+def test_idempotent_default_extra_carries_only_digest(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    out = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
+    )
+    _wait_terminal(store, cwd, out["job_id"])
+    extra = store.status(cwd, out["job_id"])["extra"]
+    assert set(extra) == {"idempotency_key_digest"}
+    assert extra["idempotency_key_digest"] == idempotency.key_digest("t", "k1")
+
+
+def test_idempotent_extra_merges_with_digest(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    out = store.start_idempotent(
+        _factory(_WRITE_DONE),
+        cwd,
+        kind="k",
+        tool="t",
+        key="k1",
+        arg_hash="AH",
+        extra={"result_format": 7, "other": "x"},
+    )
+    _wait_terminal(store, cwd, out["job_id"])
+    extra = store.status(cwd, out["job_id"])["extra"]
+    assert extra["result_format"] == 7
+    assert extra["other"] == "x"
+    assert extra["idempotency_key_digest"] == idempotency.key_digest("t", "k1")
+
+
+def test_idempotent_empty_extra_is_default(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    out = store.start_idempotent(
+        _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH", extra={}
+    )
+    _wait_terminal(store, cwd, out["job_id"])
+    extra = store.status(cwd, out["job_id"])["extra"]
+    assert set(extra) == {"idempotency_key_digest"}
+
+
+def test_idempotent_extra_cannot_override_digest(tmp_path):
+    # The digest is protocol data the store owns; a colliding caller key loses.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    out = store.start_idempotent(
+        _factory(_WRITE_DONE),
+        cwd,
+        kind="k",
+        tool="t",
+        key="k1",
+        arg_hash="AH",
+        extra={"idempotency_key_digest": "forged"},
+    )
+    _wait_terminal(store, cwd, out["job_id"])
+    extra = store.status(cwd, out["job_id"])["extra"]
+    assert extra["idempotency_key_digest"] == idempotency.key_digest("t", "k1")
+
+
+def test_idempotent_extra_does_not_mutate_caller_dict(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    supplied = {"result_format": 1}
+    out = store.start_idempotent(
+        _factory(_WRITE_DONE),
+        cwd,
+        kind="k",
+        tool="t",
+        key="k1",
+        arg_hash="AH",
+        extra=supplied,
+    )
+    _wait_terminal(store, cwd, out["job_id"])
+    assert supplied == {"result_format": 1}
 
 
 def test_idem_dir_excluded_from_listing_and_count_cap(tmp_path):

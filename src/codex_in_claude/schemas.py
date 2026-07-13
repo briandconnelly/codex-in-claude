@@ -48,7 +48,23 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-39"
+FINGERPRINT = "codex-in-claude/0.1/schema-40"
+
+# The persisted result-format version, stamped into each job record's generic metadata
+# (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
+# one (#305): on a validation failure, a stored value differing from this constant means the
+# record was written under a DIFFERENT persisted format (job_result_incompatible, permanent);
+# an equal or missing/unusable value means corruption (internal_error). Independent of
+# FINGERPRINT: that tracks the agent-visible contract and moves on wording-only changes,
+# while this tracks only the bytes replay must re-read. Bump it on any change to the
+# persisted result.json shape an older reader's closed schema could reject — a field
+# added/renamed/retyped on the result models/Meta/error envelope, a new Literal/enum value,
+# or a serializer-mode change (e.g. exclude_none). The committed format snapshot
+# (tests/fixtures/result_format_snapshot.json, guarded by tests/test_result_format.py) fails
+# CI without a bump on drift in either the model schemas or the rendered writer output (its
+# `serialized` view pins the writers' serializer modes); only a mode change the representative
+# envelopes don't exercise escapes it and relies on this rule plus review.
+RESULT_FORMAT: int = 1
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -206,6 +222,11 @@ ErrorCode = Literal[
     "job_cancelled",
     "job_timeout",
     "job_failed",
+    # a done job's stored result was written under a different persisted result format
+    # (see RESULT_FORMAT) — another release produced it and this one cannot read it.
+    # Permanent for this record (never retryable); start a new job. Same-format
+    # malformed payloads remain internal_error (#305).
+    "job_result_incompatible",
     # Idempotency (client-supplied idempotency_key on spend-committing tools):
     # the same key was reused with different effective arguments (a duplicate would be
     # a mismatched result, so it is refused rather than silently returning the other run).
@@ -481,6 +502,16 @@ class DelegateResult(_SuccessBase):
 
     tool: Literal["codex_delegate"] = "codex_delegate"
     diff: str | None = None
+
+
+def dump_success(result: _SuccessBase) -> dict:
+    """THE serializer for success envelopes bound for result.json (and the sync wire).
+    Success envelopes retain null optionals as explicit keys, unlike error envelopes
+    (serialize_error, exclude_none) — that asymmetry is part of the persisted result
+    format, pinned by tests/fixtures/result_format_snapshot.json. Changing the mode
+    here is a persisted-format change: the snapshot guard fires, and RESULT_FORMAT
+    must bump (#305)."""
+    return result.model_dump(mode="json")
 
 
 class InvalidArgument(BaseModel):
