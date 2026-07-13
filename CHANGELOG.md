@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-12
+
+A documentation-and-disclosure release. Nothing changed about what the tools do — no tool, field,
+error code, or behavior was added, removed, or retyped, and the change is backward-compatible. But
+the egress caveats now disclose that `codex exec` auto-loads the workspace's `AGENTS.md` and
+`.agents/skills/`, which is a change to the *documented meaning* of the agent-visible surface, so the
+result `fingerprint` moves (`codex-in-claude/0.1/schema-37` → `codex-in-claude/0.1/schema-38`) and
+clients that cache by `fingerprint` re-fetch the contract. Pre-1.0, a surface change is a minor
+release even when the code behind it is unchanged.
+
 ### Changed
 
 - **`collaborating-with-codex` skill: close the isolation and independence gaps found by the
