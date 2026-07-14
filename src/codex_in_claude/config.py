@@ -270,11 +270,15 @@ def _safe_token(token: str) -> str:
 
 
 def _normalize_config_key(key: str) -> str:
-    """Normalize a dotted `-c` config KEY the way codex's own TOML key parser resolves it —
-    trim each dotted segment, strip surrounding TOML quotes, and lowercase — so neither an
-    embedded space (`features . Remote_Plugin`) nor a quoted segment (`features."remote_plugin"`,
-    `"features".remote_plugin`) can slip a denied key past the whole-key denylist. shlex strips
-    unescaped quotes before this, but an escaped/preserved quote can survive to here (#287)."""
+    """Conservatively canonicalize a dotted `-c` config KEY for denylist matching: trim each
+    dotted segment, strip surrounding TOML quotes, and lowercase. This is deliberate
+    OVER-matching, not a mirror of codex — codex's own `-c` parser (config_override.rs,
+    verified at rust-v0.144.3) trims the whole key, then does a naive '.'-split with each
+    segment used literally: case-sensitive, no quote handling. So a spaced/cased/quoted
+    variant (`features . Remote_Plugin`, `features."remote_plugin"`, `"features".remote_plugin`)
+    is a junk key codex's config never reads, not an alias of the real one; refusing such
+    lookalikes anyway costs nothing and keeps the denylist unprobeable (#287, #312). shlex
+    strips unescaped quotes before this, but an escaped/preserved quote can survive to here."""
     segments = []
     for seg in key.split("."):
         segments.append(seg.strip().strip("\"'").strip().lower())
@@ -316,9 +320,13 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
             key = value.split("=", 1)[0]
             if not key.strip():
                 return ExtraArgs(configured=True, error=f"{flag} has an empty config key")
-            # Normalize the root segment the way codex's own `-c` parser does (it trims
-            # keys), so a leading/segment space can't slip a denied key past the check.
-            root = key.split(".", 1)[0].strip().lower()
+            # One canonicalization for every denylist check (#312): normalize the whole key
+            # once and derive the root from it, so a quoted root ('"sandbox_mode"=…') is
+            # refused with the same conservative over-matching as the exact-key denials
+            # below (see _normalize_config_key — in codex those spellings are junk keys,
+            # so this closes a silently-accepted no-op, not a sandbox bypass).
+            normalized = _normalize_config_key(key)
+            root = normalized.split(".", 1)[0]
             if any(root == d or root.startswith(f"{d}_") for d in _DENIED_CONFIG_KEY_ROOTS):
                 return ExtraArgs(
                     configured=True,
@@ -327,7 +335,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         "network / approval / host-env-isolation guarantees this server advertises"
                     ),
                 )
-            if _normalize_config_key(key) in _DENIED_CONFIG_KEYS:
+            if normalized in _DENIED_CONFIG_KEYS:
                 return ExtraArgs(
                     configured=True,
                     error=(
@@ -336,7 +344,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         "override cannot re-enable them"
                     ),
                 )
-            reserved = _RESERVED_META_CONFIG_KEYS.get(_normalize_config_key(key))
+            reserved = _RESERVED_META_CONFIG_KEYS.get(normalized)
             if reserved is not None:
                 meta_field, env_var, param, issue = reserved
                 return ExtraArgs(
