@@ -117,8 +117,9 @@ def build_exec_command(
         tokens += [cli_contract.MODEL_FLAG, model]
     # Reasoning effort rides the `model_reasoning_effort` config key (0.144 has no
     # dedicated flag). A config key cannot be help-gated, so it is sent whenever the
-    # caller/server requested one — including an explicit "" (whole-domain honesty:
-    # the backend, not this plugin, judges the value) — and fails loudly on drift.
+    # caller/server requested one — including an explicit "" after shared shape
+    # validation. Loss of the shared `-c` flag fails loudly; a rename/removal of this
+    # key can drift silently (see cli_contract).
     # The value is TOML-string-encoded (JSON string syntax is valid TOML): codex
     # TOML-parses the `-c` right-hand side and falls back to a string only when that
     # parse fails, so a raw interpolation would retype boolean/numeric/collection-
@@ -349,7 +350,9 @@ def classify_failure(
     effort VALUE with a message that also matches the generic drift patterns, so
     when one was sent and every backend effort marker appears in its bracketed
     `[…]` field form the failure is the caller's argument
-    (`invalid_reasoning_effort`), not contract drift (#309)."""
+    (`invalid_reasoning_effort`), not contract drift (#309) — unless the operator's
+    own matched passthrough descriptors account for that signature, in which case
+    the rejection is theirs (`extra_args_rejected`, #313)."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
@@ -362,7 +365,18 @@ def classify_failure(
     if cli_contract.is_contract_drift(run.stderr, run.stdout, event_error):
         # Only re-attribute to the operator's passthrough when codex actually named one
         # of its descriptors; otherwise a real plugin-flag drift must stay fail-loud.
-        # Backend effort rejection first: when THIS run sent a first-class effort
+        matched = _extra_args_drift_match(extra_args, run.stderr, run.stdout, event_error)
+        # When the matched operator descriptors THEMSELVES carry the full bracketed
+        # marker signature (a profile/feature literally named
+        # "[reasoning.effort][ReasoningEffortParam]" — the allowlist constrains flags,
+        # not name characters), codex quoting that name is what satisfied the backend
+        # check: the rejection is the operator's entry, not the backend's. Attribute
+        # it before the backend check or the impersonation steals the classification.
+        # A genuine backend rejection cannot trip this: its markers are separate
+        # space-delimited fields, which never token-match a composite descriptor.
+        if matched is not None and cli_contract.is_reasoning_effort_rejection(*matched):
+            return _extra_args_rejected_error(matched)
+        # Backend effort rejection next: when THIS run sent a first-class effort
         # override and the blob carries the backend's request-level markers
         # (reasoning.effort/ReasoningEffortParam), the failure is that argument — the
         # markers are specific, while the descriptor attribution below is a generic
@@ -374,7 +388,6 @@ def classify_failure(
             run.stderr, run.stdout, event_error
         ):
             return _invalid_reasoning_effort_error()
-        matched = _extra_args_drift_match(extra_args, run.stderr, run.stdout, event_error)
         # When a first-class reasoning effort was sent, the plugin ITSELF emitted a
         # bare `-c` pair, so a rejection naming only that shared flag token is
         # ambiguous between the operator's passthrough and the plugin's own tokens —

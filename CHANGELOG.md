@@ -21,7 +21,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   re-verification step in `docs/UPGRADING-CODEX.md`. The value is an open per-model string the
   backend validates; a backend rejection of a sent override is classified as the new
   `invalid_reasoning_effort` error (a caller argument to correct, with a `codex_models` repair —
-  never masked as contract drift, and never claimed for a rejection of the config key itself).
+  never masked as contract drift, never claimed for a rejection of the config key itself, and
+  never stolen by a passthrough descriptor that spells out the backend's bracketed marker
+  signature — such a rejection stays `extra_args_rejected`). The shape bounds shared by the
+  per-call parameter and the env default reject surrogate code points alongside control
+  characters and over-length values (an unpaired surrogate breaks argv/JSON encoding; the raw
+  value is never echoed back through `meta.reasoning_effort` on that error), and both dry runs
+  advertise `invalid_reasoning_effort` in their error catalogs — an invalid resolved default is
+  rejected pre-spend there too, no Codex involved.
   Reporting: `meta.reasoning_effort` (override provenance mirroring `meta.model`; `null` = Codex
   resolved it), `reasoning_effort` in `codex_status`'s `raw_defaults`/`resolved_defaults`, and both
   dry-run results now echo the effective `model`/`reasoning_effort` the previewed paid call would

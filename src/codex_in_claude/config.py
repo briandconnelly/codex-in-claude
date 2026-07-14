@@ -82,13 +82,21 @@ def _env_int(name: str, default: int) -> int:
 # advertise and enforce them at the call boundary) and the pre-spend check on the
 # resolved value — the only guard the CODEX_IN_CLAUDE_REASONING_EFFORT env default
 # passes through, since env config never crosses the MCP boundary. The set stays open
-# (the backend judges the value); these exclude only argv-hostile shapes: a NUL breaks
-# Popen outright, other control characters have no place in a config override, and an
-# argv-scale string fails as a misleading codex_not_found. "Control character" means
-# Unicode category Cc — C0, DEL, and the C1 block (U+0080-U+009F) alike. Real efforts
-# are ≤ ~7 chars; 128 is generous headroom.
+# (the backend judges the value); these exclude only argv/serialization-hostile
+# shapes: a NUL breaks Popen outright, other control characters have no place in a
+# config override, an unpaired surrogate cannot be UTF-8-encoded (it breaks both argv
+# encoding and envelope serialization), and an argv-scale string fails as a misleading
+# codex_not_found. "Control character" means Unicode category Cc — C0, DEL, and the
+# C1 block (U+0080-U+009F) alike; "surrogate" is category Cs (U+D800-U+DFFF). Real
+# efforts are ≤ ~7 chars; 128 is generous headroom.
 REASONING_EFFORT_MAX_LENGTH = 128
 # ECMA-safe for the advertised JSON-Schema `pattern` (no \Z, which ECMA lacks).
+# Deliberately does NOT name the surrogate range: under a non-`u`-flag ECMA engine a
+# [\uD800-\uDFFF] class also matches the code UNITS of astral characters — legitimate
+# values — so publishing it would make spec-compliant client validators reject them.
+# A compliant UTF-8 JSON transport cannot deliver an unpaired surrogate anyway; the
+# character-wise check below closes the residual (env defaults, in-process calls,
+# lenient parsers).
 REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
 
 
@@ -101,6 +109,8 @@ def reasoning_effort_shape_error(value: str) -> str | None:
         return f"exceeds {REASONING_EFFORT_MAX_LENGTH} characters"
     if any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in value):
         return "contains a control character"
+    if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+        return "contains a surrogate code point"
     return None
 
 

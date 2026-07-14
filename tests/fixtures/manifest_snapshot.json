@@ -543,6 +543,7 @@
           "input_too_large",
           "unexpanded_env_placeholder",
           "extra_args_rejected",
+          "invalid_reasoning_effort",
           "internal_error",
           "invalid_arguments"
         ],
@@ -569,6 +570,7 @@
           "workspace_outside_roots",
           "unexpanded_env_placeholder",
           "extra_args_rejected",
+          "invalid_reasoning_effort",
           "input_too_large",
           "not_a_git_repo",
           "worktree_error",
@@ -3407,7 +3409,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
           },
           "timeout_seconds": {
             "anyOf": [
@@ -3705,7 +3707,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
           },
           "workspace_root": {
             "anyOf": [
@@ -3910,7 +3912,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
           },
           "task": {
             "description": "The coding task for Codex to implement inside a throwaway git worktree; the resulting diff is returned for review, not applied to your tree.",
@@ -4206,7 +4208,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
           },
           "task": {
             "description": "The coding task for Codex to implement inside a throwaway git worktree; the resulting diff is returned for review, not applied to your tree.",
@@ -4390,7 +4392,7 @@
               }
             ],
             "default": null,
-            "description": "The reasoning effort the previewed paid call would send (as a `model_reasoning_effort` config override); defaults to the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the paid call's resolution. This dry run does not call Codex or validate the value beyond the paid params' shape bounds (no control characters, ≤128 chars)."
+            "description": "The reasoning effort the previewed paid call would send (as a `model_reasoning_effort` config override); defaults to the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the paid call's resolution. This dry run does not call Codex or validate the value beyond the paid params' shape bounds (no control or surrogate characters, ≤128 chars)."
           },
           "task": {
             "description": "The coding task you want Codex to implement via a real codex_delegate call; this dry run only previews the seeded baseline and prompt size — it does NOT call Codex or return a diff.",
@@ -4709,7 +4711,7 @@
               }
             ],
             "default": null,
-            "description": "The reasoning effort the previewed paid call would send (as a `model_reasoning_effort` config override); defaults to the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the paid call's resolution. This dry run does not call Codex or validate the value beyond the paid params' shape bounds (no control characters, ≤128 chars)."
+            "description": "The reasoning effort the previewed paid call would send (as a `model_reasoning_effort` config override); defaults to the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the paid call's resolution. This dry run does not call Codex or validate the value beyond the paid params' shape bounds (no control or surrogate characters, ≤128 chars)."
           },
           "scope": {
             "default": "working_tree",
@@ -6063,7 +6065,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
           },
           "scope": {
             "default": "working_tree",
@@ -6420,7 +6422,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
           },
           "scope": {
             "default": "working_tree",

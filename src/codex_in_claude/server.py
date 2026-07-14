@@ -630,7 +630,7 @@ ReasoningEffortParam = Annotated[
         "minimal|low|medium|high|xhigh; codex_models lists each model's advertised set "
         "(advisory). A backend-rejected value fails as invalid_reasoning_effort; an "
         "explicit empty string is sent as-is (and rejected by the backend), never "
-        "treated as unset. Control characters and values over "
+        "treated as unset. Control characters, surrogates, and values over "
         f"{_REASONING_EFFORT_MAX_LENGTH} chars are rejected as invalid_arguments.",
     ),
 ]
@@ -744,8 +744,8 @@ ReasoningEffortDryRunParam = Annotated[
         "`model_reasoning_effort` config override); defaults to the server default "
         "(CODEX_IN_CLAUDE_REASONING_EFFORT) when unset, so the preview mirrors the "
         "paid call's resolution. This dry run does not call Codex or validate the "
-        "value beyond the paid params' shape bounds (no control characters, "
-        f"≤{_REASONING_EFFORT_MAX_LENGTH} chars).",
+        "value beyond the paid params' shape bounds (no control or surrogate "
+        f"characters, ≤{_REASONING_EFFORT_MAX_LENGTH} chars).",
     ),
 ]
 
@@ -887,6 +887,10 @@ def _reasoning_effort_shape_error(effort: str | None, meta: Meta) -> dict | None
     reason = config.reasoning_effort_shape_error(effort)
     if reason is None:
         return None
+    # Never echo the invalid raw value back through meta: a surrogate-bearing value
+    # would break serializing this very envelope (the same failure the guard exists
+    # to prevent), and control-character values have no place in a result either.
+    meta.reasoning_effort = None
     return serialize_error(
         ErrorResult(
             error=make_error(
@@ -896,9 +900,9 @@ def _reasoning_effort_shape_error(effort: str | None, meta: Meta) -> dict | None
                 repair_alternative=(
                     "Fix the per-call reasoning_effort or the "
                     f"{config.ENV_PREFIX}REASONING_EFFORT default (≤"
-                    f"{config.REASONING_EFFORT_MAX_LENGTH} chars, no control "
-                    "characters), or omit the override. The value never reached "
-                    "codex (zero spend)."
+                    f"{config.REASONING_EFFORT_MAX_LENGTH} chars, no control or "
+                    "surrogate characters), or omit the override. The value never "
+                    "reached codex (zero spend)."
                 ),
             ),
             meta=meta,
@@ -1456,6 +1460,10 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
             "internal_error",
         ),
     ),
+    # Both dry runs advertise invalid_reasoning_effort even though they never call
+    # Codex: the pre-spend shape guard on the RESOLVED effort runs there too, so an
+    # invalid CODEX_IN_CLAUDE_REASONING_EFFORT default surfaces the code with no
+    # subprocess involved.
     "codex_dry_run": _err_codes(
         _WORKSPACE_ERRORS,
         _GITDIFF_ERROR_CODES,
@@ -1463,6 +1471,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
             "input_too_large",
             "unexpanded_env_placeholder",
             "extra_args_rejected",
+            "invalid_reasoning_effort",
             "internal_error",
         ),
     ),
@@ -1471,6 +1480,7 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         (
             "unexpanded_env_placeholder",
             "extra_args_rejected",
+            "invalid_reasoning_effort",
             "input_too_large",
             "not_a_git_repo",
             "worktree_error",

@@ -5809,9 +5809,10 @@ async def test_capabilities_advertise_reasoning_effort(clean_env):
     # The backend effort rejection is reachable on every Codex-running tool.
     for name in effort_tools[:6]:
         assert "invalid_reasoning_effort" in details[name]["error_codes"], name
-    # The dry runs never call Codex, so the code would be a false contract there.
+    # An invalid resolved default is rejected before either dry run performs work,
+    # so the code is reachable there too (pre-spend shape guard; no Codex involved).
     for name in effort_tools[6:]:
-        assert "invalid_reasoning_effort" not in details[name]["error_codes"], name
+        assert "invalid_reasoning_effort" in details[name]["error_codes"], name
 
 
 async def test_dry_run_model_echo_reconciles_help_gated_drop(monkeypatch, clean_env, tmp_path):
@@ -5902,6 +5903,48 @@ async def test_env_reasoning_effort_shape_rejected_in_dry_runs(monkeypatch, clea
     res2 = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
     assert res2["ok"] is False
     assert res2["error"]["code"] == "invalid_reasoning_effort"
+
+
+async def test_reasoning_effort_surrogate_rejected_with_serializable_envelope(clean_env, tmp_path):
+    # Maintainer-review regression (#313): a surrogate code point (category Cs) is
+    # outside the Cc ranges but hostile to argv encoding and JSON serialization. A
+    # direct in-process call must get the normal invalid_reasoning_effort envelope —
+    # with NO raw surrogate echoed anywhere in it (meta.reasoning_effort included),
+    # or serializing the envelope itself would fail the same way.
+    res = await server.codex_consult(
+        "q", workspace_root=str(tmp_path), reasoning_effort="high\ud800"
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_reasoning_effort"
+    assert res["error"]["details"]["field"] == "reasoning_effort"
+    assert res["meta"].get("reasoning_effort") is None  # invalid raw value never echoed
+    json.dumps(res).encode("utf-8")  # the whole envelope survives wire serialization
+
+
+async def test_reasoning_effort_surrogate_rejected_over_mcp(clean_env):
+    # Over MCP the advertised pattern cannot name the surrogate range (see
+    # REASONING_EFFORT_VALUE_PATTERN), but pydantic's own string validation
+    # (string_unicode) still refuses the value at the boundary — a structured
+    # invalid_arguments envelope naming the field, never a raw serialization error.
+    res = await server.mcp.call_tool(
+        "codex_consult", {"question": "q", "reasoning_effort": "high\ud800"}
+    )
+    assert res.is_error is True
+    sc = res.structured_content
+    assert sc["error"]["code"] == "invalid_arguments"
+    assert sc["error"]["details"]["field"] == "reasoning_effort"
+
+
+async def test_env_reasoning_effort_surrogate_rejected_in_dry_run(clean_env, tmp_path):
+    # A surrogateescape'd environment value (how a non-UTF-8 env byte surfaces in
+    # os.environ) must produce the same envelope through the dry run, not a raw
+    # FastMCP/Pydantic serialization error.
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "high\udcff")
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_reasoning_effort"
+    assert res["meta"].get("reasoning_effort") is None
+    json.dumps(res).encode("utf-8")
 
 
 async def test_env_reasoning_effort_shape_parity_sync_async(monkeypatch, clean_env, tmp_path):

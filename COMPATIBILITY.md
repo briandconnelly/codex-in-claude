@@ -154,8 +154,10 @@ below) — and the requested effort is quietly ignored; the re-verification prob
 `docs/UPGRADING-CODEX.md` is the guard for that case. (Verified 2026-07-13: a CLI `-c` override
 survives `--ignore-user-config`, so an explicit effort stays effective under every isolation mode.)
 
-The **value** is an open per-model string this plugin never validates: the CLI accepts any string
-silently, and the **backend** rejects a bad one at request time with a 400 whose message carries
+The **semantic value set** is open and not allowlisted by this plugin. The plugin still enforces
+transport-shape bounds (length and argv/JSON safety); values passing those bounds are sent
+unchanged. The CLI accepts such a string silently, and the **backend** rejects an unsupported
+model/effort combination at request time with a 400 whose message carries
 `[ReasoningEffortParam] [reasoning.effort] [invalid_enum_value] …` (probed against codex-cli
 0.144.3, 2026-07-13). That message also matches the generic `invalid value` drift pattern, so the
 classifier checks `REASONING_EFFORT_REJECTION_MARKERS` (`reasoning.effort`,
@@ -163,7 +165,10 @@ classifier checks `REASONING_EFFORT_REJECTION_MARKERS` (`reasoning.effort`,
 first-class effort override and **every marker appears in its bracketed `[…]` field form**, the
 failure is the caller's argument (`invalid_reasoning_effort`), not contract drift. A marker as a
 free substring does not match — an operator passthrough naming one (`--enable reasoning.effort`, a
-profile so named) stays attributable to `extra_args_rejected`. A rejection naming only
+profile so named) stays attributable to `extra_args_rejected`. A passthrough descriptor that
+itself carries the full bracketed signature (a profile literally named
+`[reasoning.effort][ReasoningEffortParam]`) is attributed to the passthrough *before* the backend
+check, so it cannot impersonate the backend rejection either. A rejection naming only
 `model_reasoning_effort` (the key) still fails loudly as `cli_contract_changed`. The accepted set
 genuinely varies by model and account — the backend advertised
 `none|minimal|low|medium|high|xhigh` for gpt-5.5 on ChatGPT, while the models cache advertises

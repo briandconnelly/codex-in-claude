@@ -742,6 +742,26 @@ def test_classify_marker_named_passthrough_attributes_to_extra_args():
     assert err.code == "extra_args_rejected"
 
 
+def test_classify_composite_marker_descriptor_attributes_to_extra_args(monkeypatch):
+    # Maintainer-review regression (#313): a passthrough descriptor that ITSELF
+    # carries the full bracketed marker signature (a profile literally named
+    # "[reasoning.effort][ReasoningEffortParam]" — the allowlist constrains flags,
+    # not name characters) would otherwise impersonate the backend rejection: codex
+    # quotes the name in its error, and that quoted text alone satisfies
+    # is_reasoning_effort_rejection. When the matched descriptors account for the
+    # signature, the failure is the operator's entry, even with an effort sent.
+    name = "[reasoning.effort][ReasoningEffortParam]"
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", f"--profile '{name}'")
+    ea = config.extra_args()
+    assert ea.valid, ea.error  # the composite name passes the passthrough allowlist
+    err = codex.classify_failure(
+        CommandRun("", f"error: invalid value '{name}' for '--profile'", 2, 1, False),
+        extra_args=ea,
+        reasoning_effort="high",
+    )
+    assert err.code == "extra_args_rejected"
+
+
 def test_classify_effort_markers_beat_incidental_descriptor_match():
     # Codex re-review regression (#309): the backend's effort rejection QUOTES the
     # supported effort names, so an operator profile that happens to be named "high"

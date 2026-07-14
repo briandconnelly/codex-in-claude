@@ -521,6 +521,8 @@ def test_reasoning_effort_shape_accepts(value):
         ("high\x80", "control character"),  # C1 lower bound
         ("high\x85", "control character"),  # NEL — a C1 control (category Cc)
         ("high\x9b", "control character"),  # CSI — C1 upper bound
+        ("high\ud800", "surrogate"),  # lone high surrogate — hostile to UTF-8/JSON
+        ("\udfff", "surrogate"),  # surrogate range upper bound
     ],
 )
 def test_reasoning_effort_shape_rejects(value, fragment):
@@ -545,3 +547,18 @@ def test_reasoning_effort_shape_rejects_every_unicode_cc_control():
     for ch in (" ", "\xa0"):
         assert config.reasoning_effort_shape_error(ch) is None
         assert re.fullmatch(config.REASONING_EFFORT_VALUE_PATTERN, ch)
+
+
+def test_reasoning_effort_shape_rejects_every_surrogate():
+    # Maintainer-review regression (#313): surrogate code points (category Cs,
+    # U+D800-U+DFFF) are outside Cc but hostile to argv encoding and JSON
+    # serialization — an unpaired one raises UnicodeEncodeError before Codex spawns
+    # and breaks envelope serialization. The character-wise predicate rejects the
+    # whole range; the neighbours just outside it must pass. (The advertised
+    # JSON-Schema pattern deliberately does NOT name the range: under a non-`u`-flag
+    # ECMA engine a surrogate class also matches the code UNITS of astral characters,
+    # which are legitimate values — see the comment on REASONING_EFFORT_VALUE_PATTERN.)
+    for cp in (0xD800, 0xDBFF, 0xDC00, 0xDFFF):
+        assert config.reasoning_effort_shape_error(chr(cp)) == "contains a surrogate code point"
+    for cp in (0xD7FF, 0xE000, 0x1F600):  # range neighbours + an astral character
+        assert config.reasoning_effort_shape_error(chr(cp)) is None

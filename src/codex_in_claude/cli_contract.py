@@ -207,9 +207,10 @@ HELP_GATED_FLAGS = {
 # ignored; the manual re-verification probe in docs/UPGRADING-CODEX.md is the only
 # guard for that case.
 #
-# The VALUE is an open per-model string, validated by the backend at request time,
-# not by the CLI and not by this plugin: the CLI accepts any string silently, and the
-# backend's accepted set varies by model and account (probed 2026-07-13: gpt-5.5 via
+# The VALUE's semantic set is open — the plugin enforces only transport-shape bounds
+# (config.reasoning_effort_shape_error) and allowlists nothing: the CLI accepts any
+# in-shape string silently, and the backend judges it at request time; its accepted
+# set varies by model and account (probed 2026-07-13: gpt-5.5 via
 # ChatGPT advertises none|minimal|low|medium|high|xhigh; the models cache advertises
 # max/ultra for other slugs). Discovery is advisory only (codex_models).
 MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
