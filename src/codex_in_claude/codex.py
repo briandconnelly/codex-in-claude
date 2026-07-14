@@ -353,6 +353,18 @@ def classify_failure(
     if cli_contract.is_contract_drift(run.stderr, run.stdout, event_error):
         # Only re-attribute to the operator's passthrough when codex actually named one
         # of its descriptors; otherwise a real plugin-flag drift must stay fail-loud.
+        # Backend effort rejection first: when THIS run sent a first-class effort
+        # override and the blob carries the backend's request-level markers
+        # (reasoning.effort/ReasoningEffortParam), the failure is that argument — the
+        # markers are specific, while the descriptor attribution below is a generic
+        # token match that an unlucky operator name (e.g. a profile called "high",
+        # which the backend's supported-values list quotes) could satisfy
+        # incidentally. A rejection naming only the config key carries no marker and
+        # stays fail-loud drift below.
+        if reasoning_effort is not None and cli_contract.is_reasoning_effort_rejection(
+            run.stderr, run.stdout, event_error
+        ):
+            return _invalid_reasoning_effort_error()
         matched = _extra_args_drift_match(extra_args, run.stderr, run.stdout, event_error)
         # When a first-class reasoning effort was sent, the plugin ITSELF emitted a
         # bare `-c` pair, so a rejection naming only that shared flag token is
@@ -363,14 +375,6 @@ def classify_failure(
         plugin_owns_dash_c = reasoning_effort is not None
         if matched is not None and not (plugin_owns_dash_c and set(matched) <= {"-c"}):
             return _extra_args_rejected_error(matched)
-        # Only when THIS run sent a first-class effort override AND the blob carries
-        # the backend's request-level markers (reasoning.effort/ReasoningEffortParam).
-        # A rejection naming only the config key means codex dropped the key itself —
-        # genuine drift that must stay fail-loud (the markers exclude the key name).
-        if reasoning_effort is not None and cli_contract.is_reasoning_effort_rejection(
-            run.stderr, run.stdout, event_error
-        ):
-            return _invalid_reasoning_effort_error()
         return contract_changed_error()
     if cli_contract.is_rate_limited(run.stderr, run.stdout, last_message, event_error):
         retry_after = cli_contract.parse_retry_after_ms(

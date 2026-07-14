@@ -610,9 +610,11 @@ def test_classify_key_only_rejection_stays_contract_changed():
     assert err.code == "cli_contract_changed"
 
 
-def test_classify_extra_args_attribution_beats_effort_attribution():
+def test_classify_extra_args_attribution_wins_without_effort_markers():
     # A drift codex explicitly attributes to an operator passthrough entry keeps the
-    # extra_args_rejected classification even when an effort override was also sent.
+    # extra_args_rejected classification when an effort override was also sent but the
+    # blob carries NO backend effort markers (marker-bearing rejections win instead —
+    # see test_classify_effort_markers_beat_incidental_descriptor_match).
     blob = "error: unexpected argument '--profile' found"
     err = codex.classify_failure(
         CommandRun("", blob, 2, 1, False),
@@ -679,3 +681,22 @@ def test_classify_key_naming_rejection_still_attributes_to_extra_args_with_effor
         reasoning_effort="high",
     )
     assert err.code == "extra_args_rejected"
+
+
+def test_classify_effort_markers_beat_incidental_descriptor_match():
+    # Codex re-review regression (#309): the backend's effort rejection QUOTES the
+    # supported effort names, so an operator profile that happens to be named "high"
+    # token-matches the blob; the marker-bearing effort classification must win over
+    # that incidental descriptor hit.
+    err = codex.classify_failure(
+        CommandRun(_EFFORT_REJECTION_EVENT, "", 1, 1, False),
+        events=_EFFORT_REJECTION_EVENT,
+        extra_args=config.ExtraArgs(
+            tokens=("-p", "high"),
+            descriptors=("-p", "high"),
+            option_count=1,
+            configured=True,
+        ),
+        reasoning_effort="totally-bogus-effort",
+    )
+    assert err.code == "invalid_reasoning_effort"
