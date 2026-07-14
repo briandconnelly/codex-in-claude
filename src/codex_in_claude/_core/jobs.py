@@ -45,6 +45,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -58,6 +59,18 @@ _IDEM_DIRNAME = ".idem"
 
 _TERMINAL = frozenset({"done", "failed", "cancelled", "timeout"})
 _LOCK = threading.RLock()
+
+
+class DiscardOutcome(StrEnum):
+    """What ``JobStore.discard`` did, so callers never have to re-derive it from a
+    post-hoc ``status`` read (a partial deletion can make the record unreadable
+    while parts of it survive on disk — indistinguishable from a lost race)."""
+
+    REMOVED = "removed"  # this call removed the record and verified it absent
+    MISSING = "missing"  # no record: already discarded, expired, or evicted
+    NOT_DONE = "not_done"  # record exists but is not a done result; never deleted
+    DELETE_FAILED = "delete_failed"  # removal failed or could not be verified
+
 
 # Per-process identity stamped onto every job this process starts and compared on
 # read to decide ownership. Generated ONCE at import, so it is stable across the many
@@ -456,10 +469,30 @@ class JobStore:
 
     @staticmethod
     def _rmtree(jd: Path) -> None:
+        # meta.json goes LAST: it is the record's existence marker (a dir without it
+        # is invisible to status/list and skipped by the reaper), so a partial
+        # failure must never orphan an unreapable remainder (#306 review). If any
+        # earlier unlink fails, the record stays fully readable. The marker must be
+        # gone before rmdir (the dir has to be empty), so if that final rmdir fails
+        # the snapshotted marker is restored — the shell stays visible and a later
+        # reap pass retries — atomically (tmp + replace), mirroring _write_meta, so
+        # a cross-process reader never sees a torn file.
+        meta = jd / "meta.json"
         try:
             for child in jd.iterdir():
-                child.unlink(missing_ok=True)
-            jd.rmdir()
+                if child != meta:
+                    child.unlink(missing_ok=True)
+            marker = None
+            with contextlib.suppress(OSError):
+                marker = meta.read_bytes()
+            meta.unlink(missing_ok=True)
+            try:
+                jd.rmdir()
+            except OSError:
+                if marker is not None:
+                    tmp = jd / "meta.json.tmp"
+                    tmp.write_bytes(marker)
+                    tmp.replace(meta)
         except OSError:
             pass
 
@@ -701,14 +734,13 @@ class JobStore:
             jd, meta, state = live
             return self._status_dict(jd, meta, state)
 
-    def result_payload(
-        self, cwd: str, job_id: str, *, consume: bool
-    ) -> tuple[dict | None, dict | None]:
-        """Return (status_dict, result_envelope).
+    def result_payload(self, cwd: str, job_id: str) -> tuple[dict | None, dict | None]:
+        """Return (status_dict, result_envelope). Read-only.
 
         status_dict is None when the job does not exist. result_envelope is the
-        parsed result.json (only when status == done), else None. With
-        ``consume=True`` a done record is deleted after reading.
+        parsed result.json (only when status == done), else None. Deletion is a
+        separate, explicit step — ``discard`` — so a caller can validate the
+        payload it was handed before destroying the only copy of it (#306).
         """
         with _LOCK:
             live = self._read_live_job(cwd, job_id)
@@ -718,10 +750,41 @@ class JobStore:
             rec = self._status_dict(jd, meta, state)
             if state != "done":
                 return rec, None
-            payload = self._read_envelope(jd)
-            if consume:
-                self._rmtree(jd)
-            return rec, payload
+            return rec, self._read_envelope(jd)
+
+    def discard(self, cwd: str, job_id: str) -> DiscardOutcome:
+        """Delete a done job record; REMOVED only when THIS call removed it.
+
+        The outcome is discriminated so callers never infer it from a follow-up
+        ``status`` read: MISSING means there was no record to delete (already
+        discarded, expired, or evicted), NOT_DONE means the record exists but is
+        not a done result (never deleted), and DELETE_FAILED means removal failed
+        or could not be verified — the record (kept fully readable by ``_rmtree``'s
+        meta-last ordering) is left to the TTL reaper.
+        Verification is a ``stat`` probe, not ``exists()``: since Python 3.14
+        ``exists()`` returns False for an inaccessible-but-present path, which
+        would claim a removal that never happened. Only FileNotFoundError proves
+        absence; any other stat error means unverified, never REMOVED.
+        The one-caller-wins guarantee is process-local: ``_LOCK`` serializes
+        threads in this process, but two server processes sharing a state root
+        can each observe the record before either deletes it (unchanged from
+        the pre-split read+delete, which held the same process-local lock).
+        """
+        with _LOCK:
+            live = self._read_live_job(cwd, job_id)
+            if live is None:
+                return DiscardOutcome.MISSING
+            jd, _meta, state = live
+            if state != "done":
+                return DiscardOutcome.NOT_DONE
+            self._rmtree(jd)
+            try:
+                jd.stat()
+            except FileNotFoundError:
+                return DiscardOutcome.REMOVED
+            except OSError:
+                return DiscardOutcome.DELETE_FAILED
+            return DiscardOutcome.DELETE_FAILED
 
     def cancel(self, cwd: str, job_id: str) -> dict | None:
         with _LOCK:

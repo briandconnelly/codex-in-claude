@@ -54,6 +54,28 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_job_consume_result` no longer destroys a stored result it failed to deliver** (#306).
+  Consume used to delete the job record *before* the payload was validated, so a corrupt or
+  cross-release result produced an `internal_error`/`job_result_incompatible` envelope about a
+  record that no longer existed — unrecoverable by definition. The store's `result_payload` is now
+  read-only and deletion is a separate, checked `discard` step the server runs only after the
+  envelope faithfully delivers the stored payload (a validated success **or** a validated stored
+  error result; generated lifecycle/corruption/incompatibility envelopes never consume). Race
+  semantics, analyzed and pinned by tests: one caller wins the delete per server process (the
+  store lock is process-local, unchanged from before); a consume that loses the delete race — to a
+  concurrent consume, TTL reaping, or count-cap eviction — reports `job_not_found` rather than
+  delivering a second copy; and when deletion itself fails, the validated result is still
+  delivered and the record is left to the TTL reaper (deletion stays best-effort, as it always
+  was). Deletion still precedes the wire response — there is no client-receipt acknowledgment —
+  so a validated consume whose response is lost in transit does not restore the record.
+  Review hardening: removal is verified with a `stat` probe (Python 3.14's `exists()` returns
+  False for an inaccessible-but-present path, which would have claimed a removal that never
+  happened), `discard` reports a discriminated outcome (`REMOVED`/`MISSING`/`NOT_DONE`/
+  `DELETE_FAILED`) so the server never infers a lost race from a post-hoc status probe, and the
+  record's `meta.json` marker is unlinked last — and restored if the final `rmdir` then fails —
+  so a partial deletion failure leaves the record visible and reapable instead of stranding an
+  unreapable orphan. Result `fingerprint` moves (`codex-in-claude/0.1/schema-42` → `schema-43`).
+
 - **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
   `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses the exact `model` key via `-c`/`--config` (plus, conservatively,
   case- and quote-varied lookalikes codex treats as distinct junk keys) at parse time with

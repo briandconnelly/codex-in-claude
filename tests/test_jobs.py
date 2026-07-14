@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from codex_in_claude._core import idempotency
-from codex_in_claude._core.jobs import JobStore
+from codex_in_claude._core.jobs import DiscardOutcome, JobStore
 
 # A snippet (run with cwd=job_dir) that writes the final envelope to result.json.
 _WRITE_DONE = "import json; open('result.json','w').write(json.dumps({'ok': True, 'tool': 't'}))"
@@ -85,7 +85,7 @@ def test_start_status_result_done(tmp_path):
     job_id, started = store.start(_factory(_WRITE_DONE), cwd, kind="codex_delegate")
     assert job_id and started
     assert _wait_terminal(store, cwd, job_id) == "done"
-    rec, payload = store.result_payload(cwd, job_id, consume=False)
+    rec, payload = store.result_payload(cwd, job_id)
     assert rec["status"] == "done"
     assert payload == {"ok": True, "tool": "t"}
     assert rec["result_available"] is True
@@ -96,7 +96,7 @@ def test_failed_when_no_result(tmp_path):
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory("raise SystemExit(1)"), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "failed"
-    rec, payload = store.result_payload(cwd, job_id, consume=False)
+    rec, payload = store.result_payload(cwd, job_id)
     assert rec["status"] == "failed"
     assert payload is None
 
@@ -296,26 +296,137 @@ def test_cleanup_noop_without_cleanup_root(tmp_path):
     assert warnings == []
 
 
-def test_consume_deletes(tmp_path):
+def test_result_payload_is_read_only(tmp_path):
+    # #306: reading never deletes — destruction is the separate, explicit discard.
     store = _store(tmp_path)
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "done"
-    _, payload = store.result_payload(cwd, job_id, consume=True)
+    _, payload = store.result_payload(cwd, job_id)
     assert payload == {"ok": True, "tool": "t"}
+    assert store.status(cwd, job_id) is not None
+
+
+def test_discard_deletes_done_record_once(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    assert store.discard(cwd, job_id) is DiscardOutcome.REMOVED
     assert store.status(cwd, job_id) is None
+    # one-winner: a second discard finds nothing to remove
+    assert store.discard(cwd, job_id) is DiscardOutcome.MISSING
 
 
-def test_consume_nondone_keeps_record(tmp_path):
+def test_discard_nondone_keeps_record(tmp_path):
     store = _store(tmp_path)
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
     store.cancel(cwd, job_id)
-    rec, payload = store.result_payload(cwd, job_id, consume=True)
-    assert rec["status"] == "cancelled"
-    assert payload is None
+    assert store.discard(cwd, job_id) is DiscardOutcome.NOT_DONE
     # not deleted (non-done)
     assert store.status(cwd, job_id) is not None
+
+
+def test_discard_running_keeps_record(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    try:
+        assert store.discard(cwd, job_id) is DiscardOutcome.NOT_DONE
+        assert store.status(cwd, job_id)["status"] == "running"
+    finally:
+        store.cancel(cwd, job_id)
+
+
+def test_discard_verification_error_reports_failure(tmp_path, monkeypatch):
+    # The stat probe can raise (EACCES on 3.11) or, since Python 3.14, exists()
+    # would silently return False for the same inaccessible-but-present path.
+    # discard must verify via stat and report DELETE_FAILED on any stat error —
+    # never claim a removal it could not verify.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
+    real_stat = Path.stat
+
+    def denied(self, *args, **kwargs):
+        if self.name == job_id:
+            raise PermissionError("stat denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    monkeypatch.undo()
+    assert store.status(cwd, job_id) is not None
+
+
+def test_discard_reports_failed_removal(tmp_path, monkeypatch):
+    # _rmtree is best-effort; discard must not claim success when the record
+    # survived the attempt (REMOVED is what lets the server promise the delete
+    # actually happened).
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    assert store.status(cwd, job_id) is not None
+
+
+def test_rmtree_partial_failure_keeps_record_readable(tmp_path, monkeypatch):
+    # _rmtree unlinks meta.json LAST: a failure on any other entry must leave the
+    # record fully readable (status + payload), not an unreadable, unreapable
+    # orphan that a status probe cannot tell from a lost race (#306 review).
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    real_unlink = Path.unlink
+
+    def sticky_result(self, *args, **kwargs):
+        if self.name == "result.json":
+            raise PermissionError("unlink denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", sticky_result)
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    monkeypatch.undo()
+    assert store.status(cwd, job_id) is not None  # meta.json survived
+    rec, payload = store.result_payload(cwd, job_id)
+    assert rec["status"] == "done"
+    assert payload == {"ok": True, "tool": "t"}  # result still fetchable
+
+
+def test_rmtree_failed_rmdir_restores_marker(tmp_path, monkeypatch):
+    # meta.json must be gone before rmdir (the dir has to be empty), so a failed
+    # final rmdir would otherwise strand a marker-less shell that status/list and
+    # the reaper all skip. _rmtree restores the snapshotted marker so the record
+    # stays visible and a later reap pass can retry (Copilot review on #314).
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    real_rmdir = Path.rmdir
+
+    def stuck_dir(self, *args, **kwargs):
+        if self.name == job_id:
+            raise OSError("directory busy")
+        return real_rmdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rmdir", stuck_dir)
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    monkeypatch.undo()
+    jd = store._job_dir(cwd, job_id)
+    assert (jd / "meta.json").is_file()  # marker restored
+    # The shell reads as a terminal record (result.json is gone, so "failed" —
+    # natural completion never persists terminal_status), which is the point:
+    # visible to status/list and eligible for TTL reaping, never an orphan.
+    assert store.status(cwd, job_id)["status"] == "failed"
+    # Once the transient failure clears, cleanup completes.
+    store._rmtree(jd)
+    assert store.status(cwd, job_id) is None
 
 
 def test_missing_job(tmp_path):
@@ -323,7 +434,7 @@ def test_missing_job(tmp_path):
     cwd = str(tmp_path)
     assert store.status(cwd, "deadbeef") is None
     assert store.cancel(cwd, "deadbeef") is None
-    rec, payload = store.result_payload(cwd, "deadbeef", consume=False)
+    rec, payload = store.result_payload(cwd, "deadbeef")
     assert rec is None and payload is None
 
 
@@ -971,7 +1082,7 @@ def test_idempotent_consumed_result_is_unavailable(tmp_path):
         _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
     )
     _wait_terminal(store, cwd, a["job_id"])
-    store.result_payload(cwd, a["job_id"], consume=True)  # tombstone survives this
+    store.discard(cwd, a["job_id"])  # tombstone survives this
     b = store.start_idempotent(
         _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
     )

@@ -13,6 +13,7 @@ from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
 from codex_in_claude import __version__, codex, delegate, orchestration, server
+from codex_in_claude._core.jobs import DiscardOutcome
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
     FINGERPRINT,
@@ -1405,10 +1406,12 @@ class _FakeStore:
             return self._record
         return self._status
 
-    def result_payload(self, cwd, job_id, *, consume):
-        if consume:
-            self.consumed.append(job_id)
+    def result_payload(self, cwd, job_id):
         return self._record, self._result_json
+
+    def discard(self, cwd, job_id):
+        self.consumed.append(job_id)
+        return DiscardOutcome.REMOVED
 
     def cancel(self, cwd, job_id):
         self.cancelled.append(job_id)
@@ -1783,7 +1786,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-42"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-43"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3246,7 +3249,147 @@ async def test_consume_result_classifies_incompatibility_too(monkeypatch, clean_
     monkeypatch.setattr(server.config, "job_store", lambda: store)
     res = await server.codex_job_consume_result("job-abc", workspace_root=str(tmp_path))
     assert res["error"]["code"] == "job_result_incompatible"
-    assert store.consumed == ["job-abc"]  # consume-before-validate is #306, unchanged here
+    assert store.consumed == []  # undeliverable → the record must survive (#306)
+
+
+# --- #306: consume must not destroy a record it failed to deliver -----------------
+# The store deletes only after server-side validation succeeded; an unreadable
+# payload (corrupt or cross-release) keeps the record fetchable via codex_job_result.
+
+
+def _real_store(tmp_path):
+    from codex_in_claude._core.jobs import JobStore
+
+    return JobStore(root=tmp_path / "jobstate", ttl_seconds=3600, max_seconds=60, max_count=50)
+
+
+def _start_done_job(store, cwd, payload, kind="codex_delegate"):
+    """Run a real job whose worker writes ``payload`` as its result.json."""
+    code = "import sys; open('result.json','w').write(sys.argv[1])"
+    body = json.dumps(payload)
+    job_id, _ = store.start(lambda _jd: [sys.executable, "-c", code, body], cwd, kind=kind)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        st = store.status(cwd, job_id)
+        assert st is not None
+        if st["status"] != "running":
+            assert st["status"] == "done"
+            return job_id
+        time.sleep(0.02)
+    raise AssertionError("job did not finish in time")
+
+
+async def test_consume_unreadable_result_keeps_record(monkeypatch, clean_env, tmp_path):
+    # Regression (#306): consume used to rmtree the record before validation, so a
+    # corrupt payload produced an error about a result that no longer existed.
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, {"ok": True, "tool": "codex_delegate"})  # schema-invalid
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "internal_error"
+    assert store.status(cwd, job_id) is not None  # the record survived
+    again = await server.codex_job_result(job_id, workspace_root=cwd)
+    assert again["error"]["code"] == "internal_error"  # still fetchable, not job_not_found
+
+
+async def test_consume_valid_result_deletes_exactly_once(monkeypatch, clean_env, tmp_path):
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, _done_envelope())
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is True
+    assert store.status(cwd, job_id) is None  # delivered → deleted
+    second = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert second["ok"] is False
+    assert second["error"]["code"] == "job_not_found"
+
+
+async def test_consume_valid_stored_error_still_deletes(monkeypatch, clean_env, tmp_path):
+    # A stored ok:false envelope that validates IS a faithful delivery — consume
+    # keeps its delete-on-success semantics for it.
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, _stored_error_envelope(tmp_path))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_failed"  # the stored error, delivered faithfully
+    assert store.status(cwd, job_id) is None  # delivered → deleted
+
+
+async def test_consume_lost_race_reports_job_not_found(monkeypatch, clean_env, tmp_path):
+    # Between read+validate and discard, a concurrent consume (or the TTL reaper /
+    # count-cap eviction) can remove the record first. The loser reports
+    # job_not_found instead of delivering a second copy — the same outcome it
+    # would have seen had the winner run marginally earlier.
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, _done_envelope())
+    real_discard = store.discard
+
+    def racing_discard(cwd_, job_id_):
+        real_discard(cwd_, job_id_)  # the concurrent winner deletes first...
+        return real_discard(cwd_, job_id_)  # ...so this caller's own discard loses
+
+    store.discard = racing_discard
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_not_found"
+
+
+async def test_consume_delete_failed_never_reports_not_found(monkeypatch, clean_env, tmp_path):
+    # A partial deletion can leave the record unreadable (status() -> None) while
+    # parts of it survive on disk — indistinguishable, via a status probe, from a
+    # lost race. Only the store's own DELETE_FAILED verdict decides, so the
+    # validated result in hand is still delivered, never swapped for
+    # job_not_found (#314 review).
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, _done_envelope())
+
+    def partial_failure_discard(cwd_, job_id_):
+        (store._job_dir(cwd_, job_id_) / "meta.json").unlink()  # record now unreadable
+        return DiscardOutcome.DELETE_FAILED
+
+    store.discard = partial_failure_discard
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is True  # the validated result, not job_not_found
+
+
+async def test_consume_failed_delete_still_delivers(monkeypatch, clean_env, tmp_path):
+    # Deletion stays best-effort (as the pre-split rmtree was): when removal fails
+    # but the payload validated, deliver it and leave the record to the TTL reaper
+    # rather than reporting an error about a result we hold in hand.
+    from codex_in_claude._core.jobs import JobStore
+
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, _done_envelope())
+    monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is True
+    assert store.status(cwd, job_id) is not None  # record lingers for the reaper
+
+
+async def test_consume_nondone_job_keeps_record(monkeypatch, clean_env, tmp_path):
+    # Unchanged semantics: consume never deletes a job that isn't done.
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(
+        lambda _jd: [sys.executable, "-c", "import time; time.sleep(30)"], cwd, kind="k"
+    )
+    store.cancel(cwd, job_id)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_cancelled"
+    assert store.status(cwd, job_id) is not None
 
 
 async def test_replay_normalizes_fingerprint_but_not_version(monkeypatch, clean_env, tmp_path):
@@ -5181,7 +5324,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-42")
+    assert result["fingerprint"].endswith("schema-43")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

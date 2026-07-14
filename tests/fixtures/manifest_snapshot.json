@@ -451,7 +451,7 @@
         "required_params": [
           "job_id"
         ],
-        "returns": "The same envelope as codex_job_result; removes completed state.",
+        "returns": "The same envelope as codex_job_result; removes completed state only once the stored result has been read back intact and validated (an unreadable stored result is kept for codex_job_result).",
         "stability": "experimental",
         "use_when": "To fetch a finished job's result and delete the stored record. Works for async and sync-originated jobs alike."
       },
@@ -857,7 +857,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-42",
+            "default": "codex-in-claude/0.1/schema-43",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1379,7 +1379,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-42",
+                "default": "codex-in-claude/0.1/schema-43",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2385,7 +2385,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-42",
+            "default": "codex-in-claude/0.1/schema-43",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3029,7 +3029,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-42",
+            "default": "codex-in-claude/0.1/schema-43",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3631,7 +3631,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex for a read-only second opinion in the background; get a `job_id`\nback immediately instead of blocking.\n\nSame read-only behavior as `codex_consult` (Codex never edits files), but it runs\ndetached — use it when the consult may run long. Starting a job commits to spend\n(it runs to completion or its wall-clock deadline even if you never poll). Poll\nwith `codex_job_status`, read the consult envelope with `codex_job_result`, delete\nit with `codex_job_consume_result`, or stop it with `codex_job_cancel`.\n\nData egress: same as `codex_consult` — sends your `question` and `extra_context`\n(raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its\nresolved working directory (`workspace_root`, your MCP roots, or the server cwd),\nincluding the auto-loaded `AGENTS.md`/`.agents/skills/` workspace context.",
+      "description": "Ask Codex for a read-only second opinion in the background; get a `job_id`\nback immediately instead of blocking.\n\nSame read-only behavior as `codex_consult` (Codex never edits files), but it runs\ndetached — use it when the consult may run long. Starting a job commits to spend\n(it runs to completion or its wall-clock deadline even if you never poll). Poll\nwith `codex_job_status`, read the consult envelope with `codex_job_result`, delete\nit after successful read with `codex_job_consume_result`, or stop it with\n`codex_job_cancel`.\n\nData egress: same as `codex_consult` — sends your `question` and `extra_context`\n(raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its\nresolved working directory (`workspace_root`, your MCP roots, or the server cwd),\nincluding the auto-loaded `AGENTS.md`/`.agents/skills/` workspace context.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4148,7 +4148,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\nit runs detached. Starting a job commits to spend (it runs to completion or its\nwall-clock deadline even if you never poll). Poll with `codex_job_status`, read\nwith `codex_job_result`, delete after reading with `codex_job_consume_result`,\nor stop with `codex_job_cancel`. Requires a git repo with at least one commit;\npass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex\nread tracked files in the worktree and send their content — including the tracked\n`AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret\nredaction is best-effort and does not cover your `task` or files Codex reads\nitself.",
+      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\nit runs detached. Starting a job commits to spend (it runs to completion or its\nwall-clock deadline even if you never poll). Poll with `codex_job_status`, read\nwith `codex_job_result`, delete after successful read with `codex_job_consume_result`,\nor stop with `codex_job_cancel`. Requires a git repo with at least one commit;\npass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex\nread tracked files in the worktree and send their content — including the tracked\n`AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret\nredaction is best-effort and does not cover your `task` or files Codex reads\nitself.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5195,7 +5195,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Fetch a finished background Codex job's result and delete the stored record.\n\nSame envelope as codex_job_result (matching the job's kind — branch on `tool`),\nthen removes completed job state. Use only when you no longer need to poll or\nre-read the job. Non-done jobs are not deleted. `detail` works as in\ncodex_job_result (#56).",
+      "description": "Fetch a finished background Codex job's result and delete the stored record.\n\nSame envelope as codex_job_result (matching the job's kind — branch on `tool`),\nthen removes completed job state — but only once the stored result has been read\nintact and validated (a success or the job's own error envelope): a stored result\nthis release cannot read (job_result_incompatible or a corruption internal_error)\nis NOT deleted, so it stays inspectable via codex_job_result. Deletion precedes\nthe response, so a response lost in transit does not restore the record; a failed\nremoval retains the record until its TTL (codex_job_status still shows it). Use\nonly when you no longer need to poll or re-read the job. Non-done jobs are not\ndeleted. `detail` works as in codex_job_result (#56).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6311,7 +6311,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Review your git changes in the background; get a `job_id` back immediately.\n\nSame read-only behavior as `codex_review_changes` (the diff is gathered, secret-\nredacted, and bounded, then reviewed read-only), but it runs detached — use it\nwhen the review may run long. The diff is gathered inside the job, so a bad\n`base`/`commit` comes back as the same structured error with **zero spend** (a bad\n`scope` is an out-of-enum value rejected by MCP input validation before the job\nstarts). Starting a job commits to spend. Poll with `codex_job_status`, read the\nreview envelope with `codex_job_result`, delete it with `codex_job_consume_result`,\nor stop it with `codex_job_cancel`. Pass `workspace_root` (absolute).\n\nData egress: same as `codex_review_changes` — sends the secret-redacted diff plus\nyour raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also\nread other repo files, including the auto-loaded `AGENTS.md`/`.agents/skills/`\nworkspace context. Redaction is best-effort, not a guarantee.",
+      "description": "Review your git changes in the background; get a `job_id` back immediately.\n\nSame read-only behavior as `codex_review_changes` (the diff is gathered, secret-\nredacted, and bounded, then reviewed read-only), but it runs detached — use it\nwhen the review may run long. The diff is gathered inside the job, so a bad\n`base`/`commit` comes back as the same structured error with **zero spend** (a bad\n`scope` is an out-of-enum value rejected by MCP input validation before the job\nstarts). Starting a job commits to spend. Poll with `codex_job_status`, read the\nreview envelope with `codex_job_result`, delete it after successful read with\n`codex_job_consume_result`, or stop it with `codex_job_cancel`. Pass\n`workspace_root` (absolute).\n\nData egress: same as `codex_review_changes` — sends the secret-redacted diff plus\nyour raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also\nread other repo files, including the auto-loaded `AGENTS.md`/`.agents/skills/`\nworkspace context. Redaction is best-effort, not a guarantee.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
