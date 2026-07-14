@@ -5,106 +5,92 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-14
+
+A reasoning-effort and operator-provenance release. Codex's reasoning effort is now a first-class,
+discoverable control on every Codex-running tool, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` passthrough
+was narrowed so an operator config can no longer contradict the provenance the result envelope
+reports. The passthrough narrows in three ways, each **breaking on the operator surface** — it now
+refuses keys it used to accept — but nothing on the agent-visible surface was removed or retyped:
+no tool, field, or error code changed shape. The agent-visible surface
+changed four times (result `fingerprint` `codex-in-claude/0.1/schema-40` →
+`codex-in-claude/0.1/schema-44`), so pre-1.0 this is a minor release; clients that cache by
+`fingerprint` re-fetch the contract.
+
 ### Added
 
 - **Reasoning-effort control, reporting, and per-model discovery** (#309). Every Codex-running tool
-  (`codex_consult`, `codex_review_changes`, `codex_delegate`, their `_async` twins) and both dry runs
-  now take an optional `reasoning_effort` parameter, with a `CODEX_IN_CLAUDE_REASONING_EFFORT` server
-  default (per-call value wins; exact-`None` precedence, so an explicit empty string is passed
-  through, not coalesced). It is sent as a `-c model_reasoning_effort=…` config override — codex-cli
-  0.144 has no dedicated flag — unconditionally when requested (a config key cannot be help-gated),
-  with the value TOML-string-encoded so the advertised open string round-trips exactly (codex
-  TOML-parses the `-c` right-hand side, so a raw interpolation would retype
-  boolean/numeric/collection-shaped values and silently unwrap quoted ones).
-  Removal of the `-c` flag itself fails loudly as `cli_contract_changed`; a rename/removal of the
-  key drifts silently (codex tolerates unknown `-c` keys) and is guarded by the manual
-  re-verification step in `docs/UPGRADING-CODEX.md`. The value is an open per-model string the
-  backend validates; a backend rejection of a sent override is classified as the new
-  `invalid_reasoning_effort` error (a caller argument to correct, with a `codex_models` repair —
-  never masked as contract drift, never claimed for a rejection of the config key itself, and
-  never stolen by a passthrough descriptor that spells out the backend's bracketed marker
-  signature — such a rejection stays `extra_args_rejected`). The shape bounds shared by the
-  per-call parameter and the env default reject surrogate code points alongside control
-  characters and over-length values (an unpaired surrogate breaks argv/JSON encoding; the raw
-  value is never echoed back through `meta.reasoning_effort` on that error), and both dry runs
-  advertise `invalid_reasoning_effort` in their error catalogs — an invalid resolved default is
-  rejected pre-spend there too, no Codex involved.
+  (`codex_consult`, `codex_review_changes`, `codex_delegate`, their `_async` twins) and both dry
+  runs take an optional `reasoning_effort` parameter, with a `CODEX_IN_CLAUDE_REASONING_EFFORT`
+  server default (the per-call value wins; exact-`None` precedence, so an explicit empty string is
+  passed through, not coalesced). The value is sent as a TOML-string-encoded
+  `-c model_reasoning_effort=…` config override — codex-cli 0.144 has no dedicated flag — so the
+  advertised open string round-trips exactly. A backend rejection of a sent value classifies as the
+  new `invalid_reasoning_effort` error (a caller argument to correct, with a `codex_models`
+  repair), never as contract drift; removal of the `-c` flag itself still fails loudly as
+  `cli_contract_changed`. Shared shape bounds reject control characters, surrogate code points, and
+  over-length values before any spend — in both dry runs too, which advertise the new error code.
   Reporting: `meta.reasoning_effort` (override provenance mirroring `meta.model`; `null` = Codex
   resolved it), `reasoning_effort` in `codex_status`'s `raw_defaults`/`resolved_defaults`, and both
-  dry-run results now echo the effective `model`/`reasoning_effort` the previewed paid call would
-  send (`codex_dry_run` also gains the `model` param for full preview parity). Discovery:
+  dry runs echo the effective `model`/`reasoning_effort` the previewed paid call would send
+  (`codex_dry_run` also gains the `model` param for full preview parity). Discovery:
   `codex_models`/`codex://models` entries carry advisory `default_reasoning_effort` and
-  `supported_reasoning_efforts`, read defensively from Codex's models cache. The `reasoning_effort`
-  spec key is written only when an effort applies, so pre-existing idempotency dedup entries survive
-  the upgrade. Result `fingerprint` moves (`codex-in-claude/0.1/schema-41` → `schema-42`) and the
-  persisted result format bumps (`RESULT_FORMAT` 1 → 2: `Meta` gained a field, so an older release
-  replaying a new stored job result reports `job_result_incompatible` instead of corruption).
+  `supported_reasoning_efforts`, read defensively from Codex's models cache. The persisted result
+  format bumps (`RESULT_FORMAT` 1 → 2: `Meta` gained a field), so an older release replaying a new
+  stored job result reports `job_result_incompatible` instead of corruption. Result `fingerprint`
+  moves (`schema-41` → `schema-42`).
 
 ### Changed
 
-- **BREAKING (operator surface): the extra-args passthrough can no longer set
-  `model_reasoning_effort`** (#309). `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses the exact
-  `model_reasoning_effort` key via `-c`/`--config` (plus case/quote lookalikes, matching the #310
-  `model` treatment) at parse time with `extra_args_rejected`, before any spend: a passthrough
-  effort would contradict the new `meta.reasoning_effort` provenance on day one. Migrate to
-  `CODEX_IN_CLAUDE_REASONING_EFFORT` or the per-call `reasoning_effort` parameter — both flow into
-  `resolved_defaults` and `meta.reasoning_effort` correctly. Other `model_*` keys
-  (`model_provider`, `model_providers.*`, `model_verbosity`, …) still pass through, and an opaque
-  `--profile` remains the documented operator-trust boundary.
+- **BREAKING (operator surface): the extra-args passthrough can no longer set `model` or
+  `model_reasoning_effort`** (#310, #309). `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses those exact keys via
+  `-c`/`--config` (plus, conservatively, case- and quote-varied lookalikes codex treats as distinct
+  junk keys) at parse time with `extra_args_rejected`, before any spend: a passthrough value ran the
+  call under the operator's setting while `meta.model` / `meta.reasoning_effort` still reported the
+  per-call/server value — null in the common case — so the envelope's provenance was wrong. Migrate
+  to `CODEX_IN_CLAUDE_MODEL` / `CODEX_IN_CLAUDE_REASONING_EFFORT` or the per-call parameters; both
+  flow into `resolved_defaults` and `meta.*` correctly. Other `model_*` keys (`model_provider`,
+  `model_providers.*`, `model_verbosity`, …) still pass through, and an opaque `--profile` remains
+  the documented operator-trust boundary (COMPATIBILITY.md) — restated, not closed. `meta.model` now
+  carries a published description defining it as override provenance (first-class controls only),
+  not backend attestation. The `model` reservation is its own `fingerprint` move (`schema-40` →
+  `schema-41`); the `model_reasoning_effort` reservation ships inside #309's bump above.
+
+- **Bundled guidance and contributor docs** (#315, #317). The `collaborating-with-codex` skill now
+  carries model- and reasoning-effort-selection guidance for the controls added in #309, and
+  AGENTS.md describes agent identity through the `$agent_ids` roster allowlist instead of naming a
+  specific agent. Skill/repo markdown only; no `fingerprint` change.
 
 ### Fixed
 
-- **BREAKING (operator surface): quoted-root spellings no longer pass the extra-args root
-  denylist** (#312). `CODEX_IN_CLAUDE_EXTRA_ARGS` root denial (`sandbox*`, `approval_policy`,
-  `shell_environment_policy`) derived the root from the raw key while the exact-key denials
-  normalized theirs, so a shlex-surviving quoted root (`-c '"sandbox_workspace_write".network_access=true'`)
-  validated cleanly. This was **not** a sandbox bypass — codex's `-c` parser is literal (no quote
-  stripping, case-sensitive; verified against `config_override.rs` at rust-v0.144.3), so the quoted
-  spelling was a junk key codex never read, a silently-accepted no-op. The parser now normalizes
-  the whole key once and derives the root from the normalized key, so root and exact-key checks
-  share one conservative canonicalization and a misspelled-but-guarantee-shaped operator config
-  gets loud feedback instead of silence. Also corrects the #287-era `_normalize_config_key`
-  docstring and test comments that claimed the normalization mirrors "the way codex's own TOML
-  key parser resolves it" — it doesn't; it is deliberate over-matching so lookalike spellings
-  can't probe the denylist. Result `fingerprint` moves (`codex-in-claude/0.1/schema-43` →
-  `schema-44`).
-
 - **`codex_job_consume_result` no longer destroys a stored result it failed to deliver** (#306).
-  Consume used to delete the job record *before* the payload was validated, so a corrupt or
+  Consume used to delete the job record *before* validating the payload, so a corrupt or
   cross-release result produced an `internal_error`/`job_result_incompatible` envelope about a
   record that no longer existed — unrecoverable by definition. The store's `result_payload` is now
-  read-only and deletion is a separate, checked `discard` step the server runs only after the
-  envelope faithfully delivers the stored payload (a validated success **or** a validated stored
-  error result; generated lifecycle/corruption/incompatibility envelopes never consume). Race
-  semantics, analyzed and pinned by tests: one caller wins the delete per server process (the
-  store lock is process-local, unchanged from before); a consume that loses the delete race — to a
-  concurrent consume, TTL reaping, or count-cap eviction — reports `job_not_found` rather than
-  delivering a second copy; and when deletion itself fails, the validated result is still
-  delivered and the record is left to the TTL reaper (deletion stays best-effort, as it always
-  was). Deletion still precedes the wire response — there is no client-receipt acknowledgment —
-  so a validated consume whose response is lost in transit does not restore the record.
-  Review hardening: removal is verified with a `stat` probe (Python 3.14's `exists()` returns
-  False for an inaccessible-but-present path, which would have claimed a removal that never
-  happened), `discard` reports a discriminated outcome (`REMOVED`/`MISSING`/`NOT_DONE`/
-  `DELETE_FAILED`) so the server never infers a lost race from a post-hoc status probe, and the
-  record's `meta.json` marker is unlinked last — and restored if the final `rmdir` then fails —
-  so a partial deletion failure leaves the record visible and reapable instead of stranding an
-  unreapable orphan. Result `fingerprint` moves (`codex-in-claude/0.1/schema-42` → `schema-43`).
+  read-only and deletion is a separate, checked `discard` step that runs only after the envelope
+  faithfully delivers the stored payload (a validated success **or** a validated stored error
+  result; generated lifecycle/corruption/incompatibility envelopes never consume). Race semantics
+  are analyzed and pinned by tests: one caller wins the delete per server process; a consume that
+  loses the race — to a concurrent consume, TTL reaping, or count-cap eviction — reports
+  `job_not_found` rather than delivering a second copy; a deletion failure still delivers the
+  validated result and leaves the record to the TTL reaper. Removal is verified with a `stat`
+  probe, `discard` reports a discriminated outcome (`REMOVED`/`MISSING`/`NOT_DONE`/`DELETE_FAILED`),
+  and the record's `meta.json` marker is unlinked last — restored if the final `rmdir` fails — so a
+  partial deletion failure leaves the record visible and reapable. Result `fingerprint` moves
+  (`schema-42` → `schema-43`).
 
-- **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
-  `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses the exact `model` key via `-c`/`--config` (plus, conservatively,
-  case- and quote-varied lookalikes codex treats as distinct junk keys) at parse time with
-  `extra_args_rejected`, before any spend: a passthrough model ran on the operator's model while `meta.model` (and
-  `raw_response.model`) still reported the per-call/server value — null in the common case — so the
-  envelope's provenance was wrong. Set `CODEX_IN_CLAUDE_MODEL` or the per-call `model` parameter
-  instead; both flow into `resolved_defaults` and `meta.model` correctly. Other `model_*` keys are
-  untouched — `model_provider`/`model_providers.*` (the passthrough's motivating use case) still
-  pass through; `model_reasoning_effort` was allowed at the time and is reserved by #309's
-  first-class replacement in this same release (see Changed above). An opaque `--profile` can still set `model` uninspectably — the documented
-  operator-trust boundary (COMPATIBILITY.md) is restated, not closed. `meta.model` now carries a
-  published description defining it as override provenance (first-class controls only), not backend
-  attestation. Result `fingerprint` moves
-  (`codex-in-claude/0.1/schema-40` → `codex-in-claude/0.1/schema-41`).
+- **BREAKING (operator surface): quoted-root spellings no longer pass the extra-args root
+  denylist** (#312). The root denial (`sandbox*`, `approval_policy`, `shell_environment_policy`)
+  derived the root from the raw key while the exact-key denials normalized theirs, so a
+  shlex-surviving quoted root (`-c '"sandbox_workspace_write".network_access=true'`) validated
+  cleanly. This was **not** a sandbox bypass — codex's `-c` parser is literal (verified against
+  `config_override.rs` at rust-v0.144.3), so the quoted spelling was a junk key codex never read, a
+  silently-accepted no-op. The parser now normalizes the whole key once and derives the root from
+  the normalized key, so root and exact-key checks share one conservative canonicalization and a
+  misspelled-but-guarantee-shaped operator config gets loud feedback instead of silence. Also
+  corrects the #287-era `_normalize_config_key` docstring: the normalization is deliberate
+  over-matching so lookalike spellings can't probe the denylist, not a mirror of codex's TOML key
+  parsing. Result `fingerprint` moves (`schema-43` → `schema-44`).
 
 ## [0.11.0] - 2026-07-13
 
