@@ -701,14 +701,13 @@ class JobStore:
             jd, meta, state = live
             return self._status_dict(jd, meta, state)
 
-    def result_payload(
-        self, cwd: str, job_id: str, *, consume: bool
-    ) -> tuple[dict | None, dict | None]:
-        """Return (status_dict, result_envelope).
+    def result_payload(self, cwd: str, job_id: str) -> tuple[dict | None, dict | None]:
+        """Return (status_dict, result_envelope). Read-only.
 
         status_dict is None when the job does not exist. result_envelope is the
-        parsed result.json (only when status == done), else None. With
-        ``consume=True`` a done record is deleted after reading.
+        parsed result.json (only when status == done), else None. Deletion is a
+        separate, explicit step — ``discard`` — so a caller can validate the
+        payload it was handed before destroying the only copy of it (#306).
         """
         with _LOCK:
             live = self._read_live_job(cwd, job_id)
@@ -718,10 +717,29 @@ class JobStore:
             rec = self._status_dict(jd, meta, state)
             if state != "done":
                 return rec, None
-            payload = self._read_envelope(jd)
-            if consume:
-                self._rmtree(jd)
-            return rec, payload
+            return rec, self._read_envelope(jd)
+
+    def discard(self, cwd: str, job_id: str) -> bool:
+        """Delete a done job record; True only when THIS call removed it.
+
+        Returns False when the record is missing (already discarded, expired, or
+        evicted), not yet done, or when removal failed and the record is still
+        on disk (``_rmtree`` is best-effort) — callers must not report a
+        completed consume on False without checking ``status`` themselves.
+        The one-caller-wins guarantee is process-local: ``_LOCK`` serializes
+        threads in this process, but two server processes sharing a state root
+        can each observe the record before either deletes it (unchanged from
+        the pre-split read+delete, which held the same process-local lock).
+        """
+        with _LOCK:
+            live = self._read_live_job(cwd, job_id)
+            if live is None:
+                return False
+            jd, _meta, state = live
+            if state != "done":
+                return False
+            self._rmtree(jd)
+            return not jd.exists()
 
     def cancel(self, cwd: str, job_id: str) -> dict | None:
         with _LOCK:

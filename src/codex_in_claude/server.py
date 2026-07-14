@@ -1728,7 +1728,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "Works for async and sync-originated jobs alike.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root", "detail"],
-                returns="The same envelope as codex_job_result; removes completed state.",
+                returns="The same envelope as codex_job_result; removes completed state "
+                "only after the result was successfully returned (an unreadable stored "
+                "result is kept for codex_job_result).",
             ),
             ToolCapability(
                 name="codex_job_cancel",
@@ -2599,7 +2601,7 @@ async def codex_delegate_async(
     worktree and the result carries a **reviewable diff that is NOT applied** — but
     it runs detached. Starting a job commits to spend (it runs to completion or its
     wall-clock deadline even if you never poll). Poll with `codex_job_status`, read
-    with `codex_job_result`, delete after reading with `codex_job_consume_result`,
+    with `codex_job_result`, delete after successful read with `codex_job_consume_result`,
     or stop with `codex_job_cancel`. Requires a git repo with at least one commit;
     pass `workspace_root` (absolute).
 
@@ -3059,10 +3061,11 @@ async def _await_job_result(
             with contextlib.suppress(Exception):
                 store.cancel(cwd, job_id)
         raise
-    rec2, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=False)
+    rec2, payload = await asyncio.to_thread(store.result_payload, cwd, job_id)
     if rec2 is None:
         return _job_result_corrupt("job record expired before its result was read", meta)
-    return _finished_job_envelope(rec2, payload, job_id, kind, meta, detail_v, None)
+    envelope, _delivered = _finished_job_envelope(rec2, payload, job_id, kind, meta, detail_v, None)
+    return envelope
 
 
 async def _run_sync(
@@ -3814,13 +3817,30 @@ async def _job_result_impl(
         return serialize_error(ErrorResult(error=detail_err, meta=_job_meta(cwd, source)))
     assert detail_v is not None
     store = config.job_store()
-    rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id, consume=consume)
+    rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id)
     if rec is None:
         return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
     # Derive the lifecycle-error meta from the job's kind so a running/corrupt
     # consult/review job reports consult/read-only, not the default propose tier.
     meta = _job_meta(cwd, source, rec["kind"])
-    return _finished_job_envelope(rec, payload, job_id, rec["kind"], meta, detail_v, workspace_root)
+    envelope, delivered = _finished_job_envelope(
+        rec, payload, job_id, rec["kind"], meta, detail_v, workspace_root
+    )
+    if not (consume and delivered):
+        # Not a consume, or the envelope does not faithfully deliver the stored
+        # payload (lifecycle error, corruption, incompatibility): the record must
+        # survive so codex_job_result can still reach it (#306).
+        return envelope
+    if await asyncio.to_thread(store.discard, cwd, job_id):
+        return envelope
+    # discard() lost: either another consume/TTL-reap/eviction removed the record
+    # first — report job_not_found, matching what this caller would have seen had
+    # the winner run marginally earlier — or removal failed and the record is
+    # still on disk, in which case delivering beats destroying: the delete stays
+    # best-effort (as the pre-split rmtree was) and the TTL reaper owns cleanup.
+    if await asyncio.to_thread(store.status, cwd, job_id) is None:
+        return _job_not_found(job_id, meta, workspace_root)
+    return envelope
 
 
 def _finished_job_envelope(
@@ -3831,9 +3851,16 @@ def _finished_job_envelope(
     meta: Meta,
     detail_v: str,
     workspace_root: str | None,
-) -> dict:
+) -> tuple[dict, bool]:
     """Map a terminal-or-running job record to the caller-facing envelope. Shared by
-    the job-fetch tools and the sync await path so the two can never diverge."""
+    the job-fetch tools and the sync await path so the two can never diverge.
+
+    Also reports whether the envelope faithfully DELIVERS the stored payload — True
+    only for a validated stored success or a validated stored error result. Generated
+    envelopes (still-running/cancelled/failed lifecycle errors, corruption,
+    incompatibility) return False: they describe the record rather than deliver it,
+    so a consume must not destroy it (#306). The flag is explicit because ok alone
+    cannot decide this — a validated stored error is ok:false yet delivered."""
     # Every envelope built here is ABOUT job_id, including the generated failure ones
     # (corrupt/incompatible/state errors), so stamp the correlation onto the fallback
     # meta up front. A validated stored payload carries its own meta and gets the same
@@ -3852,19 +3879,23 @@ def _finished_job_envelope(
         )
         if payload.get("ok") is True:
             validated_payload = _validate_job_success(payload, kind, rec, meta)
-            if validated_payload.get("ok") is True and isinstance(
-                validated_payload.get("meta"), dict
-            ):
+            # ok stays True only when validation succeeded; _validate_job_success
+            # substitutes a generated corrupt/incompatible error envelope otherwise.
+            delivered = validated_payload.get("ok") is True
+            if delivered and isinstance(validated_payload.get("meta"), dict):
                 validated_payload["meta"]["job_id"] = job_id
                 validated_payload["meta"]["fingerprint"] = FINGERPRINT
-            return apply_detail(validated_payload, detail_v)
+            return apply_detail(validated_payload, detail_v), delivered
         # An error payload (ok: false) should be an ErrorResult; validate it too, since
         # a disk-backed result.json could be partially written or corrupted.
         try:
             validated = ErrorResult.model_validate(payload)
         except ValidationError as exc:
-            return _job_result_unreadable(
-                f"stored error result was malformed: {exc}", rec, payload, meta
+            return (
+                _job_result_unreadable(
+                    f"stored error result was malformed: {exc}", rec, payload, meta
+                ),
+                False,
             )
         validated.meta.job_id = job_id
         validated.meta.fingerprint = FINGERPRINT
@@ -3881,7 +3912,7 @@ def _finished_job_envelope(
         # heuristic redactor and can't be over-redacted.
         if validated.error.code == "internal_error":
             validated.error.message = redaction.redact_text(validated.error.message) or ""
-        return serialize_error(validated)
+        return serialize_error(validated), True
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))
     # A still-running job is the one recoverable case: point at the poll tool with
     # the concrete job_id and a backoff so the agent can act without parsing prose.
@@ -3894,16 +3925,19 @@ def _finished_job_envelope(
     # codex_job_status returns) as the retry hint, so polling via job_result on a long
     # run backs off the same way without recomputing the backoff in two places.
     retry_after = rec.get("poll_after_ms") if running else None
-    return serialize_error(
-        ErrorResult(
-            error=make_error(
-                cast("ErrorCode", code),
-                message,
-                repair_arguments=poll_params if running else None,
-                retry_after_ms=retry_after,
-            ),
-            meta=meta,
-        )
+    return (
+        serialize_error(
+            ErrorResult(
+                error=make_error(
+                    cast("ErrorCode", code),
+                    message,
+                    repair_arguments=poll_params if running else None,
+                    retry_after_ms=retry_after,
+                ),
+                meta=meta,
+            )
+        ),
+        False,
     )
 
 
@@ -3942,9 +3976,11 @@ async def codex_job_consume_result(
     """Fetch a finished background Codex job's result and delete the stored record.
 
     Same envelope as codex_job_result (matching the job's kind — branch on `tool`),
-    then removes completed job state. Use only when you no longer need to poll or
-    re-read the job. Non-done jobs are not deleted. `detail` works as in
-    codex_job_result (#56)."""
+    then removes completed job state — but only when the result was successfully
+    returned: a stored result this release cannot read (job_result_incompatible or
+    a corruption internal_error) is NOT deleted, so it stays inspectable via
+    codex_job_result. Use only when you no longer need to poll or re-read the job.
+    Non-done jobs are not deleted. `detail` works as in codex_job_result (#56)."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 
 

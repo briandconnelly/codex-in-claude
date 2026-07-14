@@ -451,7 +451,7 @@
         "required_params": [
           "job_id"
         ],
-        "returns": "The same envelope as codex_job_result; removes completed state.",
+        "returns": "The same envelope as codex_job_result; removes completed state only after the result was successfully returned (an unreadable stored result is kept for codex_job_result).",
         "stability": "experimental",
         "use_when": "To fetch a finished job's result and delete the stored record. Works for async and sync-originated jobs alike."
       },
@@ -857,7 +857,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-42",
+            "default": "codex-in-claude/0.1/schema-43",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1379,7 +1379,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-42",
+                "default": "codex-in-claude/0.1/schema-43",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2385,7 +2385,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-42",
+            "default": "codex-in-claude/0.1/schema-43",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3029,7 +3029,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-42",
+            "default": "codex-in-claude/0.1/schema-43",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -4148,7 +4148,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\nit runs detached. Starting a job commits to spend (it runs to completion or its\nwall-clock deadline even if you never poll). Poll with `codex_job_status`, read\nwith `codex_job_result`, delete after reading with `codex_job_consume_result`,\nor stop with `codex_job_cancel`. Requires a git repo with at least one commit;\npass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex\nread tracked files in the worktree and send their content — including the tracked\n`AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret\nredaction is best-effort and does not cover your `task` or files Codex reads\nitself.",
+      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\nit runs detached. Starting a job commits to spend (it runs to completion or its\nwall-clock deadline even if you never poll). Poll with `codex_job_status`, read\nwith `codex_job_result`, delete after successful read with `codex_job_consume_result`,\nor stop with `codex_job_cancel`. Requires a git repo with at least one commit;\npass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex\nread tracked files in the worktree and send their content — including the tracked\n`AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret\nredaction is best-effort and does not cover your `task` or files Codex reads\nitself.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5195,7 +5195,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Fetch a finished background Codex job's result and delete the stored record.\n\nSame envelope as codex_job_result (matching the job's kind — branch on `tool`),\nthen removes completed job state. Use only when you no longer need to poll or\nre-read the job. Non-done jobs are not deleted. `detail` works as in\ncodex_job_result (#56).",
+      "description": "Fetch a finished background Codex job's result and delete the stored record.\n\nSame envelope as codex_job_result (matching the job's kind — branch on `tool`),\nthen removes completed job state — but only when the result was successfully\nreturned: a stored result this release cannot read (job_result_incompatible or\na corruption internal_error) is NOT deleted, so it stays inspectable via\ncodex_job_result. Use only when you no longer need to poll or re-read the job.\nNon-done jobs are not deleted. `detail` works as in codex_job_result (#56).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

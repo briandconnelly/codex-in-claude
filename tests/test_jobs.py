@@ -85,7 +85,7 @@ def test_start_status_result_done(tmp_path):
     job_id, started = store.start(_factory(_WRITE_DONE), cwd, kind="codex_delegate")
     assert job_id and started
     assert _wait_terminal(store, cwd, job_id) == "done"
-    rec, payload = store.result_payload(cwd, job_id, consume=False)
+    rec, payload = store.result_payload(cwd, job_id)
     assert rec["status"] == "done"
     assert payload == {"ok": True, "tool": "t"}
     assert rec["result_available"] is True
@@ -96,7 +96,7 @@ def test_failed_when_no_result(tmp_path):
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory("raise SystemExit(1)"), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "failed"
-    rec, payload = store.result_payload(cwd, job_id, consume=False)
+    rec, payload = store.result_payload(cwd, job_id)
     assert rec["status"] == "failed"
     assert payload is None
 
@@ -296,25 +296,59 @@ def test_cleanup_noop_without_cleanup_root(tmp_path):
     assert warnings == []
 
 
-def test_consume_deletes(tmp_path):
+def test_result_payload_is_read_only(tmp_path):
+    # #306: reading never deletes — destruction is the separate, explicit discard.
     store = _store(tmp_path)
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "done"
-    _, payload = store.result_payload(cwd, job_id, consume=True)
+    _, payload = store.result_payload(cwd, job_id)
     assert payload == {"ok": True, "tool": "t"}
+    assert store.status(cwd, job_id) is not None
+
+
+def test_discard_deletes_done_record_once(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    assert store.discard(cwd, job_id) is True
     assert store.status(cwd, job_id) is None
+    # one-winner: a second discard finds nothing to remove
+    assert store.discard(cwd, job_id) is False
 
 
-def test_consume_nondone_keeps_record(tmp_path):
+def test_discard_nondone_keeps_record(tmp_path):
     store = _store(tmp_path)
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
     store.cancel(cwd, job_id)
-    rec, payload = store.result_payload(cwd, job_id, consume=True)
-    assert rec["status"] == "cancelled"
-    assert payload is None
+    assert store.discard(cwd, job_id) is False
     # not deleted (non-done)
+    assert store.status(cwd, job_id) is not None
+
+
+def test_discard_running_keeps_record(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    try:
+        assert store.discard(cwd, job_id) is False
+        assert store.status(cwd, job_id)["status"] == "running"
+    finally:
+        store.cancel(cwd, job_id)
+
+
+def test_discard_reports_failed_removal(tmp_path, monkeypatch):
+    # _rmtree is best-effort; discard must not claim success when the record
+    # survived the attempt (its True return is what lets the server promise the
+    # delete actually happened).
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
+    assert store.discard(cwd, job_id) is False
     assert store.status(cwd, job_id) is not None
 
 
@@ -323,7 +357,7 @@ def test_missing_job(tmp_path):
     cwd = str(tmp_path)
     assert store.status(cwd, "deadbeef") is None
     assert store.cancel(cwd, "deadbeef") is None
-    rec, payload = store.result_payload(cwd, "deadbeef", consume=False)
+    rec, payload = store.result_payload(cwd, "deadbeef")
     assert rec is None and payload is None
 
 
@@ -971,7 +1005,7 @@ def test_idempotent_consumed_result_is_unavailable(tmp_path):
         _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
     )
     _wait_terminal(store, cwd, a["job_id"])
-    store.result_payload(cwd, a["job_id"], consume=True)  # tombstone survives this
+    store.discard(cwd, a["job_id"])  # tombstone survives this
     b = store.start_idempotent(
         _factory(_WRITE_DONE), cwd, kind="k", tool="t", key="k1", arg_hash="AH"
     )
