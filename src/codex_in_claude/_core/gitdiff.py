@@ -27,6 +27,16 @@ if TYPE_CHECKING:
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
+# Repo-config-independent `-c` overrides sent on every git invocation here. These run in
+# the server process against a possibly-untrusted workspace, so:
+#   core.quotepath=true  -- deterministic path-header quoting regardless of the caller's
+#                           config (git still C-quotes control chars either way; this only
+#                           governs high-bit bytes, keeping the reviewed diff caller-agnostic).
+#   core.fsmonitor=false -- never execute a repo-configured fsmonitor program. Index-refreshing
+#                           commands (diff, ls-files --others) otherwise spawn it in-process,
+#                           outside the Codex sandbox (mirrors worktree.py's hardening).
+_GIT_HARDENING_FLAGS = ["-c", "core.quotepath=true", "-c", "core.fsmonitor=false"]
+
 # F1a: maximum bytes of git stderr retained in memory (keeps draining to avoid
 # the >64 KB pipe-buffer deadlock while bounding how much we hold).
 _STDERR_CAP = 64 * 1024
@@ -77,6 +87,12 @@ class DiffResult:
     truncation_hint: str | None = None
     redacted_paths: list[str] = field(default_factory=list)
     diff_bytes: int = 0
+    # Untracked-file coverage (#319). Counts scoped to the review's pathspec.
+    # `untracked_detected` is None for non-working_tree scopes, where untracked files
+    # are irrelevant; `untracked_included` is how many were actually gathered (and thus
+    # sent). `detected - included` is the omitted (unreviewed) count.
+    untracked_detected: int | None = None
+    untracked_included: int = 0
 
 
 def _valid_ref(ref: str) -> bool:
@@ -121,16 +137,10 @@ def _git(
         env.update(extra_env)
     try:
         proc = subprocess.run(
-            # `-c core.quotepath=true` forces git's default path quoting regardless
-            # of the user's config. git always C-quotes control characters (newlines,
-            # tabs, etc.) no matter the quotepath setting; quotepath only governs
-            # high-bit/non-ASCII bytes -- with quotepath=false git emits them raw
-            # instead of octal-escaped, making the reviewed diff depend on the caller's
-            # config. Forcing quotepath=true keeps path-header encoding deterministic.
-            # encoding+surrogateescape so non-UTF-8 bytes git may emit or consume
-            # (binary paths, symlink targets) round-trip instead of raising
-            # UnicodeDecodeError/UnicodeEncodeError.
-            ["git", "-c", "core.quotepath=true", *args],
+            # See _GIT_HARDENING_FLAGS. encoding+surrogateescape so non-UTF-8 bytes git
+            # may emit or consume (binary paths, symlink targets) round-trip instead of
+            # raising UnicodeDecodeError/UnicodeEncodeError.
+            ["git", *_GIT_HARDENING_FLAGS, *args],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -387,7 +397,7 @@ def _stream_redacted_diff(  # noqa: PLR0915
         env.update(extra_env)
     try:
         proc = subprocess.Popen(
-            ["git", "-c", "core.quotepath=true", *args],
+            ["git", *_GIT_HARDENING_FLAGS, *args],  # see _GIT_HARDENING_FLAGS
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -487,6 +497,29 @@ def _stream_redacted_diff(  # noqa: PLR0915
         raise RuntimeError(message)
 
 
+def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
+    """Count untracked, non-ignored files within ``paths`` WITHOUT reading their
+    contents — an egress-free disclosure of the review's blind spot (#319).
+
+    Unlike :func:`_untracked_new_file_diff`, which hashes each file's bytes into a
+    throwaway index to build a reviewable patch (and so transmits them), this only
+    enumerates paths. ``--exclude-standard`` skips gitignored files (matching
+    ``git add``'s default). Output is NUL-delimited (``-z``) so a filename containing
+    a newline counts as one entry, keeping the coverage arithmetic
+    (``detected == included + omitted``) exact for any valid git path.
+
+    ``paths`` is the caller's raw pathspec; it is validated via :func:`normalize_paths`,
+    so an empty/`-`-leading/absolute/`..` entry raises :class:`InvalidPathsError` just
+    as it would for a gathered diff.
+    """
+    norm_paths = normalize_paths(paths)
+    args = ["ls-files", "--others", "--exclude-standard", "-z"]
+    if norm_paths:
+        args = [*args, "--", *norm_paths]
+    listing = _git(cwd, args, timeout)
+    return sum(1 for entry in listing.split("\0") if entry)
+
+
 def gather_diff(
     cwd: str,
     scope: str,
@@ -494,11 +527,22 @@ def gather_diff(
     base: str | None = None,
     commit: str | None = None,
     paths: list[str] | None = None,
+    untracked: str = "explicit_only",
     timeout: int,
     max_bytes: int,
 ) -> DiffResult:
     """Gather, redact, and bound a diff for the given scope. Raises the typed
-    errors above for invalid scope/base/commit/paths or git problems."""
+    errors above for invalid scope/base/commit/paths or git problems.
+
+    ``untracked`` governs how untracked (never-committed) files are treated in
+    ``working_tree`` scope — it is inert for branch/commit scopes:
+
+    - ``"explicit_only"`` (default): include only untracked files named in ``paths``
+      (#74). Untracked files not named are omitted (and disclosed via the counts).
+    - ``"include"``: include every non-ignored untracked file in scope. This gathers —
+      and therefore transmits — their contents, so it is an explicit opt-in.
+    - ``"exclude"``: never include untracked files, even when named.
+    """
     norm_paths = normalize_paths(paths)
     diff_args = _diff_args(scope, base, commit)
     if scope == "branch" and not _ref_exists(cwd, base or "", timeout):
@@ -510,14 +554,22 @@ def gather_diff(
     summary = _summary(cwd, diff_args, timeout)
     acc = _BoundedDiffAccumulator(max_bytes)
     _stream_redacted_diff(cwd, diff_args, timeout, acc)
-    if scope == "working_tree" and norm_paths:
-        # `git diff HEAD` only sees tracked files; surface explicitly-named untracked
-        # ones too so targeting a brand-new file doesn't yield a silent empty review (#74).
-        # F1b: _untracked_new_file_diff now streams directly into acc rather than
-        # returning the whole patch as a string.
-        u_files, u_added = _untracked_new_file_diff(cwd, norm_paths, timeout, acc)
-        summary.files_changed += u_files
-        summary.lines_added += u_added
+    # Untracked-file coverage. `git diff HEAD` never sees untracked files, so we inventory
+    # them (count only, egress-free) to disclose the blind spot, then gather per policy.
+    untracked_detected: int | None = None
+    untracked_included = 0
+    if scope == "working_tree":
+        untracked_detected = count_untracked(cwd, norm_paths, timeout)
+        gather_untracked = untracked == "include" or (
+            untracked == "explicit_only" and bool(norm_paths)
+        )
+        if gather_untracked:
+            # F1b: _untracked_new_file_diff streams directly into acc (never materialised
+            # whole). An empty pathspec (`include` without paths) lists every untracked file.
+            u_files, u_added = _untracked_new_file_diff(cwd, norm_paths or [], timeout, acc)
+            summary.files_changed += u_files
+            summary.lines_added += u_added
+            untracked_included = u_files
     diff_bytes = acc.diff_bytes
     truncated = acc.truncated
     hint = None
@@ -533,4 +585,6 @@ def gather_diff(
         truncation_hint=hint,
         redacted_paths=acc.redacted_paths,
         diff_bytes=diff_bytes,
+        untracked_detected=untracked_detected,
+        untracked_included=untracked_included,
     )

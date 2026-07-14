@@ -30,6 +30,7 @@ from codex_in_claude.schemas import (
     FINGERPRINT,
     RESULT_FORMAT,
     ConsultResult,
+    Coverage,
     DelegateResult,
     ErrorResult,
     Meta,
@@ -83,7 +84,18 @@ def build_snapshot() -> dict:
     """The deterministic snapshot dict the guard test compares to the fixture."""
     serialized = {
         "consult_success": dump_success(ConsultResult(summary="s", meta=_representative_meta())),
-        "review_success": dump_success(ReviewResult(summary="s", meta=_representative_meta())),
+        "review_success": dump_success(
+            ReviewResult(
+                summary="s",
+                coverage=Coverage(
+                    status="complete",
+                    untracked_files_detected=0,
+                    untracked_files_included=0,
+                    untracked_files_omitted=0,
+                ),
+                meta=_representative_meta(),
+            )
+        ),
         "delegate_success": dump_success(DelegateResult(summary="s", meta=_representative_meta())),
         "error": serialize_error(
             ErrorResult(error=make_error("internal_error", "m"), meta=_representative_meta())

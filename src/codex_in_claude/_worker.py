@@ -174,6 +174,8 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 base=spec.get("base"),
                 commit=spec.get("commit"),
                 paths=spec.get("paths"),
+                # Pre-#319 specs lack this key; default preserves their behavior.
+                untracked=spec.get("untracked", "explicit_only"),
                 sandbox=spec["sandbox"],
                 isolation=spec["isolation"],
                 timeout_seconds=spec["timeout_seconds"],

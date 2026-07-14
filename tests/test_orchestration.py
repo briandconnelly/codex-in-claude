@@ -5,8 +5,9 @@ from __future__ import annotations
 import anyio
 
 from codex_in_claude import codex, orchestration, rate_limit
+from codex_in_claude._core.gitdiff import DiffResult, DiffSummary
 from codex_in_claude._core.runtime import CommandRun
-from codex_in_claude.schemas import Meta
+from codex_in_claude.schemas import Coverage, Meta
 
 # events string containing a token_count event with a rate_limits block
 _RATE_LIMIT_EVENTS = (
@@ -131,7 +132,7 @@ def test_finalize_review_rejects_exit0_unparseable_prose(monkeypatch):
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="Here is my review in prose.")
-    out = orchestration.finalize_review(result, meta=meta)
+    out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
     assert out["ok"] is False
     assert out["error"]["code"] == "invalid_json"
     # raw text preserved (redacted, bounded) for debugging
@@ -144,7 +145,7 @@ def test_finalize_review_rejects_exit0_empty_message(monkeypatch):
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="")
-    out = orchestration.finalize_review(result, meta=meta)
+    out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
     assert out["ok"] is False
     assert out["error"]["code"] == "invalid_json"
 
@@ -155,7 +156,7 @@ def test_finalize_review_rejects_exit0_non_object_json(monkeypatch):
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="[1, 2, 3]")
-    out = orchestration.finalize_review(result, meta=meta)
+    out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
     assert out["ok"] is False
     assert out["error"]["code"] == "schema_violation"
 
@@ -167,7 +168,7 @@ def test_finalize_review_redacts_secret_in_raw_preview(monkeypatch):
     secret = "sk-" + "d" * 32
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message=f"prose with token={secret}")
-    out = orchestration.finalize_review(result, meta=meta)
+    out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
     assert out["ok"] is False
     assert secret not in str(out)
 
@@ -179,7 +180,7 @@ def test_finalize_review_bounds_raw_preview(monkeypatch):
     monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="z" * 5000)
-    out = orchestration.finalize_review(result, meta=meta)
+    out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
     assert out["ok"] is False
     # The full 5000-char body must not appear verbatim; the preview is truncated.
     assert "z" * 5000 not in out["error"]["message"]
@@ -195,7 +196,7 @@ def test_finalize_review_accepts_valid_structured_object(monkeypatch):
         exit_code=0,
         last_message='{"summary":"looks good","verdict":"pass","confidence":"high"}',
     )
-    out = orchestration.finalize_review(result, meta=meta)
+    out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
     assert out["ok"] is True
     assert out["verdict"] == "pass"
     assert out["summary"] == "looks good"
@@ -210,6 +211,141 @@ def test_finalize_consult_keeps_prose_passthrough(monkeypatch):
     out = orchestration.finalize_consult(result, meta=meta)
     assert out["ok"] is True
     assert out["summary"] == "A plain-language answer."
+
+
+# --- coverage-aware verdict rules (#319) -------------------------------------
+def _complete_cov() -> Coverage:
+    return Coverage(
+        status="complete",
+        untracked_files_detected=0,
+        untracked_files_included=0,
+        untracked_files_omitted=0,
+    )
+
+
+def _partial_cov(reasons=("untracked_omitted",), detected=2) -> Coverage:
+    return Coverage(
+        status="partial",
+        untracked_files_detected=detected,
+        untracked_files_included=0,
+        untracked_files_omitted=detected,
+        omission_reasons=list(reasons),
+    )
+
+
+def _empty_diff(**kw):
+    base = {"text": "", "summary": DiffSummary(files_changed=0)}
+    base.update(kw)
+    return DiffResult(**base)
+
+
+def _run_review_empty(monkeypatch, diff):
+    """Drive run_review with a stubbed gather_diff and a spy on the model call."""
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    monkeypatch.setattr(orchestration.gitdiff, "gather_diff", lambda *a, **k: diff)
+    calls = {"n": 0}
+
+    async def fake_exec(*a, **k):
+        calls["n"] += 1
+        return _make_exec_result()
+
+    monkeypatch.setattr(orchestration.codex, "run_codex_exec", fake_exec)
+    out = anyio.run(
+        lambda: orchestration.run_review(
+            ".",
+            _make_meta(),
+            scope="working_tree",
+            base=None,
+            commit=None,
+            paths=None,
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=10,
+            max_bytes=200_000,
+        )
+    )
+    return out, calls
+
+
+def test_finalize_review_complete_coverage_keeps_model_pass(monkeypatch):
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    result = _make_exec_result(
+        last_message='{"summary":"looks good","verdict":"pass","confidence":"high"}'
+    )
+    out = orchestration.finalize_review(result, meta=_make_meta(), coverage=_complete_cov())
+    assert out["verdict"] == "pass"
+    assert out["confidence"] == "high"
+    assert out["review_status"] == "completed"
+    assert out["coverage"]["status"] == "complete"
+    assert out["summary"] == "looks good"
+
+
+def test_finalize_review_partial_coverage_downgrades_pass_to_unknown(monkeypatch):
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    result = _make_exec_result(
+        last_message='{"summary":"all changes look good","verdict":"pass","confidence":"high"}'
+    )
+    out = orchestration.finalize_review(result, meta=_make_meta(), coverage=_partial_cov())
+    # A pass over partly-reviewed code is not a pass.
+    assert out["verdict"] == "unknown"
+    assert out["confidence"] == "low"
+    assert out["review_status"] == "completed"
+    # The model's all-clear must not stand unqualified beside verdict=unknown.
+    assert out["summary"] != "all changes look good"
+    assert "partial" in out["summary"].lower()
+    assert "all changes look good" in out["summary"]  # original retained for context
+
+
+def test_finalize_review_partial_coverage_retains_fail(monkeypatch):
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    result = _make_exec_result(
+        last_message=(
+            '{"summary":"a real bug","verdict":"fail","confidence":"high",'
+            '"findings":[{"severity":"high","title":"bug","evidence":"e",'
+            '"risk":"r","recommendation":"fix it"}]}'
+        )
+    )
+    out = orchestration.finalize_review(result, meta=_make_meta(), coverage=_partial_cov())
+    # A demonstrated defect stands regardless of coverage.
+    assert out["verdict"] == "fail"
+    assert out["confidence"] == "high"
+    assert len(out["findings"]) == 1
+    assert out["summary"] == "a real bug"
+
+
+def test_finalize_review_partial_coverage_retains_concerns(monkeypatch):
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    result = _make_exec_result(
+        last_message='{"summary":"some concern","verdict":"concerns","confidence":"medium"}'
+    )
+    out = orchestration.finalize_review(result, meta=_make_meta(), coverage=_partial_cov())
+    assert out["verdict"] == "concerns"
+
+
+def test_run_review_untracked_only_is_not_run_not_pass(monkeypatch):
+    # THE BUG: an untracked-only tree previously returned pass/high with no model call.
+    out, calls = _run_review_empty(
+        monkeypatch, _empty_diff(untracked_detected=2, untracked_included=0)
+    )
+    assert calls["n"] == 0  # the model was never called
+    assert out["review_status"] == "not_run"
+    assert out["verdict"] == "unknown"  # NOT "pass"
+    assert out["confidence"] == "low"
+    assert out["coverage"]["status"] == "partial"
+    assert out["coverage"]["untracked_files_omitted"] == 2
+    assert "untracked" in out["summary"].lower()
+
+
+def test_run_review_truly_clean_tree_is_not_run_but_complete(monkeypatch):
+    out, calls = _run_review_empty(
+        monkeypatch, _empty_diff(untracked_detected=0, untracked_included=0)
+    )
+    assert calls["n"] == 0
+    assert out["review_status"] == "not_run"
+    assert out["verdict"] == "unknown"  # no model judgment was made
+    assert out["coverage"]["status"] == "complete"
 
 
 def test_run_consult_forwards_on_event(monkeypatch):
@@ -257,6 +393,8 @@ def test_run_review_forwards_on_event(monkeypatch):
 
     fake_diff = SimpleNamespace(
         summary=SimpleNamespace(files_changed=1, lines_added=1, lines_removed=0),
+        untracked_detected=0,
+        untracked_included=0,
         redacted_paths=[],
         truncated=False,
         truncation_hint=None,
@@ -334,6 +472,8 @@ def test_run_review_forwards_reasoning_effort(monkeypatch):
 
     fake_diff = SimpleNamespace(
         summary=SimpleNamespace(files_changed=1, lines_added=1, lines_removed=0),
+        untracked_detected=0,
+        untracked_included=0,
         redacted_paths=[],
         truncated=False,
         truncation_hint=None,

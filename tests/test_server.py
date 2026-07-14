@@ -670,7 +670,10 @@ async def test_review_empty_diff_short_circuits(monkeypatch, clean_env, tmp_path
     monkeypatch.setattr(server.codex, "run_codex_exec", fake)
     res = await _run_review_direct(tmp_path, scope="working_tree")
     assert res["ok"] is True
-    assert res["verdict"] == "pass"
+    # An empty diff makes no model call, so it is not_run/unknown — never a false pass (#319).
+    assert res["verdict"] == "unknown"
+    assert res["review_status"] == "not_run"
+    assert res["coverage"]["status"] == "complete"
     assert called["n"] == 0  # no model call for an empty diff
 
 
@@ -1201,6 +1204,63 @@ async def test_dry_run_preview(monkeypatch, clean_env, tmp_path):
     assert res["context_summary"]["files_changed"] == 1
     assert res["prompt_bytes"] > 0
     assert res["redacted_paths_count"] == 1
+
+
+async def test_dry_run_empty_diff_reports_no_model_call_and_zero_bytes(
+    monkeypatch, clean_env, tmp_path
+):
+    # The paid call short-circuits on an empty diff and sends 0 bytes; the preview must
+    # match — a non-zero prompt_bytes here is the #320 bug.
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="",
+            summary=gitdiff.DiffSummary(0, 0, 0),
+            untracked_detected=0,
+            untracked_included=0,
+        ),
+    )
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["would_call_model"] is False
+    assert res["prompt_bytes"] == 0
+    assert res["coverage"]["status"] == "complete"
+
+
+async def test_dry_run_nonempty_diff_would_call_model(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="diff --git a/x b/x\n+y",
+            summary=gitdiff.DiffSummary(1, 1, 0),
+            untracked_detected=0,
+            untracked_included=0,
+        ),
+    )
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["would_call_model"] is True
+    assert res["prompt_bytes"] > 0
+
+
+async def test_dry_run_untracked_only_reports_coverage(monkeypatch, clean_env, tmp_path):
+    # Mirrors codex_delegate_dry_run's worktree_plan.untracked_files disclosure (#320).
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="",
+            summary=gitdiff.DiffSummary(0, 0, 0),
+            untracked_detected=3,
+            untracked_included=0,
+        ),
+    )
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["would_call_model"] is False
+    assert res["prompt_bytes"] == 0
+    assert res["coverage"]["status"] == "partial"
+    assert res["coverage"]["untracked_files_omitted"] == 3
+    assert "untracked_omitted" in res["coverage"]["omission_reasons"]
 
 
 async def test_dry_run_git_error(monkeypatch, clean_env, tmp_path):
@@ -1786,7 +1846,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-44"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-45"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2124,6 +2184,14 @@ def _done_review_envelope():
         "summary": "looks ok",
         "verdict": "pass",
         "confidence": "high",
+        "review_status": "completed",
+        "coverage": {
+            "status": "complete",
+            "untracked_files_detected": 0,
+            "untracked_files_included": 0,
+            "untracked_files_omitted": 0,
+            "omission_reasons": [],
+        },
         "meta": meta,
     }
 
@@ -4533,6 +4601,8 @@ async def test_sync_review_runs_through_job_store(clean_env, tmp_path, monkeypat
         "summary": "reviewed",
         "verdict": "pass",
         "confidence": "high",
+        "review_status": "completed",
+        "coverage": {"status": "complete"},
         "findings": [],
         "raw_response": {"text": None, "session_id": None, "model": None},
         "meta": meta,
@@ -5324,7 +5394,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-44")
+    assert result["fingerprint"].endswith("schema-45")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -5804,6 +5874,46 @@ def _capture_run_sync(monkeypatch):
 
     monkeypatch.setattr(server, "_run_sync", fake_run_sync)
     return calls
+
+
+# --- untracked policy plumbing + idempotency-hash compatibility (#319) --------------
+async def test_review_untracked_default_omitted_from_spec(monkeypatch, clean_env, tmp_path):
+    # Whole-domain rule: the default `untracked` must NOT enter the spec, so pre-#319
+    # idempotency hashes and stored worker specs (which lack the key) keep replaying.
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_review_changes(scope="working_tree", workspace_root=str(tmp_path))
+    assert "untracked" not in calls["spec"]
+
+
+async def test_review_untracked_include_written_to_spec(monkeypatch, clean_env, tmp_path):
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), untracked="include"
+    )
+    assert calls["spec"]["untracked"] == "include"
+
+
+async def test_review_untracked_exclude_written_to_spec(monkeypatch, clean_env, tmp_path):
+    calls = _capture_run_sync(monkeypatch)
+    await server.codex_review_changes(
+        scope="working_tree", workspace_root=str(tmp_path), untracked="exclude"
+    )
+    assert calls["spec"]["untracked"] == "exclude"
+
+
+async def test_dry_run_untracked_include_gathers_untracked(clean_env, tmp_path):
+    # End-to-end through the real gather path: `include` opts into sending untracked
+    # contents, so the preview would call the model and reports complete coverage.
+    _init_repo(tmp_path)
+    (tmp_path / "brand_new.py").write_text("value = 1\n")
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), untracked="include"
+    )
+    assert res["ok"] is True
+    assert res["would_call_model"] is True
+    assert res["prompt_bytes"] > 0
+    assert res["coverage"]["untracked_files_included"] == 1
+    assert res["coverage"]["status"] == "complete"
 
 
 async def test_consult_reasoning_effort_call_beats_server_default(monkeypatch, clean_env, tmp_path):

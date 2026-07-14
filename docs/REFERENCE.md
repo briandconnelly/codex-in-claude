@@ -8,8 +8,12 @@ this — Claude Code consumes these envelopes for you behind the `/codex:*` slas
 
 Every tool returns a discriminated envelope keyed by `ok`. The success shape depends on the tool:
 all of `codex_consult`/`codex_review_changes`/`codex_delegate` carry `summary`/`findings`/`meta`,
-but the review-only `verdict`/`confidence` appear solely on `codex_review_changes` and the proposed
-`diff` only on `codex_delegate` — consult (Q&A) carries neither a verdict nor a diff. `codex_status`,
+but the review-only `verdict`/`confidence`/`review_status`/`coverage` appear solely on
+`codex_review_changes` and the proposed `diff` only on `codex_delegate` — consult (Q&A) carries
+neither a verdict nor a diff. `review_status` distinguishes a completed review from one that never
+ran the model (nothing reviewable → `not_run`/`unknown`, never a false `pass`), and `coverage`
+discloses omitted untracked files, truncation, or redaction — downgrading a `pass` over partial
+coverage to `unknown`. `codex_status`,
 `codex_capabilities`, the `codex_job_*` lifecycle tools, `codex_dry_run`, and `codex_delegate_dry_run`
 return their own documented shapes (branch on the tool, or on `ok`/`tool`/`status`, before reading
 fields). Failure is uniform: an `error` object built for machine-driven recovery, not just prose:
