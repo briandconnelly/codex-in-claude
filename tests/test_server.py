@@ -5870,3 +5870,49 @@ async def test_reasoning_effort_max_length_boundary_accepted(monkeypatch, clean_
     value = "x" * 128
     await server.codex_consult("q", workspace_root=str(tmp_path), reasoning_effort=value)
     assert calls["spec"]["reasoning_effort"] == value
+
+
+@pytest.mark.parametrize("bad_env", ["y" * 129, "with\x07bell"])
+async def test_env_reasoning_effort_shape_rejected_pre_spend(
+    monkeypatch, clean_env, tmp_path, bad_env
+):
+    # Codex re-review regression (#309): the env default never crosses the MCP
+    # boundary, so the resolved value is re-checked pre-spend — no run may start.
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", bad_env)
+
+    async def never_run(*a, **k):
+        raise AssertionError("a run must not start for an invalid effort default")
+
+    monkeypatch.setattr(server, "_run_sync", never_run)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_reasoning_effort"
+    assert res["error"]["details"]["field"] == "reasoning_effort"
+    assert bad_env not in res["error"]["message"]  # value never echoed
+
+
+async def test_env_reasoning_effort_shape_rejected_in_dry_runs(monkeypatch, clean_env, tmp_path):
+    # The previews must fail exactly where the paid call would.
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "z" * 129)
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_reasoning_effort"
+    _init_repo(tmp_path)
+    res2 = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
+    assert res2["ok"] is False
+    assert res2["error"]["code"] == "invalid_reasoning_effort"
+
+
+async def test_env_reasoning_effort_shape_parity_sync_async(monkeypatch, clean_env, tmp_path):
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "w" * 129)
+    res_async = await server.codex_consult_async("q", workspace_root=str(tmp_path))
+    assert res_async["ok"] is False
+    assert res_async["error"]["code"] == "invalid_reasoning_effort"
+
+
+async def test_valid_env_reasoning_effort_still_runs(monkeypatch, clean_env, tmp_path):
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "xhigh")
+    calls = _capture_run_sync(monkeypatch)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res.get("_captured") is True
+    assert calls["spec"]["reasoning_effort"] == "xhigh"

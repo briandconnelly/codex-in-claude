@@ -78,6 +78,31 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# Shape bounds for a reasoning-effort VALUE (#309), shared by the MCP params (which
+# advertise and enforce them at the call boundary) and the pre-spend check on the
+# resolved value — the only guard the CODEX_IN_CLAUDE_REASONING_EFFORT env default
+# passes through, since env config never crosses the MCP boundary. The set stays open
+# (the backend judges the value); these exclude only argv-hostile shapes: a NUL breaks
+# Popen outright, other control characters have no place in a config override, and an
+# argv-scale string fails as a misleading codex_not_found. Real efforts are ≤ ~7
+# chars; 128 is generous headroom.
+REASONING_EFFORT_MAX_LENGTH = 128
+# ECMA-safe for the advertised JSON-Schema `pattern` (no \Z, which ECMA lacks).
+REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F]*$"
+
+
+def reasoning_effort_shape_error(value: str) -> str | None:
+    """Why `value` fails the reasoning-effort shape bounds, or None when it passes.
+
+    Value-free (safe for an error message). Checked character-wise, not via the
+    regex, so a trailing newline — which Python's `$` would admit — is caught too."""
+    if len(value) > REASONING_EFFORT_MAX_LENGTH:
+        return f"exceeds {REASONING_EFFORT_MAX_LENGTH} characters"
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        return "contains a control character"
+    return None
+
+
 def defaults() -> Defaults:
     tier = os.environ.get(f"{ENV_PREFIX}TIER_DEFAULT", DEFAULT_TIER)
     tier = tier if tier in VALID_TIERS else DEFAULT_TIER

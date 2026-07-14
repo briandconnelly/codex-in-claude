@@ -222,12 +222,14 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
-    # The Codex backend rejected the reasoning_effort this run requested through the
-    # plugin's first-class controls (the per-call parameter or
-    # CODEX_IN_CLAUDE_REASONING_EFFORT) — a caller/operator value to correct, NOT a
-    # plugin contract drift. Only emitted when an effort override was actually sent
-    # and the failure carries the backend's request-level markers; a rejection of the
-    # config key itself stays cli_contract_changed (#309).
+    # The reasoning_effort this run requested through the plugin's first-class
+    # controls (the per-call parameter or CODEX_IN_CLAUDE_REASONING_EFFORT) was
+    # rejected — a caller/operator value to correct, NOT a plugin contract drift.
+    # Two emitters: the plugin's pre-spend shape bounds (an argv-hostile value —
+    # oversized or control characters — refused before any subprocess, zero spend),
+    # and the Codex backend's request-level rejection (only when an effort override
+    # was actually sent and the failure carries the backend's markers; a rejection of
+    # the config key itself stays cli_contract_changed) (#309).
     "invalid_reasoning_effort",
     # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
     # (an unaccepted option / config key / profile). Operator config to fix, NOT a

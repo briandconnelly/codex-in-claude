@@ -612,13 +612,12 @@ ModelParam = Annotated[
     ),
 ]
 # Bounds on the reasoning-effort VALUE, enforced at the MCP boundary (like
-# IdempotencyKeyParam's length bounds): the set stays open — the backend judges the
-# value — but a control character or an argv-scale string would fail locally in
-# confusing ways (a NUL breaks Popen; an oversized argv maps to a misleading
-# codex_not_found), so those never reach the subprocess. Real efforts are ≤ ~7 chars;
-# 128 is generous headroom.
-_REASONING_EFFORT_MAX_LENGTH = 128
-_REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F]*$"  # no control characters
+# IdempotencyKeyParam's length bounds) and re-checked pre-spend on the RESOLVED value
+# (_reasoning_effort_shape_error below), which the CODEX_IN_CLAUDE_REASONING_EFFORT
+# env default reaches without ever crossing the MCP boundary. config owns the bounds
+# (config.reasoning_effort_shape_error) so the two enforcement points cannot drift.
+_REASONING_EFFORT_MAX_LENGTH = config.REASONING_EFFORT_MAX_LENGTH
+_REASONING_EFFORT_VALUE_PATTERN = config.REASONING_EFFORT_VALUE_PATTERN
 ReasoningEffortParam = Annotated[
     str | None,
     Field(
@@ -869,6 +868,38 @@ def _extra_args_error(meta: Meta) -> dict | None:
             error=make_error(
                 "extra_args_rejected",
                 f"{config.EXTRA_ARGS_ENV} is invalid: {extra.error}.",
+            ),
+            meta=meta,
+        )
+    )
+
+
+def _reasoning_effort_shape_error(effort: str | None, meta: Meta) -> dict | None:
+    """Pre-spend guard on the RESOLVED reasoning effort (#309, Codex re-review).
+
+    The MCP boundary already enforces the shape bounds on the per-call parameter, but
+    the CODEX_IN_CLAUDE_REASONING_EFFORT env default (and a direct in-process call)
+    never crosses that boundary — without this check an argv-hostile operator default
+    would reach Popen (a NUL raises ValueError; an argv-scale value surfaces as a
+    misleading codex_not_found). Zero spend: the run is refused before any subprocess."""
+    if effort is None:
+        return None
+    reason = config.reasoning_effort_shape_error(effort)
+    if reason is None:
+        return None
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "invalid_reasoning_effort",
+                f"the requested reasoning_effort {reason}.",
+                details=ErrorDetail(field="reasoning_effort"),
+                repair_alternative=(
+                    "Fix the per-call reasoning_effort or the "
+                    f"{config.ENV_PREFIX}REASONING_EFFORT default (≤"
+                    f"{config.REASONING_EFFORT_MAX_LENGTH} chars, no control "
+                    "characters), or omit the override. The value never reached "
+                    "codex (zero spend)."
+                ),
             ),
             meta=meta,
         )
@@ -2026,6 +2057,9 @@ async def _prepare_consult(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
+    effort_err = _reasoning_effort_shape_error(effort, meta)
+    if effort_err is not None:
+        return effort_err
 
     limit = config.max_input_bytes()
     combined = (question or "") + (extra_context or "")
@@ -2148,6 +2182,9 @@ async def _prepare_review(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
+    effort_err = _reasoning_effort_shape_error(effort, meta)
+    if effort_err is not None:
+        return effort_err
 
     spec = {
         "kind": "codex_review_changes",
@@ -2232,6 +2269,9 @@ async def _prepare_delegate(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
+    effort_err = _reasoning_effort_shape_error(effort, meta)
+    if effort_err is not None:
+        return effort_err
 
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))
@@ -3282,6 +3322,9 @@ async def codex_dry_run(
     extra_args_err = _extra_args_error(dry_meta)
     if extra_args_err is not None:
         return extra_args_err
+    effort_err = _reasoning_effort_shape_error(effort, dry_meta)
+    if effort_err is not None:
+        return effort_err
 
     max_bytes = config.max_input_bytes()
     extra_context_bytes = len((extra_context or "").encode("utf-8"))
@@ -3449,6 +3492,9 @@ async def codex_delegate_dry_run(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
+    effort_err = _reasoning_effort_shape_error(effort, meta)
+    if effort_err is not None:
+        return effort_err
 
     limit = config.max_input_bytes()
     task_bytes = len((task or "").encode("utf-8"))

@@ -496,3 +496,30 @@ def test_extra_args_model_denial_names_model_controls_not_effort(monkeypatch):
     assert ea.valid is False
     assert "CODEX_IN_CLAUDE_MODEL" in ea.error
     assert "CODEX_IN_CLAUDE_REASONING_EFFORT" not in ea.error
+
+
+# --- Reasoning-effort shape bounds (#309, Codex re-review) -----------------------------
+@pytest.mark.parametrize(
+    "value",
+    ["", "high", "x" * 128, "an effort with spaces", "Ünïcode-ok"],
+)
+def test_reasoning_effort_shape_accepts(value):
+    assert config.reasoning_effort_shape_error(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "fragment"),
+    [
+        ("x" * 129, "128"),  # over the max length
+        ("with\x00nul", "control character"),
+        ("with\x07bell", "control character"),
+        ("high\n", "control character"),  # trailing newline is NOT admitted here
+        ("\x7f", "control character"),  # DEL
+    ],
+)
+def test_reasoning_effort_shape_rejects(value, fragment):
+    reason = config.reasoning_effort_shape_error(value)
+    assert reason is not None
+    assert fragment in reason
+    # The reason is value-free (safe for an error message).
+    assert value not in reason
