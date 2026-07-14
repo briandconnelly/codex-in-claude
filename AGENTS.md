@@ -169,9 +169,10 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 ## Agent identity
 
 Agent sessions in this repo run under dedicated bot identities — GitHub App actors distinct from
-the maintainer's personal account, never the maintainer's own login: an agent's commits, pushes,
-`gh` calls, and PRs attribute to its bot identity, while the maintainer's own git operations on the
-same machine keep the personal account. The accounts the claim protocol recognizes are the
+the maintainer's personal account, never the maintainer's own login (an upheld convention, not an
+enforced boundary — the first bullet below scopes it): an agent's commits, pushes, `gh` calls, and
+PRs attribute to its bot identity, while the maintainer's own git operations on the same machine
+keep the personal account. The accounts the claim protocol recognizes are the
 `$agent_ids` allowlist in the Git / PRs query below — that list is the roster's only home, and this
 prose deliberately names no agent. Setup and mechanism live in the `agent-bot-identity` skill; what
 matters here is what an agent identity does and does not buy.
@@ -182,10 +183,11 @@ matters here is what an agent identity does and does not buy.
   agent. Everything in Git / PRs below — never merging, never self-approving — is a convention
   agents uphold, not a boundary that stops them. The only hard boundaries are each identity's own
   permission grants (for a GitHub App, its installation list) and this repo's server-side rulesets.
-- **No agent identity holds the Workflows permission — an enrollment requirement for any identity
-  added here — so GitHub rejects agent pushes that touch `.github/workflows/`.** This is enforced
-  server-side, not a convention: a change under that path has to come from the maintainer (that is
-  why #295's workflow removal could not be pushed by the agent working it). CI logic *outside* that
+- **Agent identities are enrolled without the Workflows permission — a requirement for any identity
+  added here — so GitHub rejects their pushes that touch `.github/workflows/`.** For an enrolled
+  identity this is enforced server-side, not a convention: a change under that path has to come
+  from the maintainer (that is why #295's workflow removal could not be pushed by the agent
+  working it). CI logic *outside* that
   path — scripts the workflows invoke, composite actions — is still writable by agents, which is
   part of why the human review gate matters.
 - **A GitHub App bot actor cannot be an issue assignee.** `gh issue edit --add-assignee` fails for
