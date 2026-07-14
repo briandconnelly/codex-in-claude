@@ -168,24 +168,29 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 
 ## Agent identity
 
-Agent sessions in this repo run under the `briandconnelly-agent[bot]` GitHub App identity: commits,
-pushes, `gh` calls, and PRs attribute to the bot, while the maintainer's own git operations on the
-same machine keep the personal account. Setup and mechanism live in the `agent-bot-identity` skill;
-what matters here is what the identity does and does not buy.
+Agent sessions in this repo run under dedicated bot identities — GitHub App actors distinct from
+the maintainer's personal account, never the maintainer's own login: an agent's commits, pushes,
+`gh` calls, and PRs attribute to its bot identity, while the maintainer's own git operations on the
+same machine keep the personal account. The accounts the claim protocol recognizes are the
+`$agent_ids` allowlist in the Git / PRs query below — that list is the roster's only home, and this
+prose deliberately names no agent. Setup and mechanism live in the `agent-bot-identity` skill; what
+matters here is what an agent identity does and does not buy.
 
-- **The bot identity buys attribution, not containment.** The agent runs as the maintainer's OS user
-  and can reach the personal GitHub credentials on that machine, so it holds *both* identities. The
-  ruleset's required review binds the **bot token**, not the agent. Everything in Git / PRs below —
-  never merging, never self-approving — is a convention the agent upholds, not a boundary that stops
-  it. The only hard boundaries are the App's installation list and this repo's server-side rulesets.
-- **The App holds no Workflows permission, so GitHub rejects bot pushes that touch
-  `.github/workflows/`.** This is enforced server-side, not a convention: a change under that path
-  has to come from the maintainer (that is why #295's workflow removal could not be pushed by the
-  bot). CI logic *outside* that path — scripts the workflows invoke, composite actions — is still
-  writable by the bot, which is part of why the human review gate matters.
+- **An agent identity buys attribution, not containment.** An agent running on the maintainer's
+  machine executes as the maintainer's OS user and can reach the personal GitHub credentials there,
+  so it holds *both* identities. The ruleset's required review binds the **bot token**, not the
+  agent. Everything in Git / PRs below — never merging, never self-approving — is a convention
+  agents uphold, not a boundary that stops them. The only hard boundaries are each identity's own
+  permission grants (for a GitHub App, its installation list) and this repo's server-side rulesets.
+- **No agent identity holds the Workflows permission — an enrollment requirement for any identity
+  added here — so GitHub rejects agent pushes that touch `.github/workflows/`.** This is enforced
+  server-side, not a convention: a change under that path has to come from the maintainer (that is
+  why #295's workflow removal could not be pushed by the agent working it). CI logic *outside* that
+  path — scripts the workflows invoke, composite actions — is still writable by agents, which is
+  part of why the human review gate matters.
 - **A GitHub App bot actor cannot be an issue assignee.** `gh issue edit --add-assignee` fails for
-  the bot, and `Issues: write` is already the widest grant, so no permission fixes it. The label-based
-  claim protocol in Git / PRs exists to work around this.
+  bot actors, and `Issues: write` is already the widest grant, so no permission fixes it. The
+  label-based claim protocol in Git / PRs exists to work around this.
 
 ## Git / PRs
 
@@ -202,26 +207,39 @@ what matters here is what the identity does and does not buy.
   check the assignees (`gh issue view ISSUE_NUMBER --json assignees,title`) and run the active-claim
   query below. Stop if either is taken: the issue is assigned to anyone other than the maintainer
   directing your session, or it carries an active claim that is not yours.
-- **The claim is a comment, and its identity is that comment's id.** Every agent session posts as the
-  same actor (`briandconnelly-agent[bot]`), so neither the author nor the `agent:in-progress` label
-  can tell two sessions apart — the comment id is the only unique key, and every rule below turns on
-  it. Claim by commenting first, with `<!-- agent-claim -->` as the first line; **record the `id` the
+- **The claim is a comment, and its identity is that comment's id.** Sessions cannot be told apart
+  by actor: many sessions post as the same bot account, and more than one recognized account may
+  participate, so neither the comment author nor the `agent:in-progress` label identifies a session
+  — the comment id is the only unique key, and every rule below turns on it. Claim by commenting first, with `<!-- agent-claim -->` as the first line; **record the `id` the
   API returns** — that is your claim for the rest of the issue's life. The label is shared state with
   no owner: an index for humans and search, written only by the agent that wins the race below.
-- **An active claim is a claim comment whose id no release names — and only the bot's comments are
-  protocol data.** A release comment's first line is exactly `<!-- agent-release:CLAIM_ID -->`, naming
-  the one claim it releases. The query below keys both markers on the bot's immutable account id
-  (rename-proof, unlike the login), so a claim or release posted by any other account can neither take
-  nor free an issue, and it fetches **every** comments page (`--paginate`), so a claim or release past
-  page one still counts. It prints the winning active claim, or nothing if the issue is free. A
-  non-zero exit means a page fetch or parse failed — discard any output and re-run; never treat a
-  failed run as "free":
+- **An active claim is a claim comment whose id no release names — and only comments from
+  recognized agent accounts are protocol data.** A release comment's first line is exactly
+  `<!-- agent-release:CLAIM_ID -->`, naming the one claim it releases. The query below keys both
+  markers on the recognized accounts' immutable account ids — the `$agent_ids` allowlist
+  (rename-proof, unlike logins). That allowlist is the roster's only home, and it changes only by a
+  reviewed edit to this file, only for an identity the maintainer operates and directs to follow
+  this protocol. Racing agents compute the same winner only when they run the same list, and a
+  feature branch or worktree can carry a stale roster, so two rules keep the list synchronized: run
+  the claim query as it stands on the default branch's tip (`git fetch origin && git show
+  origin/main:AGENTS.md`), not from your checkout; and a newly enrolled identity posts its first
+  claim only after its enrollment has merged to the default branch. De-enrollment runs in reverse:
+  the identity stops claiming, every active claim it holds is released, and only then is its id
+  removed — removing an id erases its comments from protocol state, so an unreleased claim would
+  silently vanish and the issue would read as free. A claim or release posted by any unlisted
+  account can neither take nor free an issue. The query fetches **every** comments page (`--paginate`), so a claim or release past page
+  one still counts. It prints the winning active claim, or nothing if the issue is free. A non-zero
+  exit means a page fetch or parse failed — discard any output and re-run; never treat a failed run
+  as "free":
 
   ```sh
   set -o pipefail
   gh api repos/briandconnelly/codex-in-claude/issues/ISSUE_NUMBER/comments --paginate | jq -s '
-    add
-    | map(select(.user.id == 292553156))    # briandconnelly-agent[bot]
+    [
+      292553156     # briandconnelly-agent[bot]
+    ] as $agent_ids                   # recognized agent accounts — the roster
+    | add
+    | map(select(.user.id as $u | $agent_ids | index($u) != null))
     | [ .[] | .body
           | capture("^<!-- agent-release:(?<id>[0-9]+) -->(\r?\n|$)").id | tonumber ] as $released
     | [ .[] | select(.body | test("^<!-- agent-claim -->(\r?\n|$)")) ]
@@ -241,8 +259,8 @@ what matters here is what the identity does and does not buy.
   landed, or you abandoned it. Post `<!-- agent-release:CLAIM_ID -->` naming the id of *your* claim,
   and remove the label (`gh issue edit ISSUE_NUMBER --remove-label agent:in-progress`) only if you
   held the winning claim. **Never release a claim id that is not yours** — that hands the issue to
-  the next agent while its owner is still working. A stale claim blocks the next agent. (The bot
-  cannot self-assign — see Agent identity.)
+  the next agent while its owner is still working. A stale claim blocks the next agent. (Bot
+  actors cannot self-assign — see Agent identity.)
 - Branch for feature work; do not commit directly to the default branch. Link the issue in the PR
   body (`Closes #N`); label the PR with a type and (for issues) a priority.
 - Preserve `Co-authored-by:` trailers (pairing, agent attribution) — they must survive the squash.
@@ -256,9 +274,8 @@ what matters here is what the identity does and does not buy.
   review thread resolved (`required_review_thread_resolution`).
   - **Human-authored PRs** get an automatic Copilot review on open and on every push (the
     `copilot_code_review` ruleset rule).
-  - **Bot/agent-authored PRs** — `briandconnelly-agent[bot]`, `kingpy-bot`, `dependabot[bot]`, or
-    any other non-human author — get **no automatic Copilot review**: the ruleset rule skips authors
-    that hold no Copilot seat. This is **deliberately not automated** — requesting the Copilot
+  - **Bot/agent-authored PRs** — any non-human author — get **no automatic Copilot review**: the
+    ruleset rule skips authors that hold no Copilot seat. This is **deliberately not automated** — requesting the Copilot
     reviewer through the API needs a full user identity that CI/automation tokens don't have (a
     fine-grained PAT is refused `403`, and a broad classic PAT was declined on security grounds; see
     #294 / #236). So the maintainer requests Copilot on a bot PR with the web-UI **"Request review"**
