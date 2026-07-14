@@ -67,8 +67,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   delivering a second copy; and when deletion itself fails, the validated result is still
   delivered and the record is left to the TTL reaper (deletion stays best-effort, as it always
   was). Deletion still precedes the wire response — there is no client-receipt acknowledgment —
-  so a validated consume whose response is lost in transit does not restore the record. Result
-  `fingerprint` moves (`codex-in-claude/0.1/schema-42` → `schema-43`).
+  so a validated consume whose response is lost in transit does not restore the record.
+  Review hardening: removal is verified with a `stat` probe (Python 3.14's `exists()` returns
+  False for an inaccessible-but-present path, which would have claimed a removal that never
+  happened), `discard` reports a discriminated outcome (`REMOVED`/`MISSING`/`NOT_DONE`/
+  `DELETE_FAILED`) so the server never infers a lost race from a post-hoc status probe, and the
+  record's `meta.json` marker is unlinked last so a partial deletion failure leaves the record
+  fully readable instead of stranding an unreapable orphan. Result `fingerprint` moves
+  (`codex-in-claude/0.1/schema-42` → `schema-43`).
 
 - **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
   `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses the exact `model` key via `-c`/`--config` (plus, conservatively,

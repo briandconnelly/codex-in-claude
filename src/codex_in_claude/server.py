@@ -50,6 +50,7 @@ from codex_in_claude import (
     rate_limit,
 )
 from codex_in_claude._core import gitdiff, idempotency, redaction, workspace, worktree
+from codex_in_claude._core.jobs import DiscardOutcome
 from codex_in_claude.codex_models import read_model_catalog
 from codex_in_claude.errors import make_error, serialize_error, serialize_error_info
 from codex_in_claude.schemas import (
@@ -3833,15 +3834,17 @@ async def _job_result_impl(
         # payload (lifecycle error, corruption, incompatibility): the record must
         # survive so codex_job_result can still reach it (#306).
         return envelope
-    if await asyncio.to_thread(store.discard, cwd, job_id):
-        return envelope
-    # discard() lost: either another consume/TTL-reap/eviction removed the record
-    # first — report job_not_found, matching what this caller would have seen had
-    # the winner run marginally earlier — or removal failed and the record is
-    # still on disk, in which case delivering beats destroying: the delete stays
-    # best-effort (as the pre-split rmtree was) and the TTL reaper owns cleanup.
-    if await asyncio.to_thread(store.status, cwd, job_id) is None:
+    outcome = await asyncio.to_thread(store.discard, cwd, job_id)
+    if outcome is DiscardOutcome.MISSING:
+        # Another consume, TTL reaping, or count-cap eviction removed the record
+        # first — report job_not_found, matching what this caller would have seen
+        # had the winner run marginally earlier. Only the store's own verdict can
+        # say this: a post-hoc status probe cannot tell a lost race from a partial
+        # deletion failure (#314 review).
         return _job_not_found(job_id, meta, workspace_root)
+    # REMOVED delivers the consumed result. DELETE_FAILED delivers too: the payload
+    # validated and delivering beats destroying — deletion stays best-effort (as
+    # the pre-split rmtree was) and the TTL reaper owns the retained record.
     return envelope
 
 
@@ -3982,8 +3985,9 @@ async def codex_job_consume_result(
     intact and validated (a success or the job's own error envelope): a stored result
     this release cannot read (job_result_incompatible or a corruption internal_error)
     is NOT deleted, so it stays inspectable via codex_job_result. Deletion precedes
-    the response, so a response lost in transit does not restore the record. Use only
-    when you no longer need to poll or re-read the job. Non-done jobs are not
+    the response, so a response lost in transit does not restore the record; a failed
+    removal retains the record until its TTL (codex_job_status still shows it). Use
+    only when you no longer need to poll or re-read the job. Non-done jobs are not
     deleted. `detail` works as in codex_job_result (#56)."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 

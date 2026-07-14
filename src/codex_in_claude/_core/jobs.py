@@ -45,6 +45,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -58,6 +59,18 @@ _IDEM_DIRNAME = ".idem"
 
 _TERMINAL = frozenset({"done", "failed", "cancelled", "timeout"})
 _LOCK = threading.RLock()
+
+
+class DiscardOutcome(StrEnum):
+    """What ``JobStore.discard`` did, so callers never have to re-derive it from a
+    post-hoc ``status`` read (a partial deletion can make the record unreadable
+    while parts of it survive on disk — indistinguishable from a lost race)."""
+
+    REMOVED = "removed"  # this call removed the record and verified it absent
+    MISSING = "missing"  # no record: already discarded, expired, or evicted
+    NOT_DONE = "not_done"  # record exists but is not a done result; never deleted
+    DELETE_FAILED = "delete_failed"  # removal failed or could not be verified
+
 
 # Per-process identity stamped onto every job this process starts and compared on
 # read to decide ownership. Generated ONCE at import, so it is stable across the many
@@ -456,9 +469,16 @@ class JobStore:
 
     @staticmethod
     def _rmtree(jd: Path) -> None:
+        # meta.json goes LAST: it is the record's existence marker (a dir without it
+        # is invisible to status/list and skipped by the reaper), so a partial
+        # failure must never orphan an unreadable, unreapable remainder (#306
+        # review). If any earlier unlink fails, the record stays fully readable.
+        meta = jd / "meta.json"
         try:
             for child in jd.iterdir():
-                child.unlink(missing_ok=True)
+                if child != meta:
+                    child.unlink(missing_ok=True)
+            meta.unlink(missing_ok=True)
             jd.rmdir()
         except OSError:
             pass
@@ -719,13 +739,19 @@ class JobStore:
                 return rec, None
             return rec, self._read_envelope(jd)
 
-    def discard(self, cwd: str, job_id: str) -> bool:
-        """Delete a done job record; True only when THIS call removed it.
+    def discard(self, cwd: str, job_id: str) -> DiscardOutcome:
+        """Delete a done job record; REMOVED only when THIS call removed it.
 
-        Returns False when the record is missing (already discarded, expired, or
-        evicted), not yet done, or when removal failed and the record is still
-        on disk (``_rmtree`` is best-effort) — callers must not report a
-        completed consume on False without checking ``status`` themselves.
+        The outcome is discriminated so callers never infer it from a follow-up
+        ``status`` read: MISSING means there was no record to delete (already
+        discarded, expired, or evicted), NOT_DONE means the record exists but is
+        not a done result (never deleted), and DELETE_FAILED means removal failed
+        or could not be verified — the record (kept fully readable by ``_rmtree``'s
+        meta-last ordering) is left to the TTL reaper.
+        Verification is a ``stat`` probe, not ``exists()``: since Python 3.14
+        ``exists()`` returns False for an inaccessible-but-present path, which
+        would claim a removal that never happened. Only FileNotFoundError proves
+        absence; any other stat error means unverified, never REMOVED.
         The one-caller-wins guarantee is process-local: ``_LOCK`` serializes
         threads in this process, but two server processes sharing a state root
         can each observe the record before either deletes it (unchanged from
@@ -734,17 +760,18 @@ class JobStore:
         with _LOCK:
             live = self._read_live_job(cwd, job_id)
             if live is None:
-                return False
+                return DiscardOutcome.MISSING
             jd, _meta, state = live
             if state != "done":
-                return False
+                return DiscardOutcome.NOT_DONE
             self._rmtree(jd)
             try:
-                return not jd.exists()
+                jd.stat()
+            except FileNotFoundError:
+                return DiscardOutcome.REMOVED
             except OSError:
-                # exists() re-raises stat errors pathlib does not ignore (e.g.
-                # EACCES). Removal that cannot be verified is never claimed.
-                return False
+                return DiscardOutcome.DELETE_FAILED
+            return DiscardOutcome.DELETE_FAILED
 
     def cancel(self, cwd: str, job_id: str) -> dict | None:
         with _LOCK:

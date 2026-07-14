@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from codex_in_claude._core import idempotency
-from codex_in_claude._core.jobs import JobStore
+from codex_in_claude._core.jobs import DiscardOutcome, JobStore
 
 # A snippet (run with cwd=job_dir) that writes the final envelope to result.json.
 _WRITE_DONE = "import json; open('result.json','w').write(json.dumps({'ok': True, 'tool': 't'}))"
@@ -312,10 +312,10 @@ def test_discard_deletes_done_record_once(tmp_path):
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "done"
-    assert store.discard(cwd, job_id) is True
+    assert store.discard(cwd, job_id) is DiscardOutcome.REMOVED
     assert store.status(cwd, job_id) is None
     # one-winner: a second discard finds nothing to remove
-    assert store.discard(cwd, job_id) is False
+    assert store.discard(cwd, job_id) is DiscardOutcome.MISSING
 
 
 def test_discard_nondone_keeps_record(tmp_path):
@@ -323,7 +323,7 @@ def test_discard_nondone_keeps_record(tmp_path):
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
     store.cancel(cwd, job_id)
-    assert store.discard(cwd, job_id) is False
+    assert store.discard(cwd, job_id) is DiscardOutcome.NOT_DONE
     # not deleted (non-done)
     assert store.status(cwd, job_id) is not None
 
@@ -333,44 +333,70 @@ def test_discard_running_keeps_record(tmp_path):
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
     try:
-        assert store.discard(cwd, job_id) is False
+        assert store.discard(cwd, job_id) is DiscardOutcome.NOT_DONE
         assert store.status(cwd, job_id)["status"] == "running"
     finally:
         store.cancel(cwd, job_id)
 
 
 def test_discard_verification_error_reports_failure(tmp_path, monkeypatch):
-    # pathlib re-raises stat errors it does not ignore (e.g. EACCES), so the
-    # post-rmtree absence check can raise; discard must report a failed delete
-    # rather than let the error escape and mask an already-validated result.
+    # The stat probe can raise (EACCES on 3.11) or, since Python 3.14, exists()
+    # would silently return False for the same inaccessible-but-present path.
+    # discard must verify via stat and report DELETE_FAILED on any stat error —
+    # never claim a removal it could not verify.
     store = _store(tmp_path)
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "done"
     monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
-    real_exists = Path.exists
+    real_stat = Path.stat
 
     def denied(self, *args, **kwargs):
         if self.name == job_id:
             raise PermissionError("stat denied")
-        return real_exists(self, *args, **kwargs)
+        return real_stat(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "exists", denied)
-    assert store.discard(cwd, job_id) is False
+    monkeypatch.setattr(Path, "stat", denied)
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    monkeypatch.undo()
     assert store.status(cwd, job_id) is not None
 
 
 def test_discard_reports_failed_removal(tmp_path, monkeypatch):
     # _rmtree is best-effort; discard must not claim success when the record
-    # survived the attempt (its True return is what lets the server promise the
-    # delete actually happened).
+    # survived the attempt (REMOVED is what lets the server promise the delete
+    # actually happened).
     store = _store(tmp_path)
     cwd = str(tmp_path)
     job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
     assert _wait_terminal(store, cwd, job_id) == "done"
     monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
-    assert store.discard(cwd, job_id) is False
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
     assert store.status(cwd, job_id) is not None
+
+
+def test_rmtree_partial_failure_keeps_record_readable(tmp_path, monkeypatch):
+    # _rmtree unlinks meta.json LAST: a failure on any other entry must leave the
+    # record fully readable (status + payload), not an unreadable, unreapable
+    # orphan that a status probe cannot tell from a lost race (#306 review).
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    real_unlink = Path.unlink
+
+    def sticky_result(self, *args, **kwargs):
+        if self.name == "result.json":
+            raise PermissionError("unlink denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", sticky_result)
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    monkeypatch.undo()
+    assert store.status(cwd, job_id) is not None  # meta.json survived
+    rec, payload = store.result_payload(cwd, job_id)
+    assert rec["status"] == "done"
+    assert payload == {"ok": True, "tool": "t"}  # result still fetchable
 
 
 def test_missing_job(tmp_path):

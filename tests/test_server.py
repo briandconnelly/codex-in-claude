@@ -13,6 +13,7 @@ from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
 from codex_in_claude import __version__, codex, delegate, orchestration, server
+from codex_in_claude._core.jobs import DiscardOutcome
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
     FINGERPRINT,
@@ -1410,7 +1411,7 @@ class _FakeStore:
 
     def discard(self, cwd, job_id):
         self.consumed.append(job_id)
-        return True
+        return DiscardOutcome.REMOVED
 
     def cancel(self, cwd, job_id):
         self.cancelled.append(job_id)
@@ -3338,6 +3339,26 @@ async def test_consume_lost_race_reports_job_not_found(monkeypatch, clean_env, t
     res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
     assert res["ok"] is False
     assert res["error"]["code"] == "job_not_found"
+
+
+async def test_consume_delete_failed_never_reports_not_found(monkeypatch, clean_env, tmp_path):
+    # A partial deletion can leave the record unreadable (status() -> None) while
+    # parts of it survive on disk — indistinguishable, via a status probe, from a
+    # lost race. Only the store's own DELETE_FAILED verdict decides, so the
+    # validated result in hand is still delivered, never swapped for
+    # job_not_found (#314 review).
+    store = _real_store(tmp_path)
+    cwd = str(tmp_path)
+    job_id = _start_done_job(store, cwd, _done_envelope())
+
+    def partial_failure_discard(cwd_, job_id_):
+        (store._job_dir(cwd_, job_id_) / "meta.json").unlink()  # record now unreadable
+        return DiscardOutcome.DELETE_FAILED
+
+    store.discard = partial_failure_discard
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_consume_result(job_id, workspace_root=cwd)
+    assert res["ok"] is True  # the validated result, not job_not_found
 
 
 async def test_consume_failed_delete_still_delivers(monkeypatch, clean_env, tmp_path):
