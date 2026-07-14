@@ -5,6 +5,12 @@ explains invariants without duplicating their full schemas.
 
 ## Optional controls
 
+- Default to omitting `model` and `reasoning_effort`, preserving the resolution chain (per-call
+  param > `CODEX_IN_CLAUDE_*` env default > Codex's own resolution). Override only for an explicit
+  user requirement or a constraint you state alongside the override; when uncertain, omit.
+- Effort values are backend-defined per model: interpret them within the selected model, prefer
+  the model's advertised default from `codex_models`, and do not infer cost, latency, or quality
+  from an effort label.
 - Discover valid model slugs — and each model's advertised reasoning-effort set — with
   `codex_models` before overriding `model` or `reasoning_effort`. Codex and its backend perform
   final validation; the discovery data is advisory.
