@@ -5849,6 +5849,7 @@ async def test_dry_run_model_echo_reconciles_help_gated_drop(monkeypatch, clean_
     [
         "with\x00nul",  # would crash Popen (ValueError) before any classification
         "with\x07bell",  # control character
+        "high\x85",  # NEL — a C1 control; the pattern must cover C1, not just C0+DEL
         "x" * 129,  # over the documented max length
     ],
 )

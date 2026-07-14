@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tomllib
+
 import anyio
 import pytest
 
@@ -503,8 +505,8 @@ def test_build_exec_command_passes_reasoning_effort_as_config_override(tmp_path)
         reasoning_effort="high",
         flag_support=_ALL_FLAGS,
     )
-    assert f"{_EFFORT_KEY}=high" in cmd
-    assert cmd[cmd.index(f"{_EFFORT_KEY}=high") - 1] == "-c"
+    assert f'{_EFFORT_KEY}="high"' in cmd
+    assert cmd[cmd.index(f'{_EFFORT_KEY}="high"') - 1] == "-c"
     assert dropped == []
 
 
@@ -531,7 +533,45 @@ def test_build_exec_command_passes_empty_reasoning_effort_through(tmp_path):
         reasoning_effort="",
         flag_support=_ALL_FLAGS,
     )
-    assert f"{_EFFORT_KEY}=" in cmd
+    assert f'{_EFFORT_KEY}=""' in cmd
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_token"),
+    [
+        ("true", f'{_EFFORT_KEY}="true"'),  # boolean-shaped
+        ("3", f'{_EFFORT_KEY}="3"'),  # integer-shaped
+        ("1.5", f'{_EFFORT_KEY}="1.5"'),  # float-shaped
+        ('"high"', f'{_EFFORT_KEY}="\\"high\\""'),  # quoted — must NOT be unwrapped
+        ("[low, high]", f'{_EFFORT_KEY}="[low, high]"'),  # array-shaped
+        ("{effort = 1}", f'{_EFFORT_KEY}="{{effort = 1}}"'),  # table-shaped
+        # Astral char: default \uXXXX escaping would emit a surrogate PAIR, which
+        # TOML rejects (escapes must be scalar values) — degrading to the raw-string
+        # fallback; the encoder must emit it literally (ensure_ascii=False).
+        ("high\U0001f600", f'{_EFFORT_KEY}="high\U0001f600"'),
+    ],
+)
+def test_build_exec_command_toml_string_encodes_reasoning_effort(tmp_path, value, expected_token):
+    # Maintainer-review regression (#313): codex TOML-parses the `-c` right-hand side
+    # and falls back to a string only when that parse fails, so a raw interpolation
+    # retypes boolean/numeric/collection-shaped values (0.144.3 then rejects them
+    # locally as an invalid type → misreported nonzero_exit) and silently unwraps
+    # quoted ones. TOML-string-encoding every value (JSON string syntax is valid
+    # TOML) makes the advertised open string round-trip exactly.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort=value,
+        flag_support=_ALL_FLAGS,
+    )
+    assert expected_token in cmd
+    assert cmd[cmd.index(expected_token) - 1] == "-c"
+    # The round-trip proof: the right-hand side is valid TOML that decodes back to
+    # the caller's exact string (codex's fallback-to-raw-string never engages).
+    encoded = expected_token.partition("=")[2]
+    assert tomllib.loads(f"v = {encoded}")["v"] == value
 
 
 def test_build_exec_command_reasoning_effort_survives_model_gating(tmp_path):
@@ -548,7 +588,7 @@ def test_build_exec_command_reasoning_effort_survives_model_gating(tmp_path):
         flag_support=_NO_MODEL,
     )
     assert dropped == ["--model"]
-    assert f"{_EFFORT_KEY}=xhigh" in cmd
+    assert f'{_EFFORT_KEY}="xhigh"' in cmd
 
 
 def test_build_exec_command_reasoning_effort_precedes_extra_args_and_sentinel(tmp_path):
@@ -562,7 +602,7 @@ def test_build_exec_command_reasoning_effort_precedes_extra_args_and_sentinel(tm
         extra_args=("-p", "work"),
         flag_support=_ALL_FLAGS,
     )
-    assert cmd.index(f"{_EFFORT_KEY}=low") < cmd.index("-p")
+    assert cmd.index(f'{_EFFORT_KEY}="low"') < cmd.index("-p")
     assert cmd[-1] == cli_contract.STDIN_PROMPT
 
 
@@ -675,6 +715,25 @@ def test_classify_key_naming_rejection_still_attributes_to_extra_args_with_effor
         extra_args=config.ExtraArgs(
             tokens=("-c", "model_provider=azure"),
             descriptors=("-c", "model_provider"),
+            option_count=1,
+            configured=True,
+        ),
+        reasoning_effort="high",
+    )
+    assert err.code == "extra_args_rejected"
+
+
+def test_classify_marker_named_passthrough_attributes_to_extra_args():
+    # Maintainer-review regression (#313): `--enable reasoning.effort` in the
+    # operator passthrough makes codex print "Unknown feature flag: reasoning.effort"
+    # — a marker as a free substring, without the backend's bracketed `[…] […]`
+    # signature. That failure is the operator's entry (extra_args_rejected), not a
+    # backend effort rejection, even though an effort override was also sent.
+    err = codex.classify_failure(
+        CommandRun("", "Unknown feature flag: reasoning.effort", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("--enable", "reasoning.effort"),
+            descriptors=("--enable", "reasoning.effort"),
             option_count=1,
             configured=True,
         ),

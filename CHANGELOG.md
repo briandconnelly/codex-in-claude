@@ -12,7 +12,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   now take an optional `reasoning_effort` parameter, with a `CODEX_IN_CLAUDE_REASONING_EFFORT` server
   default (per-call value wins; exact-`None` precedence, so an explicit empty string is passed
   through, not coalesced). It is sent as a `-c model_reasoning_effort=…` config override — codex-cli
-  0.144 has no dedicated flag — unconditionally when requested (a config key cannot be help-gated).
+  0.144 has no dedicated flag — unconditionally when requested (a config key cannot be help-gated),
+  with the value TOML-string-encoded so the advertised open string round-trips exactly (codex
+  TOML-parses the `-c` right-hand side, so a raw interpolation would retype
+  boolean/numeric/collection-shaped values and silently unwrap quoted ones).
   Removal of the `-c` flag itself fails loudly as `cli_contract_changed`; a rename/removal of the
   key drifts silently (codex tolerates unknown `-c` keys) and is guarded by the manual
   re-verification step in `docs/UPGRADING-CODEX.md`. The value is an open per-model string the

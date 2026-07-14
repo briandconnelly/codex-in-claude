@@ -219,9 +219,13 @@ MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
 # drift). The backend 400 reads "[ReasoningEffortParam] [reasoning.effort]
 # [invalid_enum_value] Invalid value: '<v>'..." — which also matches the "invalid
 # value" drift pattern above, so classify_failure must check these markers first or a
-# caller's typo would be misreported as cli_contract_changed. Deliberately EXCLUDES
-# "model_reasoning_effort": a rejection naming only the key means codex no longer
-# accepts the key — genuine drift that must stay fail-loud.
+# caller's typo would be misreported as cli_contract_changed. ALL markers must appear
+# in their bracketed `[…]` field form — a marker as a free substring is how an
+# operator passthrough naming one (`--enable reasoning.effort`, a profile so named)
+# would impersonate the backend signature and steal an extra_args_rejected
+# attribution (#313). Deliberately EXCLUDES "model_reasoning_effort": a rejection
+# naming only the key means codex no longer accepts the key — genuine drift that
+# must stay fail-loud.
 REASONING_EFFORT_REJECTION_MARKERS = ("reasoning.effort", "reasoningeffortparam")
 
 # Conservative shape for an effort token read from the UNDOCUMENTED models cache
@@ -390,13 +394,15 @@ def is_contract_drift(*texts: str | None) -> bool:
 
 
 def is_reasoning_effort_rejection(*texts: str | None) -> bool:
-    """Whether any provided text carries the backend's bad-reasoning-effort markers.
+    """Whether the provided texts carry the backend's bad-reasoning-effort signature.
 
-    True only for the request-level rejection of an effort VALUE (see
-    REASONING_EFFORT_REJECTION_MARKERS); a rejection naming only the config key is
-    contract drift and deliberately does not match."""
+    True only for the request-level rejection of an effort VALUE: every marker in
+    REASONING_EFFORT_REJECTION_MARKERS present in its bracketed `[…]` field form.
+    A marker as a free substring (an operator passthrough naming it) does not
+    match, and a rejection naming only the config key is contract drift and
+    deliberately does not match either."""
     blob = "\n".join(t for t in texts if t).lower()
-    return any(marker in blob for marker in REASONING_EFFORT_REJECTION_MARKERS)
+    return all(f"[{marker}]" in blob for marker in REASONING_EFFORT_REJECTION_MARKERS)
 
 
 def is_auth_failure(*texts: str | None) -> bool:

@@ -144,8 +144,9 @@ def test_effort_rejection_markers_never_include_the_config_key():
     "text",
     [
         _REAL_EFFORT_REJECTION,
-        "[reasoning.effort] [invalid_enum_value] Invalid value: 'wat'",
-        "ReasoningEffortParam rejected the request",
+        "[ReasoningEffortParam] [reasoning.effort] [invalid_enum_value] Invalid value: 'wat'",
+        # The two bracketed fields may be split across streams.
+        "[reasoningeffortparam] something\n[reasoning.effort] something",
     ],
 )
 def test_is_reasoning_effort_rejection_true(text):
@@ -159,6 +160,14 @@ def test_is_reasoning_effort_rejection_true(text):
         "error: invalid value 'wat' for 'model_reasoning_effort'",
         "error: unexpected argument '-c' found",
         "reasoning effort was fine",  # no dotted/param marker
+        # Maintainer-review regression (#313): an operator passthrough naming a
+        # marker (`--enable reasoning.effort`, a profile so named) must not
+        # impersonate the backend's structured `[…] […]` rejection signature.
+        "Unknown feature flag: reasoning.effort",
+        "error: unknown profile 'reasoning.effort' found in config",
+        "ReasoningEffortParam rejected the request",  # unbracketed marker prose
+        "[reasoning.effort] [invalid_enum_value] Invalid value: 'wat'",  # one field only
+        "[ReasoningEffortParam] rejected",  # one field only
         "done",
         "",
     ],

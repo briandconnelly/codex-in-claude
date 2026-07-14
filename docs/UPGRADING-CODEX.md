@@ -82,12 +82,14 @@ through this practice — review the new help in absolute terms instead.) Then c
   **silently** (codex tolerates unknown `-c` keys as junk): this manual step is the only guard.
   Re-verify per COMPATIBILITY.md's reasoning-effort section, then refresh that section's verified
   dates. Probe 1 —
-  `codex exec --json --ignore-user-config --ephemeral --skip-git-repo-check -c model_reasoning_effort=bogus -c model=bogus-model-xyz - <<< "hi"`
+  `codex exec --json --ignore-user-config --ephemeral --skip-git-repo-check -c 'model_reasoning_effort="bogus"' -c model=bogus-model-xyz - <<< "hi"`
+  (the inner quotes mirror the plugin's TOML-string-encoded transport — see COMPATIBILITY.md)
   — confirms the run is not rejected at parse (the `-c` route still exists); it **cannot** prove
   the key is still read, because a tolerated junk key produces the same backend bogus-model error.
   Probe 2 — the same invocation with a **valid** model — is the check that proves the key is still
-  applied: it must fail with the `[reasoning.effort]`/`ReasoningEffortParam` markers
-  (`REASONING_EFFORT_REJECTION_MARKERS`); note it spends a trivial request. Also check
+  applied: it must fail with both bracketed marker fields, `[reasoning.effort]` and
+  `[ReasoningEffortParam]` (`REASONING_EFFORT_REJECTION_MARKERS` — the classifier requires all of
+  them in `[…]` form); note it spends a trivial request. Also check
   `codex exec --help` for a new dedicated effort flag worth adopting.
 - **Structured output.** Run a small live `codex exec --output-schema <file>` and confirm the final
   message still conforms to the strict-mode schema in `schemas.py`. (Reminder, already in

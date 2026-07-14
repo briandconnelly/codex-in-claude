@@ -84,11 +84,12 @@ def _env_int(name: str, default: int) -> int:
 # passes through, since env config never crosses the MCP boundary. The set stays open
 # (the backend judges the value); these exclude only argv-hostile shapes: a NUL breaks
 # Popen outright, other control characters have no place in a config override, and an
-# argv-scale string fails as a misleading codex_not_found. Real efforts are ≤ ~7
-# chars; 128 is generous headroom.
+# argv-scale string fails as a misleading codex_not_found. "Control character" means
+# Unicode category Cc — C0, DEL, and the C1 block (U+0080-U+009F) alike. Real efforts
+# are ≤ ~7 chars; 128 is generous headroom.
 REASONING_EFFORT_MAX_LENGTH = 128
 # ECMA-safe for the advertised JSON-Schema `pattern` (no \Z, which ECMA lacks).
-REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F]*$"
+REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
 
 
 def reasoning_effort_shape_error(value: str) -> str | None:
@@ -98,7 +99,7 @@ def reasoning_effort_shape_error(value: str) -> str | None:
     regex, so a trailing newline — which Python's `$` would admit — is caught too."""
     if len(value) > REASONING_EFFORT_MAX_LENGTH:
         return f"exceeds {REASONING_EFFORT_MAX_LENGTH} characters"
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+    if any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in value):
         return "contains a control character"
     return None
 

@@ -119,10 +119,18 @@ def build_exec_command(
     # dedicated flag). A config key cannot be help-gated, so it is sent whenever the
     # caller/server requested one — including an explicit "" (whole-domain honesty:
     # the backend, not this plugin, judges the value) — and fails loudly on drift.
+    # The value is TOML-string-encoded (JSON string syntax is valid TOML): codex
+    # TOML-parses the `-c` right-hand side and falls back to a string only when that
+    # parse fails, so a raw interpolation would retype boolean/numeric/collection-
+    # shaped values and silently unwrap quoted ones instead of round-tripping the
+    # advertised open string exactly. ensure_ascii=False is load-bearing: the default
+    # \uXXXX escaping emits surrogate PAIRS for astral characters, which TOML rejects
+    # (escapes must be scalar values), silently degrading to the raw-string fallback.
     if reasoning_effort is not None:
         tokens += [
             "-c",
-            f"{cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY}={reasoning_effort}",
+            f"{cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY}="
+            f"{json.dumps(reasoning_effort, ensure_ascii=False)}",
         ]
     cmd, dropped = _gate_optional(tokens, fs)
     # Operator passthrough goes in AFTER gating (never gated/dropped) and before the
@@ -339,8 +347,9 @@ def classify_failure(
     `reasoning_effort` is the effort override this run sent through the plugin's
     first-class controls, or None when none was sent. The backend rejects a bad
     effort VALUE with a message that also matches the generic drift patterns, so
-    when one was sent and the backend's effort markers are present the failure is
-    the caller's argument (`invalid_reasoning_effort`), not contract drift (#309)."""
+    when one was sent and every backend effort marker appears in its bracketed
+    `[…]` field form the failure is the caller's argument
+    (`invalid_reasoning_effort`), not contract drift (#309)."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:

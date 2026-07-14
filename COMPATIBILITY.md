@@ -140,7 +140,12 @@ whether `project_doc_max_bytes=0` fully disables loading. The assumption is reco
 `codex exec` 0.144.3 has no dedicated reasoning-effort flag (verified against
 `codex exec --help`, 2026-07-13), so the per-call `reasoning_effort` parameter and
 `CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
-`-c model_reasoning_effort=<value>`. A config key cannot be help-gated — `--help` advertises flags,
+`-c model_reasoning_effort="<value>"`, with the value **TOML-string-encoded** (JSON string syntax,
+which is valid TOML). Codex TOML-parses the `-c` right-hand side and falls back to a string only
+when that parse fails, so a raw interpolation would retype boolean/numeric/collection-shaped values
+(codex 0.144.3 then rejects them locally as an invalid type) and silently unwrap quoted ones;
+encoding makes the advertised open string round-trip exactly. A config key cannot be help-gated —
+`--help` advertises flags,
 not config keys — so a requested effort is sent unconditionally. Drift coverage is **narrower than
 ALWAYS_SEND**: only removal of the `-c` flag itself fails loudly as `cli_contract_changed` with
 zero spend. If a future `codex` renames or removes the **key**, the drift is **silent** — codex
@@ -155,8 +160,10 @@ silently, and the **backend** rejects a bad one at request time with a 400 whose
 0.144.3, 2026-07-13). That message also matches the generic `invalid value` drift pattern, so the
 classifier checks `REASONING_EFFORT_REJECTION_MARKERS` (`reasoning.effort`,
 `reasoningeffortparam` — deliberately **not** the config key name) first: when this run sent a
-first-class effort override and a marker is present, the failure is the caller's argument
-(`invalid_reasoning_effort`), not contract drift. A rejection naming only
+first-class effort override and **every marker appears in its bracketed `[…]` field form**, the
+failure is the caller's argument (`invalid_reasoning_effort`), not contract drift. A marker as a
+free substring does not match — an operator passthrough naming one (`--enable reasoning.effort`, a
+profile so named) stays attributable to `extra_args_rejected`. A rejection naming only
 `model_reasoning_effort` (the key) still fails loudly as `cli_contract_changed`. The accepted set
 genuinely varies by model and account — the backend advertised
 `none|minimal|low|medium|high|xhigh` for gpt-5.5 on ChatGPT, while the models cache advertises

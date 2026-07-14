@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
+
 import pytest
 
 from codex_in_claude import config
@@ -501,7 +504,7 @@ def test_extra_args_model_denial_names_model_controls_not_effort(monkeypatch):
 # --- Reasoning-effort shape bounds (#309, Codex re-review) -----------------------------
 @pytest.mark.parametrize(
     "value",
-    ["", "high", "x" * 128, "an effort with spaces", "Ünïcode-ok"],
+    ["", "high", "x" * 128, "an effort with spaces", "Ünïcode-ok", "\xa0"],
 )
 def test_reasoning_effort_shape_accepts(value):
     assert config.reasoning_effort_shape_error(value) is None
@@ -515,6 +518,9 @@ def test_reasoning_effort_shape_accepts(value):
         ("with\x07bell", "control character"),
         ("high\n", "control character"),  # trailing newline is NOT admitted here
         ("\x7f", "control character"),  # DEL
+        ("high\x80", "control character"),  # C1 lower bound
+        ("high\x85", "control character"),  # NEL — a C1 control (category Cc)
+        ("high\x9b", "control character"),  # CSI — C1 upper bound
     ],
 )
 def test_reasoning_effort_shape_rejects(value, fragment):
@@ -523,3 +529,19 @@ def test_reasoning_effort_shape_rejects(value, fragment):
     assert fragment in reason
     # The reason is value-free (safe for an error message).
     assert value not in reason
+
+
+def test_reasoning_effort_shape_rejects_every_unicode_cc_control():
+    # Maintainer-review regression (#313): the documented contract is "no control
+    # characters", which is Unicode category Cc — C0, DEL, AND the C1 block
+    # (U+0080-U+009F, e.g. NEL/CSI). Both the character-wise predicate and the
+    # advertised JSON-Schema pattern must reject every one of them; the first
+    # non-control neighbours (space, U+00A0) must pass both.
+    cc = [chr(cp) for cp in range(0x100) if unicodedata.category(chr(cp)) == "Cc"]
+    assert len(cc) == 65  # C0 (32) + DEL (1) + C1 (32); Cc has no members past U+00FF
+    for ch in cc:
+        assert config.reasoning_effort_shape_error(ch) == "contains a control character"
+        assert re.fullmatch(config.REASONING_EFFORT_VALUE_PATTERN, ch) is None
+    for ch in (" ", "\xa0"):
+        assert config.reasoning_effort_shape_error(ch) is None
+        assert re.fullmatch(config.REASONING_EFFORT_VALUE_PATTERN, ch)
