@@ -172,3 +172,101 @@ async def test_run_delegate_not_a_git_repo(tmp_path, monkeypatch):
     assert result["error"]["repair"]["next_step"] == "init_git_repo"
     assert result["error"]["temporary"] is False
     assert result["error"]["details"]["field"] == "workspace_root"
+
+
+# --- Reasoning-effort threading (#309) ---------------------------------------------
+def test_run_delegate_forwards_reasoning_effort(monkeypatch):
+    from types import SimpleNamespace
+
+    import anyio
+
+    from codex_in_claude import delegate
+    from codex_in_claude._core import worktree
+
+    captured: dict = {}
+
+    def fake_create(*a, **k):
+        return SimpleNamespace(path="/tmp/wt", baseline_warning=None)
+
+    async def fake_exec(prompt, **kwargs):
+        captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=None)
+
+    monkeypatch.setattr(worktree, "create", fake_create)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+    meta = Meta(
+        cwd="/tmp",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=10,
+        elapsed_ms=0,
+    )
+    anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/tmp",
+            meta,
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            reasoning_effort="low",
+            git_timeout=30,
+        )
+    )
+    assert captured["reasoning_effort"] == "low"
+
+
+def test_run_delegate_classifies_effort_rejection(monkeypatch):
+    from types import SimpleNamespace
+
+    import anyio
+
+    from codex_in_claude import delegate, rate_limit
+    from codex_in_claude._core import worktree
+
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    rejection = (
+        '{"type":"error","message":"[ReasoningEffortParam] [reasoning.effort] '
+        "[invalid_enum_value] Invalid value: 'bogus'.\"}"
+    )
+
+    def fake_create(*a, **k):
+        return SimpleNamespace(path="/tmp/wt", baseline_warning=None)
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(
+            run=CommandRun(rejection, "", 1, 1, False), last_message=None, events=rejection
+        )
+
+    monkeypatch.setattr(worktree, "create", fake_create)
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+    meta = Meta(
+        cwd="/tmp",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=10,
+        elapsed_ms=0,
+        reasoning_effort="bogus",
+    )
+    out = anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/tmp",
+            meta,
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            reasoning_effort="bogus",
+            git_timeout=30,
+        )
+    )
+    assert out["ok"] is False
+    assert out["error"]["code"] == "invalid_reasoning_effort"

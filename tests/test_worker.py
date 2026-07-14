@@ -281,3 +281,84 @@ def test_worker_makes_observer_that_counts_jsonl_event_lines(tmp_path):
     recorder.flush()
     data = json.loads((rec_dir / "activity.json").read_text())
     assert data["events_seen"] == 2
+
+
+# --- Reasoning-effort threading (#309) ---------------------------------------------
+def test_worker_threads_reasoning_effort(tmp_path, monkeypatch):
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path), reasoning_effort="high")
+
+    seen = {}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        seen["reasoning_effort"] = kw.get("reasoning_effort")
+        seen["meta_reasoning_effort"] = meta.reasoning_effort
+        return {"ok": True, "tool": "codex_delegate", "summary": task}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    assert _worker.main([str(jd)]) == 0
+    assert seen["reasoning_effort"] == "high"
+    assert seen["meta_reasoning_effort"] == "high"
+
+
+def test_worker_reasoning_effort_absent_is_none(tmp_path, monkeypatch):
+    # A legacy spec (pre-#309) lacks the key entirely; the worker forwards None.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    seen = {}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        seen["reasoning_effort"] = kw.get("reasoning_effort", "MISSING")
+        seen["meta_reasoning_effort"] = meta.reasoning_effort
+        return {"ok": True, "tool": "codex_delegate", "summary": task}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    assert _worker.main([str(jd)]) == 0
+    assert seen["reasoning_effort"] is None
+    assert seen["meta_reasoning_effort"] is None
+
+
+def test_worker_threads_reasoning_effort_consult_and_review(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    seen = {}
+
+    async def fake_run_consult(question, cwd, meta, **kw):
+        seen["consult"] = kw.get("reasoning_effort")
+        return {"ok": True, "tool": "codex_consult", "summary": "s"}
+
+    async def fake_run_review(cwd, meta, **kw):
+        seen["review"] = kw.get("reasoning_effort")
+        return {"ok": True, "tool": "codex_review_changes", "summary": "s"}
+
+    monkeypatch.setattr(orchestration, "run_consult", fake_run_consult)
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+
+    jd = tmp_path / "consult-job"
+    _write_spec(
+        jd,
+        kind="codex_consult",
+        question="q",
+        cwd=str(tmp_path),
+        tier="consult",
+        sandbox="read-only",
+        reasoning_effort="low",
+    )
+    assert _worker.main([str(jd)]) == 0
+
+    jd2 = tmp_path / "review-job"
+    _write_spec(
+        jd2,
+        kind="codex_review_changes",
+        cwd=str(tmp_path),
+        tier="consult",
+        sandbox="read-only",
+        scope="working_tree",
+        max_bytes=1000,
+        reasoning_effort="medium",
+    )
+    assert _worker.main([str(jd2)]) == 0
+
+    assert seen["consult"] == "low"
+    assert seen["review"] == "medium"

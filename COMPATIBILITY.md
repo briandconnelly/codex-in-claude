@@ -135,6 +135,52 @@ whether `project_doc_max_bytes=0` fully disables loading. The assumption is reco
 - **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
   `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
 
+## Reasoning-effort control (`model_reasoning_effort`, #309)
+
+`codex exec` 0.144.3 has no dedicated reasoning-effort flag (verified against
+`codex exec --help`, 2026-07-13), so the per-call `reasoning_effort` parameter and
+`CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
+`-c model_reasoning_effort="<value>"`, with the value **TOML-string-encoded** (JSON string syntax,
+which is valid TOML). Codex TOML-parses the `-c` right-hand side and falls back to a string only
+when that parse fails, so a raw interpolation would retype boolean/numeric/collection-shaped values
+(codex 0.144.3 then rejects them locally as an invalid type) and silently unwrap quoted ones;
+encoding makes the advertised open string round-trip exactly. A config key cannot be help-gated —
+`--help` advertises flags,
+not config keys — so a requested effort is sent unconditionally. Drift coverage is **narrower than
+ALWAYS_SEND**: only removal of the `-c` flag itself fails loudly as `cli_contract_changed` with
+zero spend. If a future `codex` renames or removes the **key**, the drift is **silent** — codex
+tolerates unknown `-c` keys as junk it never reads (the same tolerance recorded for lookalike keys
+below) — and the requested effort is quietly ignored; the re-verification probe in
+`docs/UPGRADING-CODEX.md` is the guard for that case. (Verified 2026-07-13: a CLI `-c` override
+survives `--ignore-user-config`, so an explicit effort stays effective under every isolation mode.)
+
+The **semantic value set** is open and not allowlisted by this plugin. The plugin still enforces
+transport-shape bounds (length and argv/JSON safety); values passing those bounds are sent
+unchanged. The CLI accepts such a string silently, and the **backend** rejects an unsupported
+model/effort combination at request time with a 400 whose message carries
+`[ReasoningEffortParam] [reasoning.effort] [invalid_enum_value] …` (probed against codex-cli
+0.144.3, 2026-07-13). That message also matches the generic `invalid value` drift pattern, so the
+classifier checks `REASONING_EFFORT_REJECTION_MARKERS` (`reasoning.effort`,
+`reasoningeffortparam` — deliberately **not** the config key name) first: when this run sent a
+first-class effort override and **every marker appears in its bracketed `[…]` field form**, the
+failure is the caller's argument (`invalid_reasoning_effort`), not contract drift. A marker as a
+free substring does not match — an operator passthrough naming one (`--enable reasoning.effort`, a
+profile so named) stays attributable to `extra_args_rejected`. A passthrough descriptor that
+itself carries the full bracketed signature (a profile literally named
+`[reasoning.effort][ReasoningEffortParam]`) is attributed to the passthrough *before* the backend
+check, so it cannot impersonate the backend rejection either. A rejection naming only
+`model_reasoning_effort` (the key) still fails loudly as `cli_contract_changed`. The accepted set
+genuinely varies by model and account — the backend advertised
+`none|minimal|low|medium|high|xhigh` for gpt-5.5 on ChatGPT, while the models cache advertises
+`max`/`ultra` for other slugs — so discovery stays advisory (below) and no enum is pinned.
+
+**Discovery** reads the same undocumented `models_cache.json` as the slug catalog: each entry's
+`default_reasoning_level` (a string) and `supported_reasoning_levels` (a list of
+`{effort, description, …}` objects, of which only the `effort` tokens are surfaced) map to
+`ModelInfo.default_reasoning_effort` / `supported_reasoning_efforts`, defensively validated
+(`REASONING_EFFORT_TOKEN_PATTERN`, `SUPPORTED_EFFORTS_MAX_ENTRIES`) and advisory only. The bundled
+static fallback carries no effort data.
+
 ## Operator extra-args passthrough (`CODEX_IN_CLAUDE_EXTRA_ARGS`, #231)
 
 An opt-in operator knob adds extra **global** `codex` options to every paid `exec` invocation
@@ -159,18 +205,19 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   codex's own `-c` parser trims it before this check, so a leading/segment space cannot slip a denied
   key past. A `-c` value may hold a secret, so it is never echoed in `codex_status` or an error
   envelope.
-- **`model` is reserved for the first-class controls** (#310). `meta.model` (and
-  `raw_response.model`) report the model the per-call `model` parameter or `CODEX_IN_CLAUDE_MODEL`
-  requested; a passthrough `-c model=…` would make the run use the operator's model while the
-  envelope reports the per-call/server value (null in the common case), so the exact `model` key
-  is refused at parse time. The parser also conservatively refuses case- and quote-varied
-  lookalikes (`Model`, `"model"`) that codex-rs 0.144.3 treats as distinct junk keys, not
-  aliases. Set `CODEX_IN_CLAUDE_MODEL` or the per-call parameter instead — those flow into
-  `resolved_defaults` and `meta.model` correctly. This is not a `model_*` root reservation:
+- **`model` and `model_reasoning_effort` are reserved for the first-class controls** (#310, #309).
+  `meta.model` (and `raw_response.model`) report the model the per-call `model` parameter or
+  `CODEX_IN_CLAUDE_MODEL` requested, and `meta.reasoning_effort` reports the effort the per-call
+  `reasoning_effort` parameter or `CODEX_IN_CLAUDE_REASONING_EFFORT` sent; a passthrough
+  `-c model=…` / `-c model_reasoning_effort=…` would make the run use the operator's value while
+  the envelope reports the per-call/server value (null in the common case), so both exact keys are
+  refused at parse time. The parser also conservatively refuses case- and quote-varied lookalikes
+  (`Model`, `"model_reasoning_effort"`) that codex-rs 0.144.3 treats as distinct junk keys, not
+  aliases. Set the env var or the per-call parameter instead — those flow into
+  `resolved_defaults` and the meta fields correctly. This is not a `model_*` root reservation:
   `model_provider`/`model_providers.*` (this knob's motivating use case) and other `model_*`
-  keys still pass through, and `model_reasoning_effort` stays allowed until the reasoning-effort
-  surface (#309) lands its first-class replacement and reserves it. An opaque
-  `--profile` can still set `model` — the operator-trust boundary below, restated, not closed.
+  keys still pass through. An opaque `--profile` can still set either key — the operator-trust
+  boundary below, restated, not closed.
 - **`remote_plugin` is wholly plugin-owned in the passthrough.** Both `--enable remote_plugin` and
   `--disable remote_plugin`, and any `-c features.remote_plugin=…` (either spelling, since
   `--enable X` == `-c features.X=true`), are refused — the server manages this feature as a documented
@@ -245,7 +292,10 @@ a generic one:
 1. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
 2. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`, **unless** the
    rejection names an operator `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptor → `extra_args_rejected` instead
-   (user-owned passthrough, not a plugin-contract drift; see the passthrough section above). Checked
+   (user-owned passthrough, not a plugin-contract drift; see the passthrough section above), **or**
+   this run sent a first-class reasoning-effort override and the failure carries the backend's
+   `REASONING_EFFORT_REJECTION_MARKERS` → `invalid_reasoning_effort` (a caller value to correct; see
+   the reasoning-effort section above). Checked
    before rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
 3. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
    `retry-after`, plus `429` matched with word boundaries so an incidental digit run can't fire it)

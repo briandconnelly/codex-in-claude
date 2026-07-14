@@ -51,7 +51,13 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     meta.rate_limit = rate_limit.capture(result.events)
     if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
         err = codex.classify_failure(
-            result.run, last_message=result.last_message, events=result.events
+            result.run,
+            last_message=result.last_message,
+            events=result.events,
+            # meta carries the effort this run sent through the first-class controls,
+            # so a backend effort rejection is attributed to the caller's argument
+            # (invalid_reasoning_effort), not misread as contract drift (#309).
+            reasoning_effort=meta.reasoning_effort,
         )
         return serialize_error(ErrorResult(error=err, meta=meta))
     return None
@@ -230,6 +236,7 @@ async def run_consult(
     isolation: str,
     timeout_seconds: int,
     model: str | None,
+    reasoning_effort: str | None = None,
     extra_context: str = "",
     on_event: Callable[[str], None] | None = None,
 ) -> dict:
@@ -242,6 +249,7 @@ async def run_consult(
         isolation=isolation,
         timeout_seconds=timeout_seconds,
         model=model,
+        reasoning_effort=reasoning_effort,
         output_schema=CONSULT_OUTPUT_SCHEMA,
         # consult is read-only Q&A; repo membership is irrelevant, so never let a
         # non-repo workspace block the run.
@@ -271,6 +279,7 @@ async def run_review(
     isolation: str,
     timeout_seconds: int,
     model: str | None,
+    reasoning_effort: str | None = None,
     git_timeout: int,
     max_bytes: int,
     extra_context: str = "",
@@ -341,6 +350,7 @@ async def run_review(
         isolation=isolation,
         timeout_seconds=timeout_seconds,
         model=model,
+        reasoning_effort=reasoning_effort,
         output_schema=FINDINGS_OUTPUT_SCHEMA,
         on_event=on_event,
     )

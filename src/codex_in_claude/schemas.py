@@ -48,7 +48,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-41"
+FINGERPRINT = "codex-in-claude/0.1/schema-42"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -64,7 +64,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-41"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 1
+RESULT_FORMAT: int = 2
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -97,6 +97,29 @@ def _server_version_field() -> Any:
 # Sourced from _core (the lower layer that owns the value) so a live job record's
 # poll_after_ms and this constant can never drift.
 JOB_POLL_AFTER_MS = DEFAULT_POLL_AFTER_MS
+
+# Reasoning-effort description constants (#309), shared between the model fields that
+# carry them and _KEPT_DESCRIPTIONS (which lets them survive schema-noise stripping so
+# the null/[] semantics are agent-visible in the advertised outputSchemas).
+_DEFAULT_EFFORT_DESC = (
+    "This model's default reasoning effort as advertised by Codex's on-disk cache; "
+    "advisory only. null = the cache advertised nothing usable (the static fallback "
+    "never carries effort data)."
+)
+_SUPPORTED_EFFORTS_DESC = (
+    "Effort tokens this model advertises in Codex's on-disk cache; advisory only — "
+    "the backend's accepted set varies by account and an unlisted effort may still "
+    "work. null = the cache advertised nothing usable; [] = an explicitly empty "
+    "advertised set."
+)
+_DRY_RUN_MODEL_DESC = (
+    "Model override the previewed paid call would send (per-call param or server "
+    "default); null = Codex would resolve it itself. Unvalidated by the preview."
+)
+_DRY_RUN_EFFORT_DESC = (
+    "Reasoning-effort override the previewed paid call would send (per-call param or "
+    "server default); null = Codex would resolve it itself. Unvalidated by the preview."
+)
 
 Severity = Literal["critical", "high", "medium", "low", "nit"]
 Verdict = Literal["pass", "concerns", "fail", "unknown"]
@@ -199,6 +222,15 @@ ErrorCode = Literal[
     # The installed `codex` rejected a flag/value this plugin sends — its CLI
     # contract drifted and the plugin likely needs an update.
     "cli_contract_changed",
+    # The reasoning_effort this run requested through the plugin's first-class
+    # controls (the per-call parameter or CODEX_IN_CLAUDE_REASONING_EFFORT) was
+    # rejected — a caller/operator value to correct, NOT a plugin contract drift.
+    # Two emitters: the plugin's pre-spend shape bounds (an argv-hostile value —
+    # oversized or control characters — refused before any subprocess, zero spend),
+    # and the Codex backend's request-level rejection (only when an effort override
+    # was actually sent and the failure carries the backend's markers; a rejection of
+    # the config key itself stays cli_contract_changed) (#309).
+    "invalid_reasoning_effort",
     # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
     # (an unaccepted option / config key / profile). Operator config to fix, NOT a
     # plugin contract drift — kept distinct from cli_contract_changed so the fail-loud
@@ -442,6 +474,24 @@ class Meta(BaseModel):
             "for an inspected background job's kind)."
         ),
     )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description=(
+            "The reasoning effort requested through the plugin's first-class controls for "
+            "the Codex run this envelope describes — the per-call `reasoning_effort` "
+            "parameter or the server's CODEX_IN_CLAUDE_REASONING_EFFORT default, sent to "
+            "codex as a `model_reasoning_effort` config override. Like meta.model it is "
+            "override provenance, not backend attestation: null means effort resolution "
+            "happened outside those controls (Codex's own default, the operator's "
+            "config.toml, or an opaque --profile), and the plugin cannot know what it "
+            "resolved to. The generic `-c model_reasoning_effort=…` extra-args spelling is "
+            "refused at parse time so a passthrough cannot contradict this field (#309). A "
+            "retrieved background-job result carries the ORIGINATING run's value; an error "
+            "envelope GENERATED before a Codex run was prepared reports the server-default "
+            "resolution, or null when no default is set — the same cases meta.model "
+            "documents."
+        ),
+    )
     scope: str | None = None  # review scope: working_tree|branch|commit
     base: str | None = None
     commit: str | None = None
@@ -659,6 +709,7 @@ class ResolvedDefaults(BaseModel):
     sandbox: Sandbox
     isolation: Isolation
     model: str | None = None
+    reasoning_effort: str | None = None
     timeout_seconds: int
     timeout_bounds: list[int]  # [min, max] clamp range for timeout_seconds
 
@@ -669,6 +720,7 @@ class RawDefaults(BaseModel):
     sandbox: str
     isolation: str
     model: str | None = None
+    reasoning_effort: str | None = None
     timeout_seconds: int
 
 
@@ -820,6 +872,16 @@ class ModelInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     slug: str
     display_name: str | None = None
+    # Advisory reasoning-effort discovery for the optional `reasoning_effort` param
+    # (#309), read from Codex's on-disk cache. NOT authoritative: the backend's
+    # accepted set varies by model and account, and an unlisted effort may still work.
+    # These two descriptions (and the dry-run echo descriptions) are in
+    # _KEPT_DESCRIPTIONS so the null/[] semantics survive schema-noise stripping and
+    # reach the advertised outputSchema.
+    default_reasoning_effort: str | None = Field(default=None, description=_DEFAULT_EFFORT_DESC)
+    supported_reasoning_efforts: list[str] | None = Field(
+        default=None, description=_SUPPORTED_EFFORTS_DESC
+    )
 
 
 class ModelCatalogResult(BaseModel):
@@ -952,6 +1014,10 @@ class DryRunResult(BaseModel):
     tier: Tier
     sandbox: Sandbox
     isolation: Isolation
+    # Same override-provenance semantics as meta.model/meta.reasoning_effort (#309);
+    # descriptions kept through stripping via _KEPT_DESCRIPTIONS.
+    model: str | None = Field(default=None, description=_DRY_RUN_MODEL_DESC)
+    reasoning_effort: str | None = Field(default=None, description=_DRY_RUN_EFFORT_DESC)
     scope: str | None = None
     base: str | None = None
     commit: str | None = None
@@ -997,6 +1063,10 @@ class DelegateDryRunResult(BaseModel):
     tier: Tier = "propose"
     sandbox: Sandbox = "workspace-write"
     isolation: Isolation
+    # Same override-provenance semantics as DryRunResult's model/reasoning_effort;
+    # shared description constants keep the two previews from drifting.
+    model: str | None = Field(default=None, description=_DRY_RUN_MODEL_DESC)
+    reasoning_effort: str | None = Field(default=None, description=_DRY_RUN_EFFORT_DESC)
     prompt_bytes: int  # full UTF-8 size of the delegate prompt that would be sent
     max_input_bytes: int  # the task byte limit the real run enforces
     worktree_plan: WorktreePlan
@@ -1075,7 +1145,9 @@ _OPAQUE_RATE_LIMIT = {"type": "object", "description": _RATE_LIMIT_POINTER_DESC}
 _OPAQUE_RAW_DEFAULTS = {"type": "object", "description": _RAW_DEFAULTS_POINTER_DESC}
 _OPAQUE_RESOLVED_DEFAULTS = {"type": "object", "description": _RESOLVED_DEFAULTS_POINTER_DESC}
 
-# Descriptions that survive _strip_schema_noise: the intentional resource pointers.
+# Descriptions that survive _strip_schema_noise: the intentional resource pointers,
+# plus the reasoning-effort field semantics (#309) whose null/[] distinctions an agent
+# cannot recover from the bare types.
 _KEPT_DESCRIPTIONS = frozenset(
     {
         _ERROR_POINTER_DESC,
@@ -1084,6 +1156,10 @@ _KEPT_DESCRIPTIONS = frozenset(
         _RATE_LIMIT_POINTER_DESC,
         _RAW_DEFAULTS_POINTER_DESC,
         _RESOLVED_DEFAULTS_POINTER_DESC,
+        _DEFAULT_EFFORT_DESC,
+        _SUPPORTED_EFFORTS_DESC,
+        _DRY_RUN_MODEL_DESC,
+        _DRY_RUN_EFFORT_DESC,
     }
 )
 

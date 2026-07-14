@@ -182,6 +182,15 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "Update codex-in-claude (the installed codex CLI changed its contract);"
         " or pin codex to a supported version, and run codex_status to check the version.",
     ),
+    "invalid_reasoning_effort": (
+        "correct_arguments",
+        "codex_models",
+        False,
+        "The Codex backend rejected the requested reasoning_effort for this model/account. "
+        "Pass an effort the model supports (codex_models lists advisory per-model "
+        "supported_reasoning_efforts), pick a model/effort pair explicitly, or omit "
+        "reasoning_effort (and unset CODEX_IN_CLAUDE_REASONING_EFFORT) to let Codex resolve it.",
+    ),
     "extra_args_rejected": (
         "correct_config",
         None,

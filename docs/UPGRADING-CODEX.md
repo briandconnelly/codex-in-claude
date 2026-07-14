@@ -72,7 +72,25 @@ through this practice — review the new help in absolute terms instead.) Then c
   from a specific CLI's `$CODEX_HOME/models_cache.json`, meant to stay in lockstep with
   `SUPPORTED_VERSIONS`. Diff its **slug set** (not the volatile `client_version`/`fetched_at`) against
   the new CLI's live cache. If slugs changed, update the tuple; either way refresh the provenance
-  comment's re-verified date.
+  comment's re-verified date. While in the cache, also confirm the reasoning-effort discovery
+  fields still hold their pinned shape: `default_reasoning_level` a string,
+  `supported_reasoning_levels` a list of `{effort, …}` objects (the parser degrades to `None`
+  on drift — silent for agents, so record a shape change in `CHANGELOG.md`).
+- **Reasoning-effort config key.** The `reasoning_effort` controls ride
+  `-c model_reasoning_effort=…` (`MODEL_REASONING_EFFORT_CONFIG_KEY`) — a config key `--help`
+  cannot advertise, so the mechanical drift check can't see it, and a key rename/removal drifts
+  **silently** (codex tolerates unknown `-c` keys as junk): this manual step is the only guard.
+  Re-verify per COMPATIBILITY.md's reasoning-effort section, then refresh that section's verified
+  dates. Probe 1 —
+  `codex exec --json --ignore-user-config --ephemeral --skip-git-repo-check -c 'model_reasoning_effort="bogus"' -c model=bogus-model-xyz - <<< "hi"`
+  (the inner quotes mirror the plugin's TOML-string-encoded transport — see COMPATIBILITY.md)
+  — confirms the run is not rejected at parse (the `-c` route still exists); it **cannot** prove
+  the key is still read, because a tolerated junk key produces the same backend bogus-model error.
+  Probe 2 — the same invocation with a **valid** model — is the check that proves the key is still
+  applied: it must fail with both bracketed marker fields, `[reasoning.effort]` and
+  `[ReasoningEffortParam]` (`REASONING_EFFORT_REJECTION_MARKERS` — the classifier requires all of
+  them in `[…]` form); note it spends a trivial request. Also check
+  `codex exec --help` for a new dedicated effort flag worth adopting.
 - **Structured output.** Run a small live `codex exec --output-schema <file>` and confirm the final
   message still conforms to the strict-mode schema in `schemas.py`. (Reminder, already in
   `COMPATIBILITY.md`: native `codex review --output-schema` is **not** honored for the final message

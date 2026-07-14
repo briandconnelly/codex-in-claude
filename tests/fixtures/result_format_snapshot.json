@@ -1,5 +1,5 @@
 {
-  "result_format": 1,
+  "result_format": 2,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -255,6 +255,18 @@
                 }
               ],
               "default": null
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
             },
             "redacted_paths": {
               "items": {
@@ -1006,6 +1018,18 @@
               ],
               "default": null
             },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
             "redacted_paths": {
               "items": {
                 "type": "string"
@@ -1671,6 +1695,7 @@
                 "schema_violation",
                 "internal_error",
                 "cli_contract_changed",
+                "invalid_reasoning_effort",
                 "extra_args_rejected",
                 "transfer_unsupported",
                 "transfer_failed",
@@ -1955,6 +1980,18 @@
                 }
               ],
               "default": null
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
             },
             "redacted_paths": {
               "items": {
@@ -2696,6 +2733,18 @@
               ],
               "default": null
             },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
             "redacted_paths": {
               "items": {
                 "type": "string"
@@ -3233,6 +3282,7 @@
         "model": null,
         "paths": null,
         "rate_limit": null,
+        "reasoning_effort": null,
         "redacted_paths": [],
         "request_id": "00000000000000000000000000000000",
         "sandbox": "read-only",
@@ -3279,6 +3329,7 @@
         "model": null,
         "paths": null,
         "rate_limit": null,
+        "reasoning_effort": null,
         "redacted_paths": [],
         "request_id": "00000000000000000000000000000000",
         "sandbox": "read-only",
@@ -3353,6 +3404,7 @@
         "model": null,
         "paths": null,
         "rate_limit": null,
+        "reasoning_effort": null,
         "redacted_paths": [],
         "request_id": "00000000000000000000000000000000",
         "sandbox": "read-only",

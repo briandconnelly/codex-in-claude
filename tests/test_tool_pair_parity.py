@@ -194,3 +194,24 @@ async def test_delegate_input_too_large_beats_git_preflight(clean_env, tmp_path,
     for tool in ("codex_delegate", "codex_delegate_async"):
         res = await getattr(server, tool)("t" * 2000, workspace_root=str(tmp_path))
         assert res["error"]["code"] == "input_too_large"
+
+
+async def test_consult_pair_spec_parity_with_reasoning_effort(clean_env, tmp_path, capture_tail):
+    # #309: the conditional reasoning_effort spec key must be written identically by
+    # both variants (present when set, absent when not).
+    kw = dict(workspace_root=str(tmp_path), isolation="inherit", reasoning_effort="high")
+    await server.codex_consult("q", **kw)
+    await server.codex_consult_async("q", **kw)
+    assert capture_tail["sync"]["spec"]["reasoning_effort"] == "high"
+    _specs_equal_modulo_timeout(capture_tail["sync"]["spec"], capture_tail["async"]["spec"])
+
+
+async def test_delegate_pair_spec_parity_with_reasoning_effort(
+    clean_env, tmp_path, monkeypatch, capture_tail
+):
+    _no_git_preflight(monkeypatch)
+    kw = dict(workspace_root=str(tmp_path), isolation="inherit", reasoning_effort="low")
+    await server.codex_delegate("do work", **kw)
+    await server.codex_delegate_async("do work", **kw)
+    assert capture_tail["sync"]["spec"]["reasoning_effort"] == "low"
+    _specs_equal_modulo_timeout(capture_tail["sync"]["spec"], capture_tail["async"]["spec"])

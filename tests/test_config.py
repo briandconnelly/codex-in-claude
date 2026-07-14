@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
+
 import pytest
 
 from codex_in_claude import config
@@ -25,18 +28,27 @@ def test_defaults_builtin(clean_env):
     assert d.sandbox == "read-only"
     assert d.isolation == "inherit"
     assert d.model is None
+    assert d.reasoning_effort is None
     assert d.timeout_seconds == config.DEFAULT_TIMEOUT_SECONDS
 
 
 def test_defaults_env_overrides(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_TIER_DEFAULT", "propose")
     clean_env.setenv("CODEX_IN_CLAUDE_MODEL", "gpt-5.4")
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "high")
     clean_env.setenv("CODEX_IN_CLAUDE_TIMEOUT_SECONDS", "42")
     d = config.defaults()
     assert d.tier == "propose"
     assert d.sandbox == "workspace-write"  # tier default
     assert d.model == "gpt-5.4"
+    assert d.reasoning_effort == "high"
     assert d.timeout_seconds == 42
+
+
+def test_blank_reasoning_effort_env_is_unset(clean_env):
+    # Same convention as CODEX_IN_CLAUDE_MODEL: a blank env value means "not set".
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "")
+    assert config.defaults().reasoning_effort is None
 
 
 def test_invalid_tier_falls_back(clean_env):
@@ -445,10 +457,6 @@ def test_extra_args_model_denial_is_not_the_remote_plugin_message(monkeypatch):
     [
         "-c model_provider=azure",  # the passthrough's motivating use case (#231)
         "-c model_providers.x.base_url=http://localhost:8000/v1",  # provider table
-        # Allowed until the reasoning-effort surface lands (#309): denying it today
-        # would remove the operator's only effort control while contradicting nothing
-        # in meta (no effort field exists yet). #309 reserves it with its replacement.
-        "-c model_reasoning_effort=high",
         "-c model_verbosity=low",  # any other model_* key stays allowed
     ],
 )
@@ -456,3 +464,101 @@ def test_extra_args_allows_other_model_keys(monkeypatch, raw):
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
     ea = config.extra_args()
     assert ea.valid is True
+
+
+# --- #309: `model_reasoning_effort` joins `model` in the reserved set -----------------
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "-c model_reasoning_effort=high",  # short config flag
+        "--config model_reasoning_effort=high",  # long config flag
+        "--config=model_reasoning_effort=high",  # attached long config flag
+        '-c " model_reasoning_effort =high"',  # whitespace around the key
+        # Lookalike spellings, conservatively refused — same #287/#310 treatment: codex's
+        # -c parser is literal and case-sensitive, so these are junk keys codex never
+        # reads, but denying them costs nothing and keeps the denylist unprobeable.
+        "-c Model_Reasoning_Effort=high",
+        "-c '\"model_reasoning_effort\"=high'",  # escaped quotes survive shlex
+    ],
+)
+def test_extra_args_reserves_reasoning_effort_key(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    # The refusal must point the operator at the first-class replacements for THIS key.
+    assert "CODEX_IN_CLAUDE_REASONING_EFFORT" in ea.error
+    assert "reasoning_effort" in ea.error
+    # The -c VALUE is never echoed in an error envelope.
+    assert "=high" not in ea.error
+
+
+def test_extra_args_model_denial_names_model_controls_not_effort(monkeypatch):
+    # Each reserved key's refusal names its own first-class controls.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model=gpt-5-codex")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "CODEX_IN_CLAUDE_MODEL" in ea.error
+    assert "CODEX_IN_CLAUDE_REASONING_EFFORT" not in ea.error
+
+
+# --- Reasoning-effort shape bounds (#309, Codex re-review) -----------------------------
+@pytest.mark.parametrize(
+    "value",
+    ["", "high", "x" * 128, "an effort with spaces", "Ünïcode-ok", "\xa0"],
+)
+def test_reasoning_effort_shape_accepts(value):
+    assert config.reasoning_effort_shape_error(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "fragment"),
+    [
+        ("x" * 129, "128"),  # over the max length
+        ("with\x00nul", "control character"),
+        ("with\x07bell", "control character"),
+        ("high\n", "control character"),  # trailing newline is NOT admitted here
+        ("\x7f", "control character"),  # DEL
+        ("high\x80", "control character"),  # C1 lower bound
+        ("high\x85", "control character"),  # NEL — a C1 control (category Cc)
+        ("high\x9b", "control character"),  # CSI — C1 upper bound
+        ("high\ud800", "surrogate"),  # lone high surrogate — hostile to UTF-8/JSON
+        ("\udfff", "surrogate"),  # surrogate range upper bound
+    ],
+)
+def test_reasoning_effort_shape_rejects(value, fragment):
+    reason = config.reasoning_effort_shape_error(value)
+    assert reason is not None
+    assert fragment in reason
+    # The reason is value-free (safe for an error message).
+    assert value not in reason
+
+
+def test_reasoning_effort_shape_rejects_every_unicode_cc_control():
+    # Maintainer-review regression (#313): the documented contract is "no control
+    # characters", which is Unicode category Cc — C0, DEL, AND the C1 block
+    # (U+0080-U+009F, e.g. NEL/CSI). Both the character-wise predicate and the
+    # advertised JSON-Schema pattern must reject every one of them; the first
+    # non-control neighbours (space, U+00A0) must pass both.
+    cc = [chr(cp) for cp in range(0x100) if unicodedata.category(chr(cp)) == "Cc"]
+    assert len(cc) == 65  # C0 (32) + DEL (1) + C1 (32); Cc has no members past U+00FF
+    for ch in cc:
+        assert config.reasoning_effort_shape_error(ch) == "contains a control character"
+        assert re.fullmatch(config.REASONING_EFFORT_VALUE_PATTERN, ch) is None
+    for ch in (" ", "\xa0"):
+        assert config.reasoning_effort_shape_error(ch) is None
+        assert re.fullmatch(config.REASONING_EFFORT_VALUE_PATTERN, ch)
+
+
+def test_reasoning_effort_shape_rejects_every_surrogate():
+    # Maintainer-review regression (#313): surrogate code points (category Cs,
+    # U+D800-U+DFFF) are outside Cc but hostile to argv encoding and JSON
+    # serialization — an unpaired one raises UnicodeEncodeError before Codex spawns
+    # and breaks envelope serialization. The character-wise predicate rejects the
+    # whole range; the neighbours just outside it must pass. (The advertised
+    # JSON-Schema pattern deliberately does NOT name the range: under a non-`u`-flag
+    # ECMA engine a surrogate class also matches the code UNITS of astral characters,
+    # which are legitimate values — see the comment on REASONING_EFFORT_VALUE_PATTERN.)
+    for cp in (0xD800, 0xDBFF, 0xDC00, 0xDFFF):
+        assert config.reasoning_effort_shape_error(chr(cp)) == "contains a surrogate code point"
+    for cp in (0xD7FF, 0xE000, 0x1F600):  # range neighbours + an astral character
+        assert config.reasoning_effort_shape_error(chr(cp)) is None

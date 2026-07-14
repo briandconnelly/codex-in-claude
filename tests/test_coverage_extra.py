@@ -20,6 +20,7 @@ async def _run_review_direct(tmp_path, *, scope="working_tree", base=None, commi
         sandbox="read-only",
         isolation="inherit",
         model=None,
+        reasoning_effort=None,
         timeout_seconds=180,
         scope=scope,
         base=base,

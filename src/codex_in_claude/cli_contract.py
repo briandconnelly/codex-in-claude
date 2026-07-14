@@ -194,6 +194,53 @@ HELP_GATED_FLAGS = {
     MODEL_FLAG: True,  # falls back to the configured/default Codex model
 }
 
+# --- Reasoning-effort config override (issue #309) --------------------------------
+# `codex exec` 0.144.3 has no dedicated reasoning-effort flag (verified against
+# `codex exec --help` 2026-07-13); the only route is the `model_reasoning_effort`
+# config key, sent as `-c model_reasoning_effort=<value>`. A config KEY cannot be
+# help-gated — `--help` advertises flags, not config keys — so when a caller (or the
+# CODEX_IN_CLAUDE_REASONING_EFFORT default) requests an effort it is sent
+# unconditionally. Drift coverage is NARROWER than ALWAYS_SEND: only removal of the
+# `-c` flag itself fails loudly (arg-parse, zero spend, cli_contract_changed). A
+# rename/removal of the KEY drifts SILENTLY — codex tolerates unknown `-c` keys as
+# junk it never reads (verified for 0.144.3, #312) — so the effort would be quietly
+# ignored; the manual re-verification probe in docs/UPGRADING-CODEX.md is the only
+# guard for that case.
+#
+# The VALUE's semantic set is open — the plugin enforces only transport-shape bounds
+# (config.reasoning_effort_shape_error) and allowlists nothing: the CLI accepts any
+# in-shape string silently, and the backend judges it at request time; its accepted
+# set varies by model and account (probed 2026-07-13: gpt-5.5 via
+# ChatGPT advertises none|minimal|low|medium|high|xhigh; the models cache advertises
+# max/ultra for other slugs). Discovery is advisory only (codex_models).
+MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
+
+# Markers identifying the BACKEND's rejection of a bad reasoning-effort VALUE (a
+# caller error), as distinct from a CLI rejection of the config key itself (contract
+# drift). The backend 400 reads "[ReasoningEffortParam] [reasoning.effort]
+# [invalid_enum_value] Invalid value: '<v>'..." — which also matches the "invalid
+# value" drift pattern above, so classify_failure must check these markers first or a
+# caller's typo would be misreported as cli_contract_changed. ALL markers must appear
+# in their bracketed `[…]` field form — a marker as a free substring is how an
+# operator passthrough naming one (`--enable reasoning.effort`, a profile so named)
+# would impersonate the backend signature and steal an extra_args_rejected
+# attribution (#313). Deliberately EXCLUDES "model_reasoning_effort": a rejection
+# naming only the key means codex no longer accepts the key — genuine drift that
+# must stay fail-loud.
+REASONING_EFFORT_REJECTION_MARKERS = ("reasoning.effort", "reasoningeffortparam")
+
+# Conservative shape for an effort token read from the UNDOCUMENTED models cache
+# (same defensive posture as MODEL_SLUG_PATTERN): entries failing it are dropped so a
+# malformed/hostile cache cannot surface junk to an agent. Never applied to the
+# caller's own reasoning_effort parameter, which is passed through for the backend to
+# validate.
+# \Z, not $: `$` also matches before a trailing newline, so a malformed cache token
+# like "high\n" would slip the shape check under re.match.
+REASONING_EFFORT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}\Z")
+# Ignore anything past this many supported-effort entries per model (the real cache
+# advertises ≤ 6).
+SUPPORTED_EFFORTS_MAX_ENTRIES = 16
+
 # --- Model catalog (advisory discovery) -----------------------------------------
 # Codex caches its authoritative model list at $CODEX_HOME/models_cache.json (default
 # ~/.codex). It is an UNDOCUMENTED internal file, written lazily by real Codex sessions
@@ -345,6 +392,18 @@ def is_contract_drift(*texts: str | None) -> bool:
     `codex` surfaces it."""
     blob = "\n".join(t for t in texts if t).lower()
     return any(pattern in blob for pattern in CONTRACT_DRIFT_STDERR_PATTERNS)
+
+
+def is_reasoning_effort_rejection(*texts: str | None) -> bool:
+    """Whether the provided texts carry the backend's bad-reasoning-effort signature.
+
+    True only for the request-level rejection of an effort VALUE: every marker in
+    REASONING_EFFORT_REJECTION_MARKERS present in its bracketed `[…]` field form.
+    A marker as a free substring (an operator passthrough naming it) does not
+    match, and a rejection naming only the config key is contract drift and
+    deliberately does not match either."""
+    blob = "\n".join(t for t in texts if t).lower()
+    return all(f"[{marker}]" in blob for marker in REASONING_EFFORT_REJECTION_MARKERS)
 
 
 def is_auth_failure(*texts: str | None) -> bool:

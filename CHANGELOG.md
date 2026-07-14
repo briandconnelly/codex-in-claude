@@ -5,6 +5,53 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **Reasoning-effort control, reporting, and per-model discovery** (#309). Every Codex-running tool
+  (`codex_consult`, `codex_review_changes`, `codex_delegate`, their `_async` twins) and both dry runs
+  now take an optional `reasoning_effort` parameter, with a `CODEX_IN_CLAUDE_REASONING_EFFORT` server
+  default (per-call value wins; exact-`None` precedence, so an explicit empty string is passed
+  through, not coalesced). It is sent as a `-c model_reasoning_effort=…` config override — codex-cli
+  0.144 has no dedicated flag — unconditionally when requested (a config key cannot be help-gated),
+  with the value TOML-string-encoded so the advertised open string round-trips exactly (codex
+  TOML-parses the `-c` right-hand side, so a raw interpolation would retype
+  boolean/numeric/collection-shaped values and silently unwrap quoted ones).
+  Removal of the `-c` flag itself fails loudly as `cli_contract_changed`; a rename/removal of the
+  key drifts silently (codex tolerates unknown `-c` keys) and is guarded by the manual
+  re-verification step in `docs/UPGRADING-CODEX.md`. The value is an open per-model string the
+  backend validates; a backend rejection of a sent override is classified as the new
+  `invalid_reasoning_effort` error (a caller argument to correct, with a `codex_models` repair —
+  never masked as contract drift, never claimed for a rejection of the config key itself, and
+  never stolen by a passthrough descriptor that spells out the backend's bracketed marker
+  signature — such a rejection stays `extra_args_rejected`). The shape bounds shared by the
+  per-call parameter and the env default reject surrogate code points alongside control
+  characters and over-length values (an unpaired surrogate breaks argv/JSON encoding; the raw
+  value is never echoed back through `meta.reasoning_effort` on that error), and both dry runs
+  advertise `invalid_reasoning_effort` in their error catalogs — an invalid resolved default is
+  rejected pre-spend there too, no Codex involved.
+  Reporting: `meta.reasoning_effort` (override provenance mirroring `meta.model`; `null` = Codex
+  resolved it), `reasoning_effort` in `codex_status`'s `raw_defaults`/`resolved_defaults`, and both
+  dry-run results now echo the effective `model`/`reasoning_effort` the previewed paid call would
+  send (`codex_dry_run` also gains the `model` param for full preview parity). Discovery:
+  `codex_models`/`codex://models` entries carry advisory `default_reasoning_effort` and
+  `supported_reasoning_efforts`, read defensively from Codex's models cache. The `reasoning_effort`
+  spec key is written only when an effort applies, so pre-existing idempotency dedup entries survive
+  the upgrade. Result `fingerprint` moves (`codex-in-claude/0.1/schema-41` → `schema-42`) and the
+  persisted result format bumps (`RESULT_FORMAT` 1 → 2: `Meta` gained a field, so an older release
+  replaying a new stored job result reports `job_result_incompatible` instead of corruption).
+
+### Changed
+
+- **BREAKING (operator surface): the extra-args passthrough can no longer set
+  `model_reasoning_effort`** (#309). `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses the exact
+  `model_reasoning_effort` key via `-c`/`--config` (plus case/quote lookalikes, matching the #310
+  `model` treatment) at parse time with `extra_args_rejected`, before any spend: a passthrough
+  effort would contradict the new `meta.reasoning_effort` provenance on day one. Migrate to
+  `CODEX_IN_CLAUDE_REASONING_EFFORT` or the per-call `reasoning_effort` parameter — both flow into
+  `resolved_defaults` and `meta.reasoning_effort` correctly. Other `model_*` keys
+  (`model_provider`, `model_providers.*`, `model_verbosity`, …) still pass through, and an opaque
+  `--profile` remains the documented operator-trust boundary.
+
 ### Fixed
 
 - **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
@@ -14,9 +61,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `raw_response.model`) still reported the per-call/server value — null in the common case — so the
   envelope's provenance was wrong. Set `CODEX_IN_CLAUDE_MODEL` or the per-call `model` parameter
   instead; both flow into `resolved_defaults` and `meta.model` correctly. Other `model_*` keys are
-  untouched — `model_provider`/`model_providers.*` (the passthrough's motivating use case) and
-  `model_reasoning_effort` (allowed until #309 lands its first-class replacement, which reserves it)
-  still pass through. An opaque `--profile` can still set `model` uninspectably — the documented
+  untouched — `model_provider`/`model_providers.*` (the passthrough's motivating use case) still
+  pass through; `model_reasoning_effort` was allowed at the time and is reserved by #309's
+  first-class replacement in this same release (see Changed above). An opaque `--profile` can still set `model` uninspectably — the documented
   operator-trust boundary (COMPATIBILITY.md) is restated, not closed. `meta.model` now carries a
   published description defining it as override provenance (first-class controls only), not backend
   attestation. Result `fingerprint` moves

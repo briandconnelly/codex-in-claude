@@ -91,3 +91,130 @@ def test_source_none_when_no_cache_and_no_static(tmp_path, monkeypatch):
     assert cat.source == "none"
     assert cat.unavailable_reason
     assert cat.models == []
+
+
+# --- Reasoning-effort discovery (#309) ---------------------------------------------
+def test_reasoning_effort_fields_parsed_from_cache(tmp_path, monkeypatch):
+    # The real 0.144 cache shape: supported_reasoning_levels is a list of OBJECTS
+    # {effort, description, ...}; only the effort tokens are surfaced (advisory).
+    _write_cache(
+        tmp_path,
+        {
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [
+                        {"effort": "low", "description": "Fast responses"},
+                        {"effort": "medium", "description": "Balanced"},
+                        {"effort": "max", "description": "Maximum depth"},
+                        {"effort": "ultra", "description": "With delegation"},
+                    ],
+                },
+            ]
+        },
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    cat = codex_models.read_model_catalog()
+    m = cat.models[0]
+    assert m.default_reasoning_effort == "medium"
+    assert m.supported_reasoning_efforts == ["low", "medium", "max", "ultra"]
+
+
+def test_reasoning_effort_fields_none_when_absent(tmp_path, monkeypatch):
+    _write_cache(tmp_path, {"models": [{"slug": "gpt-5.5"}]})
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    m = codex_models.read_model_catalog().models[0]
+    assert m.default_reasoning_effort is None
+    assert m.supported_reasoning_efforts is None
+
+
+def test_reasoning_effort_junk_entries_dropped_and_deduped(tmp_path, monkeypatch):
+    _write_cache(
+        tmp_path,
+        {
+            "models": [
+                {
+                    "slug": "gpt-5.5",
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [
+                        {"effort": "low"},
+                        {"effort": "low"},  # duplicate: kept once, order preserved
+                        {"effort": ""},  # empty: dropped
+                        {"effort": "two words"},  # fails the token pattern: dropped
+                        {"effort": 42},  # non-string: dropped
+                        {"description": "no effort key"},  # missing effort: dropped
+                        "nope",  # non-dict entry: dropped
+                        {"effort": "high"},
+                    ],
+                },
+            ]
+        },
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    m = codex_models.read_model_catalog().models[0]
+    assert m.supported_reasoning_efforts == ["low", "high"]
+
+
+def test_reasoning_effort_all_junk_is_none_not_empty(tmp_path, monkeypatch):
+    # A non-empty advertised list that yields nothing usable is unusable data (None),
+    # distinct from an explicitly empty list ([]).
+    _write_cache(
+        tmp_path,
+        {
+            "models": [
+                {"slug": "a-model", "supported_reasoning_levels": [{"effort": "bad token!"}]},
+                {"slug": "b-model", "supported_reasoning_levels": []},
+                {"slug": "c-model", "supported_reasoning_levels": "not-a-list"},
+            ]
+        },
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    models = {m.slug: m for m in codex_models.read_model_catalog().models}
+    assert models["a-model"].supported_reasoning_efforts is None
+    assert models["b-model"].supported_reasoning_efforts == []
+    assert models["c-model"].supported_reasoning_efforts is None
+
+
+def test_reasoning_effort_list_is_capped(tmp_path, monkeypatch):
+    levels = [{"effort": f"e{i}"} for i in range(cli_contract.SUPPORTED_EFFORTS_MAX_ENTRIES + 10)]
+    _write_cache(
+        tmp_path,
+        {"models": [{"slug": "gpt-5.5", "supported_reasoning_levels": levels}]},
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    m = codex_models.read_model_catalog().models[0]
+    assert len(m.supported_reasoning_efforts) == cli_contract.SUPPORTED_EFFORTS_MAX_ENTRIES
+
+
+def test_default_reasoning_effort_validated_independently(tmp_path, monkeypatch):
+    # A junk default is dropped without touching the supported list, and a valid
+    # default survives even when absent from (or lacking) an advertised list.
+    _write_cache(
+        tmp_path,
+        {
+            "models": [
+                {
+                    "slug": "a-model",
+                    "default_reasoning_level": "bad default!",
+                    "supported_reasoning_levels": [{"effort": "low"}],
+                },
+                {"slug": "b-model", "default_reasoning_level": "xhigh"},
+            ]
+        },
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    models = {m.slug: m for m in codex_models.read_model_catalog().models}
+    assert models["a-model"].default_reasoning_effort is None
+    assert models["a-model"].supported_reasoning_efforts == ["low"]
+    assert models["b-model"].default_reasoning_effort == "xhigh"
+    assert models["b-model"].supported_reasoning_efforts is None
+
+
+def test_static_fallback_has_no_reasoning_effort_data(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    cat = codex_models.read_model_catalog()
+    assert cat.source == "static"
+    for m in cat.models:
+        assert m.default_reasoning_effort is None
+        assert m.supported_reasoning_efforts is None
