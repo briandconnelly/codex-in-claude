@@ -857,7 +857,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-43",
+            "default": "codex-in-claude/0.1/schema-44",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1379,7 +1379,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-43",
+                "default": "codex-in-claude/0.1/schema-44",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2385,7 +2385,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-43",
+            "default": "codex-in-claude/0.1/schema-44",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3029,7 +3029,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-43",
+            "default": "codex-in-claude/0.1/schema-44",
             "title": "Fingerprint",
             "type": "string"
           },

@@ -54,6 +54,21 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **BREAKING (operator surface): quoted-root spellings no longer pass the extra-args root
+  denylist** (#312). `CODEX_IN_CLAUDE_EXTRA_ARGS` root denial (`sandbox*`, `approval_policy`,
+  `shell_environment_policy`) derived the root from the raw key while the exact-key denials
+  normalized theirs, so a shlex-surviving quoted root (`-c '"sandbox_workspace_write".network_access=true'`)
+  validated cleanly. This was **not** a sandbox bypass — codex's `-c` parser is literal (no quote
+  stripping, case-sensitive; verified against `config_override.rs` at rust-v0.144.3), so the quoted
+  spelling was a junk key codex never read, a silently-accepted no-op. The parser now normalizes
+  the whole key once and derives the root from the normalized key, so root and exact-key checks
+  share one conservative canonicalization and a misspelled-but-guarantee-shaped operator config
+  gets loud feedback instead of silence. Also corrects the #287-era `_normalize_config_key`
+  docstring and test comments that claimed the normalization mirrors "the way codex's own TOML
+  key parser resolves it" — it doesn't; it is deliberate over-matching so lookalike spellings
+  can't probe the denylist. Result `fingerprint` moves (`codex-in-claude/0.1/schema-43` →
+  `schema-44`).
+
 - **`codex_job_consume_result` no longer destroys a stored result it failed to deliver** (#306).
   Consume used to delete the job record *before* the payload was validated, so a corrupt or
   cross-release result produced an `internal_error`/`job_result_incompatible` envelope about a

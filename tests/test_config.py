@@ -370,6 +370,38 @@ def test_extra_args_denies_shell_environment_policy_key(monkeypatch):
     assert ea.valid is False
 
 
+# --- #312: quoted-root spellings may not pass the security root denylist --------------
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Quoted TOML root segments that SURVIVE shlex (single-quoted whole value preserves
+        # the inner double-quotes). In codex these are junk keys its config never reads
+        # (its -c parser is literal — no quote stripping), so they were silently-accepted
+        # no-ops, not a sandbox bypass; refusing them anyway gives the operator feedback
+        # and keeps the root denial as conservative as the exact-key denials (#287).
+        "-c '\"sandbox_workspace_write\".network_access=true'",
+        "-c '\"shell_environment_policy\".inherit=all'",
+        "-c '\"approval_policy\"=never'",
+        "-c '\"sandbox_mode\"=danger-full-access'",
+        "-c '\" Sandbox_Workspace_Write \".network_access=true'",  # quotes + whitespace + case
+    ],
+)
+def test_extra_args_denies_quoted_root_spellings(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "refused" in ea.error
+
+
+def test_extra_args_allows_quoted_root_of_permitted_key(monkeypatch):
+    # The quoted-root canonicalization must not widen the denylist: a quoted root that
+    # normalizes to a PERMITTED key stays allowed (codex will treat it as a junk key,
+    # which is the operator's business — only guarantee-relevant roots are refused).
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c '\"model_provider\"=azure'")
+    ea = config.extra_args()
+    assert ea.valid is True
+
+
 # --- #287: an operator may not re-enable the remote_plugin connectors -----------------
 @pytest.mark.parametrize(
     "raw",
@@ -388,8 +420,11 @@ def test_extra_args_denies_shell_environment_policy_key(monkeypatch):
         # allowing the redundant flag would let a plugin-guarantee-flag drift be misattributed
         # to the operator's passthrough (#287 review).
         "--disable remote_plugin",
-        # Quoted TOML key segments that SURVIVE shlex (single-quoted whole value preserves the
-        # inner double-quotes) and resolve to features.remote_plugin in codex.
+        # Quoted TOML key segments that SURVIVE shlex (single-quoted whole value preserves
+        # the inner double-quotes). In codex these are junk keys, NOT aliases of
+        # features.remote_plugin — its -c parser is literal (no quote stripping, verified
+        # against config_override.rs at rust-v0.144.3) — so denying them is conservative
+        # over-matching, not a mirror of codex's resolution (#312).
         "-c 'features.\"remote_plugin\"=true'",
         "-c '\"features\".remote_plugin=true'",
     ],
