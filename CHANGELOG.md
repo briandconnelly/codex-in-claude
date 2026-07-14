@@ -11,11 +11,10 @@ A reasoning-effort and operator-provenance release. Codex's reasoning effort is 
 discoverable control on every Codex-running tool, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` passthrough
 was narrowed so an operator config can no longer contradict the provenance the result envelope
 reports. The passthrough narrows in three ways, each **breaking on the operator surface** — it now
-refuses keys it used to accept — but nothing on the agent-visible surface was removed or retyped:
-no tool, field, or error code changed shape. The agent-visible surface
-changed four times (result `fingerprint` `codex-in-claude/0.1/schema-40` →
-`codex-in-claude/0.1/schema-44`), so pre-1.0 this is a minor release; clients that cache by
-`fingerprint` re-fetch the contract.
+refuses keys it used to accept — but nothing on the agent-visible surface was removed or retyped: no
+tool, field, or error code changed shape. That surface did change four times (result `fingerprint`
+`codex-in-claude/0.1/schema-40` → `codex-in-claude/0.1/schema-44`), so pre-1.0 this is a minor
+release; clients that cache by `fingerprint` re-fetch the contract.
 
 ### Added
 
