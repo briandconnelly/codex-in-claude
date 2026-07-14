@@ -471,15 +471,28 @@ class JobStore:
     def _rmtree(jd: Path) -> None:
         # meta.json goes LAST: it is the record's existence marker (a dir without it
         # is invisible to status/list and skipped by the reaper), so a partial
-        # failure must never orphan an unreadable, unreapable remainder (#306
-        # review). If any earlier unlink fails, the record stays fully readable.
+        # failure must never orphan an unreapable remainder (#306 review). If any
+        # earlier unlink fails, the record stays fully readable. The marker must be
+        # gone before rmdir (the dir has to be empty), so if that final rmdir fails
+        # the snapshotted marker is restored — the shell stays visible and a later
+        # reap pass retries — atomically (tmp + replace), mirroring _write_meta, so
+        # a cross-process reader never sees a torn file.
         meta = jd / "meta.json"
         try:
             for child in jd.iterdir():
                 if child != meta:
                     child.unlink(missing_ok=True)
+            marker = None
+            with contextlib.suppress(OSError):
+                marker = meta.read_bytes()
             meta.unlink(missing_ok=True)
-            jd.rmdir()
+            try:
+                jd.rmdir()
+            except OSError:
+                if marker is not None:
+                    tmp = jd / "meta.json.tmp"
+                    tmp.write_bytes(marker)
+                    tmp.replace(meta)
         except OSError:
             pass
 

@@ -399,6 +399,36 @@ def test_rmtree_partial_failure_keeps_record_readable(tmp_path, monkeypatch):
     assert payload == {"ok": True, "tool": "t"}  # result still fetchable
 
 
+def test_rmtree_failed_rmdir_restores_marker(tmp_path, monkeypatch):
+    # meta.json must be gone before rmdir (the dir has to be empty), so a failed
+    # final rmdir would otherwise strand a marker-less shell that status/list and
+    # the reaper all skip. _rmtree restores the snapshotted marker so the record
+    # stays visible and a later reap pass can retry (Copilot review on #314).
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    real_rmdir = Path.rmdir
+
+    def stuck_dir(self, *args, **kwargs):
+        if self.name == job_id:
+            raise OSError("directory busy")
+        return real_rmdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rmdir", stuck_dir)
+    assert store.discard(cwd, job_id) is DiscardOutcome.DELETE_FAILED
+    monkeypatch.undo()
+    jd = store._job_dir(cwd, job_id)
+    assert (jd / "meta.json").is_file()  # marker restored
+    # The shell reads as a terminal record (result.json is gone, so "failed" —
+    # natural completion never persists terminal_status), which is the point:
+    # visible to status/list and eligible for TTL reaping, never an orphan.
+    assert store.status(cwd, job_id)["status"] == "failed"
+    # Once the transient failure clears, cleanup completes.
+    store._rmtree(jd)
+    assert store.status(cwd, job_id) is None
+
+
 def test_missing_job(tmp_path):
     store = _store(tmp_path)
     cwd = str(tmp_path)

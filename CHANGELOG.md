@@ -72,9 +72,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   False for an inaccessible-but-present path, which would have claimed a removal that never
   happened), `discard` reports a discriminated outcome (`REMOVED`/`MISSING`/`NOT_DONE`/
   `DELETE_FAILED`) so the server never infers a lost race from a post-hoc status probe, and the
-  record's `meta.json` marker is unlinked last so a partial deletion failure leaves the record
-  fully readable instead of stranding an unreapable orphan. Result `fingerprint` moves
-  (`codex-in-claude/0.1/schema-42` → `schema-43`).
+  record's `meta.json` marker is unlinked last — and restored if the final `rmdir` then fails —
+  so a partial deletion failure leaves the record visible and reapable instead of stranding an
+  unreapable orphan. Result `fingerprint` moves (`codex-in-claude/0.1/schema-42` → `schema-43`).
 
 - **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
   `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses the exact `model` key via `-c`/`--config` (plus, conservatively,
