@@ -739,7 +739,12 @@ class JobStore:
             if state != "done":
                 return False
             self._rmtree(jd)
-            return not jd.exists()
+            try:
+                return not jd.exists()
+            except OSError:
+                # exists() re-raises stat errors pathlib does not ignore (e.g.
+                # EACCES). Removal that cannot be verified is never claimed.
+                return False
 
     def cancel(self, cwd: str, job_id: str) -> dict | None:
         with _LOCK:

@@ -1729,8 +1729,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 required_params=["job_id"],
                 key_optional_params=["workspace_root", "detail"],
                 returns="The same envelope as codex_job_result; removes completed state "
-                "only after the result was successfully returned (an unreadable stored "
-                "result is kept for codex_job_result).",
+                "only once the stored result has been read back intact and validated "
+                "(an unreadable stored result is kept for codex_job_result).",
             ),
             ToolCapability(
                 name="codex_job_cancel",
@@ -3162,7 +3162,8 @@ async def codex_consult_async(
     detached — use it when the consult may run long. Starting a job commits to spend
     (it runs to completion or its wall-clock deadline even if you never poll). Poll
     with `codex_job_status`, read the consult envelope with `codex_job_result`, delete
-    it with `codex_job_consume_result`, or stop it with `codex_job_cancel`.
+    it after successful read with `codex_job_consume_result`, or stop it with
+    `codex_job_cancel`.
 
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
     (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
@@ -3218,8 +3219,9 @@ async def codex_review_changes_async(
     `base`/`commit` comes back as the same structured error with **zero spend** (a bad
     `scope` is an out-of-enum value rejected by MCP input validation before the job
     starts). Starting a job commits to spend. Poll with `codex_job_status`, read the
-    review envelope with `codex_job_result`, delete it with `codex_job_consume_result`,
-    or stop it with `codex_job_cancel`. Pass `workspace_root` (absolute).
+    review envelope with `codex_job_result`, delete it after successful read with
+    `codex_job_consume_result`, or stop it with `codex_job_cancel`. Pass
+    `workspace_root` (absolute).
 
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
     your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
@@ -3976,11 +3978,13 @@ async def codex_job_consume_result(
     """Fetch a finished background Codex job's result and delete the stored record.
 
     Same envelope as codex_job_result (matching the job's kind — branch on `tool`),
-    then removes completed job state — but only when the result was successfully
-    returned: a stored result this release cannot read (job_result_incompatible or
-    a corruption internal_error) is NOT deleted, so it stays inspectable via
-    codex_job_result. Use only when you no longer need to poll or re-read the job.
-    Non-done jobs are not deleted. `detail` works as in codex_job_result (#56)."""
+    then removes completed job state — but only once the stored result has been read
+    intact and validated (a success or the job's own error envelope): a stored result
+    this release cannot read (job_result_incompatible or a corruption internal_error)
+    is NOT deleted, so it stays inspectable via codex_job_result. Deletion precedes
+    the response, so a response lost in transit does not restore the record. Use only
+    when you no longer need to poll or re-read the job. Non-done jobs are not
+    deleted. `detail` works as in codex_job_result (#56)."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 
 

@@ -66,7 +66,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   concurrent consume, TTL reaping, or count-cap eviction — reports `job_not_found` rather than
   delivering a second copy; and when deletion itself fails, the validated result is still
   delivered and the record is left to the TTL reaper (deletion stays best-effort, as it always
-  was). Result `fingerprint` moves (`codex-in-claude/0.1/schema-42` → `schema-43`).
+  was). Deletion still precedes the wire response — there is no client-receipt acknowledgment —
+  so a validated consume whose response is lost in transit does not restore the record. Result
+  `fingerprint` moves (`codex-in-claude/0.1/schema-42` → `schema-43`).
 
 - **BREAKING (operator surface): the extra-args passthrough can no longer set `model`** (#310).
   `CODEX_IN_CLAUDE_EXTRA_ARGS` refuses the exact `model` key via `-c`/`--config` (plus, conservatively,

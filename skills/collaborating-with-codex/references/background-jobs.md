@@ -22,8 +22,9 @@ independent work, poll at the next natural pause, and synthesize when the result
 still counts as the one active call for that decision point — parallelism never adds calls. Do not
 start a job whose result you do not intend to read; fire-and-forget is not a mode.
 
-`codex_job_consume_result` fetches and deletes the record. Use it only when destructive consumption
-is intended. `codex_job_cancel` requests cancellation; `codex_job_list` can recover a lost job id.
+`codex_job_consume_result` fetches the record and deletes it once the stored result reads back
+intact; an unreadable stored result is kept. Use it only when destructive consumption is intended.
+`codex_job_cancel` requests cancellation; `codex_job_list` can recover a lost job id.
 
 Jobs are workspace-keyed and disk-backed. Their deadlines bound runtime. Retention begins after
 completion, so read `ttl_seconds` and `expires_at` and fetch completed work promptly. A fetched

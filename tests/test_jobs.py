@@ -339,6 +339,27 @@ def test_discard_running_keeps_record(tmp_path):
         store.cancel(cwd, job_id)
 
 
+def test_discard_verification_error_reports_failure(tmp_path, monkeypatch):
+    # pathlib re-raises stat errors it does not ignore (e.g. EACCES), so the
+    # post-rmtree absence check can raise; discard must report a failed delete
+    # rather than let the error escape and mask an already-validated result.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    monkeypatch.setattr(JobStore, "_rmtree", staticmethod(lambda jd: None))
+    real_exists = Path.exists
+
+    def denied(self, *args, **kwargs):
+        if self.name == job_id:
+            raise PermissionError("stat denied")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", denied)
+    assert store.discard(cwd, job_id) is False
+    assert store.status(cwd, job_id) is not None
+
+
 def test_discard_reports_failed_removal(tmp_path, monkeypatch):
     # _rmtree is best-effort; discard must not claim success when the record
     # survived the attempt (its True return is what lets the server promise the
