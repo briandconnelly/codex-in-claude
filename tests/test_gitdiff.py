@@ -215,6 +215,15 @@ def test_count_untracked_respects_pathspec(repo):
     assert gitdiff.count_untracked(str(repo), ["sub"], timeout=30) == 1
 
 
+def test_count_untracked_streams_large_listing_exactly(repo):
+    # A listing larger than one read chunk must be counted exactly by the bounded
+    # streaming reader — never materialized whole (#322 F1).
+    n = 4000
+    for i in range(n):
+        (repo / f"pkg_{i:05d}_module.py").write_text("x = 1\n")
+    assert gitdiff.count_untracked(str(repo), None, timeout=60) == n
+
+
 def test_count_untracked_newline_in_filename_counts_once(repo):
     # NUL-delimited: a filename containing a newline is ONE entry, not two. A line-count
     # would over-report here and break the coverage arithmetic (detected=included+omitted).
@@ -287,6 +296,54 @@ def test_gather_untracked_counts_none_for_commit_scope(repo):
     res = gitdiff.gather_diff(str(repo), "commit", commit="HEAD", timeout=30, max_bytes=200_000)
     assert res.untracked_detected is None
     assert res.untracked_included == 0
+
+
+# --- F2: invalid untracked policy fails loudly, not silently as exclude -------
+@pytest.mark.parametrize("bad", ["bogus", "Include", "", None, 3])
+def test_gather_invalid_untracked_policy_raises(repo, bad):
+    # A mistyped policy from a raw worker spec or a direct _core caller must be an
+    # error, not a silently-degraded partial review that looks like exclude.
+    with pytest.raises(gitdiff.InvalidUntrackedError):
+        gitdiff.gather_diff(str(repo), "working_tree", untracked=bad, timeout=30, max_bytes=200_000)
+
+
+# --- F3: coverage counts come from ONE enumeration (no TOCTOU) ----------------
+def test_gather_gathering_path_does_not_separately_count(repo, monkeypatch):
+    # When untracked files are gathered, `detected` must be derived from that same
+    # enumeration (detected == included), NOT a second `count_untracked` call whose
+    # result could disagree under concurrent working-tree mutation.
+    (repo / "a.py").write_text("a = 1\n")
+    calls = {"n": 0}
+    real = gitdiff.count_untracked
+
+    def spy(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(gitdiff, "count_untracked", spy)
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+    )
+    assert res.untracked_included == 1
+    assert res.untracked_detected == res.untracked_included  # invariant, no clamp
+    assert calls["n"] == 0  # no separate enumeration -> no race window
+
+
+def test_gather_non_gathering_path_counts_exactly_once(repo, monkeypatch):
+    # The default (no gather) still needs one count to disclose the omitted set.
+    (repo / "a.py").write_text("a = 1\n")
+    calls = {"n": 0}
+    real = gitdiff.count_untracked
+
+    def spy(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(gitdiff, "count_untracked", spy)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.untracked_detected == 1
+    assert res.untracked_included == 0
+    assert calls["n"] == 1
 
 
 def test_named_ignored_untracked_file_excluded(repo):

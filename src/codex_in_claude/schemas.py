@@ -571,6 +571,25 @@ class Coverage(BaseModel):
     untracked_files_omitted: int | None = None
     omission_reasons: list[CoverageOmissionReason] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _check_invariants(self) -> Coverage:
+        # Enforce the invariants the docstring advertises, so no construction path (now or
+        # future) can emit an internally inconsistent disclosure — e.g. a false `complete`
+        # with clamped counts (#322 F3/F5).
+        if (self.status == "partial") != bool(self.omission_reasons):
+            raise ValueError("coverage.status must be 'partial' iff omission_reasons is non-empty")
+        detected = self.untracked_files_detected
+        included = self.untracked_files_included
+        omitted = self.untracked_files_omitted
+        if (
+            detected is not None
+            and included is not None
+            and omitted is not None
+            and detected != included + omitted
+        ):
+            raise ValueError("untracked_files_detected must equal included + omitted")
+        return self
+
 
 class _SuccessBase(BaseModel):
     """Fields shared by every success envelope. `verdict`/`confidence` live only on
@@ -606,7 +625,10 @@ class ReviewResult(_SuccessBase):
     tool: Literal["codex_review_changes"] = "codex_review_changes"
     verdict: Verdict = "unknown"
     confidence: Confidence = "medium"
-    review_status: ReviewStatus = "completed"
+    # Required (no default): review_status and coverage are load-bearing for interpreting
+    # verdict, so every construction must set them — a defaulted "completed"/"True" could
+    # let a future path silently report the safe-looking positive (#322 F5).
+    review_status: ReviewStatus
     coverage: Coverage
 
 
@@ -1073,7 +1095,7 @@ class DryRunResult(BaseModel):
     # Whether the previewed review would actually call the model. When False the paid
     # call short-circuits on an empty diff, so `prompt_bytes` is 0 — matching what the
     # real call would send (#320).
-    would_call_model: bool = True
+    would_call_model: bool  # required: a defaulted True could mask a no-model preview (#322 F5)
     prompt_bytes: int  # full UTF-8 size of the prompt that would be sent (0 if no call)
     coverage: Coverage  # same coverage disclosure the paid review returns (#319/#320)
     max_input_bytes: int

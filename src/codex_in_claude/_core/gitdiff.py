@@ -37,6 +37,15 @@ _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 #                           outside the Codex sandbox (mirrors worktree.py's hardening).
 _GIT_HARDENING_FLAGS = ["-c", "core.quotepath=true", "-c", "core.fsmonitor=false"]
 
+# The accepted `untracked` policies (kept in sync with schemas.Untracked at the API
+# boundary). _core validates its own inputs so a raw worker spec or future direct caller
+# can't pass a bad value and get a silently-degraded review (#322).
+_UNTRACKED_POLICIES = frozenset({"explicit_only", "include", "exclude"})
+
+# Bounded read size for the untracked-inventory stream (count_untracked). Memory stays
+# O(this) regardless of how many untracked files the workspace has.
+_LSFILES_STDOUT_CHUNK = 65536
+
 # F1a: maximum bytes of git stderr retained in memory (keeps draining to avoid
 # the >64 KB pipe-buffer deadlock while bounding how much we hold).
 _STDERR_CAP = 64 * 1024
@@ -62,6 +71,12 @@ class InvalidCommitError(ValueError):
 
 class InvalidPathsError(ValueError):
     """Malformed/unsafe git pathspec filter."""
+
+
+class InvalidUntrackedError(ValueError):
+    """The `untracked` policy is not one of explicit_only/include/exclude. Raised at
+    gather_diff entry so a mistyped value fails loudly instead of silently behaving
+    like `exclude` and reporting a successful partial review."""
 
 
 class GitUnavailableError(RuntimeError):
@@ -516,8 +531,62 @@ def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
     args = ["ls-files", "--others", "--exclude-standard", "-z"]
     if norm_paths:
         args = [*args, "--", *norm_paths]
-    listing = _git(cwd, args, timeout)
-    return sum(1 for entry in listing.split("\0") if entry)
+    # Stream-count NUL separators in bounded chunks rather than capturing the whole
+    # listing (as `_git` would): an untrusted workspace can have arbitrarily many
+    # untracked files, and this runs on the default working_tree review path. Memory
+    # stays O(chunk), consistent with the rest of this module (see _stream_redacted_diff).
+    # ls-files emits negligible stderr, so a post-EOF read avoids a concurrent drain
+    # thread; the timeout timer is the backstop against any pathological block. (#322 F1)
+    env = {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+    try:
+        proc = subprocess.Popen(
+            ["git", *_GIT_HARDENING_FLAGS, *args],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            env=env,
+            start_new_session=True,
+        )
+    except FileNotFoundError as exc:
+        raise GitUnavailableError("git executable not found") from exc
+    timed_out = threading.Event()
+
+    def _kill() -> None:
+        timed_out.set()
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)  # proc is its own group leader
+            else:  # pragma: no cover - non-POSIX fallback
+                proc.kill()
+
+    timer = threading.Timer(timeout, _kill)
+    count = 0
+    stderr = ""
+    try:
+        timer.start()
+        assert proc.stdout is not None
+        while chunk := proc.stdout.read(_LSFILES_STDOUT_CHUNK):
+            count += chunk.count("\0")
+        if proc.stderr is not None:
+            stderr = proc.stderr.read()
+        proc.wait()
+    finally:
+        timer.cancel()
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                with contextlib.suppress(OSError):
+                    pipe.close()
+    if timed_out.is_set():
+        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s")
+    if proc.returncode != 0:
+        message = stderr.strip() or "git failed"
+        if _is_not_git_repo_error(message):
+            raise NotAGitRepoError(message)
+        raise RuntimeError(message)
+    return count
 
 
 def gather_diff(
@@ -543,6 +612,10 @@ def gather_diff(
       and therefore transmits — their contents, so it is an explicit opt-in.
     - ``"exclude"``: never include untracked files, even when named.
     """
+    if untracked not in _UNTRACKED_POLICIES:
+        raise InvalidUntrackedError(
+            f"untracked must be one of {sorted(_UNTRACKED_POLICIES)}, got {untracked!r}"
+        )
     norm_paths = normalize_paths(paths)
     diff_args = _diff_args(scope, base, commit)
     if scope == "branch" and not _ref_exists(cwd, base or "", timeout):
@@ -554,22 +627,28 @@ def gather_diff(
     summary = _summary(cwd, diff_args, timeout)
     acc = _BoundedDiffAccumulator(max_bytes)
     _stream_redacted_diff(cwd, diff_args, timeout, acc)
-    # Untracked-file coverage. `git diff HEAD` never sees untracked files, so we inventory
-    # them (count only, egress-free) to disclose the blind spot, then gather per policy.
+    # Untracked-file coverage. `git diff HEAD` never sees untracked files.
     untracked_detected: int | None = None
     untracked_included = 0
     if scope == "working_tree":
-        untracked_detected = count_untracked(cwd, norm_paths, timeout)
         gather_untracked = untracked == "include" or (
             untracked == "explicit_only" and bool(norm_paths)
         )
         if gather_untracked:
             # F1b: _untracked_new_file_diff streams directly into acc (never materialised
             # whole). An empty pathspec (`include` without paths) lists every untracked file.
+            # Everything in the gathered scope IS included, so detected == included from this
+            # ONE enumeration — no second count_untracked call whose result could disagree
+            # under concurrent mutation (which would break detected==included+omitted). (#322 F3)
             u_files, u_added = _untracked_new_file_diff(cwd, norm_paths or [], timeout, acc)
             summary.files_changed += u_files
             summary.lines_added += u_added
             untracked_included = u_files
+            untracked_detected = u_files
+        else:
+            # Not gathering: count (only) the untracked files being omitted, so the blind
+            # spot is disclosed. included stays 0, so omitted == detected — no race.
+            untracked_detected = count_untracked(cwd, norm_paths, timeout)
     diff_bytes = acc.diff_bytes
     truncated = acc.truncated
     hint = None

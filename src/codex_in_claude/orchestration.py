@@ -256,6 +256,7 @@ _GITDIFF_ERRORS: dict[type, tuple[str, str | None]] = {
     gitdiff.InvalidBaseError: ("invalid_base", "base"),
     gitdiff.InvalidCommitError: ("invalid_commit", "commit"),
     gitdiff.InvalidPathsError: ("invalid_paths", "paths"),
+    gitdiff.InvalidUntrackedError: ("invalid_arguments", "untracked"),
     gitdiff.NotAGitRepoError: ("not_a_git_repo", "workspace_root"),
     gitdiff.GitUnavailableError: ("git_unavailable", None),
 }
@@ -266,6 +267,7 @@ GITDIFF_EXCEPTIONS = (
     gitdiff.InvalidBaseError,
     gitdiff.InvalidCommitError,
     gitdiff.InvalidPathsError,
+    gitdiff.InvalidUntrackedError,
     gitdiff.NotAGitRepoError,
     gitdiff.GitUnavailableError,
     RuntimeError,
@@ -406,10 +408,16 @@ async def run_review(
         # anything (untracked files) was omitted rather than genuinely absent (#319).
         omitted = coverage.untracked_files_omitted or 0
         if omitted > 0:
+            # Repair guidance depends on the active policy: under `exclude`, naming files
+            # in `paths` still won't review them, so only `include` will (#322 F4).
+            remedy = (
+                'Re-run with untracked="include" to review them.'
+                if untracked == "exclude"
+                else 'Re-run with untracked="include", or name them in paths, to review them.'
+            )
             summary = (
                 f"No reviewable changes were gathered for scope={scope}, but {omitted} "
-                "untracked file(s) were detected and omitted (see coverage). Re-run with "
-                'untracked="include", or name them in paths, to review them.'
+                f"untracked file(s) were detected and omitted (see coverage). {remedy}"
             )
         else:
             summary = f"No changes to review for scope={scope}."

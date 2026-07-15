@@ -783,6 +783,7 @@ def test_review_result_with_findings_validates_against_schema():
         summary="Review done",
         verdict="concerns",
         confidence="high",
+        review_status="completed",
         coverage=s.Coverage(status="complete"),
         findings=[_make_finding()],
         meta=_make_meta(),

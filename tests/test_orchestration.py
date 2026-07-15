@@ -348,6 +348,54 @@ def test_run_review_truly_clean_tree_is_not_run_but_complete(monkeypatch):
     assert out["coverage"]["status"] == "complete"
 
 
+def _run_review_empty_with_policy(monkeypatch, diff, untracked):
+    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+    monkeypatch.setattr(orchestration.gitdiff, "gather_diff", lambda *a, **k: diff)
+
+    async def boom(*a, **k):
+        raise AssertionError("model must not be called on an empty diff")
+
+    monkeypatch.setattr(orchestration.codex, "run_codex_exec", boom)
+    return anyio.run(
+        lambda: orchestration.run_review(
+            ".",
+            _make_meta(),
+            scope="working_tree",
+            base=None,
+            commit=None,
+            paths=None,
+            untracked=untracked,
+            sandbox="read-only",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=10,
+            max_bytes=200_000,
+        )
+    )
+
+
+def test_run_review_not_run_exclude_does_not_advise_naming_paths(monkeypatch):
+    # Under untracked="exclude", naming files in paths still won't review them, so the
+    # repair guidance must point to `include`, not "name them in paths" (#322 F4).
+    out = _run_review_empty_with_policy(
+        monkeypatch, _empty_diff(untracked_detected=2, untracked_included=0), "exclude"
+    )
+    assert out["review_status"] == "not_run"
+    summary = out["summary"].lower()
+    assert "name them in paths" not in summary
+    assert 'untracked="include"' in out["summary"]
+
+
+def test_run_review_not_run_explicit_only_advises_paths_or_include(monkeypatch):
+    out = _run_review_empty_with_policy(
+        monkeypatch, _empty_diff(untracked_detected=2, untracked_included=0), "explicit_only"
+    )
+    assert out["review_status"] == "not_run"
+    assert "paths" in out["summary"]
+    assert 'untracked="include"' in out["summary"]
+
+
 def test_run_consult_forwards_on_event(monkeypatch):
     captured: dict = {}
 

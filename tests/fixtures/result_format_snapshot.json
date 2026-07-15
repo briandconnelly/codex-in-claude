@@ -3302,7 +3302,6 @@
           "$ref": "#/$defs/RawResponse"
         },
         "review_status": {
-          "default": "completed",
           "enum": [
             "completed",
             "not_run"
@@ -3335,6 +3334,7 @@
       "required": [
         "summary",
         "meta",
+        "review_status",
         "coverage"
       ],
       "title": "ReviewResult",

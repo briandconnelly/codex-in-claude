@@ -30,6 +30,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   - Git invocations in the diff-gathering path now run with `-c core.fsmonitor=false`, so a
     working-tree review of an untrusted repo cannot execute a repo-configured fsmonitor program in
     the server process.
+  - Hardening (from an implementation review): the untracked inventory is stream-counted in
+    bounded chunks (an untrusted workspace with arbitrarily many untracked files cannot exhaust
+    memory); an invalid `untracked` policy reaching the core is rejected as `invalid_arguments`
+    rather than silently behaving like `exclude`; the coverage counts come from a single
+    enumeration so `detected == included + omitted` can't be violated under concurrent mutation,
+    and `Coverage` now validates that invariant; `review_status`/`would_call_model` are required
+    (no unsafe positive default); and the empty-review repair hint is tailored to the active
+    `untracked` policy.
 
   Bumps `FINGERPRINT` (`schema-44` → `schema-45`) and `RESULT_FORMAT` (`2` → `3`); clients that
   cache by `fingerprint` re-fetch the contract, and cross-release job replay of a review result

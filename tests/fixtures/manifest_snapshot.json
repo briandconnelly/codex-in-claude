@@ -5005,7 +5005,8 @@
               "max_input_bytes",
               "prompt_bytes",
               "sandbox",
-              "tier"
+              "tier",
+              "would_call_model"
             ],
             "type": "object"
           },
@@ -6414,6 +6415,7 @@
             "required": [
               "coverage",
               "meta",
+              "review_status",
               "summary"
             ],
             "type": "object"

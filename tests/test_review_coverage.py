@@ -8,8 +8,12 @@ make coverage `partial`.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from codex_in_claude import orchestration as o
 from codex_in_claude._core.gitdiff import DiffResult, DiffSummary
+from codex_in_claude.schemas import Coverage
 
 
 def _diff(**kw) -> DiffResult:
@@ -94,3 +98,31 @@ def test_coverage_reasons_are_deterministically_ordered():
         ),
     )
     assert cov.omission_reasons == ["untracked_omitted", "truncated", "redacted"]
+
+
+# --- F5: Coverage enforces its own advertised invariants (#322) --------------
+def test_coverage_rejects_complete_status_with_omission_reasons():
+    with pytest.raises(ValidationError):
+        Coverage(status="complete", omission_reasons=["truncated"])
+
+
+def test_coverage_rejects_partial_status_without_reasons():
+    with pytest.raises(ValidationError):
+        Coverage(status="partial", omission_reasons=[])
+
+
+def test_coverage_rejects_broken_count_equation():
+    # detected must equal included + omitted when the counts are present.
+    with pytest.raises(ValidationError):
+        Coverage(
+            status="partial",
+            untracked_files_detected=3,
+            untracked_files_included=1,
+            untracked_files_omitted=0,
+            omission_reasons=["untracked_omitted"],
+        )
+
+
+def test_coverage_accepts_consistent_complete():
+    cov = Coverage(status="complete")  # all-None counts, no reasons — valid
+    assert cov.status == "complete"

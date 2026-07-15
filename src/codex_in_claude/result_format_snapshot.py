@@ -87,6 +87,7 @@ def build_snapshot() -> dict:
         "review_success": dump_success(
             ReviewResult(
                 summary="s",
+                review_status="completed",
                 coverage=Coverage(
                     status="complete",
                     untracked_files_detected=0,
