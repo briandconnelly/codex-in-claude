@@ -48,7 +48,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-45"
+FINGERPRINT = "codex-in-claude/0.1/schema-46"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -64,7 +64,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-45"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 3
+RESULT_FORMAT: int = 4
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -286,16 +286,27 @@ class Usage(BaseModel):
     total_tokens: int | None = None
 
 
-class RateLimitWindowSnapshot(BaseModel):
-    """Raw per-window quota as emitted by codex's token_count event (one of the
-    primary/secondary windows). Parsed tolerantly; unknown fields ignored.
+def _finite_float(v: object) -> float | None:
+    """`float(v)` for a real (non-bool) finite int/float, else None. Catches the
+    OverflowError a huge int (e.g. a 400-digit `usedPercent`) raises on `float()`, so an
+    untrusted wire value degrades to None instead of escaping as an exception (#321 review)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    try:
+        fv = float(v)
+    except (OverflowError, ValueError):  # pragma: no cover - float(int) only overflows
+        return None
+    return fv if math.isfinite(fv) else None
 
-    Field validators (mode="before") enforce numeric bounds on all three fields so
-    both the live-parse path (normalize._window_from) and the cache-read path
-    (RateLimitSnapshot.model_validate) are covered in one place:
-    - used_percent: must be a finite float in [0, 100]; out-of-range or non-finite
-      → None (treated as absent — never clamped to a valid-looking value).
-    - resets_at / window_minutes: must be a finite numeric; non-finite → None.
+
+class RateLimitWindowSnapshot(BaseModel):
+    """Raw per-window quota (one of the primary/secondary windows), read from codex's
+    app-server quota block. Parsed tolerantly; unknown fields ignored.
+
+    Field validators (mode="before") enforce numeric bounds on all three fields in one place:
+    - used_percent: a finite float in [0, 100]; out-of-range/non-finite/huge → None (treated
+      as absent — never clamped to a valid-looking value).
+    - resets_at / window_minutes: a finite numeric; non-finite/huge → None.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -306,45 +317,37 @@ class RateLimitWindowSnapshot(BaseModel):
     @field_validator("used_percent", mode="before")
     @classmethod
     def _validate_used_percent(cls, v: object) -> float | None:
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            return None
-        if not math.isfinite(float(v)):
-            return None
-        fv = float(v)
-        if fv < 0.0 or fv > 100.0:
+        fv = _finite_float(v)
+        if fv is None or fv < 0.0 or fv > 100.0:
             return None
         return fv
 
     @field_validator("resets_at", mode="before")
     @classmethod
     def _validate_resets_at(cls, v: object) -> int | None:
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            return None
-        if not math.isfinite(float(v)):
-            return None
-        return int(v)
+        fv = _finite_float(v)
+        return int(fv) if fv is not None else None
 
     @field_validator("window_minutes", mode="before")
     @classmethod
     def _validate_window_minutes(cls, v: object) -> int | None:
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            return None
-        if not math.isfinite(float(v)):
-            return None
-        return int(v)
+        fv = _finite_float(v)
+        return int(fv) if fv is not None else None
 
 
 class RateLimitSnapshot(BaseModel):
-    """Raw rate_limits block from a token_count event; what we persist/replay."""
+    """Raw quota block read from `codex app-server` (`account/rateLimits/read`); what we
+    persist/replay. Windows are stored classified by duration (see appserver.py): `primary`
+    is the shorter/rolling window, `secondary` the longer one. Either may be None."""
 
     model_config = ConfigDict(extra="ignore")
     plan_type: str | None = None
     rate_limit_reached_type: str | None = None
-    primary: RateLimitWindowSnapshot | None = None  # 5-hour window
-    secondary: RateLimitWindowSnapshot | None = None  # weekly window
+    primary: RateLimitWindowSnapshot | None = None  # shorter/rolling window (historically 5h)
+    secondary: RateLimitWindowSnapshot | None = None  # longer window (historically weekly)
 
 
-RateLimitStatus = Literal["available", "limited", "exhausted", "unknown"]
+RateLimitStatus = Literal["available", "limited", "exhausted", "unknown", "unavailable"]
 
 
 class RateLimitWindow(BaseModel):
@@ -366,28 +369,37 @@ class RateLimitWindow(BaseModel):
 
 
 class RateLimit(BaseModel):
-    """Agent-facing rate-limit quota. A snapshot captured opportunistically from a
-    paid call, interpreted against each window's reset clock. NOT a live query.
+    """Agent-facing rate-limit quota, interpreted against each window's reset clock.
 
-    Asymmetric by design: `available` is reported only when every binding window is
-    observed and healthy; an unobserved window (reset-passed, missing, or lacking
-    resets_at) never yields `available` — it degrades to `unknown`. `limited`/
-    `exhausted` come only from still-open windows, so they stay conservative even when
-    the snapshot is stale (captured usage is a lower bound on current usage).
-    `unknown` means no fresh/usable reading yet — run any paid Codex call to populate
-    it — not that anything is wrong."""
+    codex_status fetches this live from `codex app-server` (a read-only, no-model-spend
+    query — see #321); a run's Meta may also carry a snapshot when one is observed. Windows
+    are classified by duration: `primary` is the shorter/rolling window (historically 5-hour),
+    `secondary` the longer one (historically weekly). The app-server reports only the windows
+    that currently bind an account, so EITHER may be null — an absent window is not tracked as
+    a constraint, not an unobserved one.
+
+    Asymmetric by design: `available` is reported only when every window PRESENT in the
+    snapshot is observed and healthy; a present-but-unobservable window (reset-passed or
+    lacking resets_at) degrades to `unknown`. `limited`/`exhausted` come only from still-open
+    windows, so they stay conservative even when a cached snapshot is stale (captured usage is
+    a lower bound on current usage). `unknown` means no fresh/usable reading yet (a transient
+    read failure or a stale cache — retry may help), while `unavailable` means the live read
+    definitively produced no quota (this codex exposes no such data, or the account has no
+    quota windows) — neither means anything is wrong."""
 
     model_config = ConfigDict(extra="forbid")
     status: RateLimitStatus
-    source: Literal["current_run", "plugin_cache"] = "plugin_cache"
+    # 'app_server_live' = a fresh codex_status read; 'plugin_cache' = the persisted snapshot;
+    # 'current_run' = observed during a paid run (legacy; not populated on current CLIs).
+    source: Literal["current_run", "plugin_cache", "app_server_live"] = "plugin_cache"
     as_of: str | None = None  # ISO-8601 capture time; None when no snapshot
     age_seconds: int | None = None
     is_stale: bool = False  # older than the configured warn threshold (advisory)
     plan_type: str | None = None  # captured metadata, NOT a verified current plan
     home_unverified: bool = False  # cached CODEX_HOME differs from the current environment
     limiting_window: Literal["primary", "secondary"] | None = None
-    primary: RateLimitWindow | None = None  # 5-hour window
-    secondary: RateLimitWindow | None = None  # weekly window
+    primary: RateLimitWindow | None = None  # shorter/rolling window (historically 5-hour)
+    secondary: RateLimitWindow | None = None  # longer window (historically weekly)
     note: str | None = None
 
 
@@ -516,8 +528,8 @@ class Meta(BaseModel):
     security_warnings: list[str] = Field(default_factory=list)
     redacted_paths: list[str] = Field(default_factory=list)
     usage: Usage | None = None
-    # Live rate-limit quota snapshot captured from this call's event stream (the same
-    # data codex_status reports from cache). None when codex emitted no rate_limits block.
+    # A run's rate-limit snapshot. `null` on codex 0.144+: quota no longer rides the exec
+    # stream (#321), so it is read live by codex_status (account/rateLimits/read), not per run.
     rate_limit: RateLimit | None = None
     context_summary: ContextSummary | None = None
     job_id: str | None = None  # set on background-job results; None for sync calls
@@ -815,7 +827,7 @@ class StatusResult(BaseModel):
     extra_args_valid: bool = True
     raw_defaults: RawDefaults
     resolved_defaults: ResolvedDefaults
-    rate_limit: RateLimit = Field(  # always present; status 'unknown' when no cache
+    rate_limit: RateLimit = Field(  # always present; status 'unknown' when no live reading
         default_factory=lambda: RateLimit(status="unknown")
     )
     caveat: str

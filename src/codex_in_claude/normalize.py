@@ -11,85 +11,8 @@ import json
 from codex_in_claude import cli_contract
 from codex_in_claude.schemas import (
     Finding,
-    RateLimitSnapshot,
-    RateLimitWindowSnapshot,
     Usage,
 )
-
-
-def parse_rate_limit(events: str) -> RateLimitSnapshot | None:
-    """Tolerantly scan JSONL events for the latest rate_limits block. Never raises;
-    malformed lines are skipped. Last event carrying the block wins."""
-    snapshot: RateLimitSnapshot | None = None
-    for raw_line in events.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(event, dict):
-            continue
-        found = _find_rate_limit(event)
-        if found is not None:
-            snapshot = found
-    return snapshot
-
-
-def _find_rate_limit(event: dict) -> RateLimitSnapshot | None:
-    blob = event.get(cli_contract.RATE_LIMIT_EVENT_KEY)
-    if isinstance(blob, dict):
-        snap = _snapshot_from(blob)
-        if snap is not None:
-            return snap
-    for nest in ("msg", "payload", "data"):
-        inner = event.get(nest)
-        if isinstance(inner, dict):
-            found = _find_rate_limit(inner)
-            if found is not None:
-                return found
-    return None
-
-
-def _snapshot_from(blob: dict) -> RateLimitSnapshot | None:
-    primary = _window_from(blob.get("primary"))
-    secondary = _window_from(blob.get("secondary"))
-    if primary is None and secondary is None:
-        return None
-    plan = blob.get("plan_type")
-    reached = blob.get("rate_limit_reached_type")
-    return RateLimitSnapshot(
-        plan_type=plan if isinstance(plan, str) else None,
-        rate_limit_reached_type=reached if isinstance(reached, str) else None,
-        primary=primary,
-        secondary=secondary,
-    )
-
-
-def _window_from(blob: object) -> RateLimitWindowSnapshot | None:
-    if not isinstance(blob, dict):
-        return None
-    used = blob.get("used_percent")
-    window = blob.get("window_minutes")
-    resets = blob.get("resets_at")
-
-    # isinstance guards narrow to the expected types so ty is satisfied; semantic
-    # validation (finite, range) is delegated to RateLimitWindowSnapshot validators.
-    def _num(v: object) -> float | None:
-        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # type: ignore[return-value]
-
-    def _int(v: object) -> int | None:
-        return v if isinstance(v, int) and not isinstance(v, bool) else None  # type: ignore[return-value]
-
-    win = RateLimitWindowSnapshot(
-        used_percent=_num(used),
-        window_minutes=_int(window),
-        resets_at=_int(resets),
-    )
-    if win.used_percent is None and win.resets_at is None:
-        return None
-    return win
 
 
 def parse_event_metadata(events: str) -> tuple[Usage | None, str | None]:

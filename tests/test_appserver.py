@@ -21,8 +21,10 @@ from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODE
 from codex_in_claude import appserver, cli_contract
 from codex_in_claude._core import streamcap
 from codex_in_claude.appserver import (
+    RateLimitReadStatus,
     ThreadIdSource,
     TransferStatus,
+    read_rate_limits,
     transfer_session,
     validate_transcript_path,
 )
@@ -1213,3 +1215,236 @@ def _looks_like_session(path: Path) -> bool:
     except (OSError, ValueError):
         return False
     return False
+
+
+# --- read_rate_limits (account/rateLimits/read, 0.144+) -------------------------
+
+
+def test_rate_limits_weekly_in_primary_slot_is_reslotted_to_secondary(tmp_path):
+    """The real 0.144 shape: a weekly window (10080 min) reported in the `primary` slot,
+    no secondary. It must be re-slotted to our `secondary` (weekly) by duration, NOT filed
+    as a 5-hour primary — the #321 topology fix."""
+    home = tmp_path / "ch"
+    out = read_rate_limits(command=_command("rl_ok", home), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.OK
+    assert out.snapshot is not None
+    assert out.snapshot.primary is None
+    assert out.snapshot.secondary is not None
+    assert out.snapshot.secondary.window_minutes == 10080
+    assert out.snapshot.secondary.used_percent == 6.0
+    assert out.snapshot.plan_type == "plus"
+    assert out.codex_home == str(home)
+
+
+def test_rate_limits_two_windows_classified_by_duration(tmp_path):
+    home = tmp_path / "ch"
+    out = read_rate_limits(command=_command("rl_two_windows", home), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.OK
+    assert out.snapshot is not None
+    assert out.snapshot.primary is not None and out.snapshot.primary.window_minutes == 300
+    assert out.snapshot.secondary is not None and out.snapshot.secondary.window_minutes == 10080
+
+
+@pytest.mark.parametrize("scenario", ["rl_no_windows", "rl_null_block"])
+def test_rate_limits_no_windows_is_no_quota_not_drift(tmp_path, scenario):
+    out = read_rate_limits(command=_command(scenario, tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.NO_QUOTA
+    assert out.snapshot is None
+
+
+def test_rate_limits_unsupported_method(tmp_path):
+    out = read_rate_limits(command=_command("rl_unsupported", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.UNSUPPORTED
+    assert out.snapshot is None
+
+
+def test_rate_limits_read_error_is_protocol_error(tmp_path):
+    out = read_rate_limits(command=_command("rl_read_error", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+
+
+def test_rate_limits_error_message_is_redacted(tmp_path):
+    out = read_rate_limits(
+        command=_command("rl_read_error_leaky", tmp_path / "ch"), timeout_seconds=10
+    )
+    assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+    assert out.message is not None
+    assert SECRET not in out.message
+
+
+def test_rate_limits_eof_before_response_is_protocol_error(tmp_path):
+    out = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+
+
+def test_rate_limits_timeout(tmp_path):
+    out = read_rate_limits(command=_command("rl_timeout", tmp_path / "ch"), timeout_seconds=0.5)
+    assert out.status is RateLimitReadStatus.TIMED_OUT
+    assert out.snapshot is None
+
+
+def test_rate_limits_missing_codex_home_is_non_fatal(tmp_path):
+    """Unlike the transfer path, a handshake that omits codexHome does not fail the read —
+    codex_home is provenance-only here. The read still returns OK with codex_home None."""
+    out = read_rate_limits(command=_command("rl_no_home", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.OK
+    assert out.snapshot is not None
+    assert out.codex_home is None
+
+
+def test_rate_limits_prequeued_id2_is_not_trusted(tmp_path):
+    # #321 review F2: an adversarial child emits a fabricated id-2 quota response WITHOUT reading
+    # the request (guessing the old fixed id 2). Because the client correlates on an unpredictable
+    # read_id, the injected response is ignored — the run must NOT return it as OK quota.
+    out = read_rate_limits(command=_command("rl_prequeue_id2", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+    assert out.snapshot is None
+
+
+def test_rate_limits_spawn_failure(tmp_path):
+    out = read_rate_limits(command=[str(tmp_path / "does-not-exist")], timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.SPAWN_FAILED
+
+
+def test_rate_limits_init_non_json_is_protocol_error(tmp_path):
+    out = read_rate_limits(command=_command("protocol_drift", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+
+
+def test_rate_limits_init_error_is_protocol_error(tmp_path):
+    out = read_rate_limits(command=_command("init_error", tmp_path / "ch"), timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+
+
+# --- _parse_rate_limits (discriminated pure mapping) ----------------------------
+
+_OK = appserver.RateLimitReadStatus.OK
+_NO_QUOTA = appserver.RateLimitReadStatus.NO_QUOTA
+_DRIFT = appserver.RateLimitReadStatus.PROTOCOL_ERROR
+
+
+def _win(used, dur, resets=9999999999):
+    return {"usedPercent": used, "windowDurationMins": dur, "resetsAt": resets}
+
+
+def test_parse_unknown_duration_keeps_source_slot():
+    result = {"rateLimits": {"primary": _win(10, None), "secondary": _win(20, None)}}
+    status, snap = appserver._parse_rate_limits(result)
+    assert status is _OK
+    assert snap.primary is not None and snap.primary.used_percent == 10.0
+    assert snap.secondary is not None and snap.secondary.used_percent == 20.0
+
+
+def test_parse_two_windows_sorted_shorter_to_primary():
+    # #321 review F3: when both windows target the same slot, they are sorted by duration so
+    # `primary` is always the SHORTER horizon — never left inverted.
+    result = {"rateLimits": {"primary": _win(10, 300), "secondary": _win(20, 60)}}
+    status, snap = appserver._parse_rate_limits(result)
+    assert status is _OK
+    assert snap.primary is not None and snap.primary.window_minutes == 60
+    assert snap.secondary is not None and snap.secondary.window_minutes == 300
+
+
+def test_parse_huge_int_does_not_raise():
+    # #321 review F1: a 400-digit usedPercent must not raise (float() OverflowError) — it
+    # degrades to a coerced value, and the read stays a typed outcome, never an exception.
+    status, snap = appserver._parse_rate_limits(
+        {
+            "rateLimits": {
+                "primary": {"usedPercent": 10**400, "windowDurationMins": 300, "resetsAt": 9}
+            }
+        }
+    )
+    assert status is _OK
+    assert snap.primary is not None
+    assert snap.primary.used_percent is None  # out-of-range/huge → absent, not clamped
+
+
+def test_parse_null_or_empty_block_is_no_quota():
+    # An explicitly null block, or a present block with no windows, is a legitimate no-quota
+    # account — NO_QUOTA, not drift.
+    assert appserver._parse_rate_limits({"rateLimits": None}) == (_NO_QUOTA, None)
+    assert appserver._parse_rate_limits({"rateLimits": {"primary": None, "secondary": None}}) == (
+        _NO_QUOTA,
+        None,
+    )
+
+
+def test_parse_malformed_shapes_are_protocol_error_not_no_quota():
+    # #321 review F1: missing key, wrong-typed block, and malformed windows are DRIFT — they
+    # must not masquerade as a legitimate no-quota account.
+    assert appserver._parse_rate_limits({})[0] is _DRIFT  # required key absent
+    assert appserver._parse_rate_limits("nope")[0] is _DRIFT  # result not an object
+    assert appserver._parse_rate_limits({"rateLimits": []})[0] is _DRIFT  # wrong block type
+    assert appserver._parse_rate_limits({"rateLimits": {"primary": "x"}})[0] is _DRIFT  # bad window
+    assert appserver._parse_rate_limits({"rateLimits": {"primary": {"nope": 1}}})[0] is _DRIFT
+
+
+def test_parse_boundary_duration_is_short():
+    # A window exactly at the threshold is short (→ primary), one above is long (→ secondary).
+    thresh = cli_contract.RATE_LIMIT_SHORT_WINDOW_MAX_MINUTES
+    result = {"rateLimits": {"primary": _win(10, thresh), "secondary": _win(20, thresh + 1)}}
+    status, snap = appserver._parse_rate_limits(result)
+    assert status is _OK
+    assert snap.primary is not None and snap.primary.window_minutes == thresh
+    assert snap.secondary is not None and snap.secondary.window_minutes == thresh + 1
+
+
+def test_parse_unknown_reached_type_is_dropped_not_trusted():
+    # #321 review F2: an unrecognized rateLimitReachedType must be dropped (None), never trusted
+    # as a real limit reason (which would later become a false 'exhausted').
+    result = {"rateLimits": {"primary": _win(10, 300), "rateLimitReachedType": "made_up_value"}}
+    _, snap = appserver._parse_rate_limits(result)
+    assert snap.rate_limit_reached_type is None
+
+
+def test_parse_known_reached_type_is_kept():
+    result = {
+        "rateLimits": {"primary": _win(10, 300), "rateLimitReachedType": "rate_limit_reached"}
+    }
+    _, snap = appserver._parse_rate_limits(result)
+    assert snap.rate_limit_reached_type == "rate_limit_reached"
+
+
+def test_parse_oversized_plan_type_is_dropped():
+    # #321 review F2: an unbounded/hostile planType must not reach the envelope.
+    result = {"rateLimits": {"primary": _win(10, 300), "planType": "p" * 5000}}
+    _, snap = appserver._parse_rate_limits(result)
+    assert snap.plan_type is None
+
+
+# --- liveness guards ------------------------------------------------------------
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_parse_matches_recorded_real_wire_shape():
+    """Known-positive against the recorded (synthetic-valued) 0.144 wire shape — including
+    rateLimitsByLimitId / credits / rateLimitResetCredits siblings. A future change that
+    breaks the mapping fails HERE rather than silently degrading (the #321 trap)."""
+    result = json.loads((_FIXTURES / "rate_limits_read_response.json").read_text())
+    status, snap = appserver._parse_rate_limits(result)
+    assert status is _OK
+    assert snap.plan_type == "plus"
+    # the single weekly window (10080 min) is re-slotted from `primary` to our `secondary`.
+    assert snap.primary is None
+    assert snap.secondary is not None
+    assert snap.secondary.window_minutes == 10080
+    assert snap.secondary.used_percent == 12.0
+
+
+@pytest.mark.integration
+def test_live_rate_limits_read_roundtrip():
+    """Live: read quota from the REAL `codex app-server`. This is the liveness guard for
+    #321 — if codex moves the method again, the status is UNSUPPORTED/PROTOCOL_ERROR and this
+    FAILS loudly instead of silently reporting no quota. Requires an authenticated codex. Run
+    with `pytest -m integration --no-cov`."""
+    outcome = read_rate_limits(command=None, timeout_seconds=60)
+    if outcome.status is RateLimitReadStatus.SPAWN_FAILED:
+        pytest.skip("codex CLI not installed")
+    assert outcome.status in (RateLimitReadStatus.OK, RateLimitReadStatus.NO_QUOTA), (
+        f"account/rateLimits/read contract drifted: {outcome.status} ({outcome.message})"
+    )
+    if outcome.status is RateLimitReadStatus.OK:
+        assert outcome.snapshot is not None
+        assert outcome.snapshot.primary is not None or outcome.snapshot.secondary is not None

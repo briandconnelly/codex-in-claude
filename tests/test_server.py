@@ -1846,7 +1846,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-45"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-46"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4146,66 +4146,51 @@ async def test_codex_models_resource_matches_tool_payload():
 # --- rate_limit field on codex_status ----------------------------------------
 
 
-def test_codex_status_includes_rate_limit_unknown_without_cache(monkeypatch):
+def _force_not_ready(monkeypatch):
+    """Make codex read as installed-but-unauthenticated so codex_status reports a static
+    'unknown' quota (not_ready()) without spawning the app-server for a live read (hermetic)."""
+    from codex_in_claude import server
+
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.144.1")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
+
+
+def test_codex_status_ready_uses_live_read(monkeypatch):
+    # When codex is ready, codex_status fetches quota LIVE (no model spend) via live_read,
+    # not from the cache. Monkeypatched so no real app-server is spawned.
     from codex_in_claude import rate_limit, server
+    from codex_in_claude.schemas import RateLimit
 
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: None)
-    result = server.codex_status()
-    assert result["rate_limit"]["status"] == "unknown"
-    assert result["rate_limit"]["note"]
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.144.1")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    called = {}
 
+    def _fake_live_read(*, timeout_seconds, **kw):
+        called["timeout"] = timeout_seconds
+        return RateLimit(status="available", source="app_server_live", plan_type="plus")
 
-def test_codex_status_reports_cached_snapshot(monkeypatch):
-    from codex_in_claude import rate_limit, server
-    from codex_in_claude.config import codex_home as _codex_home
-
-    monkeypatch.setattr(
-        rate_limit,
-        "_load_raw",
-        lambda path=None: {
-            "version": rate_limit.CACHE_VERSION,
-            "captured_at": 1,
-            "codex_home": str(_codex_home()),
-            "snapshot": {
-                "plan_type": "plus",
-                "primary": {
-                    "used_percent": 10.0,
-                    "window_minutes": 300,
-                    "resets_at": 9999999999,
-                },
-                "secondary": {
-                    "used_percent": 5.0,
-                    "window_minutes": 10080,
-                    "resets_at": 9999999999,
-                },
-            },
-        },
-    )
+    monkeypatch.setattr(rate_limit, "live_read", _fake_live_read)
     result = server.codex_status()
     assert result["rate_limit"]["status"] == "available"
-    assert result["rate_limit"]["plan_type"] == "plus"
-    assert result["rate_limit"]["source"] == "plugin_cache"
-    assert result["rate_limit"]["home_unverified"] is False
+    assert result["rate_limit"]["source"] == "app_server_live"
+    assert called["timeout"] == rate_limit.READ_TIMEOUT_SECONDS
 
 
-def test_codex_status_tolerates_corrupt_cache_envelope(monkeypatch):
+def test_codex_status_not_ready_is_unknown_without_spawning(monkeypatch):
+    # When codex is not ready, codex_status reports a static 'unknown' and does NOT spawn the
+    # app-server (no cache exists to read, and an unauthenticated read would fail anyway).
     from codex_in_claude import rate_limit, server
 
-    # captured_at as a string would crash arithmetic if not validated -> must degrade.
-    monkeypatch.setattr(
-        rate_limit,
-        "_load_raw",
-        lambda path=None: {
-            "version": rate_limit.CACHE_VERSION,
-            "captured_at": "not-a-number",
-            "codex_home": ["bad"],
-            "snapshot": {"primary": {"used_percent": 10.0, "resets_at": 9999999999}},
-        },
-    )
+    _force_not_ready(monkeypatch)
+
+    def _boom(**kw):
+        raise AssertionError("live_read must not be called when codex is not ready")
+
+    monkeypatch.setattr(rate_limit, "live_read", _boom)
     result = server.codex_status()
-    # captured_at invalid -> as_of/age drop out, but interpretation must not raise.
-    assert result["rate_limit"]["as_of"] is None
-    assert result["rate_limit"]["status"] in {"unknown", "available", "limited", "exhausted"}
+    assert result["rate_limit"]["status"] == "unknown"
+    assert result["rate_limit"]["source"] == "app_server_live"
+    assert result["rate_limit"]["note"]
 
 
 # --------------------------------------------------------------------------- #
@@ -5394,7 +5379,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-45")
+    assert result["fingerprint"].endswith("schema-46")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

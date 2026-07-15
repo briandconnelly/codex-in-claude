@@ -82,6 +82,53 @@ JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_RESERVED_ERROR_MIN = -32768
 JSONRPC_RESERVED_ERROR_MAX = -32000
 
+# --- App-server: account rate-limits read (0.144+) ------------------------------
+# codex 0.144 removed the `token_count` JSONL event; quota no longer rides the
+# `codex exec --json` stream (that event is gone — only `turn.completed.usage` for token
+# counts remains). Quota moved onto the app-server protocol: `account/rateLimits/read`
+# (params: null) is a READ-ONLY, no-model-spend request that returns the current quota
+# snapshot after the same initialize/initialized handshake codex_transfer uses. Verified
+# against codex-cli 0.144.4 on 2026-07-14 via `codex app-server`. See #321, COMPATIBILITY.md.
+APP_SERVER_RATE_LIMITS_READ_METHOD = "account/rateLimits/read"
+# read response → `result.rateLimits` is the single-bucket RateLimitSnapshot. Its windows
+# are `primary`/`secondary`, but — unlike the old exec-stream block, which fixed primary=5h
+# and secondary=weekly — the app-server's slot order is NOT stable (a Plus account was
+# observed reporting only the weekly window, in the `primary` slot). We therefore classify
+# windows by RATE_LIMIT_WINDOW_DURATION_MINS_KEY, not slot position (see appserver.py).
+RATE_LIMITS_RESULT_KEY = "rateLimits"
+RATE_LIMIT_PRIMARY_KEY = "primary"
+RATE_LIMIT_SECONDARY_KEY = "secondary"
+RATE_LIMIT_PLAN_TYPE_KEY = "planType"
+RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"
+# per-window fields (camelCase on the app-server protocol; snake_case in our schema).
+RATE_LIMIT_WINDOW_USED_PERCENT_KEY = "usedPercent"
+RATE_LIMIT_WINDOW_DURATION_MINS_KEY = "windowDurationMins"
+RATE_LIMIT_WINDOW_RESETS_AT_KEY = "resetsAt"
+# Duration boundary (minutes) separating a short/rolling window (historically the 5-hour
+# limit) from a long window (historically weekly). A window at or below this maps to our
+# `primary` slot, above it to `secondary`. 1 day is a wide margin between a ~5h and a ~weekly
+# window, so it survives upstream retuning the exact durations without remisclassifying.
+RATE_LIMIT_SHORT_WINDOW_MAX_MINUTES = 1440
+# The recognized `rateLimitReachedType` values (app-server enum, lower-cased) PLUS the legacy
+# exec-stream window-name form the interpreter still honors. The value is agent-visible and
+# gets interpolated into prose, so an unrecognized value from a drifting/hostile child is
+# dropped (treated as no signal) rather than trusted as a real "limit reached" reason.
+RATE_LIMIT_REACHED_TYPES = frozenset(
+    {
+        "rate_limit_reached",
+        "workspace_owner_credits_depleted",
+        "workspace_member_credits_depleted",
+        "workspace_owner_usage_limit_reached",
+        "workspace_member_usage_limit_reached",
+        "primary",  # legacy exec-stream window-name form
+        "secondary",
+    }
+)
+# Defensive length cap for the free-form `planType` string before it reaches an envelope
+# (the wire value is untrusted and the input line cap is 8 MiB). Real values are short
+# identifiers ("plus", "self_serve_business_usage_based").
+RATE_LIMIT_PLAN_TYPE_MAX_BYTES = 64
+
 # --- App-server identifier bounds (defensive policy, not a documented protocol limit) -
 # Upstream publishes no length cap on these ids/paths, so we pick generous ceilings that
 # reject implausible or hostile values — an id or path far past these is drift, not a real
@@ -301,10 +348,9 @@ USAGE_KEYS = frozenset(
 # carrying token-usage or the final agent message. Matched case-insensitively.
 USAGE_EVENT_MARKERS = ("token_count", "usage")
 FINAL_MESSAGE_EVENT_MARKERS = ("agent_message", "task_complete")
-# The rate-limit quota block rides inside the same token_count event as token usage,
-# at payload.rate_limits, with `primary` (5h) / `secondary` (weekly) sub-objects each
-# carrying used_percent / window_minutes / resets_at. Parsed tolerantly in normalize.
-RATE_LIMIT_EVENT_KEY = "rate_limits"
+# NOTE: codex 0.144 removed the token_count event that once carried the rate-limit quota
+# block on this stream (#321). Quota is now read from the app-server (see the
+# APP_SERVER_RATE_LIMITS_* constants above), not scraped from these events.
 ERROR_EVENT_MARKERS = ("error", "stream_error")
 
 # --- Login-status signatures ----------------------------------------------------

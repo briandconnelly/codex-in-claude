@@ -29,8 +29,9 @@ The `pyproject.toml` trove classifiers declare `Operating System :: MacOS` and
 - `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]
   [--ephemeral] [--ignore-user-config] [--ignore-rules] [--skip-git-repo-check] [--add-dir <dir>]
   [--model <m>] -` — prompt delivered on **stdin** (the trailing `-`), keeping context out of argv.
-- `codex app-server` — one short-lived JSON-RPC session, driven **only** by `codex_transfer`. See
-  "Session transfer" below.
+- `codex app-server` — short-lived JSON-RPC sessions, driven by `codex_transfer` (session import)
+  and by `codex_status`'s rate-limit read (`account/rateLimits/read`, no model spend — see #321).
+  See "Session transfer" below.
 - `codex --version`, `codex login status`, `codex exec --help` — free local probes.
 
 Every paid call family — `codex_consult[_async]`, `codex_review_changes[_async]`, and
@@ -56,11 +57,13 @@ the historical "output depends on the user's Codex MCP fleet" concern was **not 
 pass — it appears mitigable via `--disable remote_plugin`. Adopting native review remains blocked on
 `--output-schema` alone; re-open the question only if a future Codex honors it.
 
-`codex_transfer` is the single, deliberate exception: this plugin reaches Codex's transcript-import
-surface only through `app-server`. That surface is experimental upstream, so it is quarantined —
-every assumption lives in `cli_contract.py` and `appserver.py`, the call spends nothing
-(`schemas.py`: "No model call and no token spend"), and no paid call depends on it. See "Session
-transfer" below.
+Two flows reach the `app-server` surface: `codex_transfer` (transcript import) and `codex_status`'s
+rate-limit read (`account/rateLimits/read`, added for #321 when codex 0.144 moved quota off the
+`codex exec` stream). Both are quarantined the same way: the surface is experimental upstream, so
+every assumption lives in `cli_contract.py` and `appserver.py`, neither call spends model tokens, and
+no paid call depends on either. The rate-limit read verifies against **codex-cli 0.144.4** (probe:
+drive `codex app-server` and confirm `account/rateLimits/read` returns a quota block; an integration
+test does this live). See "Session transfer" below for the import flow.
 
 ## Sandbox modes
 

@@ -857,7 +857,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-45",
+            "default": "codex-in-claude/0.1/schema-46",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1379,7 +1379,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-45",
+                "default": "codex-in-claude/0.1/schema-46",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1625,7 +1625,7 @@
           },
           "RateLimit": {
             "additionalProperties": false,
-            "description": "Agent-facing rate-limit quota. A snapshot captured opportunistically from a\npaid call, interpreted against each window's reset clock. NOT a live query.\n\nAsymmetric by design: `available` is reported only when every binding window is\nobserved and healthy; an unobserved window (reset-passed, missing, or lacking\nresets_at) never yields `available` — it degrades to `unknown`. `limited`/\n`exhausted` come only from still-open windows, so they stay conservative even when\nthe snapshot is stale (captured usage is a lower bound on current usage).\n`unknown` means no fresh/usable reading yet — run any paid Codex call to populate\nit — not that anything is wrong.",
+            "description": "Agent-facing rate-limit quota, interpreted against each window's reset clock.\n\ncodex_status fetches this live from `codex app-server` (a read-only, no-model-spend\nquery — see #321); a run's Meta may also carry a snapshot when one is observed. Windows\nare classified by duration: `primary` is the shorter/rolling window (historically 5-hour),\n`secondary` the longer one (historically weekly). The app-server reports only the windows\nthat currently bind an account, so EITHER may be null — an absent window is not tracked as\na constraint, not an unobserved one.\n\nAsymmetric by design: `available` is reported only when every window PRESENT in the\nsnapshot is observed and healthy; a present-but-unobservable window (reset-passed or\nlacking resets_at) degrades to `unknown`. `limited`/`exhausted` come only from still-open\nwindows, so they stay conservative even when a cached snapshot is stale (captured usage is\na lower bound on current usage). `unknown` means no fresh/usable reading yet (a transient\nread failure or a stale cache — retry may help), while `unavailable` means the live read\ndefinitively produced no quota (this codex exposes no such data, or the account has no\nquota windows) — neither means anything is wrong.",
             "properties": {
               "age_seconds": {
                 "anyOf": [
@@ -1726,6 +1726,7 @@
               "source": {
                 "default": "plugin_cache",
                 "enum": [
+                  "app_server_live",
                   "current_run",
                   "plugin_cache"
                 ],
@@ -1737,6 +1738,7 @@
                   "available",
                   "exhausted",
                   "limited",
+                  "unavailable",
                   "unknown"
                 ],
                 "title": "Status",
@@ -1992,7 +1994,7 @@
         "listChanged": true
       }
     },
-    "instructions": "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Every model-bearing call also disables Codex's remote_plugin feature, so third-party connectors (GitHub, Gmail, Slack, Drive, …) aren't exposed to the Codex run — barring a custom operator-supplied Codex profile. Every model-bearing call sends your inputs to OpenAI raw, and Codex also auto-loads context from the resolved workspace — the project's AGENTS.md and any skills under .agents/skills/ — so their content can be sent even if your prompt never mentions them; the plugin's isolation flags do not suppress this project-level context. Use codex_consult for a read-only second opinion or Q&A — including on a diff you paste inline. Use codex_review_changes for a structured review of changes gathered from git (working_tree, branch, or commit); prefer it over codex_consult whenever the changes already live in git. Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Use codex_transfer (free) to hand off the current Claude Code session transcript to a resumable Codex thread when the user wants to continue this conversation inside Codex. Before the first paid call in a session, run codex_status (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it). Branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory. Before overriding the model or reasoning_effort, use codex_models (or the codex://models resource) to discover valid model slugs and each model's advertised reasoning-effort set (the listing is advisory; codex and the backend validate the real values). To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|unknown, where unknown means no fresh reading yet, not a problem) showing how much Codex quota remains.",
+    "instructions": "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Every model-bearing call also disables Codex's remote_plugin feature, so third-party connectors (GitHub, Gmail, Slack, Drive, …) aren't exposed to the Codex run — barring a custom operator-supplied Codex profile. Every model-bearing call sends your inputs to OpenAI raw, and Codex also auto-loads context from the resolved workspace — the project's AGENTS.md and any skills under .agents/skills/ — so their content can be sent even if your prompt never mentions them; the plugin's isolation flags do not suppress this project-level context. Use codex_consult for a read-only second opinion or Q&A — including on a diff you paste inline. Use codex_review_changes for a structured review of changes gathered from git (working_tree, branch, or commit); prefer it over codex_consult whenever the changes already live in git. Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Use codex_transfer (free) to hand off the current Claude Code session transcript to a resumable Codex thread when the user wants to continue this conversation inside Codex. Before the first paid call in a session, run codex_status (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it). Branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory. Before overriding the model or reasoning_effort, use codex_models (or the codex://models resource) to discover valid model slugs and each model's advertised reasoning-effort set (the listing is advisory; codex and the backend validate the real values). To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|unknown|unavailable) showing how much Codex quota remains, read live from the app-server with no model spend; unknown/unavailable mean no usable reading, not a problem.",
     "protocolVersion": "2025-11-25",
     "serverInfo": {
       "name": "codex-in-claude"
@@ -2066,7 +2068,7 @@
           },
           "RateLimit": {
             "additionalProperties": false,
-            "description": "Agent-facing rate-limit quota. A snapshot captured opportunistically from a\npaid call, interpreted against each window's reset clock. NOT a live query.\n\nAsymmetric by design: `available` is reported only when every binding window is\nobserved and healthy; an unobserved window (reset-passed, missing, or lacking\nresets_at) never yields `available` — it degrades to `unknown`. `limited`/\n`exhausted` come only from still-open windows, so they stay conservative even when\nthe snapshot is stale (captured usage is a lower bound on current usage).\n`unknown` means no fresh/usable reading yet — run any paid Codex call to populate\nit — not that anything is wrong.",
+            "description": "Agent-facing rate-limit quota, interpreted against each window's reset clock.\n\ncodex_status fetches this live from `codex app-server` (a read-only, no-model-spend\nquery — see #321); a run's Meta may also carry a snapshot when one is observed. Windows\nare classified by duration: `primary` is the shorter/rolling window (historically 5-hour),\n`secondary` the longer one (historically weekly). The app-server reports only the windows\nthat currently bind an account, so EITHER may be null — an absent window is not tracked as\na constraint, not an unobserved one.\n\nAsymmetric by design: `available` is reported only when every window PRESENT in the\nsnapshot is observed and healthy; a present-but-unobservable window (reset-passed or\nlacking resets_at) degrades to `unknown`. `limited`/`exhausted` come only from still-open\nwindows, so they stay conservative even when a cached snapshot is stale (captured usage is\na lower bound on current usage). `unknown` means no fresh/usable reading yet (a transient\nread failure or a stale cache — retry may help), while `unavailable` means the live read\ndefinitively produced no quota (this codex exposes no such data, or the account has no\nquota windows) — neither means anything is wrong.",
             "properties": {
               "age_seconds": {
                 "anyOf": [
@@ -2167,6 +2169,7 @@
               "source": {
                 "default": "plugin_cache",
                 "enum": [
+                  "app_server_live",
                   "current_run",
                   "plugin_cache"
                 ],
@@ -2178,6 +2181,7 @@
                   "available",
                   "exhausted",
                   "limited",
+                  "unavailable",
                   "unknown"
                 ],
                 "title": "Status",
@@ -2385,7 +2389,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-45",
+            "default": "codex-in-claude/0.1/schema-46",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2639,7 +2643,7 @@
         "$defs": {
           "RateLimit": {
             "additionalProperties": false,
-            "description": "Agent-facing rate-limit quota. A snapshot captured opportunistically from a\npaid call, interpreted against each window's reset clock. NOT a live query.\n\nAsymmetric by design: `available` is reported only when every binding window is\nobserved and healthy; an unobserved window (reset-passed, missing, or lacking\nresets_at) never yields `available` — it degrades to `unknown`. `limited`/\n`exhausted` come only from still-open windows, so they stay conservative even when\nthe snapshot is stale (captured usage is a lower bound on current usage).\n`unknown` means no fresh/usable reading yet — run any paid Codex call to populate\nit — not that anything is wrong.",
+            "description": "Agent-facing rate-limit quota, interpreted against each window's reset clock.\n\ncodex_status fetches this live from `codex app-server` (a read-only, no-model-spend\nquery — see #321); a run's Meta may also carry a snapshot when one is observed. Windows\nare classified by duration: `primary` is the shorter/rolling window (historically 5-hour),\n`secondary` the longer one (historically weekly). The app-server reports only the windows\nthat currently bind an account, so EITHER may be null — an absent window is not tracked as\na constraint, not an unobserved one.\n\nAsymmetric by design: `available` is reported only when every window PRESENT in the\nsnapshot is observed and healthy; a present-but-unobservable window (reset-passed or\nlacking resets_at) degrades to `unknown`. `limited`/`exhausted` come only from still-open\nwindows, so they stay conservative even when a cached snapshot is stale (captured usage is\na lower bound on current usage). `unknown` means no fresh/usable reading yet (a transient\nread failure or a stale cache — retry may help), while `unavailable` means the live read\ndefinitively produced no quota (this codex exposes no such data, or the account has no\nquota windows) — neither means anything is wrong.",
             "properties": {
               "age_seconds": {
                 "anyOf": [
@@ -2740,6 +2744,7 @@
               "source": {
                 "default": "plugin_cache",
                 "enum": [
+                  "app_server_live",
                   "current_run",
                   "plugin_cache"
                 ],
@@ -2751,6 +2756,7 @@
                   "available",
                   "exhausted",
                   "limited",
+                  "unavailable",
                   "unknown"
                 ],
                 "title": "Status",
@@ -3029,7 +3035,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-45",
+            "default": "codex-in-claude/0.1/schema-46",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -6721,7 +6727,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Check that the `codex` CLI is installed, authenticated, and a supported\nversion, and report the resolved defaults. Free — no model call. Run it before\nyour first paid call in a session to confirm setup, and again whenever a run\nfails with a setup error.\nAlso reports a `rate_limit` block — how much of the Codex 5-hour (`primary`) and\nweekly (`secondary`) quota windows remains, captured from your last paid Codex call\n(a cached snapshot, not a live query). Use it to decide whether to spend: `available`\nis deliberately conservative (only when both windows are observed and healthy);\nwhen `limited`/`exhausted`, prefer to defer non-urgent Codex calls (urgent ones may\nstill proceed); `unknown` means no fresh/usable reading (run any **paid** Codex call\nto populate it), not that anything is wrong.\n`is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different\nCODEX_HOME.",
+      "description": "Check that the `codex` CLI is installed, authenticated, and a supported\nversion, and report the resolved defaults. Free — no model call. Run it before\nyour first paid call in a session to confirm setup, and again whenever a run\nfails with a setup error.\nAlso reports a `rate_limit` block — how much of the Codex quota windows remains,\nfetched LIVE from `codex app-server` (a read-only call with no model spend). `primary`\nis the shorter/rolling window, `secondary` the longer one; the account reports only the\nwindows that currently bind it, so either may be null. Use it to decide whether to spend:\n`available` is deliberately conservative (only when every reported window is healthy);\nwhen `limited`/`exhausted`, prefer to defer non-urgent Codex calls (urgent ones may still\nproceed); `unknown` means the live read couldn't complete just now (retry) or only a stale\ncache was available; `unavailable` means this codex/account exposes no quota data — none\nof these means anything is wrong.\n`is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different\nCODEX_HOME.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

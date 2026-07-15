@@ -137,11 +137,14 @@ records that sync runs also create). Operational semantics:
 
 ## Rate-limit reporting
 
-When an active call emits usable quota data, its `meta.rate_limit` carries that live snapshot
-(`source: current_run`) and the plugin caches it. `codex_status` reports the latest usable cached
-snapshot (`source: plugin_cache`), including whether it has gone stale
-(`CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS`). A paid call that emits no usable quota data leaves the
-previous snapshot, or the unknown state, unchanged. The block is advisory.
+`codex_status` reads the current quota **live** from the Codex app-server
+(`account/rateLimits/read`, `source: app_server_live`) — a read-only call with no model-token
+spend and nothing persisted. Windows are classified by duration: `primary` is the shorter/rolling
+window, `secondary` the longer one; the account reports only the windows that currently bind it, so
+either may be null. `status` is `available`/`limited`/`exhausted`/`unknown` (the live read could not
+complete, or codex is not ready — retry) / `unavailable` (this codex/account exposes no quota data).
+On codex 0.144+ the quota block no longer rides the `codex exec` stream, so a run's `meta.rate_limit`
+is `null`. The block is advisory.
 
 ## Workspace selection
 

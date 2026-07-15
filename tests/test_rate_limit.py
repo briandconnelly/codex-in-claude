@@ -1,9 +1,11 @@
-from pathlib import Path
-
 import pytest
 
-from codex_in_claude import rate_limit
-from codex_in_claude.schemas import RateLimitSnapshot, RateLimitWindow, RateLimitWindowSnapshot
+from codex_in_claude import appserver, rate_limit
+from codex_in_claude.schemas import (
+    RateLimitSnapshot,
+    RateLimitWindow,
+    RateLimitWindowSnapshot,
+)
 
 
 def _win(used, resets):
@@ -129,237 +131,101 @@ def test_interpret_flags_stale_and_home_unverified():
     assert rl.home_unverified is True
 
 
-def test_live_age_zero_not_stale_and_source_current_run():
-    snap = _both(10.0, 9999999, 10.0, 9999999)
-    rl = rate_limit.live(snap, now_epoch=1000)
-    assert rl.age_seconds == 0 and rl.is_stale is False
-    assert rl.source == "current_run"
-
-
-def test_live_none_when_no_snapshot():
-    assert rate_limit.live(None, now_epoch=1000) is None
-
-
-def test_save_hardening_does_not_raise_when_model_dump_fails(tmp_path: Path, monkeypatch):
-    """save() must never raise, even if payload construction fails (directive-2 regression).
-    Pydantic v2 blocks instance-level patching of model_dump, so we inject a failure via
-    config.codex_home (called when home=None), which sits inside the same outer try guard."""
-
-    def boom():
-        raise RuntimeError("injected failure")
-
-    monkeypatch.setattr(rate_limit.config, "codex_home", boom)
-    # home=None forces the code path through config.codex_home() which raises.
-    # save() must absorb the exception without propagating it.
-    rate_limit.save(_snap(), now_epoch=1, path=tmp_path / "snap.json", home=None)
-
-
-def _snap() -> RateLimitSnapshot:
-    return RateLimitSnapshot(
+def test_interpret_single_present_window_can_be_available():
+    # The #321 topology: the app-server reports only ONE binding window (here the weekly
+    # `secondary`, with no primary). An absent window is NOT 'unobserved' — a single healthy
+    # window must still yield 'available', not a permanent 'unknown'.
+    snap = RateLimitSnapshot(
         plan_type="plus",
-        primary=RateLimitWindowSnapshot(
-            used_percent=12.0, window_minutes=300, resets_at=1780534461
-        ),
+        primary=None,
         secondary=RateLimitWindowSnapshot(
-            used_percent=8.0, window_minutes=10080, resets_at=1780864628
+            used_percent=6.0, window_minutes=10080, resets_at=1_700_009_000
         ),
     )
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "available"
+    assert rl.limiting_window == "secondary"
+    assert rl.primary is None
+    assert rl.secondary is not None and rl.secondary.remaining_percent == 94.0
 
 
-def test_save_then_load_roundtrips(tmp_path: Path):
-    target = tmp_path / "snap.json"
-    rate_limit.save(_snap(), now_epoch=1780530000, path=target, home="/home/.codex")
-    raw = rate_limit._load_raw(target)
-    assert raw["version"] == rate_limit.CACHE_VERSION
-    assert raw["captured_at"] == 1780530000
-    assert raw["codex_home"] == "/home/.codex"
-    assert raw["snapshot"]["primary"]["used_percent"] == 12.0
+def test_interpret_reached_reason_enum_escalates_to_exhausted():
+    # 0.144's rateLimitReachedType is a REASON code, not a window name. A non-empty reason
+    # must escalate to 'exhausted' (a limit was hit), naming the binding open window.
+    snap = _both(10.0, 1_700_009_000, 40.0, 1_700_009_000)
+    snap.rate_limit_reached_type = "workspace_owner_usage_limit_reached"
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "exhausted"
+    assert rl.limiting_window == "secondary"  # lower remaining (60 vs 90)
+    assert rl.note is not None and "usage limit was reached" in rl.note
 
 
-def test_load_missing_file_returns_none(tmp_path: Path):
-    assert rate_limit._load_raw(tmp_path / "absent.json") is None
-
-
-def test_load_corrupt_file_returns_none(tmp_path: Path):
-    target = tmp_path / "snap.json"
-    target.write_text("{not json", encoding="utf-8")
-    assert rate_limit._load_raw(target) is None
-
-
-def test_load_wrong_version_returns_none(tmp_path: Path):
-    target = tmp_path / "snap.json"
-    target.write_text('{"version": 999, "snapshot": {}}', encoding="utf-8")
-    assert rate_limit._load_raw(target) is None
-
-
-def test_save_is_best_effort_on_unwritable_path(tmp_path: Path):
-    # A path whose parent is a file, not a dir, cannot be created — save must not raise.
-    blocker = tmp_path / "blocker"
-    blocker.write_text("x", encoding="utf-8")
-    rate_limit.save(_snap(), now_epoch=1, path=blocker / "nested" / "snap.json", home="/h")
-
-
-def test_save_leaves_no_temp_files(tmp_path: Path):
-    target = tmp_path / "snap.json"
-    rate_limit.save(_snap(), now_epoch=1, path=target, home="/h")
-    assert target.exists()
-    assert list(tmp_path.glob("*.tmp")) == []  # atomic write cleaned up its temp
-
-
-# ---------------------------------------------------------------------------
-# current() — load-and-interpret path
-# ---------------------------------------------------------------------------
-
-# _snap() resets_at values are near-term and will have passed by the time current()
-# runs against int(time.time()), so current() tests use a snapshot with resets_at
-# far enough in the future (year ~2030) that windows always appear open.
-_FAR_FUTURE_RESETS = 9999999999  # 2286-11-20
-
-
-def _future_snap() -> RateLimitSnapshot:
-    """RateLimitSnapshot whose windows are always open for current() envelope tests."""
-    return RateLimitSnapshot(
+def test_live_read_ok_interprets_ephemerally(monkeypatch):
+    """live_read maps an OK app-server outcome to an interpreted, live-sourced RateLimit. It is
+    EPHEMERAL — nothing is persisted (rate_limit has no save()), keeping codex_status read-only."""
+    assert not hasattr(rate_limit, "save")  # persistence was removed (#321 review F7)
+    snap = RateLimitSnapshot(
         plan_type="plus",
-        primary=RateLimitWindowSnapshot(
-            used_percent=12.0, window_minutes=300, resets_at=_FAR_FUTURE_RESETS
-        ),
         secondary=RateLimitWindowSnapshot(
-            used_percent=8.0, window_minutes=10080, resets_at=_FAR_FUTURE_RESETS
+            used_percent=6.0, window_minutes=10080, resets_at=9_999_999_999
         ),
     )
-
-
-def test_current_no_cache_is_unknown(monkeypatch):
-    """_load_raw returns None -> status 'unknown', no raise."""
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: None)
-    rl = rate_limit.current()
-    assert rl.status == "unknown"
-    assert rl.as_of is None
-    assert rl.age_seconds is None
-
-
-def test_current_captured_at_bool_drops_timestamp(monkeypatch):
-    """captured_at as bool is rejected: as_of and age_seconds are None, no raise."""
-    raw = {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": True,
-        "codex_home": "/home/.codex",
-        "snapshot": _future_snap().model_dump(mode="json"),
-    }
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.as_of is None
-    assert rl.age_seconds is None
-
-
-def test_current_captured_at_non_numeric_string_drops_timestamp(monkeypatch):
-    """captured_at as a non-numeric string is rejected: as_of and age_seconds are None, no raise."""
-    raw = {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": "not-a-number",
-        "codex_home": "/home/.codex",
-        "snapshot": _future_snap().model_dump(mode="json"),
-    }
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.as_of is None
-    assert rl.age_seconds is None
-
-
-def test_current_codex_home_non_str_treated_as_absent(monkeypatch):
-    """codex_home as a non-str (list) is dropped; home_unverified is False, no raise."""
-    raw = {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": 1780530000,
-        "codex_home": ["/home/.codex"],  # non-str
-        "snapshot": _future_snap().model_dump(mode="json"),
-    }
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.home_unverified is False
-
-
-def test_current_unvalidatable_snapshot_is_unknown(monkeypatch):
-    """An envelope whose snapshot fails model_validate degrades to status 'unknown', no raise."""
-    raw = {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": 1780530000,
-        "codex_home": "/home/.codex",
-        "snapshot": {"primary": "not-a-dict"},  # fails RateLimitSnapshot.model_validate
-    }
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.status == "unknown"
-
-
-def test_current_home_unverified_when_codex_home_differs(monkeypatch):
-    """home_unverified is True when the cached codex_home differs from config.codex_home()."""
-    raw = {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": 1780530000,
-        "codex_home": "/old/.codex",
-        "snapshot": _future_snap().model_dump(mode="json"),
-    }
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: raw)
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/new/.codex"))
-    rl = rate_limit.current()
-    assert rl.home_unverified is True
-    # Cross-home snapshot is degraded to unknown regardless of window health.
-    assert rl.status == "unknown"
-    assert rl.limiting_window is None
-    assert rl.note is not None and "CODEX_HOME" in rl.note
-
-
-# ---------------------------------------------------------------------------
-# Non-finite float regression tests (NaN / Infinity in captured_at / capture())
-# ---------------------------------------------------------------------------
-
-
-def _raw_with_captured_at(value: float) -> dict:
-    return {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": value,
-        "codex_home": "/home/.codex",
-        "snapshot": _future_snap().model_dump(mode="json"),
-    }
-
-
-def test_current_captured_at_nan_does_not_raise(monkeypatch):
-    """captured_at=NaN must NOT raise; as_of and age_seconds must be None."""
-
-    monkeypatch.setattr(
-        rate_limit, "_load_raw", lambda path=None: _raw_with_captured_at(float("nan"))
+    outcome = appserver.RateLimitReadOutcome(
+        status=appserver.RateLimitReadStatus.OK, snapshot=snap, codex_home="/tmp/ch"
     )
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.as_of is None
-    assert rl.age_seconds is None
+    monkeypatch.setattr(appserver, "read_rate_limits", lambda **kw: outcome)
+    rl = rate_limit.live_read(timeout_seconds=5, now_epoch=1000)
+    assert rl.status == "available"
+    assert rl.source == "app_server_live"
+    assert rl.is_stale is False and rl.home_unverified is False
 
 
-def test_current_captured_at_infinity_does_not_raise(monkeypatch):
-    """captured_at=Infinity must NOT raise; as_of and age_seconds must be None."""
-    monkeypatch.setattr(
-        rate_limit, "_load_raw", lambda path=None: _raw_with_captured_at(float("inf"))
-    )
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.as_of is None
-    assert rl.age_seconds is None
+def test_live_read_no_quota_is_unavailable(monkeypatch):
+    outcome = appserver.RateLimitReadOutcome(status=appserver.RateLimitReadStatus.NO_QUOTA)
+    monkeypatch.setattr(appserver, "read_rate_limits", lambda **kw: outcome)
+    rl = rate_limit.live_read(timeout_seconds=5)
+    assert rl.status == "unavailable"
+    assert rl.source == "app_server_live"
 
 
-def test_capture_parse_raise_returns_none(monkeypatch):
-    """capture() must return None (not raise) when normalize.parse_rate_limit raises."""
+@pytest.mark.parametrize(
+    "status",
+    [appserver.RateLimitReadStatus.UNSUPPORTED, appserver.RateLimitReadStatus.PROTOCOL_ERROR],
+)
+def test_live_read_unsupported_or_drift_is_unavailable(monkeypatch, status):
+    outcome = appserver.RateLimitReadOutcome(status=status)
+    monkeypatch.setattr(appserver, "read_rate_limits", lambda **kw: outcome)
+    rl = rate_limit.live_read(timeout_seconds=5)
+    assert rl.status == "unavailable"
 
-    def boom(_events: str) -> None:
-        raise RuntimeError("injected parse failure")
 
-    monkeypatch.setattr(rate_limit.normalize, "parse_rate_limit", boom)
-    result = rate_limit.capture("irrelevant events", now_epoch=1000)
-    assert result is None
+@pytest.mark.parametrize(
+    "status",
+    [appserver.RateLimitReadStatus.TIMED_OUT, appserver.RateLimitReadStatus.SPAWN_FAILED],
+)
+def test_live_read_transient_failure_is_unknown_never_stale_cache(monkeypatch, status):
+    # A transient failure is honestly 'unknown' — never a (possibly stale) cached snapshot,
+    # since persistence was removed (#321 review F3/F4).
+    outcome = appserver.RateLimitReadOutcome(status=status)
+    monkeypatch.setattr(appserver, "read_rate_limits", lambda **kw: outcome)
+    rl = rate_limit.live_read(timeout_seconds=5)
+    assert rl.status == "unknown"
+    assert rl.source == "app_server_live"
+
+
+def test_live_read_never_raises(monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("injected")
+
+    monkeypatch.setattr(appserver, "read_rate_limits", boom)
+    rl = rate_limit.live_read(timeout_seconds=5)
+    assert rl.status == "unknown"
+
+
+def test_not_ready_is_static_unknown():
+    rl = rate_limit.not_ready()
+    assert rl.status == "unknown"
+    assert rl.note is not None
 
 
 # ---------------------------------------------------------------------------
@@ -400,55 +266,6 @@ def test_interpret_same_home_healthy_snapshot_is_available():
     )
     assert rl.status == "available"
     assert rl.home_unverified is False
-
-
-# ---------------------------------------------------------------------------
-# Findings 2 & 3: out-of-range and non-finite used_percent via cache-read path
-# ---------------------------------------------------------------------------
-
-
-def _raw_with_snapshot(primary_used_percent: object) -> dict:
-    """Build a raw cache dict with the given used_percent for the primary window."""
-    snap = _future_snap()
-    dumped = snap.model_dump(mode="json")
-    dumped["primary"]["used_percent"] = primary_used_percent
-    return {
-        "version": rate_limit.CACHE_VERSION,
-        "captured_at": 1780530000,
-        "codex_home": "/home/.codex",
-        "snapshot": dumped,
-    }
-
-
-def test_current_cache_nan_used_percent_is_none(monkeypatch):
-    """A cached used_percent=NaN must be coerced to None; no raise; not false available."""
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: _raw_with_snapshot(float("nan")))
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.primary is not None
-    assert rl.primary.used_percent is None
-    assert rl.primary.remaining_percent is None
-    assert rl.status != "available"
-
-
-def test_current_cache_negative_used_percent_is_none(monkeypatch):
-    """A cached used_percent=-50 (out-of-range) must be coerced to None; no false available."""
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: _raw_with_snapshot(-50.0))
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.primary is not None
-    assert rl.primary.used_percent is None
-    assert rl.primary.remaining_percent is None
-    assert rl.status != "available"
-
-
-def test_current_cache_over_100_used_percent_is_none(monkeypatch):
-    """A cached used_percent=150 (out-of-range) must be coerced to None."""
-    monkeypatch.setattr(rate_limit, "_load_raw", lambda path=None: _raw_with_snapshot(150.0))
-    monkeypatch.setattr(rate_limit.config, "codex_home", lambda: Path("/home/.codex"))
-    rl = rate_limit.current()
-    assert rl.primary is not None
-    assert rl.primary.used_percent is None
 
 
 class TestResetsAtRfc3339:
