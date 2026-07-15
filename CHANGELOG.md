@@ -43,6 +43,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   cache by `fingerprint` re-fetch the contract, and cross-release job replay of a review result
   written by an older version is refused rather than misread.
 
+- **`codex_delegate_dry_run` counts untracked files via the shared inventory primitive** (#323).
+  The worktree preview (`worktree.plan`) now delegates its untracked-file count to
+  `gitdiff.count_untracked` — the same NUL-delimited, memory-bounded, fsmonitor-hardened
+  enumeration `codex_review_changes`/`codex_dry_run` use — instead of its own unbounded `ls-files`
+  line-count, so the two dry-run tools share one implementation and a pathological workspace can't
+  balloon the preview's memory. The reported count is unchanged, so **no `fingerprint` change**:
+  the originally-filed newline over-count did not reproduce (git C-quotes control characters,
+  newline included, by default, so the line-count was already correct for `plan`'s non-`-z`
+  output). A git failure or timeout during the count now surfaces as a structured error instead of
+  a silently-authoritative `0`, preserving `plan`'s documented infrastructure-failure contract.
+
 ### Fixed
 
 - **`codex_status` reports live rate-limit quota again on codex 0.144+** (#321, **breaking**).

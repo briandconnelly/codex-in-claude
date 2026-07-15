@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codex_in_claude._core import gitdiff
 from codex_in_claude._core.redaction import redact_text
 
 if TYPE_CHECKING:
@@ -286,6 +287,28 @@ def _count_nonempty_lines(proc: subprocess.CompletedProcess) -> int:
     return sum(1 for line in proc.stdout.splitlines() if line.strip())
 
 
+def _count_untracked(repo: str, timeout: int) -> int:
+    """Count untracked, non-ignored files for the advisory plan preview via the shared
+    inventory primitive both dry-run tools use (``gitdiff.count_untracked``): one
+    NUL-delimited, memory-bounded, fsmonitor-hardened implementation, so
+    ``codex_delegate_dry_run`` and ``codex_review_changes``/``codex_dry_run`` can't drift
+    (#323).
+
+    ``count_untracked`` is fail-loud — it raises ``RuntimeError`` (and its
+    ``GitUnavailableError``/``NotAGitRepoError`` subclasses) on a git failure or timeout.
+    By the time ``plan()`` reaches the untracked count the repo has already passed
+    ``_ensure_repo_with_head`` and several git calls, so any failure here is an
+    infrastructure fault; translate it to ``WorktreeError`` to preserve ``plan()``'s
+    documented contract (git missing / a subprocess timeout -> ``WorktreeError``, never a
+    crash and never a falsely-authoritative ``0``)."""
+    try:
+        return gitdiff.count_untracked(repo, None, timeout)
+    except RuntimeError as exc:
+        raise WorktreeError(
+            f"counting untracked files failed: {(redact_text(str(exc)) or '')[:200]}"
+        ) from exc
+
+
 def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
     """Count entries in the HEAD tree and sum blob sizes (approximate baseline size).
     `git ls-tree -r --long` emits `<mode> <type> <sha> <size>\\t<path>`; size is `-`
@@ -325,9 +348,7 @@ def plan(repo: str, *, timeout: int) -> WorktreePlanData:
         uncommitted = _count_nonempty_lines(
             _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD"], timeout)
         )
-        untracked = _count_nonempty_lines(
-            _git(repo, ["ls-files", "--others", "--exclude-standard"], timeout)
-        )
+        untracked = _count_untracked(repo, timeout)
     except (NotAGitRepoError, NoCommitsError, WorktreeError):
         raise  # domain errors pass through unchanged
     except (subprocess.SubprocessError, OSError) as exc:
