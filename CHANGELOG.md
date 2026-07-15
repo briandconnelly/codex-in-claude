@@ -54,6 +54,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   output). A git failure or timeout during the count now surfaces as a structured error instead of
   a silently-authoritative `0`, preserving `plan`'s documented infrastructure-failure contract.
 
+- **`codex_delegate_dry_run` bounds its remaining `plan()` count captures** (#326). #325
+  stream-counted only the untracked files; the worktree preview's two other counts —
+  `git ls-tree -r --long` (tracked files/bytes) and `git diff --numstat` (uncommitted tracked
+  files) — still materialized the whole git listing in memory. Both now stream through a new shared
+  `_core/gitproc.run_lines` runner (bounded per-line reader, concurrent capped stderr drain,
+  process-group kill/reap on timeout or consumer failure — the lifecycle guarantees ported from the
+  diff streamer), so a repo with a pathological number of tracked or changed files is counted in
+  bounded memory. Reported counts and failure semantics are unchanged (an `ls-tree` failure still
+  surfaces as `worktree_error`; a `numstat` non-zero exit still degrades to `0`, a timeout or
+  missing git to `worktree_error`), so **no `fingerprint` change**.
+
 ### Fixed
 
 - **`codex_status` reports live rate-limit quota again on codex 0.144+** (#321, **breaking**).

@@ -26,15 +26,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from codex_in_claude._core import gitdiff
+from codex_in_claude._core import gitdiff, gitproc
 from codex_in_claude._core.redaction import redact_text
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 # mkdtemp prefix for the throwaway worktree's parent dir. Exposed so a job runner
 # can constrain its cleanup to this temp area (see jobs.JobStore cleanup_prefix).
 WORKTREE_PREFIX = "cic-worktree-"
+
+# Per-line cap for plan()'s streamed inventory counts (ls-tree / diff --numstat). Each
+# line's counted/summed fields precede the pathname, so even a pathologically long path
+# truncated at this cap still parses correctly; the cap only bounds peak memory (#326).
+_PLAN_LINE_CAP = 1024 * 1024
 
 
 class WorktreeError(RuntimeError):
@@ -279,12 +284,44 @@ def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None =
     return Worktree(path=wt, parent=parent, baseline_warning=warning)
 
 
-def _count_nonempty_lines(proc: subprocess.CompletedProcess) -> int:
-    """Count non-blank stdout lines, treating a failed git call as zero (the plan is
-    advisory — a transient git hiccup must not break a free preview)."""
-    if proc.returncode != 0:
+def _count_uncommitted(repo: str, timeout: int) -> int:
+    """Count tracked files changed vs HEAD (staged + unstaged) — the changes
+    `_seed_uncommitted` would replay — by streaming `git diff --numstat HEAD` so a repo
+    with a pathological number of changed files is counted in bounded memory (#326),
+    matching the untracked count. Each non-empty line is one changed file.
+
+    Carries the `--no-ext-diff`/`--no-textconv` hardening the rest of this module uses: a
+    free preview must never run a repo-configured diff/textconv helper. (`--numstat` does
+    not invoke those helpers today, but the flags keep this defensive and uniform.)
+
+    Fail-soft on a non-zero git exit — returns 0, since a transient git hiccup must not
+    break a free preview (the pre-#326 `_count_nonempty_lines` behavior). A timeout or
+    missing git binary is an infrastructure fault surfaced as WorktreeError, preserving
+    plan()'s contract."""
+    cmd = [
+        "git",
+        *_hardening_flags(repo, timeout),
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--numstat",
+        "HEAD",
+    ]
+    try:
+        return gitproc.run_lines(
+            cmd,
+            cwd=repo,
+            env=_base_env(),
+            timeout=timeout,
+            max_line_bytes=_PLAN_LINE_CAP,
+            consume=lambda lines: sum(1 for line in lines if line.strip()),
+        )
+    except gitproc.GitStreamFailed:
         return 0
-    return sum(1 for line in proc.stdout.splitlines() if line.strip())
+    except (gitproc.GitStreamTimeout, gitproc.GitBinaryNotFound) as exc:
+        raise WorktreeError(
+            f"counting uncommitted files failed: {(redact_text(str(exc).strip()) or '')[:200]}"
+        ) from exc
 
 
 def _count_untracked(repo: str, timeout: int) -> int:
@@ -309,14 +346,14 @@ def _count_untracked(repo: str, timeout: int) -> int:
         ) from exc
 
 
-def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
-    """Count entries in the HEAD tree and sum blob sizes (approximate baseline size).
-    `git ls-tree -r --long` emits `<mode> <type> <sha> <size>\\t<path>`; size is `-`
-    for non-blob entries (e.g. submodule gitlinks), which are counted as files but
-    contribute no bytes."""
-    out = _git_ok(repo, ["ls-tree", "-r", "--long", "HEAD"], timeout)
+def _parse_tracked(lines: Iterable[str]) -> tuple[int, int]:
+    """Count entries and sum blob sizes over `git ls-tree -r --long` output lines. Each
+    entry is `<mode> <type> <sha> <size>\\t<path>`; size is `-` for non-blob entries (e.g.
+    submodule gitlinks), which are counted as files but contribute no bytes. A line with
+    no tab (or fewer than four leading fields) is skipped. The counted/summed fields all
+    precede the tab, so a pathname truncated by the streaming line cap still parses."""
     files = total = 0
-    for line in out.splitlines():
+    for line in lines:
         meta, sep, _path = line.partition("\t")
         fields = meta.split()
         if not sep or len(fields) < 4:  # a real entry always has a tab before its path
@@ -326,6 +363,28 @@ def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
         if size.isdigit():
             total += int(size)
     return files, total
+
+
+def _tracked_files_and_bytes(repo: str, timeout: int) -> tuple[int, int]:
+    """Count entries in the HEAD tree and sum blob sizes (approximate baseline size) by
+    streaming `git ls-tree -r --long HEAD` so a repo with a pathological number of tracked
+    entries is counted in bounded memory (#326), matching the untracked count. See
+    `_parse_tracked` for the line format. A git failure (non-zero exit, timeout, or a
+    missing binary) surfaces as WorktreeError, preserving plan()'s contract."""
+    cmd = ["git", *_hardening_flags(repo, timeout), "ls-tree", "-r", "--long", "HEAD"]
+    try:
+        return gitproc.run_lines(
+            cmd,
+            cwd=repo,
+            env=_base_env(),
+            timeout=timeout,
+            max_line_bytes=_PLAN_LINE_CAP,
+            consume=_parse_tracked,
+        )
+    except (gitproc.GitStreamFailed, gitproc.GitStreamTimeout, gitproc.GitBinaryNotFound) as exc:
+        raise WorktreeError(
+            f"counting tracked files failed: {(redact_text(str(exc).strip()) or '')[:200]}"
+        ) from exc
 
 
 def plan(repo: str, *, timeout: int) -> WorktreePlanData:
@@ -340,14 +399,7 @@ def plan(repo: str, *, timeout: int) -> WorktreePlanData:
         subj = _git(repo, ["log", "-1", "--format=%s"], timeout)
         head_subject = subj.stdout.strip() if subj.returncode == 0 and subj.stdout.strip() else None
         tracked_files, tracked_bytes = _tracked_files_and_bytes(repo, timeout)
-        # `git diff --numstat HEAD` mirrors what _seed_uncommitted replays (staged +
-        # unstaged tracked changes); each non-empty line is one changed file. Carry the
-        # same --no-ext-diff/--no-textconv hardening the rest of this module uses: a free
-        # preview must never run a repo-configured diff/textconv helper. (--numstat does
-        # not invoke those helpers today, but the flags keep this defensive and uniform.)
-        uncommitted = _count_nonempty_lines(
-            _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD"], timeout)
-        )
+        uncommitted = _count_uncommitted(repo, timeout)
         untracked = _count_untracked(repo, timeout)
     except (NotAGitRepoError, NoCommitsError, WorktreeError):
         raise  # domain errors pass through unchanged
