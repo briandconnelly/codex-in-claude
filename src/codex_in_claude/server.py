@@ -3413,15 +3413,10 @@ async def codex_dry_run(
             timeout=config.git_timeout_seconds(),
             max_bytes=max_bytes,
         )
-    except (
-        gitdiff.InvalidScopeError,
-        gitdiff.InvalidBaseError,
-        gitdiff.InvalidCommitError,
-        gitdiff.InvalidPathsError,
-        gitdiff.NotAGitRepoError,
-        gitdiff.GitUnavailableError,
-        RuntimeError,
-    ) as exc:
+    except orchestration.GITDIFF_EXCEPTIONS as exc:
+        # Reuse run_review's exception set (not a hand-maintained copy) so a new gitdiff
+        # error — e.g. InvalidUntrackedError — is handled here too, mapped to a structured
+        # envelope by gitdiff_error rather than surfacing unhandled (PR #322 review).
         meta = _base_meta(
             cwd,
             wres.source,

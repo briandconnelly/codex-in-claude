@@ -5901,6 +5901,17 @@ async def test_review_untracked_exclude_written_to_spec(monkeypatch, clean_env, 
     assert calls["spec"]["untracked"] == "exclude"
 
 
+async def test_dry_run_invalid_untracked_returns_structured_error(clean_env, tmp_path):
+    # A direct Python call bypassing MCP Literal validation must get the structured
+    # invalid_arguments envelope, not an unhandled InvalidUntrackedError (PR #322 review).
+    _init_repo(tmp_path)
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), untracked="bogus"
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_arguments"
+
+
 async def test_dry_run_untracked_include_gathers_untracked(clean_env, tmp_path):
     # End-to-end through the real gather path: `include` opts into sending untracked
     # contents, so the preview would call the model and reports complete coverage.
