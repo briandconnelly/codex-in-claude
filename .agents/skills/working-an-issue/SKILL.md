@@ -7,8 +7,11 @@ description: Use when working a GitHub issue in this repo from selection through
 
 Orchestrates the issue → green-PR lifecycle in this repo. This skill owns the **order of
 operations and the human checkpoints**; every *rule* lives in `AGENTS.md` (auto-loaded each
-session) or the named sibling skill. When a phase names a section, open that section and follow
-it — this file deliberately does not restate it.
+session) or the named sibling skill.
+
+**How to read a phase: each phase names an action and cites the `AGENTS.md` § section (or sibling
+skill) that owns the rule. Open the cited section and follow it — this file deliberately does not
+restate the rule, so acting on a phase line alone will miss it.**
 
 ## Before you start: verification honesty
 
