@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-15
+
+A review-honesty and rate-limit-recovery release. `codex_review_changes` no longer reports an
+unreviewed working tree — the all-untracked shape most agent work takes — as a high-confidence
+`pass`, and `codex_status` reads live rate-limit quota from the `codex app-server` again after
+codex 0.144 moved it off the `codex exec` stream. Both are **breaking** on the agent-visible
+surface: the result `fingerprint` moves twice (`codex-in-claude/0.1/schema-44` → `schema-46`) and
+`RESULT_FORMAT` twice (`2` → `4`), so pre-1.0 this is a minor release and clients that cache by
+`fingerprint` re-fetch the contract.
+
 ### Changed
 
 - **`codex_review_changes` no longer reports an unreviewed tree as a high-confidence pass**
@@ -43,27 +53,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   cache by `fingerprint` re-fetch the contract, and cross-release job replay of a review result
   written by an older version is refused rather than misread.
 
-- **`codex_delegate_dry_run` counts untracked files via the shared inventory primitive** (#323).
-  The worktree preview (`worktree.plan`) now delegates its untracked-file count to
-  `gitdiff.count_untracked` — the same NUL-delimited, memory-bounded, fsmonitor-hardened
-  enumeration `codex_review_changes`/`codex_dry_run` use — instead of its own unbounded `ls-files`
-  line-count, so the two dry-run tools share one implementation and a pathological workspace can't
-  balloon the preview's memory. The reported count is unchanged, so **no `fingerprint` change**:
-  the originally-filed newline over-count did not reproduce (git C-quotes control characters,
-  newline included, by default, so the line-count was already correct for `plan`'s non-`-z`
-  output). A git failure or timeout during the count now surfaces as a structured error instead of
-  a silently-authoritative `0`, preserving `plan`'s documented infrastructure-failure contract.
-
-- **`codex_delegate_dry_run` bounds its remaining `plan()` count captures** (#326). #325
-  stream-counted only the untracked files; the worktree preview's two other counts —
-  `git ls-tree -r --long` (tracked files/bytes) and `git diff --numstat` (uncommitted tracked
-  files) — still materialized the whole git listing in memory. Both now stream through a new shared
-  `_core/gitproc.run_lines` runner (bounded per-line reader, concurrent capped stderr drain,
-  process-group kill/reap on timeout or consumer failure — the lifecycle guarantees ported from the
-  diff streamer), so a repo with a pathological number of tracked or changed files is counted in
-  bounded memory. Reported counts and failure semantics are unchanged (an `ls-tree` failure still
-  surfaces as `worktree_error`; a `numstat` non-zero exit still degrades to `0`, a timeout or
-  missing git to `worktree_error`), so **no `fingerprint` change**.
+- **`codex_delegate_dry_run`'s worktree preview counts in bounded memory** (#323, #326). All three
+  counts in `worktree.plan()` — untracked files, tracked files/bytes (`git ls-tree -r --long`), and
+  uncommitted tracked files (`git diff --numstat`) — previously materialized their whole git listing
+  in memory. The untracked count now delegates to the shared `gitdiff.count_untracked` inventory
+  (the same NUL-delimited, fsmonitor-hardened enumeration `codex_review_changes`/`codex_dry_run`
+  use), and the other two stream through a new shared `_core/gitproc.run_lines` runner (bounded
+  per-line reader, concurrent capped stderr drain, process-group kill/reap on timeout or consumer
+  failure — lifecycle guarantees ported from the diff streamer), so a repo with a pathological
+  number of tracked, changed, or untracked files is counted without exhausting memory. Reported
+  counts and failure semantics are unchanged — a git failure surfaces as a structured
+  `worktree_error` (or, for `numstat`, still degrades to `0`) instead of a silently-authoritative
+  `0` — so **no `fingerprint` change**. (The newline over-count originally filed as #323 did not
+  reproduce: git C-quotes control characters, newline included, by default, so `plan()`'s non-`-z`
+  line-count was already correct.)
 
 ### Fixed
 
