@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_in_claude._core import gitdiff, worktree
+from codex_in_claude._core import gitdiff, gitproc, worktree
 from conftest import run_git
 
 
@@ -208,27 +208,96 @@ def test_plan_does_not_create_a_worktree(repo, monkeypatch):
     assert out.count("\n") == 1  # only the main worktree
 
 
-def test_tracked_files_and_bytes_counts_gitlinks_and_skips_malformed(repo, monkeypatch):
+def test_parse_tracked_counts_gitlinks_and_skips_malformed():
     # A submodule gitlink is counted as a file but contributes 0 bytes (size '-');
-    # a malformed line (no tab) is ignored entirely.
-    listing = (
-        "100644 blob abc123 5\ta.py\n"
-        "160000 commit deadbeef -\tvendor/sub\n"  # submodule: counted, 0 bytes
-        "garbage line without tab\n"  # malformed: skipped
-    )
-    monkeypatch.setattr(worktree, "_git_ok", lambda *a, **k: listing)
-    files, total = worktree._tracked_files_and_bytes(str(repo), 30)
+    # a malformed line (no tab) is ignored entirely. Lines arrive with trailing newlines,
+    # as the streaming line reader yields them.
+    lines = [
+        "100644 blob abc123 5\ta.py\n",
+        "160000 commit deadbeef -\tvendor/sub\n",  # submodule: counted, 0 bytes
+        "garbage line without tab\n",  # malformed: skipped
+    ]
+    files, total = worktree._parse_tracked(lines)
     assert files == 2
     assert total == 5
 
 
-def test_count_nonempty_lines_treats_git_failure_as_zero(repo):
-    import subprocess
+def test_parse_tracked_survives_truncated_pathname():
+    # The streaming cap can truncate a pathological pathname (appending a marker), but the
+    # counted/summed fields precede the tab, so the entry still parses as one file.
+    truncated = "100644 blob abc123 7\tsome/very/long/pa" + "…[line truncated]\n"
+    files, total = worktree._parse_tracked([truncated])
+    assert files == 1
+    assert total == 7
 
-    failed = subprocess.CompletedProcess(["git"], 1, "", "boom")
-    assert worktree._count_nonempty_lines(failed) == 0
-    ok = subprocess.CompletedProcess(["git"], 0, "x\n\n y \n", "")
-    assert worktree._count_nonempty_lines(ok) == 2
+
+def test_count_uncommitted_fail_soft_returns_zero_on_git_failure(repo, monkeypatch):
+    # A non-zero git exit must NOT break the free preview: the count degrades to 0
+    # (the pre-#326 _count_nonempty_lines semantic), not an error.
+    def boom(*a, **k):
+        raise gitproc.GitStreamFailed(1, "boom")
+
+    monkeypatch.setattr(gitproc, "run_lines", boom)
+    assert worktree._count_uncommitted(str(repo), 30) == 0
+
+
+def test_count_uncommitted_maps_timeout_to_worktree_error(repo, monkeypatch):
+    # A timeout / missing binary is an infrastructure fault, not a transient hiccup: it
+    # surfaces as WorktreeError (never a falsely-authoritative 0).
+    def boom(*a, **k):
+        raise gitproc.GitStreamTimeout("timed out")
+
+    monkeypatch.setattr(gitproc, "run_lines", boom)
+    with pytest.raises(worktree.WorktreeError):
+        worktree._count_uncommitted(str(repo), 30)
+
+
+def test_tracked_files_and_bytes_maps_failure_to_worktree_error(repo, monkeypatch):
+    # ls-tree is fail-loud: any git failure surfaces as WorktreeError (unlike the
+    # fail-soft uncommitted count).
+    def boom(*a, **k):
+        raise gitproc.GitStreamFailed(128, "fatal: not a tree object")
+
+    monkeypatch.setattr(gitproc, "run_lines", boom)
+    with pytest.raises(worktree.WorktreeError):
+        worktree._tracked_files_and_bytes(str(repo), 30)
+
+
+def test_plan_tracked_and_uncommitted_counts_use_streamed_runner(repo, monkeypatch):
+    # plan()'s tracked and uncommitted counts must route through the bounded streaming
+    # runner (gitproc.run_lines), so a pathological listing is counted in bounded memory
+    # (#326). Proven by spying: a clean plan() calls run_lines for BOTH counts. (The
+    # untracked count uses gitdiff.count_untracked, which has its own bounded reader.)
+    (repo / "a.py").write_text("x = 2\n")  # one uncommitted tracked change
+    calls = []
+    real = gitproc.run_lines
+
+    def spy(cmd, **k):
+        calls.append(" ".join(cmd))
+        return real(cmd, **k)
+
+    monkeypatch.setattr(gitproc, "run_lines", spy)
+    worktree.plan(str(repo), timeout=30)
+    # Exactly two streamed counts: ls-tree (tracked) and diff --numstat (uncommitted).
+    assert len(calls) == 2
+    assert any("ls-tree" in c for c in calls)
+    assert any("--numstat" in c for c in calls)
+
+
+def test_plan_streams_large_tracked_and_uncommitted_listing_exactly(repo):
+    # A tracked listing larger than one read chunk must be counted exactly by the bounded
+    # streaming reader — never materialized whole (#326). 1500 entries of ~70 bytes each
+    # exceed the 64 KiB stdout chunk, exercising multi-chunk streaming end to end.
+    n = 1500
+    for i in range(n):
+        (repo / f"pkg_{i:05d}_module.py").write_text("x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "bulk")
+    for i in range(0, n, 2):  # modify half → uncommitted tracked changes
+        (repo / f"pkg_{i:05d}_module.py").write_text("x = 2\n")
+    plan = worktree.plan(str(repo), timeout=60)
+    assert plan.tracked_files == n + 1  # + the original a.py from the fixture
+    assert plan.uncommitted_tracked_files == n // 2
 
 
 def test_plan_not_a_git_repo(tmp_path):
