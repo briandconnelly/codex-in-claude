@@ -305,7 +305,7 @@ def _count_untracked(repo: str, timeout: int) -> int:
         return gitdiff.count_untracked(repo, None, timeout)
     except RuntimeError as exc:
         raise WorktreeError(
-            f"counting untracked files failed: {(redact_text(str(exc)) or '')[:200]}"
+            f"counting untracked files failed: {(redact_text(str(exc).strip()) or '')[:200]}"
         ) from exc
 
 
