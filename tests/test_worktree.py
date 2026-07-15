@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_in_claude._core import worktree
+from codex_in_claude._core import gitdiff, worktree
 from conftest import run_git
 
 
@@ -251,6 +251,32 @@ def test_plan_maps_git_infra_failure_to_worktree_error(repo, monkeypatch):
     monkeypatch.setattr(worktree, "_git", boom)
     with pytest.raises(worktree.WorktreeError):
         worktree.plan(str(repo), timeout=30)
+
+
+def test_plan_untracked_count_uses_shared_inventory(repo, monkeypatch):
+    # plan() must delegate its untracked count to the shared gitdiff.count_untracked
+    # primitive (NUL-safe, memory-bounded, fsmonitor-hardened) so the two dry-run tools
+    # share ONE inventory implementation and cannot drift (#323). Proven by making that
+    # primitive the only thing that can fail the count: were plan() still running its own
+    # `ls-files` line-count, this monkeypatch would be inert and no error would surface.
+    def boom(*a, **k):
+        raise RuntimeError("ls-files exploded")
+
+    monkeypatch.setattr(gitdiff, "count_untracked", boom)
+    with pytest.raises(worktree.WorktreeError):
+        worktree.plan(str(repo), timeout=30)
+
+
+def test_plan_counts_newline_named_untracked_file_once(repo):
+    # Characterization, NOT a red-green regression test: git C-quotes control characters
+    # (newline included) by default, so the pre-#323 line-count already reported this
+    # correctly. It pins that the shared-inventory swap keeps a pathological filename
+    # counting as exactly ONE untracked file. (count_untracked's own -z NUL path has its
+    # true red-green guard in test_gitdiff.py::test_count_untracked_newline_in_filename_counts_once
+    # — that path emits raw newlines and genuinely needs NUL-counting; this one does not.)
+    (repo / "we\nird.txt").write_bytes(b"w = 1\n")
+    plan = worktree.plan(str(repo), timeout=30)
+    assert plan.untracked_files == 1
 
 
 def test_remove_is_idempotent(repo):
