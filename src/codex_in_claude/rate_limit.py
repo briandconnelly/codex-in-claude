@@ -1,24 +1,22 @@
-"""Persist, load, and interpret the latest Codex rate-limit snapshot.
+"""Read and interpret the current Codex rate-limit snapshot.
 
-Capture is opportunistic: paid calls already parse the token_count event for token
-usage, so we lift the sibling rate_limits block at no extra spend, persist the latest,
-and interpret it against each window's own resets_at when read — so a stale cache
-can't mislead: an unobserved (reset-passed or missing) window never reports as
-available, while conservative limited/exhausted verdicts from open windows survive."""
+codex 0.144 removed the token_count event that once carried quota on the `codex exec`
+stream (#321); the data now lives on the app-server protocol. :func:`live_read` fetches it
+via `account/rateLimits/read` (a read-only call with no model spend) and interprets it
+against each window's own resets_at. The read is EPHEMERAL — nothing is persisted, so
+codex_status stays a genuinely read-only call and no stale cache can ever mislead a spend
+decision. Windows arrive already classified by duration (see appserver.py); either the
+shorter (`primary`) or longer (`secondary`) window may be absent, and an absent window is
+not treated as unobserved."""
 
 from __future__ import annotations
 
-import contextlib
-import json
 import math
-import os
-import tempfile
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal, TypeGuard, cast
 
-from codex_in_claude import config, normalize
+from codex_in_claude import appserver, config
 from codex_in_claude.schemas import (
     RateLimit,
     RateLimitSnapshot,
@@ -27,62 +25,17 @@ from codex_in_claude.schemas import (
     RateLimitWindowSnapshot,
 )
 
-CACHE_VERSION = 1
+# `current_run`/`plugin_cache` are retained for schema compatibility; live reads use
+# `app_server_live` (nothing is persisted now, so `plugin_cache` is no longer produced).
+_LiveSource = Literal["current_run", "plugin_cache", "app_server_live"]
 
-
-def save(
-    snapshot: RateLimitSnapshot,
-    *,
-    now_epoch: int,
-    path: Path | None = None,
-    home: str | None = None,
-) -> None:
-    """Persist the latest snapshot, best-effort and atomically. Never raises: a write
-    failure must never fail the underlying paid call. Uses a unique temp file +
-    os.replace (mirroring _worker._atomic_write) so a concurrent paid call or a
-    codex_status read never observes a truncated file. Last writer wins."""
-    try:
-        target = path or config.rate_limit_snapshot_file()
-        home_str = home if home is not None else str(config.codex_home())
-        payload = {
-            "version": CACHE_VERSION,
-            "captured_at": now_epoch,
-            "codex_home": home_str,
-            "snapshot": snapshot.model_dump(mode="json"),
-        }
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
-        except OSError:
-            return
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload))
-            Path(tmp).replace(target)
-        except Exception:
-            with contextlib.suppress(Exception):
-                Path(tmp).unlink()
-    except Exception:
-        pass
-
-
-def _load_raw(path: Path | None = None) -> dict | None:
-    target = path or config.rate_limit_snapshot_file()
-    try:
-        text = target.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if isinstance(data, dict) and data.get("version") == CACHE_VERSION:
-        return data
-    return None
-
+# Wall-clock cap for the codex_status live read. codex_status is a free, no-model-spend
+# call; the app-server read normally returns in ~1s, so this is only a ceiling that bounds a
+# hung child. Deliberately well under the model-call timeout — status must stay responsive.
+READ_TIMEOUT_SECONDS = 20.0
 
 _REFRESH_HINT = (
-    "No Codex rate-limit data yet; run any Codex call (consult/review/delegate) to populate it."
+    "No Codex rate-limit reading available; run codex_status to fetch the current quota."
 )
 _LIMITED_THRESHOLD = 25.0  # remaining_percent below this on an open window -> 'limited'
 _EXPECTED_WINDOWS = ("primary", "secondary")
@@ -96,15 +49,16 @@ def interpret(
     cache_home: str | None = None,
     current_home: str | None = None,
     stale_seconds: int | None = None,
-    source: Literal["current_run", "plugin_cache"] = "plugin_cache",
+    source: _LiveSource = "plugin_cache",
 ) -> RateLimit:
     """Turn a raw snapshot into the agent-facing RateLimit, reasoning about staleness
     against each window's own resets_at. A None snapshot yields status 'unknown'.
 
-    Asymmetric: `available` only when every expected window is open (not reset-passed,
-    has resets_at) and healthy; an unobserved window degrades to `unknown`. Risk
-    verdicts (`limited`/`exhausted`) come only from open windows, so they stay
-    conservative under staleness."""
+    Asymmetric: `available` only when every window PRESENT in the snapshot is open (not
+    reset-passed, has resets_at) and healthy; a present-but-unobservable window degrades to
+    `unknown`, while a window the source omits is not a binding constraint. Risk verdicts
+    (`limited`/`exhausted`) come only from open windows, so they stay conservative under
+    staleness."""
     if snapshot is None:
         return RateLimit(status="unknown", source=source, note=_REFRESH_HINT)
     threshold = stale_seconds if stale_seconds is not None else config.rate_limit_stale_seconds()
@@ -136,59 +90,60 @@ def interpret(
     )
 
 
-def live(snapshot: RateLimitSnapshot | None, *, now_epoch: int) -> RateLimit | None:
-    """RateLimit for a just-captured snapshot (for Meta): age 0, never stale, source
-    'current_run'. None when there is no snapshot."""
-    if snapshot is None:
-        return None
-    return interpret(snapshot, now_epoch=now_epoch, captured_at=now_epoch, source="current_run")
+_UNAVAILABLE_NO_QUOTA = "This Codex account exposes no rate-limit windows."
+_UNAVAILABLE_UNSUPPORTED = (
+    "This codex version did not expose rate-limit data via the app-server; codex-in-claude may"
+    " need an update for your CLI."
+)
+_TRANSIENT_HINT = (
+    "Could not read Codex quota just now (the app-server read timed out or could not start); retry."
+)
+_NOT_READY_HINT = "Codex is not ready (not installed or not authenticated); quota can't be read."
 
 
-def current() -> RateLimit:
-    """Load and interpret the cached snapshot for codex_status (free, local). Tolerant:
-    a missing/corrupt cache or bad envelope types degrade to 'unknown', never raise."""
-    now = int(time.time())
-    raw = _load_raw()
-    if raw is None:
-        return interpret(None, now_epoch=now)
-    captured_at = raw.get("captured_at")
-    if (
-        isinstance(captured_at, bool)
-        or not isinstance(captured_at, (int, float))
-        or not math.isfinite(captured_at)
+def not_ready() -> RateLimit:
+    """The rate_limit codex_status reports when codex is not ready to read quota (missing or
+    unauthenticated). A static 'unknown' — no app-server subprocess is spawned."""
+    return RateLimit(status="unknown", source="app_server_live", note=_NOT_READY_HINT)
+
+
+def live_read(
+    *,
+    timeout_seconds: float,
+    command: list[str] | None = None,
+    now_epoch: int | None = None,
+) -> RateLimit:
+    """Fetch the current quota LIVE from `codex app-server` (a read-only call, no model
+    spend) and interpret it for codex_status. EPHEMERAL — nothing is persisted, so codex_status
+    stays read-only and no stale cache can mislead. Never raises — every failure is a typed
+    :class:`RateLimit`, not a silent None (#321):
+
+    * OK          -> interpret (source `app_server_live`).
+    * NO_QUOTA    -> 'unavailable' (the account has no quota windows).
+    * UNSUPPORTED / PROTOCOL_ERROR -> 'unavailable' (this codex exposes no such data / drift).
+    * TIMED_OUT / SPAWN_FAILED     -> 'unknown' (a transient failure — retry).
+
+    ``command`` is injectable for tests; ``now_epoch`` fixes the clock."""
+    now = now_epoch if now_epoch is not None else int(time.time())
+    try:
+        outcome = appserver.read_rate_limits(command=command, timeout_seconds=timeout_seconds)
+    except Exception:
+        # A live-read fault must never break codex_status.
+        return RateLimit(status="unknown", source="app_server_live", note=_TRANSIENT_HINT)
+    status = outcome.status
+    if status is appserver.RateLimitReadStatus.OK and outcome.snapshot is not None:
+        return interpret(outcome.snapshot, now_epoch=now, captured_at=now, source="app_server_live")
+    if status is appserver.RateLimitReadStatus.NO_QUOTA:
+        return RateLimit(status="unavailable", source="app_server_live", note=_UNAVAILABLE_NO_QUOTA)
+    if status in (
+        appserver.RateLimitReadStatus.UNSUPPORTED,
+        appserver.RateLimitReadStatus.PROTOCOL_ERROR,
     ):
-        captured_at = None
-    else:
-        captured_at = int(captured_at)
-    cache_home = raw.get("codex_home")
-    if not isinstance(cache_home, str):
-        cache_home = None
-    try:
-        snapshot = RateLimitSnapshot.model_validate(raw.get("snapshot"))
-    except Exception:
-        return interpret(None, now_epoch=now)
-    return interpret(
-        snapshot,
-        now_epoch=now,
-        captured_at=captured_at,
-        cache_home=cache_home,
-        current_home=str(config.codex_home()),
-    )
-
-
-def capture(events: str, *, now_epoch: int | None = None) -> RateLimit | None:
-    """Parse a paid run's events for a rate_limits block; persist it (best-effort) and
-    return the live RateLimit for the call's Meta. None when no block was emitted."""
-    try:
-        # best-effort: metadata capture must never fail a paid call
-        now = now_epoch if now_epoch is not None else int(time.time())
-        snapshot = normalize.parse_rate_limit(events)
-        if snapshot is None:
-            return None
-        save(snapshot, now_epoch=now)
-        return live(snapshot, now_epoch=now)
-    except Exception:
-        return None
+        return RateLimit(
+            status="unavailable", source="app_server_live", note=_UNAVAILABLE_UNSUPPORTED
+        )
+    # TIMED_OUT / SPAWN_FAILED: a transient failure. Honestly 'unknown' — never a stale cache.
+    return RateLimit(status="unknown", source="app_server_live", note=_TRANSIENT_HINT)
 
 
 def _window(snap: RateLimitWindowSnapshot | None, now_epoch: int) -> RateLimitWindow | None:
@@ -251,21 +206,37 @@ def _status(
         name: w for name, w in windows.items() if _is_open(w)
     }
 
-    # 1. Codex explicitly named the window that hit its limit.
+    # 1. Codex flagged that a limit was reached.
     reached = (snapshot.rate_limit_reached_type or "").strip().lower()
     if reached:
         if reached in open_windows:
+            # Legacy window-name form ("primary"/"secondary"): name that window.
+            return "exhausted", cast('Literal["primary", "secondary"]', reached), None
+        if reached in _EXPECTED_WINDOWS:
+            # Named a window that has since reset or is absent -> not actionable.
             return (
-                "exhausted",
-                cast('Literal["primary", "secondary"]', reached),
+                "unknown",
                 None,
+                f"codex reported '{reached}' reached its limit"
+                " but that window is no longer observable; refresh.",
             )
-        # The reached window has since reset or is absent -> snapshot not actionable.
+        # A reason code that does not name a window (0.144's app-server enum, e.g.
+        # 'rate_limit_reached' / '*_usage_limit_reached'): a limit WAS hit. Escalate to
+        # exhausted only while a window is still observable to bind it to; once every window has
+        # reset, a cached reason code is no longer actionable and degrades to unknown — matching
+        # the legacy window-name branch above, not a permanent stale 'exhausted' (review F5).
+        if not open_windows:
+            return (
+                "unknown",
+                None,
+                f"codex reported a usage limit was reached ({reached})"
+                " but no window is currently observable; refresh.",
+            )
+        binding = min(open_windows, key=lambda k: _remaining(open_windows[k]))
         return (
-            "unknown",
-            None,
-            f"codex reported '{reached}' reached its limit"
-            " but that window is no longer observable; refresh.",
+            "exhausted",
+            cast('Literal["primary", "secondary"]', binding),
+            f"codex reports a usage limit was reached ({reached}).",
         )
 
     # 2. Conservative risk from open windows (safe even if stale: captured usage is a
@@ -279,15 +250,17 @@ def _status(
         n = min(limited, key=lambda k: _remaining(limited[k]))
         return "limited", cast('Literal["primary", "secondary"]', n), None
 
-    # 3. No risk signal. `available` only if EVERY expected window is open and healthy;
-    #    any unobserved window could be the binding constraint -> unknown.
-    unobserved = [n for n in _EXPECTED_WINDOWS if n not in open_windows]
+    # 3. No risk signal. `available` only if every window PRESENT in the snapshot is open and
+    #    healthy. The app-server reports the windows that currently bind the account, so an
+    #    ABSENT window is not a binding constraint (not 'unobserved') — but a present window we
+    #    cannot currently observe (reset-passed / no resets_at) still degrades to unknown.
+    unobserved = [n for n in present if n not in open_windows]
     if unobserved:
         return (
             "unknown",
             None,
-            f"quota for the {', '.join(unobserved)} window(s) is unobserved"
-            " (reset, missing, or stale); refresh before relying on availability.",
+            f"quota for the {', '.join(unobserved)} window(s) is present but unobservable"
+            " (reset or stale); refresh before relying on availability.",
         )
     n = min(open_windows, key=lambda k: _remaining(open_windows[k]))
     return "available", cast('Literal["primary", "secondary"]', n), None

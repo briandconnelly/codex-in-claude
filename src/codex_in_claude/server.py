@@ -157,8 +157,9 @@ CAPABILITY_SUMMARY = (
     "codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate "
     "records its run as a job (meta.job_id), so a dropped connection can be recovered the "
     "same way. codex_status also reports a rate_limit block (status "
-    "available|limited|exhausted|unknown, where unknown means no fresh reading yet, not a "
-    "problem) showing how much Codex quota remains."
+    "available|limited|exhausted|unknown|unavailable) showing how much Codex quota remains, "
+    "read live from the app-server with no model spend; unknown/unavailable mean no usable "
+    "reading, not a problem."
 )
 
 # Annotation presets. destructiveHint/idempotentHint have MCP-spec meaning only when
@@ -1030,13 +1031,15 @@ def codex_status() -> dict:
     version, and report the resolved defaults. Free — no model call. Run it before
     your first paid call in a session to confirm setup, and again whenever a run
     fails with a setup error.
-    Also reports a `rate_limit` block — how much of the Codex 5-hour (`primary`) and
-    weekly (`secondary`) quota windows remains, captured from your last paid Codex call
-    (a cached snapshot, not a live query). Use it to decide whether to spend: `available`
-    is deliberately conservative (only when both windows are observed and healthy);
-    when `limited`/`exhausted`, prefer to defer non-urgent Codex calls (urgent ones may
-    still proceed); `unknown` means no fresh/usable reading (run any **paid** Codex call
-    to populate it), not that anything is wrong.
+    Also reports a `rate_limit` block — how much of the Codex quota windows remains,
+    fetched LIVE from `codex app-server` (a read-only call with no model spend). `primary`
+    is the shorter/rolling window, `secondary` the longer one; the account reports only the
+    windows that currently bind it, so either may be null. Use it to decide whether to spend:
+    `available` is deliberately conservative (only when every reported window is healthy);
+    when `limited`/`exhausted`, prefer to defer non-urgent Codex calls (urgent ones may still
+    proceed); `unknown` means the live read couldn't complete just now (retry) or only a stale
+    cache was available; `unavailable` means this codex/account exposes no quota data — none
+    of these means anything is wrong.
     `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
     CODEX_HOME."""
     d = config.defaults()
@@ -1102,7 +1105,15 @@ def codex_status() -> dict:
             timeout_seconds=timeout,
             timeout_bounds=[config.MIN_TIMEOUT_SECONDS, config.MAX_TIMEOUT_SECONDS],
         ),
-        rate_limit=rate_limit.current(),
+        # Live read when codex is ready (a read-only call, no model spend, nothing persisted);
+        # otherwise a static 'unknown' without spawning the app-server (it can't authenticate
+        # anyway). Never raises — live_read degrades to a typed RateLimit, so a quota-read
+        # failure can't fail codex_status.
+        rate_limit=(
+            rate_limit.live_read(timeout_seconds=rate_limit.READ_TIMEOUT_SECONDS)
+            if ready
+            else rate_limit.not_ready()
+        ),
         caveat="The active tools send your content to OpenAI via the codex CLI: "
         "codex_consult sends your question and context (plus files Codex reads from "
         "the resolved working dir — workspace_root, your MCP roots, or the server cwd); "

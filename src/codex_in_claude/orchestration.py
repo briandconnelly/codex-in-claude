@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast, get_args
 
-from codex_in_claude import codex, normalize, prompts, rate_limit
+from codex_in_claude import codex, normalize, prompts
 from codex_in_claude._core import gitdiff, redaction
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
@@ -87,7 +87,9 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     usage, session_id = normalize.parse_event_metadata(result.events)
     meta.usage = usage
     meta.session_id = session_id
-    meta.rate_limit = rate_limit.capture(result.events)
+    # meta.rate_limit stays None: codex 0.144 no longer emits quota on the exec stream (#321).
+    # Quota is fetched live (no model spend) by codex_status via account/rateLimits/read, not
+    # per paid run — a second app-server spawn on every call would add latency for no benefit.
     if result.run.exit_code != 0 or result.run.binary_missing or result.run.timed_out:
         err = codex.classify_failure(
             result.run,

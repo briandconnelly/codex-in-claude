@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import anyio
 
-from codex_in_claude import codex, orchestration, rate_limit
+from codex_in_claude import codex, orchestration
 from codex_in_claude._core.gitdiff import DiffResult, DiffSummary
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Coverage, Meta
@@ -51,21 +51,18 @@ def test_gitdiff_error_redacts_secret():
     assert "[redacted: secret value]" in str(out)
 
 
-def test_stamp_meta_attaches_rate_limit(monkeypatch):
-
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
+def test_stamp_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):
+    # #321: codex 0.144 removed the token_count event; the exec stream no longer carries
+    # quota and we no longer scrape it. meta.rate_limit stays None even if a legacy-shaped
+    # rate_limits block appears in the events (codex_status reads quota live instead).
     meta = _make_meta()
     result = _make_exec_result(events=_RATE_LIMIT_EVENTS, exit_code=0, last_message="hi")
     orchestration._stamp_meta(result, meta)
-    assert meta.rate_limit is not None
-    assert meta.rate_limit.status == "available"
-    assert meta.rate_limit.plan_type == "plus"
-    assert meta.rate_limit.source == "current_run"
+    assert meta.rate_limit is None
 
 
 def test_stamp_meta_no_rate_limits_block_leaves_none(monkeypatch):
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(events="", exit_code=0, last_message="hi")
     orchestration._stamp_meta(result, meta)
@@ -76,7 +73,6 @@ def test_stamp_meta_clears_model_when_model_flag_dropped(monkeypatch):
     """When --model is dropped by help-gating, meta.model is reconciled to None so
     reported provenance matches the default model actually used (#158)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     meta.model = "gpt-5.5"
     result = _make_exec_result(exit_code=0, dropped_flags=["--model"])
@@ -88,7 +84,6 @@ def test_stamp_meta_clears_model_when_model_flag_dropped(monkeypatch):
 def test_stamp_meta_preserves_model_when_not_dropped(monkeypatch):
     """A requested model survives when --model was not dropped (#158)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     meta.model = "gpt-5.5"
     result = _make_exec_result(exit_code=0)
@@ -100,7 +95,6 @@ def test_finalize_consult_raw_response_model_reflects_dropped_model(monkeypatch)
     """raw_response.model (derived from meta.model) is also None when --model was
     dropped, so the finalized envelope's provenance is consistent (#158)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     meta.model = "gpt-5.5"
     result = _make_exec_result(exit_code=0, last_message="hello", dropped_flags=["--model"])
@@ -110,16 +104,14 @@ def test_finalize_consult_raw_response_model_reflects_dropped_model(monkeypatch)
     assert "--model" in out["meta"]["compat_warnings"]
 
 
-def test_stamp_meta_captures_rate_limit_even_on_failure(monkeypatch):
-    """rate_limit is captured before the failure-path return."""
+def test_stamp_meta_failure_path_leaves_rate_limit_none(monkeypatch):
+    """The failure path stamps meta and returns an error; meta.rate_limit stays None (#321)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(events=_RATE_LIMIT_EVENTS, exit_code=1, last_message="")
     err = orchestration._stamp_meta(result, meta)
     assert err is not None  # failure path returned an error
-    assert meta.rate_limit is not None
-    assert meta.rate_limit.source == "current_run"
+    assert meta.rate_limit is None
     # error envelope uses new shape: symbolic next_step, temporary flag
     assert err["error"]["repair"]["next_step"] == "inspect_and_retry"
     assert err["error"]["temporary"] is False
@@ -129,7 +121,6 @@ def test_finalize_review_rejects_exit0_unparseable_prose(monkeypatch):
     """exit-0 with non-JSON prose under the schema review path is an explicit
     invalid_json error, not a silently-downgraded success (#159)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="Here is my review in prose.")
     out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
@@ -142,7 +133,6 @@ def test_finalize_review_rejects_exit0_unparseable_prose(monkeypatch):
 def test_finalize_review_rejects_exit0_empty_message(monkeypatch):
     """Missing/empty last message on exit 0 is invalid_json, not a phantom success."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="")
     out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
@@ -153,7 +143,6 @@ def test_finalize_review_rejects_exit0_empty_message(monkeypatch):
 def test_finalize_review_rejects_exit0_non_object_json(monkeypatch):
     """Valid JSON that isn't the required object → schema_violation (#159)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="[1, 2, 3]")
     out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
@@ -164,7 +153,6 @@ def test_finalize_review_rejects_exit0_non_object_json(monkeypatch):
 def test_finalize_review_redacts_secret_in_raw_preview(monkeypatch):
     """The raw-output preview embedded in the error message is secret-redacted."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     secret = "sk-" + "d" * 32
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message=f"prose with token={secret}")
@@ -177,7 +165,6 @@ def test_finalize_review_bounds_raw_preview(monkeypatch):
     """The raw-output preview embedded in the error message is bounded (~300 chars),
     so an unparseable multi-KB response can't bloat the error envelope (#159)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="z" * 5000)
     out = orchestration.finalize_review(result, meta=meta, coverage=_complete_cov())
@@ -190,7 +177,6 @@ def test_finalize_review_bounds_raw_preview(monkeypatch):
 def test_finalize_review_accepts_valid_structured_object(monkeypatch):
     """The happy path is unchanged: a schema-valid object still succeeds (#159)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(
         exit_code=0,
@@ -205,7 +191,6 @@ def test_finalize_review_accepts_valid_structured_object(monkeypatch):
 def test_finalize_consult_keeps_prose_passthrough(monkeypatch):
     """consult stays lenient: exit-0 prose is a valid Q&A answer, not an error (#159)."""
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(exit_code=0, last_message="A plain-language answer.")
     out = orchestration.finalize_consult(result, meta=meta)
@@ -241,7 +226,6 @@ def _empty_diff(**kw):
 
 def _run_review_empty(monkeypatch, diff):
     """Drive run_review with a stubbed gather_diff and a spy on the model call."""
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     monkeypatch.setattr(orchestration.gitdiff, "gather_diff", lambda *a, **k: diff)
     calls = {"n": 0}
 
@@ -270,7 +254,6 @@ def _run_review_empty(monkeypatch, diff):
 
 
 def test_finalize_review_complete_coverage_keeps_model_pass(monkeypatch):
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     result = _make_exec_result(
         last_message='{"summary":"looks good","verdict":"pass","confidence":"high"}'
     )
@@ -283,7 +266,6 @@ def test_finalize_review_complete_coverage_keeps_model_pass(monkeypatch):
 
 
 def test_finalize_review_partial_coverage_downgrades_pass_to_unknown(monkeypatch):
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     result = _make_exec_result(
         last_message='{"summary":"all changes look good","verdict":"pass","confidence":"high"}'
     )
@@ -299,7 +281,6 @@ def test_finalize_review_partial_coverage_downgrades_pass_to_unknown(monkeypatch
 
 
 def test_finalize_review_partial_coverage_retains_fail(monkeypatch):
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     result = _make_exec_result(
         last_message=(
             '{"summary":"a real bug","verdict":"fail","confidence":"high",'
@@ -316,7 +297,6 @@ def test_finalize_review_partial_coverage_retains_fail(monkeypatch):
 
 
 def test_finalize_review_partial_coverage_retains_concerns(monkeypatch):
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     result = _make_exec_result(
         last_message='{"summary":"some concern","verdict":"concerns","confidence":"medium"}'
     )
@@ -349,7 +329,6 @@ def test_run_review_truly_clean_tree_is_not_run_but_complete(monkeypatch):
 
 
 def _run_review_empty_with_policy(monkeypatch, diff, untracked):
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     monkeypatch.setattr(orchestration.gitdiff, "gather_diff", lambda *a, **k: diff)
 
     async def boom(*a, **k):
@@ -553,7 +532,6 @@ def test_run_review_forwards_reasoning_effort(monkeypatch):
 def test_stamp_meta_classifies_effort_rejection_from_meta(monkeypatch):
     # The failure classifier must learn the sent effort from meta, so a backend
     # effort rejection maps to invalid_reasoning_effort — not cli_contract_changed.
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     rejection = (
         '{"type":"error","message":"[ReasoningEffortParam] [reasoning.effort] '
         "[invalid_enum_value] Invalid value: 'bogus'.\"}"
@@ -569,7 +547,6 @@ def test_stamp_meta_classifies_effort_rejection_from_meta(monkeypatch):
 
 
 def test_stamp_meta_effort_rejection_without_sent_effort_is_drift(monkeypatch):
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     rejection = (
         '{"type":"error","message":"[reasoning.effort] [invalid_enum_value] '
         "Invalid value: 'bogus'.\"}"

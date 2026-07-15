@@ -1,5 +1,5 @@
 {
-  "result_format": 3,
+  "result_format": 4,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -510,7 +510,8 @@
               "default": "plugin_cache",
               "enum": [
                 "current_run",
-                "plugin_cache"
+                "plugin_cache",
+                "app_server_live"
               ],
               "title": "Source",
               "type": "string"
@@ -520,7 +521,8 @@
                 "available",
                 "limited",
                 "exhausted",
-                "unknown"
+                "unknown",
+                "unavailable"
               ],
               "title": "Status",
               "type": "string"
@@ -1272,7 +1274,8 @@
               "default": "plugin_cache",
               "enum": [
                 "current_run",
-                "plugin_cache"
+                "plugin_cache",
+                "app_server_live"
               ],
               "title": "Source",
               "type": "string"
@@ -1282,7 +1285,8 @@
                 "available",
                 "limited",
                 "exhausted",
-                "unknown"
+                "unknown",
+                "unavailable"
               ],
               "title": "Status",
               "type": "string"
@@ -2235,7 +2239,8 @@
               "default": "plugin_cache",
               "enum": [
                 "current_run",
-                "plugin_cache"
+                "plugin_cache",
+                "app_server_live"
               ],
               "title": "Source",
               "type": "string"
@@ -2245,7 +2250,8 @@
                 "available",
                 "limited",
                 "exhausted",
-                "unknown"
+                "unknown",
+                "unavailable"
               ],
               "title": "Status",
               "type": "string"
@@ -3053,7 +3059,8 @@
               "default": "plugin_cache",
               "enum": [
                 "current_run",
-                "plugin_cache"
+                "plugin_cache",
+                "app_server_live"
               ],
               "title": "Source",
               "type": "string"
@@ -3063,7 +3070,8 @@
                 "available",
                 "limited",
                 "exhausted",
-                "unknown"
+                "unknown",
+                "unavailable"
               ],
               "title": "Status",
               "type": "string"

@@ -43,6 +43,45 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   cache by `fingerprint` re-fetch the contract, and cross-release job replay of a review result
   written by an older version is refused rather than misread.
 
+### Fixed
+
+- **`codex_status` reports live rate-limit quota again on codex 0.144+** (#321, **breaking**).
+  codex 0.144 removed the `token_count` event that carried the quota block on the `codex exec`
+  stream, so `rate_limit` had gone permanently `unknown` while the note told you to "run any Codex
+  call to populate it" — advice that could never work. The data had moved to the app-server
+  protocol, not disappeared. Now:
+  - `codex_status` fetches quota **live** from `codex app-server` (`account/rateLimits/read`) — a
+    read-only call with **no model-token spend** — reusing the hardened one-shot client that backs
+    `codex_transfer`. The read is **ephemeral**: nothing is persisted, so `codex_status` stays a
+    genuinely read-only call and no stale cache can mislead a spend decision. `rate_limit.source`
+    is `app_server_live`.
+  - Windows are re-slotted **by duration**, not by the app-server's slot order: `primary` is the
+    shorter/rolling window (historically 5-hour), `secondary` the longer (weekly). The 0.144
+    app-server reports only the windows that currently bind an account and may place the weekly
+    window in the `primary` slot with no secondary — so a naive field rename would have kept the
+    bug. An absent window is no longer treated as "unobserved," so a single healthy window now
+    correctly reports `available` instead of a permanent `unknown`.
+  - New `rate_limit.status` value `unavailable` (this codex/account exposes no quota data) and
+    `rate_limit.source` value `app_server_live`; `codex_status`'s meaning changes from a cached
+    paid-run snapshot to a live read (**breaking** under the versioning rules — a closed-schema
+    output meaning changed, and `meta.rate_limit` is now `null` on current CLIs). A read that finds
+    the method missing, the protocol drifted, or a malformed result is surfaced as `unavailable`
+    (never as a plausible "no quota") with a note that the plugin may need an update — a loud
+    signal, not another silent `unknown`. A committed real-shape fixture plus an integration test
+    against the live app-server guard against the next such drift.
+  - Untrusted app-server output is hardened: `planType` is length-bounded and
+    `rateLimitReachedType` is accepted only from the known enum (an unknown value is dropped, never
+    trusted as a false `exhausted`); a cached reason code degrades to `unknown` once every window
+    has reset; a pathological numeric field (e.g. a 400-digit `usedPercent`) degrades to absent
+    instead of raising; two windows are duration-sorted so `primary` is always the shorter horizon;
+    and the read response is correlated on an unpredictable request id so a prequeued/unsolicited
+    message can't be trusted as quota.
+  - The dead exec-stream quota parser (`normalize.parse_rate_limit`), the per-run capture, and the
+    snapshot cache (`CODEX_IN_CLAUDE_RATE_LIMIT_FILE`) are removed.
+
+  Bumps `FINGERPRINT` (`schema-45` → `schema-46`) and `RESULT_FORMAT` (`3` → `4`) for the added
+  enum values and the changed meaning of the `rate_limit` block.
+
 ## [0.12.0] - 2026-07-14
 
 A reasoning-effort and operator-provenance release. Codex's reasoning effort is now a first-class,

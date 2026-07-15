@@ -132,10 +132,10 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
 **Free (local only):**
 
 - `codex_status` — readiness, version, auth, resolved defaults, and a `rate_limit` block
-  (remaining Codex quota for the 5-hour/weekly windows, from the latest paid run that emitted
-  usable quota data; `status` is `available`/`limited`/`exhausted`/`unknown`). Advisory — informs
-  whether to spend; a paid run without usable quota data leaves the prior snapshot, or the unknown
-  state, unchanged.
+  (remaining Codex quota for the shorter/rolling and longer windows, read **live** from the Codex
+  app-server with no model spend; `status` is `available`/`limited`/`exhausted`/`unknown`/
+  `unavailable`). Advisory — informs whether to spend; `unknown`/`unavailable` mean no usable
+  reading, not a problem.
 - `codex_transfer(transcript_path, …)` — hand off the current Claude Code session to a resumable
   Codex thread; returns `resume_command` (`codex resume <thread_id>`) to continue that exact
   conversation in Codex. No model call or token spend (a local file conversion via the experimental
@@ -224,8 +224,6 @@ reporting (`meta.rate_limit`), background-job semantics, and workspace selection
 | `CODEX_IN_CLAUDE_JOB_TTL` | 86400 | seconds a finished job record is kept (min 60) |
 | `CODEX_IN_CLAUDE_JOB_MAX_SECONDS` | 1800 | background-job wall-clock cap (clamped 60–7200) |
 | `CODEX_IN_CLAUDE_JOB_MAX_COUNT` | 50 | retained jobs per workspace (clamped 1–1000) |
-| `CODEX_IN_CLAUDE_RATE_LIMIT_FILE` | `rate_limit_snapshot.json` next to the jobs state dir | where the cached rate-limit snapshot is stored |
-| `CODEX_IN_CLAUDE_RATE_LIMIT_STALE_SECONDS` | 1800 | snapshot age beyond which `codex_status` reports the reading as stale |
 | `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` | built-in tested set | comma-separated `codex` `major.minor` versions to treat as supported |
 | `CODEX_IN_CLAUDE_LOG_LEVEL` | `WARNING` | server diagnostic log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`\|`CRITICAL`); logs go to **stderr** (never stdout) |
 | `CODEX_IN_CLAUDE_LOG_FILE` | unset | also mirror diagnostic logs to this file path |

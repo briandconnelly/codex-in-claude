@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import queue
+import secrets
 import signal
 import subprocess
 import threading
@@ -29,10 +30,14 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from codex_in_claude import __version__, cli_contract
 from codex_in_claude._core import redaction, streamcap
+from codex_in_claude.schemas import RateLimitSnapshot, RateLimitWindowSnapshot
 
 # Claude Code writes session transcripts under ~/.claude/projects/<cwd-slug>/. We only
 # transfer files from there (mirrors upstream's containment check) — a defense against
@@ -225,6 +230,38 @@ class TransferOutcome:
     ledger_path: str | None = None  # set on INCOMPLETE so the error can name it; bounded
     message: str | None = None  # upstream failure message / diagnostic detail; bounded
     stderr_tail: str | None = None  # redacted + display-bounded child stderr tail (#275)
+
+
+class RateLimitReadStatus(StrEnum):
+    """Discriminant for :class:`RateLimitReadOutcome`.
+
+    Keeping these distinct is the #321 guardrail: a legitimate no-quota response, a codex
+    too old to expose the method, protocol drift, a timeout, and a spawn failure are
+    different facts with different repairs — never collapsed into one silent ``None`` (the
+    tolerant-parse blind spot that let the token_count removal go unnoticed)."""
+
+    OK = "ok"  # read returned a snapshot with at least one quota window
+    NO_QUOTA = "no_quota"  # read succeeded but the account exposes no quota windows
+    UNSUPPORTED = "unsupported"  # app-server lacks the method (older codex, -32601)
+    PROTOCOL_ERROR = "protocol_error"  # drift: bad handshake / exit / line / non-(-32601) error
+    TIMED_OUT = "timed_out"  # never received the read response in time
+    SPAWN_FAILED = "spawn_failed"  # `codex` not on PATH
+
+
+@dataclass
+class RateLimitReadOutcome:
+    """The result of one ``account/rateLimits/read`` run, ready for the rate_limit layer.
+
+    ``snapshot`` is set only on ``OK``. ``codex_home`` is the app-server-reported (raw,
+    absolute) $CODEX_HOME — provenance only (which account produced the read); the read is
+    ephemeral, so nothing is persisted against it. ``message``/``stderr_tail`` are redacted and
+    display-bounded like :class:`TransferOutcome`'s."""
+
+    status: RateLimitReadStatus
+    snapshot: RateLimitSnapshot | None = None
+    codex_home: str | None = None
+    message: str | None = None
+    stderr_tail: str | None = None
 
 
 @dataclass
@@ -531,9 +568,11 @@ class _Reader:
     thread: threading.Thread
 
 
-def _spawn_reader(stdout: Any) -> _Reader:
+def _spawn_reader(stdout: Any, is_relevant: Callable[[Any], bool] = _relevant_to_loop) -> _Reader:
     """Start a daemon thread that parses newline-delimited JSON from ``stdout`` and queues
-    the loop-relevant messages (plus a ``_BAD_LINE``/``_EOF`` sentinel).
+    the loop-relevant messages (plus a ``_BAD_LINE``/``_EOF`` sentinel). ``is_relevant`` selects
+    which messages the loop can act on (defaults to the transfer loop's admission set; the
+    rate-limit read passes its own so only its unpredictable request id is admitted).
 
     ``stdout`` is a *binary* pipe read through ``iter_bounded_lines_interactive``: this is
     a request/response protocol, so a response line must surface on its newline rather
@@ -561,7 +600,7 @@ def _spawn_reader(stdout: Any) -> _Reader:
                 except ValueError:
                     _put_or_stop(q, stop, _BAD_LINE)
                     return
-                if _relevant_to_loop(parsed):
+                if is_relevant(parsed):
                     _put_or_stop(q, stop, parsed)
         finally:
             _put_or_stop(q, stop, _EOF)
@@ -853,6 +892,306 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     finally:
         # Release a reader parked in put() on a full queue BEFORE killing the child, then
         # tear down and make a bounded join so we don't strand a daemon thread per transfer.
+        reader.stop.set()
+        _terminate(proc)
+        reader.thread.join(timeout=_POLL_SECONDS)
+
+
+# --- account/rateLimits/read (0.144+): live quota, no model spend -------------------
+# Same one-shot transport as transfer_session — initialize handshake, one request, kill the
+# child — but the request is `account/rateLimits/read` and the terminal signal is that
+# request's RESPONSE (id 2), not a notification. Recovers the quota feature #321 lost when
+# codex 0.144 dropped the token_count event off the exec stream.
+
+
+def _classify_read_error(code: Any) -> RateLimitReadStatus:
+    """Map a rate-limit-read JSON-RPC ``error.code`` to a read status.
+
+    ``-32601`` (method not found) means the installed codex predates the method →
+    UNSUPPORTED. Any other error — a reserved-range framework error, an application-range
+    code, or a malformed non-integer code — means our request was rejected or the app-server
+    is not speaking the protocol we encode → PROTOCOL_ERROR (drift). ``type(code) is int``
+    (not ``isinstance``) so a JSON ``true``/float that compares ``== -32601`` is treated as
+    malformed, never as method-not-found (mirrors :func:`classify_import_error`)."""
+    if type(code) is int and code == cli_contract.JSONRPC_METHOD_NOT_FOUND:
+        return RateLimitReadStatus.UNSUPPORTED
+    return RateLimitReadStatus.PROTOCOL_ERROR
+
+
+def _rate_limit_window_from_wire(
+    blob: object,
+) -> tuple[int | None, RateLimitWindowSnapshot] | None:
+    """Map one app-server window object to ``(duration_minutes, snapshot)``, or ``None`` when
+    it is not a usable window. The duration rides alongside so the caller classifies windows
+    by LENGTH, not by the ``primary``/``secondary`` slot they arrived in — the app-server does
+    not keep that slot order stable (#321)."""
+    if not isinstance(blob, dict):
+        return None
+
+    # isinstance guards narrow to the expected types so ty is satisfied; semantic validation
+    # (finite, range) is delegated to RateLimitWindowSnapshot's validators (mirrors normalize).
+    def _num(v: object) -> float | None:
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # type: ignore[return-value]
+
+    def _int(v: object) -> int | None:
+        return v if isinstance(v, int) and not isinstance(v, bool) else None  # type: ignore[return-value]
+
+    snap = RateLimitWindowSnapshot(
+        used_percent=_num(blob.get(cli_contract.RATE_LIMIT_WINDOW_USED_PERCENT_KEY)),
+        window_minutes=_int(blob.get(cli_contract.RATE_LIMIT_WINDOW_DURATION_MINS_KEY)),
+        resets_at=_int(blob.get(cli_contract.RATE_LIMIT_WINDOW_RESETS_AT_KEY)),
+    )
+    if snap.used_percent is None and snap.resets_at is None:
+        return None
+    return snap.window_minutes, snap
+
+
+def _valid_plan_type(value: object) -> str | None:
+    """A bounded, control-free ``planType`` string, or None. Untrusted wire text bound for an
+    envelope must not be arbitrarily large or carry control content (#321 review F2)."""
+    return _valid_wire_id(value, cli_contract.RATE_LIMIT_PLAN_TYPE_MAX_BYTES)
+
+
+def _valid_reached_type(value: object) -> str | None:
+    """A recognized ``rateLimitReachedType`` (normalized lower-case), or None. An unknown value
+    is dropped rather than trusted as a real limit reason — an unrecognized value from a drifting
+    or hostile child must never become a false `exhausted` or leak into agent-visible prose (F2)."""
+    if not isinstance(value, str):
+        return None
+    norm = value.strip().lower()
+    return norm if norm in cli_contract.RATE_LIMIT_REACHED_TYPES else None
+
+
+def _assign_window_slots(
+    windows: list[tuple[int | None, RateLimitWindowSnapshot, str]],
+) -> tuple[RateLimitWindowSnapshot | None, RateLimitWindowSnapshot | None]:
+    """Map 1-2 parsed ``(duration, snapshot, source_slot)`` windows onto (primary, secondary) BY
+    DURATION — shorter to ``primary``, longer to ``secondary``. A single window is slotted by its
+    own duration (short → primary, long → secondary); an unknown duration keeps its source slot.
+    Two windows with known durations are sorted so ``primary`` is always the shorter horizon the
+    schema promises (review F3); if either duration is unknown, source order is kept."""
+    threshold = cli_contract.RATE_LIMIT_SHORT_WINDOW_MAX_MINUTES
+    if len(windows) == 1:
+        duration, snap, slot = windows[0]
+        if duration is not None:
+            is_long = duration > threshold
+        else:
+            is_long = slot == cli_contract.RATE_LIMIT_SECONDARY_KEY
+        return (None, snap) if is_long else (snap, None)
+    (d0, s0, _), (d1, s1, _) = windows[0], windows[1]
+    if d0 is not None and d1 is not None:
+        return (s0, s1) if d0 <= d1 else (s1, s0)  # shorter → primary
+    return s0, s1  # unknown duration(s): keep source order (primary slot came first)
+
+
+def _parse_rate_limits(result: object) -> tuple[RateLimitReadStatus, RateLimitSnapshot | None]:
+    """Discriminate an ``account/rateLimits/read`` result into (status, snapshot):
+
+    * ``OK`` with a snapshot when at least one quota window parses.
+    * ``NO_QUOTA`` when the block is explicitly null, or present with no quota windows — a
+      legitimate no-quota account.
+    * ``PROTOCOL_ERROR`` when the result is not an object, the required ``rateLimits`` key is
+      absent, the block is the wrong type, or a *present* window is malformed. Collapsing these
+      into ``NO_QUOTA`` would re-hide upstream drift behind a plausible "no quota" — the exact
+      #321 silent-degradation trap (review F1).
+
+    Windows are re-slotted by DURATION (shorter → ``primary``, longer → ``secondary``), not by
+    the app-server's slot order, which is not stable. When both windows' durations are known they
+    are sorted so ``primary`` is always the shorter horizon the schema promises (review F3); an
+    unknown duration keeps its source slot."""
+    if not isinstance(result, dict):
+        return RateLimitReadStatus.PROTOCOL_ERROR, None
+    if cli_contract.RATE_LIMITS_RESULT_KEY not in result:
+        return RateLimitReadStatus.PROTOCOL_ERROR, None  # required field absent → drift
+    block = result.get(cli_contract.RATE_LIMITS_RESULT_KEY)
+    if block is None:
+        return RateLimitReadStatus.NO_QUOTA, None  # explicit no-quota
+    if not isinstance(block, dict):
+        return RateLimitReadStatus.PROTOCOL_ERROR, None  # wrong type → drift
+    # Collect present windows in slot order (primary, then secondary).
+    windows: list[tuple[int | None, RateLimitWindowSnapshot, str]] = []
+    for slot in (cli_contract.RATE_LIMIT_PRIMARY_KEY, cli_contract.RATE_LIMIT_SECONDARY_KEY):
+        raw = block.get(slot)
+        if raw is None:
+            continue  # window absent/null for this slot
+        parsed = _rate_limit_window_from_wire(raw)
+        if parsed is None:
+            return RateLimitReadStatus.PROTOCOL_ERROR, None  # present but malformed → drift
+        windows.append((parsed[0], parsed[1], slot))
+    if not windows:
+        return RateLimitReadStatus.NO_QUOTA, None  # block present, no windows → no quota
+    primary, secondary = _assign_window_slots(windows)
+    return RateLimitReadStatus.OK, RateLimitSnapshot(
+        plan_type=_valid_plan_type(block.get(cli_contract.RATE_LIMIT_PLAN_TYPE_KEY)),
+        rate_limit_reached_type=_valid_reached_type(
+            block.get(cli_contract.RATE_LIMIT_REACHED_TYPE_KEY)
+        ),
+        primary=primary,
+        secondary=secondary,
+    )
+
+
+def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitting obscures the flow
+    *,
+    command: list[str] | None = None,
+    timeout_seconds: float,
+    stop_event: threading.Event | None = None,
+) -> RateLimitReadOutcome:
+    """Read the current account quota via ``codex app-server`` — a read-only call with NO
+    model-token spend. ``command`` is injectable so tests can drive a scripted fake
+    app-server; ``stop_event`` requests cooperative cancellation. Never raises for a
+    subprocess failure — every path returns a :class:`RateLimitReadOutcome` (the #321
+    contract: a failure is a typed fact, never a silent ``None``)."""
+    argv = command or [cli_contract.CODEX_BIN, *cli_contract.APP_SERVER_SUBCOMMAND]
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError:
+        return RateLimitReadOutcome(status=RateLimitReadStatus.SPAWN_FAILED)
+
+    drain = _StderrDrain(proc.stderr)
+    # An UNPREDICTABLE request id for the read, so a drifting/hostile child cannot prequeue a
+    # fabricated response before it has read the request (it can't guess the id) — the effective
+    # form of the review-F6 guard. Bounded to the JS safe-integer range and != 1 (initialize).
+    read_id = secrets.randbelow(2**53 - 3) + 2
+    reader = _spawn_reader(
+        proc.stdout,
+        lambda m: isinstance(m, dict) and (m.get("id") == 1 or m.get("id") == read_id),
+    )
+
+    def _send(obj: dict[str, Any]) -> None:
+        if proc.stdin is None:  # pragma: no cover
+            return
+        with contextlib.suppress(OSError):
+            proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
+            proc.stdin.flush()
+
+    codex_home: str | None = None
+    read_sent = False
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        _send(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": cli_contract.APP_SERVER_INITIALIZE_METHOD,
+                "params": {
+                    "clientInfo": {"name": _CLIENT_NAME, "version": __version__},
+                    "capabilities": {cli_contract.APP_SERVER_EXPERIMENTAL_CAPABILITY: True},
+                },
+            }
+        )
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                return RateLimitReadOutcome(
+                    status=RateLimitReadStatus.TIMED_OUT, codex_home=codex_home
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return RateLimitReadOutcome(
+                    status=RateLimitReadStatus.TIMED_OUT,
+                    codex_home=codex_home,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
+                )
+            try:
+                msg = reader.messages.get(timeout=min(remaining, _POLL_SECONDS))
+            except queue.Empty:
+                continue
+            if msg is _EOF:
+                return RateLimitReadOutcome(
+                    status=RateLimitReadStatus.PROTOCOL_ERROR,
+                    codex_home=codex_home,
+                    message="codex app-server exited before the rate-limit read completed.",
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
+                )
+            if msg is _BAD_LINE:
+                return RateLimitReadOutcome(
+                    status=RateLimitReadStatus.PROTOCOL_ERROR,
+                    codex_home=codex_home,
+                    message="codex app-server emitted a non-JSON or oversized line.",
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
+                )
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("id") == 1 and "error" in msg:
+                error = msg.get("error")
+                detail = error.get("message") if isinstance(error, dict) else None
+                return RateLimitReadOutcome(
+                    status=RateLimitReadStatus.PROTOCOL_ERROR,
+                    message=f"codex app-server initialize failed: {_display_text(detail)}"
+                    if detail
+                    else "codex app-server rejected initialize.",
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
+                )
+            if msg.get("id") == 1 and "result" in msg and not read_sent:
+                result = msg.get("result")
+                # codex_home is provenance-only here (no ledger to locate and nothing persisted),
+                # so an absent or invalid value is non-fatal: we proceed with codex_home=None.
+                # transfer_session, which needs it to find the import ledger, fails instead.
+                codex_home = _valid_codex_home(
+                    result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
+                    if isinstance(result, dict)
+                    else None
+                )
+                _send(
+                    {"jsonrpc": "2.0", "method": cli_contract.APP_SERVER_INITIALIZED_NOTIFICATION}
+                )
+                _send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": read_id,
+                        "method": cli_contract.APP_SERVER_RATE_LIMITS_READ_METHOD,
+                        "params": None,
+                    }
+                )
+                read_sent = True
+                continue
+            # The read response is matched on the UNPREDICTABLE read_id, so an unsolicited or
+            # prequeued message (which cannot guess the id) is never trusted as quota — it falls
+            # through to the tolerant ignore and the run resolves on the real response, EOF, or
+            # timeout (review F6). read_sent guards only the one-time id-1 handshake above.
+            if msg.get("id") == read_id and "error" in msg:
+                error = msg.get("error")
+                error = error if isinstance(error, dict) else {}
+                status = _classify_read_error(error.get("code"))
+                if status is RateLimitReadStatus.UNSUPPORTED:
+                    return RateLimitReadOutcome(
+                        status=RateLimitReadStatus.UNSUPPORTED,
+                        codex_home=codex_home,
+                        stderr_tail=_display_stderr_tail(drain.snapshot()),
+                    )
+                detail = error.get("message")
+                return RateLimitReadOutcome(
+                    status=RateLimitReadStatus.PROTOCOL_ERROR,
+                    codex_home=codex_home,
+                    message=f"codex app-server rejected the rate-limit read: "
+                    f"{_display_text(detail)}"
+                    if detail
+                    else "codex app-server rejected the rate-limit read.",
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
+                )
+            if msg.get("id") == read_id and "result" in msg:
+                status, snapshot = _parse_rate_limits(msg.get("result"))
+                if status is RateLimitReadStatus.PROTOCOL_ERROR:
+                    return RateLimitReadOutcome(
+                        status=RateLimitReadStatus.PROTOCOL_ERROR,
+                        codex_home=codex_home,
+                        message="codex app-server returned a malformed rate-limit result.",
+                        stderr_tail=_display_stderr_tail(drain.snapshot()),
+                    )
+                return RateLimitReadOutcome(
+                    status=status,
+                    snapshot=snapshot,
+                    codex_home=codex_home,
+                    stderr_tail=_display_stderr_tail(drain.snapshot()),
+                )
+            # Everything else (interleaved notifications, unknown/unsolicited ids): tolerant ignore.
+    finally:
         reader.stop.set()
         _terminate(proc)
         reader.thread.join(timeout=_POLL_SECONDS)

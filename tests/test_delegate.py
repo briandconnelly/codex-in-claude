@@ -1,8 +1,8 @@
-"""Unit tests for delegate._apply_run_meta (rate-limit capture)."""
+"""Unit tests for delegate._apply_run_meta."""
 
 from __future__ import annotations
 
-from codex_in_claude import codex, rate_limit
+from codex_in_claude import codex
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Meta
 
@@ -41,23 +41,20 @@ def _make_exec_result(
     )
 
 
-def test_apply_run_meta_attaches_rate_limit(monkeypatch):
+def test_apply_run_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):
+    # #321: the exec stream no longer carries quota on codex 0.144, and we no longer scrape
+    # it — meta.rate_limit stays None even with a legacy rate_limits block in the events.
     from codex_in_claude import delegate
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(events=_RATE_LIMIT_EVENTS, exit_code=0, last_message="done")
     delegate._apply_run_meta(meta, result)
-    assert meta.rate_limit is not None
-    assert meta.rate_limit.status == "available"
-    assert meta.rate_limit.plan_type == "plus"
-    assert meta.rate_limit.source == "current_run"
+    assert meta.rate_limit is None
 
 
 def test_apply_run_meta_no_rate_limits_block_leaves_none(monkeypatch):
     from codex_in_claude import delegate
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     result = _make_exec_result(events="", exit_code=0, last_message="done")
     delegate._apply_run_meta(meta, result)
@@ -69,7 +66,6 @@ def test_apply_run_meta_clears_model_when_model_flag_dropped(monkeypatch):
     the delegate result's provenance matches the default model used (#158)."""
     from codex_in_claude import delegate
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     meta.model = "gpt-5.5"
     result = _make_exec_result(exit_code=0, dropped_flags=["--model"])
@@ -82,7 +78,6 @@ def test_apply_run_meta_preserves_model_when_not_dropped(monkeypatch):
     """A requested model survives when --model was not dropped (#158)."""
     from codex_in_claude import delegate
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     meta = _make_meta()
     meta.model = "gpt-5.5"
     result = _make_exec_result(exit_code=0)
@@ -225,10 +220,9 @@ def test_run_delegate_classifies_effort_rejection(monkeypatch):
 
     import anyio
 
-    from codex_in_claude import delegate, rate_limit
+    from codex_in_claude import delegate
     from codex_in_claude._core import worktree
 
-    monkeypatch.setattr(rate_limit, "save", lambda *a, **k: None)
     rejection = (
         '{"type":"error","message":"[ReasoningEffortParam] [reasoning.effort] '
         "[invalid_enum_value] Invalid value: 'bogus'.\"}"

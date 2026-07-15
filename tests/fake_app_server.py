@@ -76,8 +76,26 @@ def _session_source(import_params: dict) -> str:
     return import_params["migrationItems"][0]["details"]["sessions"][0]["path"]
 
 
+def _rate_limits_snapshot() -> dict:
+    return {
+        "limitId": "codex",
+        "primary": WEEKLY_WINDOW,
+        "secondary": None,
+        "planType": "plus",
+        "rateLimitReachedType": None,
+    }
+
+
 def _handle_initialize(scenario: str, codex_home: str) -> bool:
     """Respond to `initialize`. Returns True when the fake should exit afterwards."""
+    if scenario == "rl_prequeue_id2":
+        # Adversarial: emit the init result AND a fabricated quota response BOTH now, WITHOUT
+        # ever reading the rate-limit request — using the OLD predictable id 2. Because the
+        # client now correlates on an unpredictable read_id, this injected response must be
+        # ignored and the run must NOT trust it as quota (review F6). id 2 is a fixed guess.
+        _emit(_init_response(codex_home))
+        _emit({"id": 2, "result": {"rateLimits": _rate_limits_snapshot()}})
+        return True
     if scenario == "protocol_drift":
         sys.stdout.write("this is not json\n")
         sys.stdout.flush()
@@ -118,6 +136,11 @@ def _handle_initialize(scenario: str, codex_home: str) -> bool:
     if scenario == "init_no_home":
         _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
         return True
+    if scenario == "rl_no_home":
+        # A VALID handshake that omits codexHome, but does NOT exit — the rate-limit read
+        # then proceeds (codexHome is provenance-only there, unlike the transfer path).
+        _emit({"id": 1, "result": {"userAgent": "fake/0.0.0", "platformOs": "macos"}})
+        return False
     if scenario == "relative_home":
         _emit(_init_response("relative/dir"))
         return False
@@ -264,6 +287,82 @@ def _handle_import_success(scenario: str, source: str) -> None:
             pass
 
 
+# --- account/rateLimits/read scenarios (0.144+) --------------------------------
+# A weekly window reported in the `primary` SLOT with no secondary — the real 0.144 Plus
+# shape (#321). The client must re-slot it by duration into `secondary` (weekly).
+WEEKLY_WINDOW = {"usedPercent": 6, "windowDurationMins": 10080, "resetsAt": 1784674467}
+# A short/5-hour window (300 min) → the client's `primary` slot.
+FIVE_HOUR_WINDOW = {"usedPercent": 40, "windowDurationMins": 300, "resetsAt": 1780000000}
+
+_RATE_LIMIT_SNAPSHOTS: dict[str, dict] = {
+    "rl_ok": {
+        "limitId": "codex",
+        "limitName": None,
+        "primary": WEEKLY_WINDOW,
+        "secondary": None,
+        "planType": "plus",
+        "rateLimitReachedType": None,
+    },
+    "rl_no_home": {  # same payload as rl_ok; the difference is the home-less handshake
+        "limitId": "codex",
+        "primary": WEEKLY_WINDOW,
+        "secondary": None,
+        "planType": "plus",
+        "rateLimitReachedType": None,
+    },
+    "rl_two_windows": {
+        "limitId": "codex",
+        "primary": FIVE_HOUR_WINDOW,
+        "secondary": WEEKLY_WINDOW,
+        "planType": "pro",
+        "rateLimitReachedType": None,
+    },
+    "rl_no_windows": {  # authenticated but no quota windows → NO_QUOTA, not drift
+        "limitId": "codex",
+        "primary": None,
+        "secondary": None,
+        "planType": "plus",
+        "rateLimitReachedType": None,
+    },
+}
+
+_RATE_LIMIT_ERRORS: dict[str, dict] = {
+    "rl_unsupported": {"code": -32601, "message": "method not found"},
+    "rl_read_error": {"code": -32602, "message": "bad params"},
+    "rl_read_error_leaky": {"code": -32602, "message": LEAKY_MESSAGE},
+}
+
+
+def _rate_limits_result(rate_limits: dict, request_id: object) -> dict:
+    return {
+        "id": request_id,  # echo the client's (now unpredictable) request id, like real codex
+        "result": {
+            "rateLimits": rate_limits,
+            "rateLimitsByLimitId": {"codex": rate_limits},
+            "rateLimitResetCredits": None,
+        },
+    }
+
+
+def _handle_rate_limits(scenario: str, request_id: object) -> None:
+    """Respond to `account/rateLimits/read` (echoing the client's request id), then return."""
+    if scenario in _RATE_LIMIT_ERRORS:
+        _emit({"id": request_id, "error": _RATE_LIMIT_ERRORS[scenario]})
+        return
+    if scenario in _RATE_LIMIT_SNAPSHOTS:
+        _emit(_rate_limits_result(_RATE_LIMIT_SNAPSHOTS[scenario], request_id))
+        return
+    if scenario == "rl_null_block":
+        # A well-formed response whose rateLimits block is null → NO_QUOTA (not drift).
+        _emit({"id": request_id, "result": {"rateLimits": None}})
+        return
+    if scenario == "rl_eof":
+        return  # exit without answering the read → the client sees stdout EOF
+    if scenario == "rl_timeout":
+        for _ in sys.stdin:  # accept nothing further; block until the client kills us
+            pass
+
+
 def main() -> None:
     scenario = sys.argv[1]
     codex_home = sys.argv[2] if len(sys.argv) > 2 else "/tmp/fake-codex-home"
@@ -290,7 +389,11 @@ def main() -> None:
         if method == "externalAgentConfig/import":
             _handle_import(scenario, msg["params"])
             return
-    # stdin closed without an import request
+
+        if method == "account/rateLimits/read":
+            _handle_rate_limits(scenario, msg.get("id"))
+            return
+    # stdin closed without a terminal request
     return
 
 
