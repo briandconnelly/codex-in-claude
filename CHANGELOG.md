@@ -5,6 +5,44 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **`codex_review_changes` no longer reports an unreviewed tree as a high-confidence pass**
+  (#319, **breaking**). A working tree whose only changes were untracked (new) files — the most
+  common shape of agent work — used to short-circuit to `verdict: "pass"`, `confidence: "high"`
+  with **no model call**, indistinguishable from a genuinely clean review. Now:
+  - The result carries top-level `review_status` (`completed` | `not_run`) and a `coverage` object
+    (`status` `complete` | `partial`; pathspec-scoped `untracked_files_detected`/`included`/`omitted`
+    counts, null outside `working_tree` scope; a closed `omission_reasons` set of `untracked_omitted`
+    / `truncated` / `redacted`). Untracked files are inventoried with `git ls-files --others` — a
+    **count only, no contents read**, so the blind spot is disclosed at zero egress.
+  - A review that never ran the model returns `verdict: "unknown"`, `confidence: "low"`,
+    `review_status: "not_run"` — **never `pass`**. A model `pass` over `partial` coverage (omitted
+    untracked files, a truncated diff, or a redacted file) is surfaced as `unknown`/`low` with the
+    caveat prefixed to `summary`; concrete `fail`/`concerns` findings are always retained.
+  - A new `untracked` input (`explicit_only` default | `include` | `exclude`) on
+    `codex_review_changes`, `codex_review_changes_async`, and `codex_dry_run`. `explicit_only`
+    preserves #74 (only untracked files named in `paths` are reviewed); `include` reviews every
+    non-ignored untracked file (opt-in egress — it sends their contents); `exclude` includes none.
+  - `codex_dry_run` now reports `would_call_model` and the same `coverage` object, and its
+    `prompt_bytes` is `0` when the previewed call would send nothing — matching the paid path
+    instead of reporting the size of a prompt never sent (#320).
+  - Git invocations in the diff-gathering path now run with `-c core.fsmonitor=false`, so a
+    working-tree review of an untrusted repo cannot execute a repo-configured fsmonitor program in
+    the server process.
+  - Hardening (from an implementation review): the untracked inventory is stream-counted in
+    bounded chunks (an untrusted workspace with arbitrarily many untracked files cannot exhaust
+    memory); an invalid `untracked` policy reaching the core is rejected as `invalid_arguments`
+    rather than silently behaving like `exclude`; the coverage counts come from a single
+    enumeration so `detected == included + omitted` can't be violated under concurrent mutation,
+    and `Coverage` now validates that invariant; `review_status`/`would_call_model` are required
+    (no unsafe positive default); and the empty-review repair hint is tailored to the active
+    `untracked` policy.
+
+  Bumps `FINGERPRINT` (`schema-44` → `schema-45`) and `RESULT_FORMAT` (`2` → `3`); clients that
+  cache by `fingerprint` re-fetch the contract, and cross-release job replay of a review result
+  written by an older version is refused rather than misread.
+
 ## [0.12.0] - 2026-07-14
 
 A reasoning-effort and operator-provenance release. Codex's reasoning effort is now a first-class,

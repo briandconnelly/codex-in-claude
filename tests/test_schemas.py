@@ -715,13 +715,16 @@ def _wire_catalog_bytes() -> int:
 
 # Serialized-size budget for the tools/list wire response (audit F1, #173) — a weight
 # gate the content-only manifest snapshot does not provide. Cap = real MCP wire catalog
-# (~73,088 bytes, incl. annotations/_meta) + ~9% headroom. History: ~180,266 → ~103,526
-# (JOB_RESULT slim) → ~57,570 (opaque meta branch + docstring dedup) → ~64,211 (output-schema
-# `$schema` dialect, audit N4/#185: ~54 B x 16 tools) → ~73,088 (#309: a described
-# reasoning_effort param on the six paid tools + both dry-runs, model on codex_dry_run,
-# and the dry-run results' model/reasoning_effort echo fields). Tighten deliberately when
-# the surface legitimately shrinks; a bump means the wire response grew — justify it.
-CATALOG_BYTE_CAP = 80_000
+# + ~9% headroom. History: ~180,266 → ~103,526 (JOB_RESULT slim) → ~57,570 (opaque meta
+# branch + docstring dedup) → ~64,211 (output-schema `$schema` dialect, audit N4/#185:
+# ~54 B x 16 tools) → ~73,088 (#309: described reasoning_effort param on the paid tools +
+# both dry-runs, model on codex_dry_run, dry-run model/effort echo fields) → ~80,187
+# (#319/#320: the `untracked` input policy on the two review tools + codex_dry_run, and the
+# `review_status`/`coverage` review-coverage disclosure plus codex_dry_run's
+# `would_call_model`/`coverage`). The last step also absorbed headroom earlier PRs consumed
+# without resetting the cap. Tighten deliberately when the surface legitimately shrinks; a
+# bump means the wire response grew — justify it.
+CATALOG_BYTE_CAP = 87_400
 
 
 def test_wire_catalog_under_cap():
@@ -780,6 +783,8 @@ def test_review_result_with_findings_validates_against_schema():
         summary="Review done",
         verdict="concerns",
         confidence="high",
+        review_status="completed",
+        coverage=s.Coverage(status="complete"),
         findings=[_make_finding()],
         meta=_make_meta(),
     )
@@ -849,7 +854,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-44"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-45"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

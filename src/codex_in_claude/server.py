@@ -104,6 +104,7 @@ from codex_in_claude.schemas import (
     ToolCapability,
     TransferMeta,
     TransferResult,
+    Untracked,
     Workspace,
     WorktreePlan,
     apply_detail,
@@ -669,8 +670,19 @@ IsolationParam = Annotated[
 ScopeParam = Annotated[
     ReviewScope,
     Field(
-        description="Which changes to review: 'working_tree' (uncommitted vs HEAD), "
-        "'branch' (needs base), or 'commit' (needs commit)."
+        description="Which changes to review: 'working_tree' (tracked changes vs HEAD; "
+        "untracked files follow the `untracked` policy, off by default), 'branch' "
+        "(needs base), or 'commit' (needs commit)."
+    ),
+]
+UntrackedParam = Annotated[
+    Untracked,
+    Field(
+        description="How working_tree scope treats untracked files: 'explicit_only' "
+        "(default) includes only those named in `paths`; 'include' reviews all "
+        "non-ignored untracked files (SENDS their contents to OpenAI — opt-in egress); "
+        "'exclude' includes none. Omitted ones are disclosed in `coverage`. Inert for "
+        "branch/commit scopes."
     ),
 ]
 DetailParam = Annotated[
@@ -2118,6 +2130,7 @@ async def _prepare_review(
     base: str | None,
     commit: str | None,
     paths: list[str] | None,
+    untracked: str = "explicit_only",
     extra_context: str | None,
     model: str | None,
     reasoning_effort: str | None,
@@ -2219,6 +2232,10 @@ async def _prepare_review(
     # See _prepare_consult: written only when set, preserving pre-#309 arg hashes.
     if effort is not None:
         spec["reasoning_effort"] = effort
+    # Likewise omit the default `untracked` so existing idempotency hashes and pre-#319
+    # worker specs (which lack the key) keep replaying; the worker reads the default.
+    if untracked != "explicit_only":
+        spec["untracked"] = untracked
     return meta, cwd, spec, detail_v
 
 
@@ -2435,6 +2452,7 @@ async def codex_review_changes(
     base: BaseParam = None,
     commit: CommitParam = None,
     paths: PathsParam = None,
+    untracked: UntrackedParam = "explicit_only",
     workspace_root: WorkspaceRootParam = None,
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
@@ -2447,10 +2465,15 @@ async def codex_review_changes(
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
 
-    scope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews
+    scope: `working_tree` (tracked changes vs HEAD — untracked files follow the
+    `untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews
     `base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-
     redacted, and bounded by this server; Codex reviews it read-only and returns
     structured findings. Pass `workspace_root` (absolute) for the right repo.
+
+    The result's top-level `review_status` and `coverage` disclose whether the model
+    actually ran and what it was shown: a `pass` over partial coverage is surfaced as
+    `unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.
 
     `extra_context` (optional) is author intent — why the change was made, what you
     already verified, constraints — added to the prompt as clearly-labeled UNTRUSTED
@@ -2486,6 +2509,7 @@ async def codex_review_changes(
         base=base,
         commit=commit,
         paths=paths,
+        untracked=untracked,
         extra_context=extra_context,
         model=model,
         reasoning_effort=reasoning_effort,
@@ -3205,6 +3229,7 @@ async def codex_review_changes_async(
     base: BaseParam = None,
     commit: CommitParam = None,
     paths: PathsParam = None,
+    untracked: UntrackedParam = "explicit_only",
     workspace_root: WorkspaceRootParam = None,
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
@@ -3235,6 +3260,7 @@ async def codex_review_changes_async(
         base=base,
         commit=commit,
         paths=paths,
+        untracked=untracked,
         extra_context=extra_context,
         model=model,
         reasoning_effort=reasoning_effort,
@@ -3266,6 +3292,7 @@ async def codex_dry_run(
     base: BaseParam = None,
     commit: CommitParam = None,
     paths: PathsParam = None,
+    untracked: UntrackedParam = "explicit_only",
     workspace_root: WorkspaceRootParam = None,
     extra_context: ExtraContextParam = None,
     model: ModelDryRunParam = None,
@@ -3276,9 +3303,12 @@ async def codex_dry_run(
     redactions, truncation — with NO model call and no spend. Use it before a
     review to inspect the scope and the reported redactions; redaction is
     best-effort, so treat the preview as a check on scope, not as confirmation
-    that no secret remains. Pass the same `extra_context` you would give the
-    review so `prompt_bytes` reflects it. The result echoes the effective
-    `model`/`reasoning_effort` overrides the paid call would send (unvalidated)."""
+    that no secret remains. Pass the same `extra_context` and `untracked` policy
+    you would give the review so the preview matches it. `would_call_model` reports
+    whether the paid call would actually run the model (False on an empty diff, where
+    `prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the
+    review would. The result echoes the effective `model`/`reasoning_effort` overrides
+    the paid call would send (unvalidated)."""
     d = config.defaults()
     # Mirror _prepare_review's resolution so the preview reports what the paid call
     # would send: falsey-coalesced model, exact-None effort (#309).
@@ -3379,18 +3409,14 @@ async def codex_dry_run(
             base=base,
             commit=commit,
             paths=paths,
+            untracked=untracked,
             timeout=config.git_timeout_seconds(),
             max_bytes=max_bytes,
         )
-    except (
-        gitdiff.InvalidScopeError,
-        gitdiff.InvalidBaseError,
-        gitdiff.InvalidCommitError,
-        gitdiff.InvalidPathsError,
-        gitdiff.NotAGitRepoError,
-        gitdiff.GitUnavailableError,
-        RuntimeError,
-    ) as exc:
+    except orchestration.GITDIFF_EXCEPTIONS as exc:
+        # Reuse run_review's exception set (not a hand-maintained copy) so a new gitdiff
+        # error — e.g. InvalidUntrackedError — is handled here too, mapped to a structured
+        # envelope by gitdiff_error rather than surfacing unhandled (PR #322 review).
         meta = _base_meta(
             cwd,
             wres.source,
@@ -3407,7 +3433,12 @@ async def codex_dry_run(
         return orchestration.gitdiff_error(exc, meta)
 
     label = scope if scope != "branch" else f"branch {base}...HEAD"
+    # Mirror the paid path's empty-diff short-circuit (orchestration.run_review): when
+    # nothing is reviewable the real call sends 0 bytes and makes no model call, so the
+    # preview must report exactly that instead of the size of a prompt never sent (#320).
+    would_call_model = not (diff.summary.files_changed == 0 and not diff.text.strip())
     prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
+    prompt_bytes = len(prompt.encode("utf-8")) if would_call_model else 0
     return DryRunResult(
         cwd=cwd,
         workspace_source=wres.source,
@@ -3426,7 +3457,9 @@ async def codex_dry_run(
             lines_added=diff.summary.lines_added,
             lines_removed=diff.summary.lines_removed,
         ),
-        prompt_bytes=len(prompt.encode("utf-8")),
+        would_call_model=would_call_model,
+        prompt_bytes=prompt_bytes,
+        coverage=orchestration.build_coverage(scope=scope, diff=diff),
         max_input_bytes=max_bytes,
         truncated=diff.truncated,
         truncation_hint=diff.truncation_hint,

@@ -20,6 +20,8 @@ from codex_in_claude.schemas import (
     FINDINGS_OUTPUT_SCHEMA,
     ConsultResult,
     ContextSummary,
+    Coverage,
+    CoverageOmissionReason,
     ErrorCode,
     ErrorDetail,
     ErrorResult,
@@ -32,6 +34,43 @@ from codex_in_claude.schemas import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from codex_in_claude._core.gitdiff import DiffResult
+
+
+def build_coverage(*, scope: str, diff: DiffResult) -> Coverage:
+    """Derive the agent-visible Coverage from a gathered diff and its scope (#319).
+
+    `complete` is a strict claim — it holds only when nothing in scope was left
+    unreviewed. Untracked omission, byte-cap truncation, and secret redaction each make
+    coverage `partial`, since each hides changed content from the model. Untracked counts
+    are scoped to the review's pathspec (`diff.untracked_detected`) and are N/A (None) for
+    non-working_tree scopes, where untracked files are irrelevant. Reasons are emitted in a
+    fixed order for deterministic output."""
+    reasons: list[CoverageOmissionReason] = []
+    if scope == "working_tree":
+        detected = diff.untracked_detected or 0
+        included = diff.untracked_included
+        omitted = max(0, detected - included)
+        det: int | None = detected
+        inc: int | None = included
+        omt: int | None = omitted
+        if omitted > 0:
+            reasons.append("untracked_omitted")
+    else:
+        det = inc = omt = None
+    if diff.truncated:
+        reasons.append("truncated")
+    if diff.redacted_paths:
+        reasons.append("redacted")
+    return Coverage(
+        status="partial" if reasons else "complete",
+        untracked_files_detected=det,
+        untracked_files_included=inc,
+        untracked_files_omitted=omt,
+        omission_reasons=reasons,
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Shared finalization (process metadata -> structured envelope)
@@ -145,13 +184,35 @@ def _review_invalid_response_error(code: str, last_message: str | None, meta: Me
     )
 
 
-def finalize_review(result: codex.CodexExecResult, *, meta: Meta) -> dict:
+def _apply_coverage(
+    verdict: str, confidence: str, summary: str, coverage: Coverage
+) -> tuple[str, str, str]:
+    """Fold coverage into the *overall* conclusion (#319). A model `pass` over partly
+    reviewed code is surfaced as `unknown`/`low` with a caveat prefixed to the summary,
+    so the model's all-clear prose never stands unqualified beside `verdict: unknown`.
+    Concrete `fail`/`concerns` are left untouched — partial coverage cannot invalidate a
+    demonstrated defect."""
+    if coverage.status == "partial" and verdict == "pass":
+        reasons = ", ".join(coverage.omission_reasons) or "unreviewed content"
+        return (
+            "unknown",
+            "low",
+            f"Overall verdict is unknown because coverage is partial ({reasons}); the "
+            f"model reported no blocking concerns in the reviewed portion. {summary}",
+        )
+    return verdict, confidence, summary
+
+
+def finalize_review(result: codex.CodexExecResult, *, meta: Meta, coverage: Coverage) -> dict:
     """Build a ReviewResult/ErrorResult dict — the only verdict-bearing result.
 
     Strict on exit-0 unparseable output (#159): the structured verdict/findings *are*
     the product here, so a successful run whose last message is not a JSON object is an
     explicit invalid_json/schema_violation error rather than a prose downgrade. (consult
-    deliberately keeps the prose-passthrough — see ``finalize_consult``.)"""
+    deliberately keeps the prose-passthrough — see ``finalize_consult``.)
+
+    `coverage` describes what the model was actually shown; it can downgrade a `pass`
+    (see ``_apply_coverage``) but never touches the retained findings."""
     err = _stamp_meta(result, meta)
     if err is not None:
         return err
@@ -164,13 +225,19 @@ def finalize_review(result: codex.CodexExecResult, *, meta: Meta) -> dict:
         session_id=meta.session_id,
         model=meta.model,
     )
+    verdict, confidence, summary = _apply_coverage(
+        _enum(structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"),
+        _enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
+        _summary_of(structured),
+        coverage,
+    )
     return dump_success(
         ReviewResult(
-            summary=_summary_of(structured),
-            verdict=_enum(
-                structured.get("verdict"), ("pass", "concerns", "fail", "unknown"), "unknown"
-            ),
-            confidence=_enum(structured.get("confidence"), ("low", "medium", "high"), "medium"),
+            summary=summary,
+            verdict=cast("Any", verdict),
+            confidence=cast("Any", confidence),
+            review_status="completed",
+            coverage=coverage,
             findings=normalize.coerce_findings(structured.get("findings")),
             questions=_str_list(structured.get("questions")),
             assumptions=_str_list(structured.get("assumptions")),
@@ -189,6 +256,7 @@ _GITDIFF_ERRORS: dict[type, tuple[str, str | None]] = {
     gitdiff.InvalidBaseError: ("invalid_base", "base"),
     gitdiff.InvalidCommitError: ("invalid_commit", "commit"),
     gitdiff.InvalidPathsError: ("invalid_paths", "paths"),
+    gitdiff.InvalidUntrackedError: ("invalid_arguments", "untracked"),
     gitdiff.NotAGitRepoError: ("not_a_git_repo", "workspace_root"),
     gitdiff.GitUnavailableError: ("git_unavailable", None),
 }
@@ -199,6 +267,7 @@ GITDIFF_EXCEPTIONS = (
     gitdiff.InvalidBaseError,
     gitdiff.InvalidCommitError,
     gitdiff.InvalidPathsError,
+    gitdiff.InvalidUntrackedError,
     gitdiff.NotAGitRepoError,
     gitdiff.GitUnavailableError,
     RuntimeError,
@@ -275,6 +344,7 @@ async def run_review(
     base: str | None,
     commit: str | None,
     paths: list[str] | None,
+    untracked: str = "explicit_only",
     sandbox: str,
     isolation: str,
     timeout_seconds: int,
@@ -315,6 +385,7 @@ async def run_review(
             base=base,
             commit=commit,
             paths=paths,
+            untracked=untracked,
             timeout=git_timeout,
             max_bytes=max_bytes,
         )
@@ -329,13 +400,34 @@ async def run_review(
     meta.redacted_paths = diff.redacted_paths
     meta.truncated = diff.truncated
     meta.truncation_hint = diff.truncation_hint
+    coverage = build_coverage(scope=scope, diff=diff)
 
     if diff.summary.files_changed == 0 and not diff.text.strip():
+        # Nothing reviewable was gathered, so the model is NOT called. This is a
+        # `not_run`/`unknown` result — never a `pass` — and coverage discloses whether
+        # anything (untracked files) was omitted rather than genuinely absent (#319).
+        omitted = coverage.untracked_files_omitted or 0
+        if omitted > 0:
+            # Repair guidance depends on the active policy: under `exclude`, naming files
+            # in `paths` still won't review them, so only `include` will (#322 F4).
+            remedy = (
+                'Re-run with untracked="include" to review them.'
+                if untracked == "exclude"
+                else 'Re-run with untracked="include", or name them in paths, to review them.'
+            )
+            summary = (
+                f"No reviewable changes were gathered for scope={scope}, but {omitted} "
+                f"untracked file(s) were detected and omitted (see coverage). {remedy}"
+            )
+        else:
+            summary = f"No changes to review for scope={scope}."
         return dump_success(
             ReviewResult(
-                summary=f"No changes to review for scope={scope}.",
-                verdict="pass",
-                confidence="high",
+                summary=summary,
+                verdict="unknown",
+                confidence="low",
+                review_status="not_run",
+                coverage=coverage,
                 meta=meta,
             )
         )
@@ -354,4 +446,4 @@ async def run_review(
         output_schema=FINDINGS_OUTPUT_SCHEMA,
         on_event=on_event,
     )
-    return finalize_review(result, meta=meta)
+    return finalize_review(result, meta=meta, coverage=coverage)

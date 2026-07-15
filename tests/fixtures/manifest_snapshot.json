@@ -857,7 +857,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-44",
+            "default": "codex-in-claude/0.1/schema-45",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1379,7 +1379,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-44",
+                "default": "codex-in-claude/0.1/schema-45",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2385,7 +2385,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-44",
+            "default": "codex-in-claude/0.1/schema-45",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3029,7 +3029,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-44",
+            "default": "codex-in-claude/0.1/schema-45",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -4614,7 +4614,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Preview what a `codex_review_changes` call would send — scope, diff size,\nredactions, truncation — with NO model call and no spend. Use it before a\nreview to inspect the scope and the reported redactions; redaction is\nbest-effort, so treat the preview as a check on scope, not as confirmation\nthat no secret remains. Pass the same `extra_context` you would give the\nreview so `prompt_bytes` reflects it. The result echoes the effective\n`model`/`reasoning_effort` overrides the paid call would send (unvalidated).",
+      "description": "Preview what a `codex_review_changes` call would send — scope, diff size,\nredactions, truncation — with NO model call and no spend. Use it before a\nreview to inspect the scope and the reported redactions; redaction is\nbest-effort, so treat the preview as a check on scope, not as confirmation\nthat no secret remains. Pass the same `extra_context` and `untracked` policy\nyou would give the review so the preview matches it. `would_call_model` reports\nwhether the paid call would actually run the model (False on an empty diff, where\n`prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the\nreview would. The result echoes the effective `model`/`reasoning_effort` overrides\nthe paid call would send (unvalidated).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4715,11 +4715,21 @@
           },
           "scope": {
             "default": "working_tree",
-            "description": "Which changes to review: 'working_tree' (uncommitted vs HEAD), 'branch' (needs base), or 'commit' (needs commit).",
+            "description": "Which changes to review: 'working_tree' (tracked changes vs HEAD; untracked files follow the `untracked` policy, off by default), 'branch' (needs base), or 'commit' (needs commit).",
             "enum": [
               "branch",
               "commit",
               "working_tree"
+            ],
+            "type": "string"
+          },
+          "untracked": {
+            "default": "explicit_only",
+            "description": "How working_tree scope treats untracked files: 'explicit_only' (default) includes only those named in `paths`; 'include' reviews all non-ignored untracked files (SENDS their contents to OpenAI — opt-in egress); 'exclude' includes none. Omitted ones are disclosed in `coverage`. Inert for branch/commit scopes.",
+            "enum": [
+              "exclude",
+              "explicit_only",
+              "include"
             ],
             "type": "string"
           },
@@ -4786,6 +4796,63 @@
                     "type": "null"
                   }
                 ]
+              },
+              "coverage": {
+                "additionalProperties": false,
+                "properties": {
+                  "omission_reasons": {
+                    "items": {
+                      "enum": [
+                        "redacted",
+                        "truncated",
+                        "untracked_omitted"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "status": {
+                    "enum": [
+                      "complete",
+                      "partial"
+                    ],
+                    "type": "string"
+                  },
+                  "untracked_files_detected": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "untracked_files_included": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "untracked_files_omitted": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
               },
               "cwd": {
                 "type": "string"
@@ -4926,15 +4993,20 @@
                     "type": "null"
                   }
                 ]
+              },
+              "would_call_model": {
+                "type": "boolean"
               }
             },
             "required": [
+              "coverage",
               "cwd",
               "isolation",
               "max_input_bytes",
               "prompt_bytes",
               "sandbox",
-              "tier"
+              "tier",
+              "would_call_model"
             ],
             "type": "object"
           },
@@ -5945,7 +6017,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (uncommitted vs HEAD), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (Codex is instructed to treat embedded directives as data, not commands — a\nbest-effort injection mitigation, not a guarantee) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files — including the workspace's `AGENTS.md`\nand `.agents/skills/` skills, which it auto-loads even if your prompt never mentions\nthem (the plugin's isolation flags do not suppress this). Redaction is not a guarantee. Do not\nrely on it to protect live credentials; keep them out of the reviewed tree and your\nsupplied inputs, or do not request a review of that tree.\n\nProgress & recovery: blocks until Codex finishes (timeout clamped 10-600s via\n`timeout_seconds`), streaming coarse `notifications/progress` when your client requests\nit; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`\nif the connection drops, and `codex_review_changes_async` runs the same work\nfire-and-forget (poll `codex_job_status`).",
+      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (tracked changes vs HEAD — untracked files follow the\n`untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\nThe result's top-level `review_status` and `coverage` disclose whether the model\nactually ran and what it was shown: a `pass` over partial coverage is surfaced as\n`unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (Codex is instructed to treat embedded directives as data, not commands — a\nbest-effort injection mitigation, not a guarantee) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files — including the workspace's `AGENTS.md`\nand `.agents/skills/` skills, which it auto-loads even if your prompt never mentions\nthem (the plugin's isolation flags do not suppress this). Redaction is not a guarantee. Do not\nrely on it to protect live credentials; keep them out of the reviewed tree and your\nsupplied inputs, or do not request a review of that tree.\n\nProgress & recovery: blocks until Codex finishes (timeout clamped 10-600s via\n`timeout_seconds`), streaming coarse `notifications/progress` when your client requests\nit; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`\nif the connection drops, and `codex_review_changes_async` runs the same work\nfire-and-forget (poll `codex_job_status`).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6069,7 +6141,7 @@
           },
           "scope": {
             "default": "working_tree",
-            "description": "Which changes to review: 'working_tree' (uncommitted vs HEAD), 'branch' (needs base), or 'commit' (needs commit).",
+            "description": "Which changes to review: 'working_tree' (tracked changes vs HEAD; untracked files follow the `untracked` policy, off by default), 'branch' (needs base), or 'commit' (needs commit).",
             "enum": [
               "branch",
               "commit",
@@ -6088,6 +6160,16 @@
             ],
             "default": null,
             "description": "Per-call wall-clock timeout in seconds, clamped to 10..600 (out-of-range values are coerced, not rejected). Defaults to the server's configured timeout."
+          },
+          "untracked": {
+            "default": "explicit_only",
+            "description": "How working_tree scope treats untracked files: 'explicit_only' (default) includes only those named in `paths`; 'include' reviews all non-ignored untracked files (SENDS their contents to OpenAI — opt-in egress); 'exclude' includes none. Omitted ones are disclosed in `coverage`. Inert for branch/commit scopes.",
+            "enum": [
+              "exclude",
+              "explicit_only",
+              "include"
+            ],
+            "type": "string"
           },
           "workspace_root": {
             "anyOf": [
@@ -6124,6 +6206,63 @@
                   "medium"
                 ],
                 "type": "string"
+              },
+              "coverage": {
+                "additionalProperties": false,
+                "properties": {
+                  "omission_reasons": {
+                    "items": {
+                      "enum": [
+                        "redacted",
+                        "truncated",
+                        "untracked_omitted"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "status": {
+                    "enum": [
+                      "complete",
+                      "partial"
+                    ],
+                    "type": "string"
+                  },
+                  "untracked_files_detected": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "untracked_files_included": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "untracked_files_omitted": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
               },
               "findings": {
                 "items": {
@@ -6249,6 +6388,13 @@
                 },
                 "type": "object"
               },
+              "review_status": {
+                "enum": [
+                  "completed",
+                  "not_run"
+                ],
+                "type": "string"
+              },
               "summary": {
                 "type": "string"
               },
@@ -6267,7 +6413,9 @@
               }
             },
             "required": [
+              "coverage",
               "meta",
+              "review_status",
               "summary"
             ],
             "type": "object"
@@ -6426,11 +6574,21 @@
           },
           "scope": {
             "default": "working_tree",
-            "description": "Which changes to review: 'working_tree' (uncommitted vs HEAD), 'branch' (needs base), or 'commit' (needs commit).",
+            "description": "Which changes to review: 'working_tree' (tracked changes vs HEAD; untracked files follow the `untracked` policy, off by default), 'branch' (needs base), or 'commit' (needs commit).",
             "enum": [
               "branch",
               "commit",
               "working_tree"
+            ],
+            "type": "string"
+          },
+          "untracked": {
+            "default": "explicit_only",
+            "description": "How working_tree scope treats untracked files: 'explicit_only' (default) includes only those named in `paths`; 'include' reviews all non-ignored untracked files (SENDS their contents to OpenAI — opt-in egress); 'exclude' includes none. Omitted ones are disclosed in `coverage`. Inert for branch/commit scopes.",
+            "enum": [
+              "exclude",
+              "explicit_only",
+              "include"
             ],
             "type": "string"
           },

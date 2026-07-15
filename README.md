@@ -71,6 +71,8 @@ Codex inspects the diff **read-only** and returns a structured result envelope (
   "tool": "codex_review_changes",
   "verdict": "concerns",
   "confidence": "high",
+  "review_status": "completed",
+  "coverage": { "status": "complete", "untracked_files_detected": 0, "untracked_files_omitted": 0, "omission_reasons": [] },
   "summary": "The retry path is correct, but the backoff delay leaks between calls and the new branch has no test coverage.",
   "findings": [
     {
@@ -90,7 +92,11 @@ Codex inspects the diff **read-only** and returns a structured result envelope (
 
 `verdict` is one of `pass` / `concerns` / `fail` / `unknown`; `confidence` is `low` / `medium` /
 `high`; every finding carries a `severity` (`critical` … `nit`) plus `evidence`, `risk`, and
-`recommendation`. The envelope above is abridged — `meta` (always present, with `cwd`, `tier`,
+`recommendation`. `verdict` is the *safe overall conclusion*: `review_status` tells you whether the
+model actually ran (a tree with nothing reviewable returns `not_run`/`unknown`, never a false
+`pass`), and `coverage` discloses anything the model was not shown — omitted untracked files
+(governed by the `untracked` policy), a truncated diff, or a redacted file — downgrading a `pass`
+over partial coverage to `unknown`. The envelope above is abridged — `meta` (always present, with `cwd`, `tier`,
 `sandbox`, `isolation`, and timing), `request_id`, `raw_response`, and other fields are trimmed for
 brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
 
@@ -168,8 +174,8 @@ The plugin ships one Claude Code skill, auto-discovered from `skills/`:
 ## Result envelopes
 
 Every result discriminates first on `ok`. On success, completed consult, review, and delegate calls
-share their active-result fields; review alone adds `verdict`/`confidence`, and delegate alone adds
-the proposed `diff`. Discovery, dry-run, transfer, async-start, and job-lifecycle tools have their
+share their active-result fields; review alone adds `verdict`/`confidence`/`review_status`/`coverage`,
+and delegate alone adds the proposed `diff`. Discovery, dry-run, transfer, async-start, and job-lifecycle tools have their
 own success schemas. A fetched job result matches its originating consult, review, or delegate tool,
 so branch on that result type before reading fields. Failure is a uniform, machine-actionable
 `error` with a stable `code` and symbolic `repair` hint. The contract is versioned by `fingerprint`.

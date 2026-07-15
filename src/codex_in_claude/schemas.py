@@ -48,7 +48,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-44"
+FINGERPRINT = "codex-in-claude/0.1/schema-45"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -64,7 +64,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-44"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 2
+RESULT_FORMAT: int = 3
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -132,6 +132,12 @@ Sandbox = Literal["read-only", "workspace-write", "danger-full-access"]
 # (--ignore-user-config), ignore-rules (--ignore-user-config --ignore-rules).
 Isolation = Literal["inherit", "ignore-config", "ignore-rules"]
 ReviewScope = Literal["working_tree", "branch", "commit"]
+
+# How a working_tree review treats untracked (never-committed) files. `explicit_only`
+# preserves #74 (include only untracked files named in `paths`); `include` sends every
+# non-ignored untracked file's contents to OpenAI (opt-in egress); `exclude` never
+# includes them. Inert for branch/commit scopes.
+Untracked = Literal["explicit_only", "include", "exclude"]
 Detail = Literal["summary", "full"]
 # Lifecycle states for a background job. Terminal: done|failed|cancelled|timeout.
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
@@ -533,6 +539,58 @@ class Meta(BaseModel):
     server_version: str | None = _server_version_field()
 
 
+# Whether the model was actually consulted. `not_run` means the tool short-circuited
+# before any Codex call (e.g. nothing reviewable was gathered), so `verdict` reflects no
+# model judgment. Separated from `verdict` so a caller can tell "reviewed and clean" from
+# "never reviewed" (#319).
+ReviewStatus = Literal["completed", "not_run"]
+
+# Whether everything in the requested git/path scope was actually put in front of the
+# model. `complete` is a strict claim: NOTHING was left unreviewed. `partial` means some
+# in-scope content was not — see `omission_reasons`.
+CoverageStatus = Literal["complete", "partial"]
+
+# Why in-scope content went unreviewed. A closed set:
+#   untracked_omitted — untracked files exist in scope but were not gathered (see the
+#                       `untracked` input policy); their contents were never sent.
+#   truncated         — the gathered diff hit the byte cap and was cut off.
+#   redacted          — a secret-looking file's hunk was dropped from the diff, so the
+#                       model saw a marker instead of its content.
+CoverageOmissionReason = Literal["untracked_omitted", "truncated", "redacted"]
+
+
+class Coverage(BaseModel):
+    """What the review actually covered — the disclosure that makes `verdict`
+    interpretable (#319). Untracked counts are pathspec-scoped and null outside
+    working_tree scope; `detected == included + omitted` where applicable."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: CoverageStatus
+    untracked_files_detected: int | None = None
+    untracked_files_included: int | None = None
+    untracked_files_omitted: int | None = None
+    omission_reasons: list[CoverageOmissionReason] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> Coverage:
+        # Enforce the invariants the docstring advertises, so no construction path (now or
+        # future) can emit an internally inconsistent disclosure — e.g. a false `complete`
+        # with clamped counts (#322 F3/F5).
+        if (self.status == "partial") != bool(self.omission_reasons):
+            raise ValueError("coverage.status must be 'partial' iff omission_reasons is non-empty")
+        detected = self.untracked_files_detected
+        included = self.untracked_files_included
+        omitted = self.untracked_files_omitted
+        if (
+            detected is not None
+            and included is not None
+            and omitted is not None
+            and detected != included + omitted
+        ):
+            raise ValueError("untracked_files_detected must equal included + omitted")
+        return self
+
+
 class _SuccessBase(BaseModel):
     """Fields shared by every success envelope. `verdict`/`confidence` live only on
     the review result — they are a review judgment, meaningless for Q&A (consult) or
@@ -556,11 +614,22 @@ class ConsultResult(_SuccessBase):
 
 
 class ReviewResult(_SuccessBase):
-    """codex_review_changes: a structured review. The only verdict-bearing result."""
+    """codex_review_changes: a structured review. The only verdict-bearing result.
+
+    `verdict` is the *safe overall conclusion*, not the raw model verdict: when coverage
+    is `partial`, a model `pass` is surfaced as `unknown` (a pass over partly-reviewed
+    code is not a pass), while concrete `fail`/`concerns` are retained. `review_status`
+    and `coverage` are top-level — not in `meta` — because they are load-bearing for
+    interpreting `verdict` (#319)."""
 
     tool: Literal["codex_review_changes"] = "codex_review_changes"
     verdict: Verdict = "unknown"
     confidence: Confidence = "medium"
+    # Required (no default): review_status and coverage are load-bearing for interpreting
+    # verdict, so every construction must set them — a defaulted "completed"/"True" could
+    # let a future path silently report the safe-looking positive (#322 F5).
+    review_status: ReviewStatus
+    coverage: Coverage
 
 
 class DelegateResult(_SuccessBase):
@@ -1023,7 +1092,12 @@ class DryRunResult(BaseModel):
     commit: str | None = None
     paths: list[str] = Field(default_factory=list)
     context_summary: ContextSummary | None = None
-    prompt_bytes: int  # full UTF-8 size of the prompt that would be sent
+    # Whether the previewed review would actually call the model. When False the paid
+    # call short-circuits on an empty diff, so `prompt_bytes` is 0 — matching what the
+    # real call would send (#320).
+    would_call_model: bool  # required: a defaulted True could mask a no-model preview (#322 F5)
+    prompt_bytes: int  # full UTF-8 size of the prompt that would be sent (0 if no call)
+    coverage: Coverage  # same coverage disclosure the paid review returns (#319/#320)
     max_input_bytes: int
     truncated: bool = False
     truncation_hint: str | None = None

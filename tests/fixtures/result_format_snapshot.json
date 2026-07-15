@@ -1,5 +1,5 @@
 {
-  "result_format": 2,
+  "result_format": 3,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -2502,6 +2502,72 @@
           "title": "ContextSummary",
           "type": "object"
         },
+        "Coverage": {
+          "additionalProperties": false,
+          "properties": {
+            "omission_reasons": {
+              "items": {
+                "enum": [
+                  "untracked_omitted",
+                  "truncated",
+                  "redacted"
+                ],
+                "type": "string"
+              },
+              "title": "Omission Reasons",
+              "type": "array"
+            },
+            "status": {
+              "enum": [
+                "complete",
+                "partial"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "untracked_files_detected": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Untracked Files Detected"
+            },
+            "untracked_files_included": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Untracked Files Included"
+            },
+            "untracked_files_omitted": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Untracked Files Omitted"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "Coverage",
+          "type": "object"
+        },
         "Finding": {
           "additionalProperties": false,
           "properties": {
@@ -3199,6 +3265,9 @@
           "title": "Confidence",
           "type": "string"
         },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
         "findings": {
           "items": {
             "$ref": "#/$defs/Finding"
@@ -3232,6 +3301,14 @@
         "raw_response": {
           "$ref": "#/$defs/RawResponse"
         },
+        "review_status": {
+          "enum": [
+            "completed",
+            "not_run"
+          ],
+          "title": "Review Status",
+          "type": "string"
+        },
         "summary": {
           "title": "Summary",
           "type": "string"
@@ -3256,7 +3333,9 @@
       },
       "required": [
         "summary",
-        "meta"
+        "meta",
+        "review_status",
+        "coverage"
       ],
       "title": "ReviewResult",
       "type": "object"
@@ -3387,6 +3466,13 @@
     "review_success": {
       "assumptions": [],
       "confidence": "medium",
+      "coverage": {
+        "omission_reasons": [],
+        "status": "complete",
+        "untracked_files_detected": 0,
+        "untracked_files_included": 0,
+        "untracked_files_omitted": 0
+      },
       "findings": [],
       "meta": {
         "base": null,
@@ -3428,6 +3514,7 @@
         "session_id": null,
         "text": null
       },
+      "review_status": "completed",
       "summary": "s",
       "tool": "codex_review_changes",
       "verdict": "unknown"
