@@ -336,9 +336,10 @@ class RateLimitWindowSnapshot(BaseModel):
 
 
 class RateLimitSnapshot(BaseModel):
-    """Raw quota block read from `codex app-server` (`account/rateLimits/read`); what we
-    persist/replay. Windows are stored classified by duration (see appserver.py): `primary`
-    is the shorter/rolling window, `secondary` the longer one. Either may be None."""
+    """Raw quota block read from `codex app-server` (`account/rateLimits/read`), interpreted
+    fresh each read (ephemeral — not persisted). Windows are stored classified by duration (see
+    appserver.py): `primary` is the shorter/rolling window, `secondary` the longer one. Either
+    may be None."""
 
     model_config = ConfigDict(extra="ignore")
     plan_type: str | None = None

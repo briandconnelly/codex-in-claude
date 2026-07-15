@@ -253,8 +253,8 @@ class RateLimitReadOutcome:
     """The result of one ``account/rateLimits/read`` run, ready for the rate_limit layer.
 
     ``snapshot`` is set only on ``OK``. ``codex_home`` is the app-server-reported (raw,
-    absolute) $CODEX_HOME, captured so the persisted cache records the account that produced
-    it (the cross-CODEX_HOME staleness guard). ``message``/``stderr_tail`` are redacted and
+    absolute) $CODEX_HOME — provenance only (which account produced the read); the read is
+    ephemeral, so nothing is persisted against it. ``message``/``stderr_tail`` are redacted and
     display-bounded like :class:`TransferOutcome`'s."""
 
     status: RateLimitReadStatus
@@ -1130,9 +1130,9 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 )
             if msg.get("id") == 1 and "result" in msg and not read_sent:
                 result = msg.get("result")
-                # codex_home is provenance-only here (no ledger to locate), so an absent or
-                # invalid value is non-fatal: we proceed and let the cache fall back to the
-                # configured CODEX_HOME. transfer_session, which needs it, fails instead.
+                # codex_home is provenance-only here (no ledger to locate and nothing persisted),
+                # so an absent or invalid value is non-fatal: we proceed with codex_home=None.
+                # transfer_session, which needs it to find the import ledger, fails instead.
                 codex_home = _valid_codex_home(
                     result.get(cli_contract.APP_SERVER_CODEX_HOME_KEY)
                     if isinstance(result, dict)
