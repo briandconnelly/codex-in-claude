@@ -9,14 +9,23 @@ Orchestrates the issue → green-PR lifecycle in this repo. This skill owns the 
 operations and the human checkpoints**; every *rule* lives in `AGENTS.md` (auto-loaded each
 session) or the named sibling skill.
 
+**Scope & dependencies.** Runs in a **Claude Code** session — it drives Codex and the Copilot
+review, both Claude-Code-side. Sibling skills it names: `collaborating-with-codex` (bundled with
+this plugin, so present in that session) and, optionally, `receiving-code-review` (an external
+Superpowers plugin). When a named skill is absent, fall back to the cited `AGENTS.md` section — it
+carries the binding rule regardless.
+
 **How to read a phase: each phase names an action and cites the `AGENTS.md` § section (or sibling
 skill) that owns the rule. Open the cited section and follow it — this file deliberately does not
 restate the rule, so acting on a phase line alone will miss it.**
 
 ## Before you start: verification honesty
 
-Run every check a phase prescribes — never predict its result. Before claiming anything is pushed
-or merged, confirm the committed object (`git show`), not the working tree.
+Run every check a phase prescribes — never predict its result. Local inspection (`git show`, the
+working tree) proves neither a push nor a merge — it only shows a local object. Before claiming
+something is **pushed**, compare the remote ref (`git rev-parse origin/<branch>` or
+`git ls-remote origin <branch>`); before claiming it is **merged**, query the PR or default branch
+(`gh pr view <n> --json state,mergedAt`, or confirm `origin/main` contains the commit).
 
 ## Phases
 
@@ -46,10 +55,12 @@ Work them in order. ▸ marks a phase that pauses for the maintainer.
    request the Copilot review (bot PRs get none automatically).
 
 7. **Review loop** — Verify each Copilot comment against the code before acting; fix, reply, and
-   resolve every thread, including ones you decline. Rules: § *Git / PRs*; disposition discipline:
-   the `receiving-code-review` skill. Iterate until nothing new is actionable and every thread is
-   resolved.
+   resolve every thread, including ones you decline. Rules: § *Git / PRs*; for disposition
+   discipline, the `receiving-code-review` skill when it's available, else § *Git / PRs*. Iterate
+   until nothing new is actionable and every thread is resolved.
 
-8. **Hand off** ▸ — Rules: § *Git / PRs*. Agents never merge — stop at green-and-approved unless the
-   maintainer gives an explicit in-session instruction to merge this PR. If you instead lost the
-   race or abandoned the issue, release your own claim.
+8. **Hand off** ▸ — Rules: § *Git / PRs*, which owns both the never-merge rule and claim release.
+   Agents never merge — stop at green-and-approved unless the maintainer gives an explicit
+   in-session instruction to merge this PR. Release your own claim per § *Git / PRs* whenever you
+   stop working the issue — its triggers include *the work landed*, not only losing the race or
+   abandoning.
