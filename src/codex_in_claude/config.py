@@ -16,7 +16,7 @@ from codex_in_claude._core.jobs import JobStore
 ENV_PREFIX = "CODEX_IN_CLAUDE_"
 
 MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 10, 600
-DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_MAX_INPUT_BYTES = 200_000
 # Byte ceiling for a subprocess's captured output (stdout+stderr aggregate), a
 # robustness guard against OOM of the long-lived stdio server (#155). Separate

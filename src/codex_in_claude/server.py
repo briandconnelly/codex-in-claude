@@ -2437,7 +2437,7 @@ async def codex_consult(
     Codex's returned output, not what you type or what Codex reads from files).
 
     Progress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped
-    10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline
+    10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline
     expires the run is terminated and its partial output is not recoverable or resumable, so for a
     high-`reasoning_effort` or broad repo-grounded consult that may exceed it, prefer
     `codex_consult_async` (a background job, built-in default 1800s deadline; poll
@@ -2525,7 +2525,7 @@ async def codex_review_changes(
     supplied inputs, or do not request a review of that tree.
 
     Progress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped
-    10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline
+    10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline
     expires the run is terminated and its partial output is not recoverable or resumable, so for a
     multi-file or whole-branch review that may exceed it, prefer `codex_review_changes_async` (a
     background job, built-in default 1800s deadline; poll `codex_job_status`). Coarse
@@ -2604,7 +2604,7 @@ async def codex_delegate(
     it or files Codex reads itself.
 
     Progress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped
-    10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline
+    10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline
     expires the run is terminated and its partial output is not recoverable or resumable, so for a
     substantial or multi-file task that may exceed it, prefer `codex_delegate_async` (a background
     job, built-in default 1800s deadline; poll `codex_job_status`). Coarse `notifications/progress`
@@ -2660,7 +2660,7 @@ async def codex_delegate_async(
     Same propose-tier behavior as `codex_delegate` — Codex works in a throwaway git
     worktree and the result carries a **reviewable diff that is NOT applied** — but
     detached; prefer it for a substantial or multi-file implementation task that can exceed the
-    synchronous deadline (built-in default 180s), since a sync run whose deadline expires loses
+    synchronous deadline (built-in default 300s), since a sync run whose deadline expires loses
     its partial work (this job's own deadline is separately configured, built-in default 1800s).
     Starting a job commits to spend (it runs to completion or its wall-clock deadline even if
     you never poll). Poll `codex_job_status`; read/consume with
@@ -3222,7 +3222,7 @@ async def codex_consult_async(
 
     Same read-only behavior as `codex_consult` (Codex never edits files), but detached —
     prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the
-    synchronous deadline (built-in default 180s), since a sync run whose deadline expires loses
+    synchronous deadline (built-in default 300s), since a sync run whose deadline expires loses
     its partial work; this job's own deadline is separately configured (built-in default 1800s).
     Starting a job commits to spend (it runs to completion or its wall-clock deadline even if
     you never poll). Poll `codex_job_status`; read/consume the consult envelope with
@@ -3279,7 +3279,7 @@ async def codex_review_changes_async(
 
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
     redacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file
-    or whole-branch review that can exceed the synchronous deadline (built-in default 180s),
+    or whole-branch review that can exceed the synchronous deadline (built-in default 300s),
     since a sync run whose deadline expires loses its partial work; this job's own deadline is
     separately configured (built-in default 1800s). The diff is gathered inside the job, so a bad
     `base`/`commit` comes back as the same structured error with **zero spend** (a bad

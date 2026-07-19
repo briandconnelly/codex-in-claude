@@ -14,7 +14,7 @@ review pass `scope=branch` and `base=<branch>`; for a single commit pass
 Optionally call `codex_dry_run` first (free) to preview the scope and diff size.
 
 For a multi-file or whole-branch review that can exceed the synchronous deadline
-(built-in default 180s), use `codex_review_changes_async` instead and poll for the
+(built-in default 300s), use `codex_review_changes_async` instead and poll for the
 result — a sync call whose deadline expires loses the paid run.
 
 When findings come back, verify each one against the actual code before presenting

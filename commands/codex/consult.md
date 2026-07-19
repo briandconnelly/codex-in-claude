@@ -15,5 +15,5 @@ verify against the actual code — summarize what is worth acting on and flag
 anything you disagree with.
 
 For a high-reasoning-effort or broad repo-grounded consult that can exceed the synchronous
-deadline (built-in default 180s), use `codex_consult_async` instead and poll for the
+deadline (built-in default 300s), use `codex_consult_async` instead and poll for the
 result — a sync call whose deadline expires loses the paid run.
