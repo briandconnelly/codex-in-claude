@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -934,3 +935,367 @@ def test_stream_timeout_no_killpg_falls_back_to_proc_kill(tmp_path, monkeypatch)
     assert elapsed < 3, f"expected prompt kill via proc.kill(); elapsed={elapsed:.1f}s"
     # After fix: proc.kill() was called as the fallback; before fix: it was never called.
     assert kill_called["n"] > 0, "proc.kill() was not called as the killpg fallback"
+
+
+# --- #330: honor the user's GLOBAL git excludes despite the HOME-stripped child env ---
+#
+# The enumeration children run with a replacement env that has no HOME/XDG, so git cannot
+# find the user's global excludes on its own. The fix resolves the effective
+# core.excludesFile from the SERVER's env and injects it via `-c core.excludesFile=...`.
+# These tests neutralize the autouse global-excludes isolation (conftest) by overriding the
+# specific env var the branch under test resolves from.
+
+
+@pytest.fixture
+def outside(tmp_path_factory):
+    """A scratch directory OUTSIDE any `repo` fixture (which aliases `tmp_path`), for
+    global config / ignore / XDG files that must not themselves become untracked entries
+    in the repo under test."""
+    return tmp_path_factory.mktemp("global-git-cfg")
+
+
+def _write_global_excludesfile(monkeypatch, base, patterns, *, name="globalconfig"):
+    """Point GIT_CONFIG_GLOBAL at a config (under ``base``) whose core.excludesFile lists
+    ``patterns``. Returns the ignore-file path."""
+    ignore = base / f"{name}_ignore"
+    ignore.write_text("".join(f"{p}\n" for p in patterns))
+    config = base / name
+    config.write_text(f"[core]\n\texcludesFile = {ignore}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    return ignore
+
+
+def test_global_excludes_flags_configured_value(tmp_path, monkeypatch):
+    ignore = _write_global_excludesfile(monkeypatch, tmp_path, ["x"])
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    assert flags == ["-c", f"core.excludesFile={ignore}"]
+
+
+def test_global_excludes_flags_unset_uses_xdg_default(tmp_path, monkeypatch):
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)  # key unset -> default location used
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    # Passed even though the default file does not exist: git no-ops on a missing file,
+    # and this faithfully reproduces "unset -> default location" under the stripped child.
+    assert flags == ["-c", f"core.excludesFile={xdg / 'git' / 'ignore'}"]
+
+
+def test_global_excludes_flags_unset_uses_home_default_when_no_xdg(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    assert flags == ["-c", f"core.excludesFile={home / '.config' / 'git' / 'ignore'}"]
+
+
+def test_global_excludes_flags_expands_tilde(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    ignore = home / "my_ignore"
+    ignore.write_text("x\n")
+    monkeypatch.setenv("HOME", str(home))
+    config = tmp_path / "gc"
+    config.write_text("[core]\n\texcludesFile = ~/my_ignore\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    # `git config --path` expands ~ in the SERVER (which has HOME); the stripped child
+    # could not have expanded it itself.
+    assert flags == ["-c", f"core.excludesFile={ignore}"]
+
+
+def test_global_excludes_flags_relative_value_passed_through(tmp_path, monkeypatch):
+    config = tmp_path / "gc"
+    config.write_text("[core]\n\texcludesFile = sub/ignore\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    # A relative value is passed UNCHANGED: git resolves a relative excludesFile against the
+    # process cwd, and the enumeration child runs with the SAME cwd, so it resolves
+    # identically. Joining onto cwd here would double-prefix under a relative cwd (#330 review).
+    assert flags == ["-c", "core.excludesFile=sub/ignore"]
+
+
+def test_global_excludes_flags_rejects_oversized_value(tmp_path, monkeypatch):
+    # Merged config includes the untrusted repo-local layer; an oversized core.excludesFile
+    # must be rejected (fail-closed), not materialized and interpolated into git argv where
+    # it could spike memory / hit E2BIG (#330 review).
+    huge = "/" + "x" * 9000  # > _EXCLUDES_VALUE_MAX (8192)
+    config = tmp_path / "gc"
+    config.write_text(f"[core]\n\texcludesFile = {huge}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    with pytest.raises(RuntimeError, match="size cap"):
+        gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+
+
+def test_global_excludes_flags_rejects_oversized_multibyte_value(tmp_path, monkeypatch):
+    # The cap is BYTE-based: a value whose CHARACTER count is under the cap but whose UTF-8
+    # byte length exceeds it must still be rejected (#330 review). 3000 emoji ~= 3001 chars
+    # but ~12001 bytes.
+    value = "/" + "\U0001f600" * 3000
+    config = tmp_path / "gc"
+    config.write_text(f"[core]\n\texcludesFile = {value}\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    with pytest.raises(RuntimeError, match="size cap"):
+        gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+
+
+def test_global_excludes_flags_sanitizes_inherited_git_dir(tmp_path, monkeypatch):
+    # An inherited GIT_DIR must NOT redirect config resolution to another repo — otherwise
+    # a stray GIT_DIR could inject a foreign repo's core.excludesFile at highest precedence
+    # into the target review (issue #330 security review).
+    other = tmp_path / "other"
+    other.mkdir()
+    run_git(other, "init", "-q")
+    foreign_ignore = other / "foreign_ignore"
+    foreign_ignore.write_text("x\n")
+    run_git(other, "config", "--local", "core.excludesFile", str(foreign_ignore))
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))  # the trap
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    # Resolution stays anchored to the passed cwd (no local excludesFile there) -> falls to
+    # the XDG default, NOT the foreign repo's setting.
+    assert flags == ["-c", f"core.excludesFile={xdg / 'git' / 'ignore'}"]
+
+
+def test_resolver_env_adds_only_global_config_allowlist_over_base(monkeypatch):
+    # The resolver env must be the enumeration child's base env plus ONLY the global-config
+    # source vars, so repo discovery and the system/local config view match the child and
+    # nothing can divert resolution to a different repo/config (#330 review). Asserted on the
+    # DELTA (resolver env minus base env) so it is robust to whatever the base env contains
+    # (e.g. the conftest system-isolation seam) — the invariant is purely about what the
+    # allowlist ADDS.
+    diverting = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_PARAMETERS",
+        # System-config selection: the child reads git's compiled-in system config and honors
+        # neither of these, so the resolver must not add them from the ambient environment
+        # (else it could miss a system core.excludesFile the child applies).
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_NOSYSTEM",
+    ]
+    for var in diverting:
+        monkeypatch.setenv(var, "diverting-value")
+    monkeypatch.setenv("HOME", "/home/u")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/home/u/.config")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/home/u/.gitconfig")
+    base = gitdiff._base_git_env()
+    env = gitdiff._resolver_env()
+    # Everything in the base env is present unchanged.
+    for key, value in base.items():
+        assert env[key] == value
+    # The ONLY keys added or overridden on top of base are the global-config allowlist —
+    # so no diverting var (whose ambient value is "diverting-value") leaks in.
+    added = {k for k in env if k not in base or env[k] != base[k]}
+    assert added == {"HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL"}
+    assert env["HOME"] == "/home/u"
+    assert env["XDG_CONFIG_HOME"] == "/home/u/.config"
+    assert env["GIT_CONFIG_GLOBAL"] == "/home/u/.gitconfig"
+
+
+def test_global_excludes_flags_ignores_git_config_system(tmp_path, monkeypatch):
+    # GIT_CONFIG_SYSTEM relocates the SYSTEM config for git commands that honor it, but the
+    # stripped ls-files child never does; the resolver must match, so it must ignore an
+    # inherited GIT_CONFIG_SYSTEM (#330 review). A fake system config here must NOT win — the
+    # resolver falls to the (isolated, empty) default location instead.
+    sys_ignore = tmp_path / "sys_ignore"
+    sys_ignore.write_text("x\n")
+    sys_config = tmp_path / "sys_config"
+    sys_config.write_text(f"[core]\n\texcludesFile = {sys_ignore}\n")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(sys_config))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)  # no global -> unset -> default
+    default = Path(os.environ["XDG_CONFIG_HOME"]) / "git" / "ignore"
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    assert flags == ["-c", f"core.excludesFile={default}"]
+
+
+def test_count_untracked_honors_repo_local_excludesfile_despite_ceiling(repo, monkeypatch):
+    # A subdirectory workspace plus an inherited GIT_CEILING_DIRECTORIES at the repo root
+    # must NOT stop the resolver from seeing the repo-local core.excludesFile the enumeration
+    # child honors. The resolver's env allowlist omits the ceiling, so it discovers the repo
+    # exactly like the child (#330 review). Before the allowlist, the resolver would fail
+    # discovery, inject the default, and mask the local excludes -> secret.txt re-counted.
+    repo_real = repo.resolve()
+    sub = repo_real / "sub"
+    sub.mkdir()
+    ignore = repo_real / "excl"
+    ignore.write_text("secret.txt\n")
+    _git(repo_real, "config", "--local", "core.excludesFile", str(ignore))
+    (sub / "secret.txt").write_text("s\n")  # ignored via repo-local excludesFile
+    (sub / "keep.py").write_text("k\n")  # untracked -> counted
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(repo_real))
+    assert gitdiff.count_untracked(str(sub), None, timeout=30) == 1
+
+
+def test_global_excludes_flags_ignores_inherited_git_config(tmp_path, monkeypatch):
+    # GIT_CONFIG relocates ONLY `git config`'s view (not `ls-files`'). The resolver must
+    # strip it, or an inherited GIT_CONFIG would hide the user's real global excludesFile
+    # and inject a wrong fallback at command precedence (#330 review). Here GIT_CONFIG_GLOBAL
+    # holds the real setting and GIT_CONFIG points at an empty file: the real one must win.
+    ignore = _write_global_excludesfile(monkeypatch, tmp_path, ["x"])
+    empty = tmp_path / "empty_gitconfig"
+    empty.write_text("")
+    monkeypatch.setenv("GIT_CONFIG", str(empty))  # the trap
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    assert flags == ["-c", f"core.excludesFile={ignore}"]
+
+
+def test_count_untracked_ignores_inherited_git_config_override(repo, outside, monkeypatch):
+    # End-to-end: an ambient GIT_CONFIG must not let a globally-ignored file slip back into
+    # the count (and, under include, the egress). RED if the resolver honors GIT_CONFIG.
+    _write_global_excludesfile(monkeypatch, outside, ["secret.txt"])  # real global excludes
+    empty = outside / "empty_gitconfig"
+    empty.write_text("")
+    monkeypatch.setenv("GIT_CONFIG", str(empty))  # the trap
+    (repo / "secret.txt").write_text("shh\n")  # globally ignored -> not counted
+    (repo / "keep.py").write_text("k = 1\n")  # untracked -> counted (positive control)
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+
+
+def test_global_excludes_flags_preserves_newline_in_value(tmp_path, monkeypatch):
+    # A core.excludesFile value can contain an embedded newline; the resolver must preserve
+    # the WHOLE value (via -z), not silently drop everything after the first newline — which
+    # would point at a different ignore file and re-open the egress this fixes (#330 review).
+    weird = f"{tmp_path / 'alpha'}\n{tmp_path / 'beta'}"  # absolute path with an embedded \n
+    config = tmp_path / "gc"
+    run_git(tmp_path, "config", "-f", str(config), "core.excludesFile", weird)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    assert flags == ["-c", f"core.excludesFile={weird}"]
+
+
+def test_global_excludes_flags_rejects_oversized_multiline_value(tmp_path, monkeypatch):
+    # The size cap must hold even when the value is spread across many physical lines — the
+    # accumulation counts the total, so a multi-line value cannot evade the bound (#330 review).
+    value = ("/" + "a" * 60 + "\n") * 200  # ~12200 bytes across 200 lines, > cap (8192)
+    config = tmp_path / "gc"
+    run_git(tmp_path, "config", "-f", str(config), "core.excludesFile", value)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    with pytest.raises(RuntimeError, match="size cap"):
+        gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+
+
+def test_default_excludes_path_empty_home_is_root_relative(monkeypatch):
+    # git treats HOME="" as present (empty home == "/", so /.config/git/ignore), distinct
+    # from unset; the resolver must preserve that path, not drop the default (#330 review).
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", "")
+    assert gitdiff._default_excludes_path() == "/.config/git/ignore"
+
+
+def test_default_excludes_path_unset_home_and_xdg_returns_none(monkeypatch):
+    # Truly-unset HOME (and no XDG) is the only case with no computable default.
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    assert gitdiff._default_excludes_path() is None
+
+
+def test_global_excludes_flags_no_default_returns_empty(tmp_path, monkeypatch):
+    # Unset key AND no XDG/HOME to compute a default location -> no flag (the stripped
+    # child then has no global layer, matching git under the same env).
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)  # key unset
+    assert gitdiff._global_excludes_flags(str(tmp_path), timeout=30) == []
+
+
+def test_global_excludes_flags_fails_loud_on_bad_config(tmp_path, monkeypatch):
+    # A `git config` outcome other than found (0) / absent (1) must NOT be swallowed as
+    # "unset" — that would silently restore the egress bug. A malformed config exits 128.
+    bad = tmp_path / "bad_config"
+    bad.write_text("this is not valid git config\n[[[\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(bad))
+    with pytest.raises(RuntimeError, match="config"):
+        gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+
+
+def test_count_untracked_respects_global_core_excludesfile(repo, outside, monkeypatch):
+    # RED before the fix: the stripped child never reads global config, so the globally
+    # ignored file is counted (== 2). GREEN after: it is excluded (== 1).
+    _write_global_excludesfile(monkeypatch, outside, ["secret.txt"])
+    (repo / "secret.txt").write_text("shh\n")  # globally ignored -> not counted
+    (repo / "keep.py").write_text("y = 1\n")  # untracked -> counted (positive control)
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+
+
+def test_count_untracked_respects_xdg_default_ignore(repo, outside, monkeypatch):
+    xdg = outside / "xdg"
+    (xdg / "git").mkdir(parents=True)
+    (xdg / "git" / "ignore").write_text("secret.txt\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)  # unset -> default location
+    (repo / "secret.txt").write_text("shh\n")
+    (repo / "keep.py").write_text("y = 1\n")
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+
+
+def test_count_untracked_local_excludesfile_wins_over_global(repo, outside, monkeypatch):
+    # Merged resolution must respect git's precedence (local over global). A naive
+    # `git config --global` resolver would inject the GLOBAL file at highest precedence,
+    # ignoring the two global-only names and counting the wrong set (== 1 here). Correct
+    # behavior counts the two files only global would ignore (== 2).
+    _write_global_excludesfile(monkeypatch, outside, ["aaa.txt", "ccc.txt"])
+    local_ignore = outside / "local_ignore"
+    local_ignore.write_text("bbb.txt\n")
+    _git(repo, "config", "--local", "core.excludesFile", str(local_ignore))
+    (repo / "aaa.txt").write_text("a\n")  # only GLOBAL ignores it -> local wins -> counted
+    (repo / "bbb.txt").write_text("b\n")  # LOCAL ignores it -> not counted
+    (repo / "ccc.txt").write_text("c\n")  # only GLOBAL ignores it -> local wins -> counted
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 2
+
+
+def test_count_untracked_explicit_missing_excludesfile_suppresses_default(
+    repo, outside, monkeypatch
+):
+    # An explicitly-set-but-missing core.excludesFile means "no global ignore" in git's own
+    # semantics — the XDG default is NOT consulted. Verified empirically: `-c
+    # core.excludesFile=/missing` emits an otherwise-globally-ignored file. So the file
+    # must be counted despite a matching XDG default existing.
+    xdg = outside / "xdg"
+    (xdg / "git").mkdir(parents=True)
+    (xdg / "git" / "ignore").write_text("secret.txt\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    config = outside / "gc"
+    config.write_text(f"[core]\n\texcludesFile = {outside / 'does-not-exist'}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    (repo / "secret.txt").write_text("s\n")
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+
+
+def test_count_untracked_honors_relative_excludesfile_under_relative_cwd(repo, monkeypatch):
+    # Regression for the cwd double-prefix (#330 review): with a RELATIVE cwd and a relative
+    # `core.excludesFile`, the resolver and the ls-files child share the cwd, so the value
+    # must pass through unchanged. Joining it onto the relative cwd would double-prefix and
+    # drop the excludes, re-counting (and, under include, re-sending) the ignored file.
+    (repo / "cfg").mkdir()
+    (repo / "cfg" / "ignore").write_text("secret.txt\ncfg/\n")  # ignore the secret AND cfg/ itself
+    _git(repo, "config", "--local", "core.excludesFile", "cfg/ignore")  # relative value
+    (repo / "secret.txt").write_text("s\n")  # ignored -> not counted
+    (repo / "keep.py").write_text("k\n")  # untracked -> counted
+    monkeypatch.chdir(repo.parent)
+    assert gitdiff.count_untracked(repo.name, None, timeout=30) == 1
+
+
+def test_gather_include_does_not_gather_globally_ignored_file(repo, outside, monkeypatch):
+    # The egress consequence: with untracked="include", a globally-ignored file must NOT be
+    # gathered (its contents would be sent to OpenAI). RED before the fix.
+    _write_global_excludesfile(monkeypatch, outside, ["secret.env"])
+    (repo / "secret.env").write_text("TOKEN=abcdef\n")  # must NOT be sent
+    (repo / "keep.py").write_text("k = 1\n")  # gathered (positive control)
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=1_000_000
+    )
+    assert "secret.env" not in res.text
+    assert "TOKEN=abcdef" not in res.text
+    assert res.untracked_included == 1
+    assert "keep.py" in res.text

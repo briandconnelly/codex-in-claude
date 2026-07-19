@@ -18,10 +18,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from codex_in_claude._core import streamcap
+from codex_in_claude._core import gitproc, streamcap
 from codex_in_claude._core.redaction import DiffRedactor
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from typing import TextIO
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -45,6 +46,13 @@ _UNTRACKED_POLICIES = frozenset({"explicit_only", "include", "exclude"})
 # Bounded read size for the untracked-inventory stream (count_untracked). Memory stays
 # O(this) regardless of how many untracked files the workspace has.
 _LSFILES_STDOUT_CHUNK = 65536
+
+# Upper bound (UTF-8 BYTES) on the resolved core.excludesFile value (#330 review). The
+# value comes from merged git config, which INCLUDES the untrusted repo-local `.git/config`,
+# so a workspace could set an arbitrarily large value. A real filesystem path is far under
+# this; a larger value is rejected (fail-closed) rather than interpolated into the next git
+# argv (where it would spike server memory and could exceed the OS argv limit, E2BIG).
+_EXCLUDES_VALUE_MAX = 8192
 
 # F1a: maximum bytes of git stderr retained in memory (keeps draining to avoid
 # the >64 KB pipe-buffer deadlock while bounding how much we hold).
@@ -147,7 +155,7 @@ def _git(
     extra_env: dict[str, str] | None = None,
     stdin: str | None = None,
 ) -> str:
-    env = {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+    env = _base_git_env()
     if extra_env:
         env.update(extra_env)
     try:
@@ -182,6 +190,158 @@ def _path() -> str:
     return os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin")
 
 
+# The ONLY env vars the excludes resolver adds on top of the enumeration child's stripped
+# env (`_base_git_env`). They locate the user's GLOBAL git config + excludes layer — the one
+# thing the HOME-stripped child cannot see — so the resolver reports exactly the effective
+# `core.excludesFile` the child would honor if it had that layer. This is an ALLOWLIST (not a
+# denylist) on purpose: everything else is EXCLUDED by omission so the resolver reads the SAME
+# system + local layers, and discovers the SAME repo, as the child — no divergence can mask an
+# ignore the child would honor (#330 review). Deliberately omitted:
+#   * repo-discovery vars (GIT_DIR, GIT_CEILING_DIRECTORIES, GIT_DISCOVERY_ACROSS_FILESYSTEM,
+#     …) — the resolver must discover the same repo the child does, for the local layer;
+#   * the `git config`-only single-file override GIT_CONFIG and command-scope injection
+#     (GIT_CONFIG_COUNT/KEY/VALUE/PARAMETERS) — the child honors none of these;
+#   * GIT_CONFIG_SYSTEM / GIT_CONFIG_NOSYSTEM — the child reads git's compiled-in SYSTEM
+#     config and honors neither, so the resolver must too. Honoring an inherited
+#     GIT_CONFIG_NOSYSTEM would let the resolver miss a system `core.excludesFile` the child
+#     still applies, and the injected `-c` would then mask it.
+_RESOLVER_GLOBAL_CONFIG_VARS = (
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "GIT_CONFIG_GLOBAL",
+)
+
+
+def _base_git_env() -> dict[str, str]:
+    """The complete replacement environment for every hardened git child here: C locale
+    for deterministic output plus PATH, and nothing else. No HOME/XDG means git reads no
+    global config (hooks, fsmonitor, attributes) from the user's home — deliberate
+    hardening. The global *excludes* layer, which is data-only, is reintroduced narrowly
+    and explicitly via `-c core.excludesFile` on the untracked-enumeration calls (see
+    `_global_excludes_flags`); nothing else from the user's home is restored."""
+    return {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+
+
+def _resolver_env() -> dict[str, str]:
+    """Environment for the excludes resolver (:func:`_global_excludes_flags`): the
+    enumeration child's stripped env (:func:`_base_git_env`) plus ONLY the global-config
+    source vars in :data:`_RESOLVER_GLOBAL_CONFIG_VARS`. Building it as base-plus-allowlist
+    (rather than server-env-minus-denylist) guarantees the resolver differs from the child
+    solely by the global config layer: it discovers the same repo (no inherited GIT_DIR or
+    GIT_CEILING_DIRECTORIES) and reads the same system+local config, so it can never inject
+    an override that masks a repo-local ``core.excludesFile`` the child would honor (#330)."""
+    env = _base_git_env()
+    for var in _RESOLVER_GLOBAL_CONFIG_VARS:
+        value = os.environ.get(var)
+        if value is not None:
+            env[var] = value
+    return env
+
+
+def _default_excludes_path() -> str | None:
+    """git's default `core.excludesFile` location, computed from the SERVER's env (which
+    has HOME/XDG): ``$XDG_CONFIG_HOME/git/ignore`` when ``XDG_CONFIG_HOME`` is set and
+    non-empty, else ``$HOME/.config/git/ignore``. ``None`` only when HOME is truly unset.
+
+    git distinguishes an UNSET HOME from a present-but-EMPTY one: with ``HOME=""`` it uses
+    ``/.config/git/ignore`` (empty home == ``/``), so match that with ``home is not None``
+    and a literal ``$HOME/...`` join — ``Path("") / ".config"`` would wrongly yield a
+    *relative* path. Only a truly-unset HOME (and no XDG) means no default (#330 review)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:  # git: an unset OR empty XDG_CONFIG_HOME falls through to $HOME
+        return str(Path(xdg) / "git" / "ignore")
+    home = os.environ.get("HOME")
+    if home is not None:
+        return f"{home}/.config/git/ignore"
+    return None
+
+
+def _global_excludes_flags(cwd: str, timeout: int) -> list[str]:
+    """``-c core.excludesFile=<path>`` args that re-supply the user's GLOBAL git-ignore
+    layer to the HOME-stripped enumeration children (#330), which otherwise misclassify a
+    globally-ignored file (e.g. one listed in ``~/.config/git/ignore``) as untracked and
+    — with ``untracked="include"`` — send its contents to Codex.
+
+    The effective path is resolved from the SERVER's own environment, which has HOME/XDG,
+    mirroring git's own resolution:
+
+    * If ``core.excludesFile`` is SET in the merged config (system+global+local, at git's
+      own precedence via ``git config``), its value is used verbatim — even if the file is
+      empty, missing, or a directory — because an explicit setting SUPPRESSES the default
+      location in git's semantics (``-c core.excludesFile=/missing`` disables global
+      ignores rather than falling back). Reading the repo-local layer here honors
+      local-over-global precedence, so this never overrides a repo-local setting.
+    * If UNSET, the default location (:func:`_default_excludes_path`) is used, even if
+      absent (git no-ops on a missing excludes file). If no default is computable, no flag
+      is emitted (the child then has no global layer, matching git under the same env).
+
+    The resolver runs under :func:`_resolver_env` (the child's stripped env plus only the
+    global-config source vars), anchored to ``cwd``, so it discovers the same repo and reads
+    the same system+local config the child does — adding only the global layer. ``--path``
+    expands a leading ``~``. A relative value is passed through UNCHANGED: git resolves a
+    relative ``core.excludesFile`` against the process cwd, and the enumeration child runs
+    with the SAME ``cwd``, so the relative form resolves identically (joining it onto ``cwd``
+    here would double-prefix under a relative ``cwd``).
+
+    ``-z`` NUL-terminates the value so an excludesFile path containing a newline is
+    preserved intact (a plain ``--get`` would let a multi-line value be truncated to its
+    first line, pointing at the wrong ignore file). The value is read through
+    :func:`gitproc.run_lines` — the shared watchdog/concurrent-stderr-drain runner — so a
+    stalled or verbose child is killed at ``timeout`` and never deadlocks, and memory stays
+    bounded. Merged config includes the untrusted repo-local layer, so accumulation stops
+    and fails closed once the value's UTF-8 length exceeds :data:`_EXCLUDES_VALUE_MAX`,
+    rather than materializing an arbitrarily large value and interpolating it into the next
+    git argv. Fails loud on that or any ``git config`` outcome other than "found" (0) or
+    "absent" (1) so a broken resolver cannot silently restore the egress bug."""
+    env = _resolver_env()
+
+    def _read_value(lines: Iterator[str]) -> str:
+        # `git config -z --get` prints `<value>\0`; the value may itself contain newlines, so
+        # accumulate physical lines until the NUL terminator — enforcing the byte cap DURING
+        # accumulation (+1 for the NUL) so a pathological multi-line value cannot defeat the
+        # bound. run_lines drains and bounds anything left unread.
+        parts: list[str] = []
+        total = 0
+        for line in lines:
+            parts.append(line)
+            total += len(line.encode("utf-8", "surrogateescape"))
+            if total > _EXCLUDES_VALUE_MAX + 1:
+                raise RuntimeError(
+                    "core.excludesFile value exceeds the size cap; refusing to use it"
+                )
+            if "\0" in line:
+                break
+        return "".join(parts)
+
+    try:
+        # max_line_bytes sits above the reject cap so no in-cap value is truncated; a larger
+        # single line is truncated (bounding memory) and then rejected by the cap check.
+        raw = gitproc.run_lines(
+            ["git", "--no-pager", "config", "-z", "--path", "--get", "core.excludesFile"],
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            max_line_bytes=_EXCLUDES_VALUE_MAX + 1024,
+            consume=_read_value,
+        )
+    except gitproc.GitBinaryNotFound as exc:
+        raise GitUnavailableError("git executable not found") from exc
+    except gitproc.GitStreamTimeout as exc:
+        raise RuntimeError(f"git config core.excludesFile timed out after {timeout}s") from exc
+    except gitproc.GitStreamFailed as exc:
+        if exc.returncode == 1:  # git config: key absent across all config
+            default = _default_excludes_path()
+            if default is None:
+                return []
+            return ["-c", f"core.excludesFile={default}"]
+        raise RuntimeError(exc.stderr.strip() or "git config core.excludesFile failed") from exc
+    # `-z`: the value is everything up to the NUL terminator (byte-exact, newlines intact).
+    value = raw.split("\0", 1)[0]
+    if len(value.encode("utf-8", "surrogateescape")) > _EXCLUDES_VALUE_MAX:
+        raise RuntimeError("core.excludesFile value exceeds the size cap; refusing to use it")
+    return ["-c", f"core.excludesFile={value}"]
+
+
 def _ref_exists(cwd: str, ref: str, timeout: int) -> bool:
     try:
         proc = subprocess.run(
@@ -193,7 +353,7 @@ def _ref_exists(cwd: str, ref: str, timeout: int) -> bool:
             errors="surrogateescape",
             timeout=timeout,
             check=False,
-            env={"LC_ALL": "C", "LANG": "C", "PATH": _path()},
+            env=_base_git_env(),
         )
     except FileNotFoundError as exc:
         raise GitUnavailableError("git executable not found") from exc
@@ -243,10 +403,13 @@ def _untracked_new_file_diff(
     them into ``acc``.
 
     Returns ``(files, added_lines)``. ``git ls-files --others --exclude-standard``
-    enumerates untracked files under the named paths while skipping gitignored ones
-    (matching `git add`'s default), so an explicitly-named new file is reviewed
-    instead of silently producing an empty review (#74). Untracked files can never
-    appear in ``git diff HEAD``, so there is no double-counting with the tracked diff.
+    enumerates untracked files under the named paths while skipping gitignored ones;
+    the injected ``-c core.excludesFile`` re-supplies the user's global ignore layer the
+    HOME-stripped env would otherwise drop, so the set matches `git add`'s default (#330)
+    and a globally-ignored file is never gathered and sent. An explicitly-named new file
+    is thus reviewed instead of silently producing an empty review (#74). Untracked files
+    can never appear in ``git diff HEAD``, so there is no double-counting with the tracked
+    diff.
 
     The patches are produced by ``git`` itself: each discovered path's content is
     hashed into a blob and recorded in a throwaway index (``GIT_INDEX_FILE``, never the
@@ -266,8 +429,14 @@ def _untracked_new_file_diff(
     the repo's real objects as a read-only alternate, so the raw (pre-redaction) bytes
     of an untracked secret never persist as a blob in the repo's own ``.git/objects``.
     The temp index and objects are discarded with the tempdir, leaving no trace."""
+    # `-c core.excludesFile=...` re-supplies the user's global ignore layer, which the
+    # HOME-stripped env would otherwise drop, so a globally-ignored file is not gathered
+    # and sent (#330). It precedes the subcommand, so it goes in the args list.
+    excludes = _global_excludes_flags(cwd, timeout)
     listing = _git(
-        cwd, ["ls-files", "--others", "--exclude-standard", "-z", "--", *norm_paths], timeout
+        cwd,
+        [*excludes, "ls-files", "--others", "--exclude-standard", "-z", "--", *norm_paths],
+        timeout,
     )
     paths = [p for p in listing.split("\0") if p]
     if not paths:
@@ -407,7 +576,7 @@ def _stream_redacted_diff(  # noqa: PLR0915
 ) -> None:
     """Run `git <args>` and feed its stdout, line by line, into `acc` — bounded in
     memory. Raises the same typed errors as `_git` on git failure/timeout."""
-    env = {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+    env = _base_git_env()
     if extra_env:
         env.update(extra_env)
     try:
@@ -518,16 +687,19 @@ def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
 
     Unlike :func:`_untracked_new_file_diff`, which hashes each file's bytes into a
     throwaway index to build a reviewable patch (and so transmits them), this only
-    enumerates paths. ``--exclude-standard`` skips gitignored files (matching
-    ``git add``'s default). Output is NUL-delimited (``-z``) so a filename containing
-    a newline counts as one entry, keeping the coverage arithmetic
-    (``detected == included + omitted``) exact for any valid git path.
+    enumerates paths. ``--exclude-standard`` skips gitignored files, and the injected
+    ``-c core.excludesFile`` re-supplies the user's global ignore layer that the
+    HOME-stripped env would otherwise drop, so the count matches ``git add``'s default
+    (#330). Output is NUL-delimited (``-z``) so a filename containing a newline counts as
+    one entry, keeping the coverage arithmetic (``detected == included + omitted``) exact
+    for any valid git path.
 
     ``paths`` is the caller's raw pathspec; it is validated via :func:`normalize_paths`,
     so an empty/`-`-leading/absolute/`..` entry raises :class:`InvalidPathsError` just
     as it would for a gathered diff.
     """
     norm_paths = normalize_paths(paths)
+    excludes = _global_excludes_flags(cwd, timeout)
     args = ["ls-files", "--others", "--exclude-standard", "-z"]
     if norm_paths:
         args = [*args, "--", *norm_paths]
@@ -537,10 +709,10 @@ def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
     # stays O(chunk), consistent with the rest of this module (see _stream_redacted_diff).
     # ls-files emits negligible stderr, so a post-EOF read avoids a concurrent drain
     # thread; the timeout timer is the backstop against any pathological block. (#322 F1)
-    env = {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
+    env = _base_git_env()
     try:
         proc = subprocess.Popen(
-            ["git", *_GIT_HARDENING_FLAGS, *args],
+            ["git", *_GIT_HARDENING_FLAGS, *excludes, *args],
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
