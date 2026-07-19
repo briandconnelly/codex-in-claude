@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import os
 import re
 import shutil
 import subprocess
@@ -201,8 +200,9 @@ def _hardening_flags(repo: str, timeout: int) -> list[str]:
 
 def _base_env() -> dict[str, str]:
     """Locale/PATH pinning shared by every git subprocess (deterministic output, no
-    inherited locale surprises)."""
-    return {"LC_ALL": "C", "LANG": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    inherited locale surprises). Delegates to :func:`gitdiff._base_git_env` so the
+    stripped-env construction lives in exactly one place across `_core` (#330)."""
+    return gitdiff._base_git_env()
 
 
 def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProcess:

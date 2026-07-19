@@ -5,6 +5,37 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Untracked-file handling now honors the user's global gitignore** (#330). The git
+  subprocesses that enumerate untracked files run with a HOME-stripped environment
+  (deliberate hardening — no user hooks/fsmonitor/attributes), which also prevented git
+  from resolving the user's **global** excludes (`core.excludesFile` from global config,
+  or the default `~/.config/git/ignore` / `$XDG_CONFIG_HOME/git/ignore`). As a result a
+  globally-ignored file (e.g. a `~/.config/git/ignore`-listed `.claude/settings.local.json`)
+  was misclassified as untracked: it inflated the `untracked_files_detected` /
+  delegate-plan `untracked` counts, and under `untracked="include"` its **contents were
+  gathered and sent to OpenAI**, contrary to the documented "non-ignored untracked files"
+  contract. The effective `core.excludesFile` is now resolved from the server's own
+  environment (mirroring git's own precedence, including a repo-local override) and passed
+  explicitly as `-c core.excludesFile=<path>` to only the untracked-enumeration calls, so
+  the global ignore layer is honored without restoring `HOME` (no other global config
+  becomes readable). The resolver drops inherited `GIT_DIR`-family variables so a stray
+  `GIT_DIR` cannot anchor resolution to another repo, and `GIT_CONFIG` (which only
+  `git config` honors) so it mirrors what `ls-files` actually reads. Repo-local
+  (`.gitignore`, `.git/info/exclude`) and local/system `core.excludesFile` layers with
+  ordinary absolute or relative paths were already honored; a `~`-containing local/system
+  `core.excludesFile` previously failed to expand under the HOME-stripped child (a fatal
+  error) and now resolves too, since the value is `~`-expanded in the server. Behavior-only
+  fix restoring the already-documented meaning — no change to the agent-visible schema or
+  descriptions, so the result `fingerprint` is unchanged.
+
+### Changed
+
+- Internal: the stripped git-subprocess environment is now built by a single
+  `gitdiff._base_git_env()` helper shared across `_core` (previously duplicated at five
+  call sites), so the hardening posture cannot drift between them.
+
 ## [0.13.0] - 2026-07-15
 
 A review-honesty and rate-limit-recovery release. `codex_review_changes` no longer reports an

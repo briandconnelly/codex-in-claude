@@ -266,8 +266,10 @@ def test_tracked_files_and_bytes_maps_failure_to_worktree_error(repo, monkeypatc
 def test_plan_tracked_and_uncommitted_counts_use_streamed_runner(repo, monkeypatch):
     # plan()'s tracked and uncommitted counts must route through the bounded streaming
     # runner (gitproc.run_lines), so a pathological listing is counted in bounded memory
-    # (#326). Proven by spying: a clean plan() calls run_lines for BOTH counts. (The
-    # untracked count uses gitdiff.count_untracked, which has its own bounded reader.)
+    # (#326). Proven by spying: a clean plan() calls run_lines for BOTH counts. The untracked
+    # count uses gitdiff.count_untracked, whose own listing has a separate bounded reader but
+    # which now also routes its global-excludes resolution (`git config`) through run_lines
+    # (#330) — so a clean plan() makes exactly three run_lines calls.
     (repo / "a.py").write_text("x = 2\n")  # one uncommitted tracked change
     calls = []
     real = gitproc.run_lines
@@ -278,10 +280,11 @@ def test_plan_tracked_and_uncommitted_counts_use_streamed_runner(repo, monkeypat
 
     monkeypatch.setattr(gitproc, "run_lines", spy)
     worktree.plan(str(repo), timeout=30)
-    # Exactly two streamed counts: ls-tree (tracked) and diff --numstat (uncommitted).
-    assert len(calls) == 2
+    # ls-tree (tracked), diff --numstat (uncommitted), and the excludes resolver (config).
+    assert len(calls) == 3
     assert any("ls-tree" in c for c in calls)
     assert any("--numstat" in c for c in calls)
+    assert any("config" in c and "core.excludesFile" in c for c in calls)
 
 
 def test_plan_streams_large_tracked_and_uncommitted_listing_exactly(repo):
@@ -344,6 +347,25 @@ def test_plan_counts_newline_named_untracked_file_once(repo):
     # true red-green guard in test_gitdiff.py::test_count_untracked_newline_in_filename_counts_once
     # — that path emits raw newlines and genuinely needs NUL-counting; this one does not.)
     (repo / "we\nird.txt").write_bytes(b"w = 1\n")
+    plan = worktree.plan(str(repo), timeout=30)
+    assert plan.untracked_files == 1
+
+
+def test_plan_untracked_count_respects_global_core_excludesfile(
+    repo, tmp_path_factory, monkeypatch
+):
+    # plan()'s untracked count flows through gitdiff.count_untracked, so it inherits the
+    # global-excludes fix (#330): a globally-ignored file must not inflate the delegate
+    # dry-run's baseline untracked count. RED before the fix. The global config lives
+    # OUTSIDE the repo (which aliases tmp_path) so it is not itself an untracked entry.
+    outside = tmp_path_factory.mktemp("global-git-cfg")
+    ignore = outside / "global_ignore"
+    ignore.write_text("secret.txt\n")
+    config = outside / "globalconfig"
+    config.write_text(f"[core]\n\texcludesFile = {ignore}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    (repo / "secret.txt").write_text("shh\n")  # globally ignored -> not counted
+    (repo / "keep.txt").write_text("keep\n")  # untracked -> counted (positive control)
     plan = worktree.plan(str(repo), timeout=30)
     assert plan.untracked_files == 1
 

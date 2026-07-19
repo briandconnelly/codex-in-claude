@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from codex_in_claude import preflight
+from codex_in_claude._core import gitdiff
 from codex_in_claude._core.runtime import CommandRun
 
 # Git environment variables that redirect where git reads/writes its object store,
@@ -45,12 +46,39 @@ def run_git(cwd, *args, check: bool = True) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_git_env(monkeypatch):
+def _isolate_git_env(monkeypatch, tmp_path_factory):
     """Blanket protection: strip inherited git-location vars from every test's
     environment so even ad-hoc ``subprocess.run(["git", ...])`` calls stay anchored to
-    their ``cwd``. Complements the per-call scrubbing in `run_git`. See #229."""
+    their ``cwd``. Complements the per-call scrubbing in `run_git`. See #229.
+
+    Also fully isolate the git-excludes layers the #330 resolver consults, so the suite
+    never depends on the developer's or CI host's real config:
+
+    * GLOBAL: point ``GIT_CONFIG_GLOBAL`` at an empty file and ``XDG_CONFIG_HOME`` at an
+      empty dir (a non-empty ``XDG_CONFIG_HOME`` also suppresses the ``$HOME`` default
+      excludes location in git's own resolution).
+    * SYSTEM: production reads git's compiled-in system config (the resolver and the
+      enumeration child do so identically — that parity is the point of #330). Tests must
+      not depend on the host's ``/etc/gitconfig``, so patch ``gitdiff._base_git_env`` — the
+      env BOTH share — to add ``GIT_CONFIG_NOSYSTEM=1``. That keeps resolver/child parity
+      (both skip system config) while making the suite host-independent. Production
+      ``_base_git_env`` is unchanged.
+
+    Tests exercising the fix opt back in by overriding these explicitly."""
     for var in GIT_ISOLATION_VARS:
         monkeypatch.delenv(var, raising=False)
+    empty_xdg = tmp_path_factory.mktemp("git-excludes-isolation")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(empty_xdg))
+
+    _real_base_git_env = gitdiff._base_git_env
+
+    def _base_git_env_no_system() -> dict[str, str]:
+        env = _real_base_git_env()
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        return env
+
+    monkeypatch.setattr(gitdiff, "_base_git_env", _base_git_env_no_system)
 
 
 @pytest.fixture(autouse=True)
