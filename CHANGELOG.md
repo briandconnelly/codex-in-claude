@@ -32,6 +32,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The sync active tools now steer long-running work to their `_async` variants at selection
+  time** (#338). The `codex_consult` / `codex_review_changes` / `codex_delegate` descriptions,
+  their `_async` counterparts' descriptions, all six `codex_capabilities` `use_when` entries, and
+  the server `instructions` block now name the shapes that can exceed the synchronous deadline
+  (built-in default 180s) — a high-reasoning-effort or broad repo-grounded consult, a multi-file or
+  whole-branch review, or a substantial implementation task — and recommend the matching `_async`
+  tool for them, because a sync call whose deadline expires is terminated with its partial paid work
+  unrecoverable. Previously that steer lived only in the post-timeout repair, i.e. after the paid
+  run had already been lost. Wording-only guidance change that narrows no accepted input and weakens
+  no guarantee, so it bumps the result `fingerprint` (schema-47) but is **not** breaking. The
+  `collaborating-with-codex` skill routing (`SKILL.md`, `active-workflows.md`, `background-jobs.md`)
+  and the `/codex:consult|review|delegate` command prompts carry the same steer (not
+  fingerprint-covered). Two related follow-ups are tracked separately: raising the default sync
+  `timeout_seconds`, and a `codex_dry_run` size advisory.
 - Internal: the stripped git-subprocess environment is now built by a single
   `gitdiff._base_git_env()` helper shared across `_core` (previously duplicated at five
   call sites), so the hardening posture cannot drift between them.

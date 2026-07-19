@@ -135,6 +135,12 @@ CAPABILITY_SUMMARY = (
     "already live in git. "
     "Use codex_delegate to implement a task in a throwaway git worktree and get back a "
     "reviewable diff. "
+    "Prefer the matching _async variant (codex_consult_async / codex_review_changes_async / "
+    "codex_delegate_async) for work that can exceed the synchronous deadline — a high-"
+    "reasoning-effort or broad repo-grounded consult, a multi-file or whole-branch review, or "
+    "a substantial implementation task — because a sync call whose deadline expires is "
+    "terminated and its partial work is lost; keep the sync tool for focused work that "
+    "finishes well inside the deadline. "
     "Use codex_transfer (free) to hand off the current Claude Code session transcript to a "
     "resumable Codex thread when the user wants to continue this conversation inside Codex. "
     # Preflight and failure-handling rules.
@@ -1580,7 +1586,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 cost="active",
                 use_when="You want a read-only second opinion or answer from Codex "
                 "(a different model) on a question, design, or an ad-hoc diff you paste "
-                "inline; use codex_review_changes when the diff comes from git.",
+                "inline; use codex_review_changes when the diff comes from git. Prefer "
+                "codex_consult_async for a high-reasoning-effort or broad repo-grounded "
+                "consult that can exceed the synchronous deadline.",
                 required_params=["question"],
                 key_optional_params=[
                     "workspace_root",
@@ -1604,8 +1612,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 name="codex_consult_async",
                 cost="active",
                 stability="experimental",
-                use_when="You want a read-only second opinion from Codex, but the consult "
-                "may run long, so you want a job_id immediately instead of blocking; "
+                use_when="You want a read-only second opinion from Codex for a "
+                "high-reasoning-effort or broad repo-grounded consult that can exceed the "
+                "synchronous deadline, so you want a job_id immediately instead of blocking; "
                 "async counterpart to codex_consult.",
                 required_params=["question"],
                 key_optional_params=[
@@ -1627,7 +1636,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 name="codex_review_changes",
                 cost="active",
                 use_when="You want Codex to review your git changes (working_tree, "
-                "branch, or commit) and return structured findings.",
+                "branch, or commit) and return structured findings. Prefer "
+                "codex_review_changes_async for a multi-file or whole-branch review that can "
+                "exceed the synchronous deadline.",
                 key_optional_params=[
                     "scope",
                     "base",
@@ -1654,8 +1665,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 cost="active",
                 stability="experimental",
                 use_when="You want Codex to review your git changes (working_tree, branch, "
-                "or commit), but the review may run long, so you want a job_id immediately "
-                "instead of blocking; async counterpart to codex_review_changes.",
+                "or commit) for a multi-file or whole-branch review that can exceed the "
+                "synchronous deadline, so you want a job_id immediately instead of blocking; "
+                "async counterpart to codex_review_changes.",
                 key_optional_params=[
                     "scope",
                     "base",
@@ -1679,7 +1691,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 cost="active",
                 use_when="You want Codex to implement a coding task and return a "
                 "reviewable diff WITHOUT touching your working tree (it works in a "
-                "throwaway git worktree).",
+                "throwaway git worktree). Prefer codex_delegate_async for a substantial or "
+                "multi-file task that can exceed the synchronous deadline.",
                 required_params=["task"],
                 key_optional_params=[
                     "workspace_root",
@@ -1704,9 +1717,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 cost="active",
                 stability="experimental",
                 use_when="You want Codex to implement a coding task as a reviewable diff "
-                "(NOT applied to your working tree), but the task is long-running, so you "
-                "want a job_id immediately instead of blocking; async counterpart to "
-                "codex_delegate.",
+                "(NOT applied to your working tree) for a substantial or multi-file task that "
+                "can exceed the synchronous deadline, so you want a job_id immediately instead "
+                "of blocking; async counterpart to codex_delegate.",
                 required_params=["task"],
                 key_optional_params=[
                     "workspace_root",
@@ -2414,11 +2427,16 @@ async def codex_consult(
     redaction is best-effort and does not cover them (it covers gathered diffs and
     Codex's returned output, not what you type or what Codex reads from files).
 
-    Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
-    `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
-    it; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`
-    if the connection drops, and `codex_consult_async` runs the same work fire-and-forget
-    (poll `codex_job_status`)."""
+    Progress & recovery: blocks until Codex finishes, up to the resolved deadline
+    (`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in
+    default 180s). If that deadline expires the run is terminated and its partial output is not
+    recoverable or resumable, so for a high-`reasoning_effort` or broad repo-grounded consult
+    that can exceed it, prefer `codex_consult_async` (a background job whose deadline is
+    separately configured, built-in default 1800s; poll `codex_job_status`) and keep this sync
+    tool for focused questions that finish well inside the deadline. Coarse
+    `notifications/progress` streams while it blocks when your client requests it; the detached
+    run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result` if the connection
+    drops."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2505,11 +2523,15 @@ async def codex_review_changes(
     rely on it to protect live credentials; keep them out of the reviewed tree and your
     supplied inputs, or do not request a review of that tree.
 
-    Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
-    `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
-    it; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`
-    if the connection drops, and `codex_review_changes_async` runs the same work
-    fire-and-forget (poll `codex_job_status`)."""
+    Progress & recovery: blocks until Codex finishes, up to the resolved deadline
+    (`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in
+    default 180s). If that deadline expires the run is terminated and its partial output is not
+    recoverable or resumable, so for a multi-file or whole-branch review that can exceed it,
+    prefer `codex_review_changes_async` (a background job whose deadline is separately
+    configured, built-in default 1800s; poll `codex_job_status`) and keep this sync tool for
+    small, localized diffs. Coarse `notifications/progress` streams while it blocks when your
+    client requests it; the detached run (`meta.job_id`) is recoverable via
+    `codex_job_list`→`codex_job_result` if the connection drops."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2581,11 +2603,15 @@ async def codex_delegate(
     this). Your `task` is sent raw — secret redaction is best-effort and does not cover
     it or files Codex reads itself.
 
-    Progress & recovery: blocks until Codex finishes (timeout clamped 10-600s via
-    `timeout_seconds`), streaming coarse `notifications/progress` when your client requests
-    it; the detached run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result`
-    if the connection drops, and `codex_delegate_async` runs the same work fire-and-forget
-    (poll `codex_job_status`)."""
+    Progress & recovery: blocks until Codex finishes, up to the resolved deadline
+    (`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in
+    default 180s). If that deadline expires the run is terminated and its partial output is not
+    recoverable or resumable, so for a substantial or multi-file implementation task that can
+    exceed it, prefer `codex_delegate_async` (a background job whose deadline is separately
+    configured, built-in default 1800s; poll `codex_job_status`) and keep this sync tool for
+    small, self-contained changes. Coarse `notifications/progress` streams while it blocks when
+    your client requests it; the detached run (`meta.job_id`) is recoverable via
+    `codex_job_list`→`codex_job_result` if the connection drops."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2635,7 +2661,10 @@ async def codex_delegate_async(
 
     Same propose-tier behavior as `codex_delegate` — Codex works in a throwaway git
     worktree and the result carries a **reviewable diff that is NOT applied** — but
-    it runs detached. Starting a job commits to spend (it runs to completion or its
+    it runs detached; prefer it for a substantial or multi-file implementation task that can
+    exceed the synchronous deadline (built-in default 180s), since a sync run whose deadline
+    expires loses its partial work (this job's own deadline is separately configured, built-in
+    default 1800s). Starting a job commits to spend (it runs to completion or its
     wall-clock deadline even if you never poll). Poll with `codex_job_status`, read
     with `codex_job_result`, delete after successful read with `codex_job_consume_result`,
     or stop with `codex_job_cancel`. Requires a git repo with at least one commit;
@@ -3195,7 +3224,10 @@ async def codex_consult_async(
     back immediately instead of blocking.
 
     Same read-only behavior as `codex_consult` (Codex never edits files), but it runs
-    detached — use it when the consult may run long. Starting a job commits to spend
+    detached — prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can
+    exceed the synchronous deadline (built-in default 180s), since a sync run whose deadline
+    expires loses its partial work; this job's own deadline is separately configured (built-in
+    default 1800s). Starting a job commits to spend
     (it runs to completion or its wall-clock deadline even if you never poll). Poll
     with `codex_job_status`, read the consult envelope with `codex_job_result`, delete
     it after successful read with `codex_job_consume_result`, or stop it with
@@ -3251,8 +3283,11 @@ async def codex_review_changes_async(
     """Review your git changes in the background; get a `job_id` back immediately.
 
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
-    redacted, and bounded, then reviewed read-only), but it runs detached — use it
-    when the review may run long. The diff is gathered inside the job, so a bad
+    redacted, and bounded, then reviewed read-only), but it runs detached — prefer it for a
+    multi-file or whole-branch review that can exceed the synchronous deadline (built-in
+    default 180s), since a sync run whose deadline expires loses its partial work; this job's
+    own deadline is separately configured (built-in default 1800s). The diff is gathered
+    inside the job, so a bad
     `base`/`commit` comes back as the same structured error with **zero spend** (a bad
     `scope` is an out-of-enum value rejected by MCP input validation before the job
     starts). Starting a job commits to spend. Poll with `codex_job_status`, read the

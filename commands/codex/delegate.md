@@ -11,6 +11,10 @@ Task: $ARGUMENTS
 Pass the absolute repository path as `workspace_root`. Codex implements the task in
 an isolated git worktree and returns a `diff` — it does NOT touch the working tree.
 
+For a substantial or multi-file task that can exceed the synchronous deadline
+(built-in default 180s), use `codex_delegate_async` instead and poll for the result —
+a sync call whose deadline expires loses the paid run.
+
 When the result returns:
 1. Show the proposed `diff` and Codex's `summary`.
 2. Review the diff for correctness yourself.

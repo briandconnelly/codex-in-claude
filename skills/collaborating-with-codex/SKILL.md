@@ -41,13 +41,18 @@ and verification skills instead of replacing them.
 | Stuck mid-debugging or choosing between viable approaches | `codex_consult` | [active workflows](references/active-workflows.md) |
 | Review changes already represented in git | `codex_review_changes` | [active workflows](references/active-workflows.md) |
 | Proposed implementation diff from an isolated worktree | `codex_delegate` | [active workflows](references/active-workflows.md) |
-| Long-running consult, review, or delegate | matching `_async` tool | [background jobs](references/background-jobs.md) |
+| A consult, review, or delegate that can exceed the synchronous deadline — high reasoning effort, broad repo-grounded work, a multi-file or whole-branch review, or a substantial implementation task | matching `_async` tool | [background jobs](references/background-jobs.md) |
 | Move the Claude session into a resumable Codex thread | `codex_transfer` | [session transfer](references/transfer.md) |
 | Claude and Codex attempt independently, then synthesize | independent two-member attempt | [independent attempt](references/independent-attempt.md) |
 | Claude drafts, Codex critiques, Claude revises | declared review–revise | [review–revise](references/review-revise.md) |
 | Optional parameters, idempotency, or a tool error | current tool | [options and errors](references/options-and-errors.md) |
 | MCP server unavailable | limited read-only CLI fallback | [server-down fallback](references/server-down-fallback.md) |
 | None of these, or a Codex call would not change the decision | no call — proceed without Codex | — |
+
+When a request matches both a sync row and the async row, prefer the matching `_async` tool: a
+sync call whose deadline expires (built-in default 180s) is terminated and its partial paid work is
+lost, whereas the async job runs to a separately configured deadline (built-in default 1800s). The
+sync tool is for focused work that finishes well inside the deadline.
 
 Use `codex_dry_run` or `codex_delegate_dry_run` to preview review or delegate scope. Use
 `codex_capabilities`, `codex_status`, and `codex_models` for current schemas, defaults, readiness,
