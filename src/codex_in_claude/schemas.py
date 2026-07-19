@@ -37,6 +37,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     "result_meta_schema",  # codex://result-meta content
     "capabilities_result_schema",  # codex://capabilities-result content (#242)
     "status_result_schema",  # codex://status-result content (#242)
+    "parameter_contracts",  # codex://params content (#333) — compressed param summaries + full text
     "capabilities_payload",  # the codex_capabilities result body
     "capability_guarantees",  # the semantic promises within it (annotations/tiers/error contracts)
 )
@@ -48,7 +49,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-47"
+FINGERPRINT = "codex-in-claude/0.1/schema-48"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt

@@ -430,6 +430,109 @@ def test_egress_disclosed_in_active_tool_docstrings(name):
     assert "OpenAI" in doc, name
 
 
+# --- egress/security guarantee freeze matrix (issue #333) --------------------
+# Compressing the tools/list catalog (#333) shrinks these docstrings. A dropped
+# egress/security guarantee is a BREAKING change (AGENTS.md § Versioning), yet the
+# `"OpenAI" in doc` check above is far too coarse to catch it: it would still pass
+# after the raw-input, files-read, auto-loaded-AGENTS.md, isolation, or best-effort-
+# redaction guarantees were silently deleted. This matrix locks each guarantee a
+# tool's description states TODAY so compression can only make it shorter, never
+# softer.
+#
+# Each matcher is a semantic probe over the lowercased docstring: it survives a
+# reword but fails on an omission. The required set per tool is the empirically
+# captured current baseline, NOT an idealized maximum — the `_async` twins
+# deliberately carry a compressed subset (they reference their sync sibling), so
+# requiring the full set on them would be a spurious failure. Adjust a tool's row
+# only when deliberately, reviewably changing what that tool guarantees inline.
+_GUARANTEE_MATCHERS = {
+    # Caller content is sent to OpenAI.
+    "openai": lambda d: "openai" in d,
+    # The caller's supplied input is sent raw / unredacted.
+    "raw_input": lambda d: "unredacted" in d or "raw" in d,
+    # Codex may read and send other files in the resolved workspace/worktree.
+    "files_read": lambda d: "read" in d and ("file" in d or "tracked" in d or "repo" in d),
+    # The workspace AGENTS.md auto-loads (its content can be sent).
+    "autoload_agents": lambda d: "agents.md" in d,
+    # The workspace .agents/skills/ skills auto-load.
+    "autoload_skills": lambda d: ".agents/skills" in d,
+    # The isolation flags do NOT suppress that auto-loaded context.
+    "isolation_suppress": lambda d: "isolation" in d and "suppress" in d,
+    # Secret redaction is best-effort, not a guarantee.
+    "redaction_best_effort": lambda d: "redact" in d and "best-effort" in d,
+    # delegate: workspace-write blocks network egress for commands Codex RUNS *in the
+    # sandbox* — the sandbox-scope qualifier is load-bearing (without it the claim reads
+    # as "nothing leaves the machine", which openai/raw_input contradict), so require it.
+    "no_network": lambda d: "network" in d and "block" in d and "sandbox" in d,
+    # review: the gathered diff is secret-redacted before it is sent.
+    "diff_redacted": lambda d: "redact" in d and "diff" in d,
+}
+_COMMON_EGRESS = {"openai", "raw_input", "files_read", "autoload_agents", "autoload_skills"}
+_REQUIRED_GUARANTEES = {
+    "codex_consult": _COMMON_EGRESS | {"isolation_suppress", "redaction_best_effort"},
+    "codex_consult_async": _COMMON_EGRESS,
+    "codex_review_changes": _COMMON_EGRESS
+    | {"isolation_suppress", "redaction_best_effort", "diff_redacted"},
+    "codex_review_changes_async": _COMMON_EGRESS | {"redaction_best_effort", "diff_redacted"},
+    "codex_delegate": _COMMON_EGRESS
+    | {"isolation_suppress", "redaction_best_effort", "no_network"},
+    "codex_delegate_async": _COMMON_EGRESS | {"redaction_best_effort", "no_network"},
+}
+
+
+def test_guarantee_matrix_covers_every_active_tool():
+    """The freeze matrix tracks the active-tool set (mirrors _ACTIVE_EGRESS_TOOLS).
+
+    A new active tool must get an explicit guarantee row rather than silently
+    escaping the freeze."""
+    assert set(_REQUIRED_GUARANTEES) == set(_ACTIVE_EGRESS_TOOLS)
+
+
+def test_guarantee_matchers_are_discriminating():
+    """Confirm the instrument can register a negative: no matcher is vacuously true.
+
+    A matcher that always returned True would make the freeze below pass even after
+    the guarantee was deleted (a broken instrument and a clean result look alike)."""
+    for key, matcher in _GUARANTEE_MATCHERS.items():
+        assert matcher("") is False, key
+
+
+@pytest.mark.parametrize(
+    ("name", "guarantee"),
+    [(name, g) for name, gs in _REQUIRED_GUARANTEES.items() for g in sorted(gs)],
+)
+def test_active_tool_docstring_preserves_guarantee(name, guarantee):
+    """Every guarantee a tool's description states today must survive compression (#333)."""
+    doc = (getattr(server, name).__doc__ or "").lower()
+    assert _GUARANTEE_MATCHERS[guarantee](doc), f"{name} dropped egress guarantee: {guarantee}"
+
+
+def _param_description(alias_name):
+    return getattr(server, alias_name).__metadata__[0].description.lower()
+
+
+def test_extra_context_param_preserves_guarantees():
+    """extra_context's description carries two guarantees compression must keep (#333):
+    it is treated as UNTRUSTED data (best-effort injection mitigation, not a guarantee),
+    and secret redaction does NOT cover this field."""
+    d = _param_description("ExtraContextParam")
+    assert "untrusted" in d, "extra_context dropped the untrusted-data framing"
+    # Polarity matters: 'redaction does not cover this field' is the guarantee; a matcher
+    # that accepted a bare 'cover' would also pass the inverted 'redaction covers this field'.
+    assert "redact" in d and ("does not cover" in d or "not cover" in d), (
+        "extra_context dropped the redaction-doesn't-cover-it guarantee"
+    )
+
+
+def test_untracked_param_preserves_egress_guarantee():
+    """untracked='include' opt-in egress must stay disclosed inline (#333): choosing it
+    SENDS untracked-file contents to OpenAI, and that is not derivable from the enum name."""
+    d = _param_description("UntrackedParam")
+    assert "openai" in d and ("egress" in d or "send" in d), (
+        "untracked dropped the 'include sends contents to OpenAI' egress disclosure"
+    )
+
+
 @pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
 def test_egress_disclosed_in_capabilities(name):
     """codex_capabilities alone discloses OpenAI egress per active tool (issue #114).
@@ -1934,7 +2037,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-47"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-48"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4436,6 +4539,19 @@ def test_capabilities_include_schemas_single_and_deduped():
     assert list(caps["schemas"]) == ["result-meta"]
 
 
+def test_capabilities_include_parameter_contracts_fold_in():
+    """A resource-blind client can reach the full codex://params contracts from tools/list
+    alone via the parameter-contracts fold-in (#333)."""
+    from codex_in_claude.param_contracts import PARAMETER_CONTRACTS
+    from codex_in_claude.server import codex_capabilities
+
+    caps = codex_capabilities(include_schemas=["parameter-contracts"])
+    embedded = caps["schemas"]["parameter-contracts"]
+    # The embedded document is the full contract body, including the moved-out detail.
+    assert set(embedded["params"]) == set(PARAMETER_CONTRACTS)
+    assert "idempotency_in_progress" in embedded["params"]["idempotency_key"]["full"]
+
+
 def test_capabilities_result_resource_returns_full_schema():
     from codex_in_claude.server import capabilities_result_resource
 
@@ -4468,7 +4584,7 @@ def test_capabilities_include_schemas_covers_all_four_tokens():
     assert "RateLimit" in caps["schemas"]["status-result"]["$defs"]
 
 
-async def test_include_schemas_input_enum_lists_all_four_tokens():
+async def test_include_schemas_input_enum_lists_all_tokens():
     """The MCP-advertised input enum — not just the runtime dict — must carry the new
     tokens; a direct Python call bypasses FastMCP/Pydantic arg validation, so this is
     what catches a forgotten IncludeSchemasParam Literal widening."""
@@ -4479,7 +4595,13 @@ async def test_include_schemas_input_enum_lists_all_four_tokens():
     branches = prop.get("anyOf", [prop])
     items_schema = next(branch["items"] for branch in branches if "items" in branch)
     enum = items_schema["enum"]
-    assert set(enum) == {"error-envelope", "result-meta", "capabilities-result", "status-result"}
+    assert set(enum) == {
+        "error-envelope",
+        "result-meta",
+        "capabilities-result",
+        "status-result",
+        "parameter-contracts",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -5321,17 +5443,25 @@ async def test_unkeyed_await_timeout_cancels_job(monkeypatch, clean_env, tmp_pat
 
 
 async def test_idempotency_key_description_scopes_to_concrete_tool():
-    """The idempotency_key description states per-concrete-tool scoping, drops the
-    misleading 'TTL window' single-horizon phrasing, and describes the true fail-closed
-    horizon (#201)."""
+    """The idempotency_key contract preserves #201 across the #333 inline/resource split.
+
+    The inline summary (what ships on the wire) keeps per-tool scoping and the sync/async
+    separation, and must NOT reintroduce the misleading 'TTL window' single-horizon phrase;
+    the true fail-closed horizon (max runtime + grace + TTL) and the replay marker moved to
+    the codex://params full contract, where they remain discoverable."""
+    from codex_in_claude.param_contracts import PARAMETER_CONTRACTS
+
     tools = {t.name: t for t in await server.mcp.list_tools()}
-    desc = tools["codex_consult"].parameters["properties"]["idempotency_key"]["description"]
-    assert "concrete tool" in desc
-    assert "different tools" in desc.lower()  # sync and async never share a key's run
-    assert "TTL window" not in desc  # the misleading single-horizon phrase is gone
-    # the real fail-closed horizon (max runtime + grace + TTL) is described
-    assert "termination grace" in desc
-    assert "idempotency_replayed=true" in desc
+    inline = tools["codex_consult"].parameters["properties"]["idempotency_key"]["description"]
+    assert inline == PARAMETER_CONTRACTS["idempotency_key"].summary  # wire == registry summary
+    # First-call facts stay inline.
+    assert "tool" in inline.lower() and "workspace" in inline.lower()  # per-tool+workspace scope
+    assert "separate tools" in inline.lower()  # sync and async never share a key
+    assert "TTL window" not in inline  # the misleading single-horizon phrase stays gone
+    # The full fail-closed horizon and replay marker moved to the resource, not deleted.
+    full = PARAMETER_CONTRACTS["idempotency_key"].full
+    assert "termination grace" in full
+    assert "idempotency_replayed=true" in full
 
 
 async def test_consult_sync_conflict_maps_to_error(monkeypatch, clean_env, tmp_path):
@@ -5467,7 +5597,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-47")
+    assert result["fingerprint"].endswith("schema-48")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

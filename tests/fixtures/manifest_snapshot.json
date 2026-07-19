@@ -26,6 +26,7 @@
       "result_meta_schema",
       "capabilities_result_schema",
       "status_result_schema",
+      "parameter_contracts",
       "capabilities_payload",
       "capability_guarantees"
     ],
@@ -857,7 +858,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-47",
+            "default": "codex-in-claude/0.1/schema-48",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1379,7 +1380,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-47",
+                "default": "codex-in-claude/0.1/schema-48",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2000,6 +2001,25 @@
       "name": "codex-in-claude"
     }
   },
+  "params": [
+    {
+      "mimeType": "application/json",
+      "text": {
+        "description": "Full semantics for parameters whose tools/list description is a compressed summary (issue #333). Each entry's `summary` is what ships inline on the wire; `full` is the authoritative contract.",
+        "params": {
+          "idempotency_key": {
+            "full": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response.",
+            "summary": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+          },
+          "reasoning_effort": {
+            "full": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments.",
+            "summary": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
+          }
+        }
+      },
+      "uri": "codex://params"
+    }
+  ],
   "prompts": [],
   "resource_templates": [],
   "resources": [
@@ -2023,6 +2043,13 @@
       "name": "codex-models",
       "title": "Codex model catalog",
       "uri": "codex://models"
+    },
+    {
+      "description": "Full semantics for parameters whose tools/list description is a compressed summary\n(#333). MCP inlines each parameter description into every tool's inputSchema, so the\nlengthy lifecycle/validation prose is shipped once here instead of repeated on the\nwire; the inline summary keeps the first-call selection, safety, and spend-critical\nfacts and points here for the complete lifecycle and recovery semantics.",
+      "mimeType": "application/json",
+      "name": "codex-params",
+      "title": "Codex tool parameter contracts",
+      "uri": "codex://params"
     },
     {
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
@@ -2389,7 +2416,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-47",
+            "default": "codex-in-claude/0.1/schema-48",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3035,7 +3062,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-47",
+            "default": "codex-in-claude/0.1/schema-48",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3143,6 +3170,7 @@
                   "enum": [
                     "capabilities-result",
                     "error-envelope",
+                    "parameter-contracts",
                     "result-meta",
                     "status-result"
                   ],
@@ -3155,7 +3183,7 @@
               }
             ],
             "default": null,
-            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result' schema in the response (the default payload omits them and points at the codex:// resources instead)."
+            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema), in the response — the default payload omits them and points at the codex:// resources instead."
           }
         },
         "type": "object"
@@ -3330,7 +3358,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) for a read-only second opinion or answer.\n\nRuns `codex exec` in a read-only sandbox — Codex never edits files. This is a\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on executing your checks to confirm its claims. For a repo-grounded\nquestion, pass `workspace_root` (absolute) so Codex reasons about the right repo;\nit is optional for pure Q&A that needs no codebase. Returns a result envelope.\nTreat findings as unvalidated claims; verify them by running the checks yourself.\n\nData egress: this sends your `question` and `extra_context` to OpenAI via the\ncodex CLI. Codex always runs with a resolved working directory (`workspace_root`,\nyour MCP roots, or the server's cwd as a fallback), so it may read files there and\nsend their content too. Codex also auto-loads context from that workspace — the\nproject's `AGENTS.md` and any skills under `.agents/skills/` — so their content can\nbe sent even if your prompt never mentions them; the plugin's isolation flags do\nnot suppress this project-level context. Your inputs are sent raw — secret\nredaction is best-effort and does not cover them (it covers gathered diffs and\nCodex's returned output, not what you type or what Codex reads from files).\n\nProgress & recovery: blocks until Codex finishes, up to the resolved deadline\n(`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in\ndefault 180s). If that deadline expires the run is terminated and its partial output is not\nrecoverable or resumable, so for a high-`reasoning_effort` or broad repo-grounded consult\nthat can exceed it, prefer `codex_consult_async` (a background job whose deadline is\nseparately configured, built-in default 1800s; poll `codex_job_status`) and keep this sync\ntool for focused questions that finish well inside the deadline. Coarse\n`notifications/progress` streams while it blocks when your client requests it; the detached\nrun (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result` if the connection\ndrops.",
+      "description": "Ask Codex (a different model) for a read-only second opinion or answer.\n\nRuns `codex exec` in a read-only sandbox — Codex never edits files. A STATIC\nreview, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run needs, so Codex can't run your checks to confirm its claims —\ntreat findings as unvalidated claims you verify yourself. Pass `workspace_root`\n(absolute) for a repo-grounded question; omit it for pure Q&A. Returns a result\nenvelope.\n\nData egress: this sends your `question` and `extra_context` to OpenAI via the\ncodex CLI. Codex always runs with a resolved working directory (`workspace_root`,\nyour MCP roots, or the server's cwd as a fallback), so it may read files there and\nsend their content too. Codex also auto-loads context from that workspace — the\nproject's `AGENTS.md` and any skills under `.agents/skills/` — so their content can\nbe sent even if your prompt never mentions them; the plugin's isolation flags do\nnot suppress this project-level context. Your inputs are sent raw — secret\nredaction is best-effort and does not cover them (it covers gathered diffs and\nCodex's returned output, not what you type or what Codex reads from files).\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nhigh-`reasoning_effort` or broad repo-grounded consult that may exceed it, prefer\n`codex_consult_async` (a background job, built-in default 1800s deadline; poll\n`codex_job_status`). Coarse `notifications/progress` streams while it blocks when your client\nrequests it; the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_result` if the connection drops.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -3368,7 +3396,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -3385,7 +3413,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -3415,7 +3443,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           },
           "timeout_seconds": {
             "anyOf": [
@@ -3439,7 +3467,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -3637,7 +3665,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex for a read-only second opinion in the background; get a `job_id`\nback immediately instead of blocking.\n\nSame read-only behavior as `codex_consult` (Codex never edits files), but it runs\ndetached — prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can\nexceed the synchronous deadline (built-in default 180s), since a sync run whose deadline\nexpires loses its partial work; this job's own deadline is separately configured (built-in\ndefault 1800s). Starting a job commits to spend\n(it runs to completion or its wall-clock deadline even if you never poll). Poll\nwith `codex_job_status`, read the consult envelope with `codex_job_result`, delete\nit after successful read with `codex_job_consume_result`, or stop it with\n`codex_job_cancel`.\n\nData egress: same as `codex_consult` — sends your `question` and `extra_context`\n(raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its\nresolved working directory (`workspace_root`, your MCP roots, or the server cwd),\nincluding the auto-loaded `AGENTS.md`/`.agents/skills/` workspace context.",
+      "description": "Ask Codex for a read-only second opinion in the background; get a `job_id`\nback immediately instead of blocking.\n\nSame read-only behavior as `codex_consult` (Codex never edits files), but detached —\nprefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the\nsynchronous deadline (built-in default 180s), since a sync run whose deadline expires loses\nits partial work; this job's own deadline is separately configured (built-in default 1800s).\nStarting a job commits to spend (it runs to completion or its wall-clock deadline even if\nyou never poll). Poll `codex_job_status`; read/consume the consult envelope with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.\n\nData egress: same as `codex_consult` — sends your `question` and `extra_context`\n(raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its\nresolved working directory (`workspace_root`, your MCP roots, or the server cwd),\nincluding the auto-loaded `AGENTS.md`/`.agents/skills/` workspace context.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -3666,7 +3694,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -3683,7 +3711,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -3713,7 +3741,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           },
           "workspace_root": {
             "anyOf": [
@@ -3725,7 +3753,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -3849,7 +3877,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex (a different model) in an isolated git\nworktree, and get back a **reviewable diff that is NOT applied** to your tree.\n\nCodex edits files with `workspace-write`, but only inside a throwaway worktree\nseeded from your current tracked state. The returned `diff` is Codex's changes;\nreview it, then apply it yourself if you want it. Requires a git repo with at\nleast one commit. Pass `workspace_root` (absolute).\n\nNO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the\nsandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`\nanything, `curl`, publish, or install dependencies (those fail inside the sandbox\nwith a DNS/host-resolution error). Ask only for local code changes; do any network\nstep yourself afterward. This does NOT mean nothing leaves the machine: the Codex\nmodel call still sends your `task` to OpenAI and lets Codex read tracked files in\nthe worktree and send their content. The tracked `AGENTS.md` and `.agents/skills/`\nskills seeded into the worktree auto-load there too — their content can be sent even\nif your `task` never mentions them (the plugin's isolation flags do not suppress\nthis). Your `task` is sent raw — secret redaction is best-effort and does not cover\nit or files Codex reads itself.\n\nProgress & recovery: blocks until Codex finishes, up to the resolved deadline\n(`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in\ndefault 180s). If that deadline expires the run is terminated and its partial output is not\nrecoverable or resumable, so for a substantial or multi-file implementation task that can\nexceed it, prefer `codex_delegate_async` (a background job whose deadline is separately\nconfigured, built-in default 1800s; poll `codex_job_status`) and keep this sync tool for\nsmall, self-contained changes. Coarse `notifications/progress` streams while it blocks when\nyour client requests it; the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_result` if the connection drops.",
+      "description": "Delegate a coding task to Codex (a different model) in an isolated git\nworktree, and get back a **reviewable diff that is NOT applied** to your tree.\n\nCodex edits files with `workspace-write`, but only inside a throwaway worktree\nseeded from your current tracked state. The returned `diff` is Codex's changes;\nreview it, then apply it yourself if you want it. Requires a git repo with at\nleast one commit. Pass `workspace_root` (absolute).\n\nNO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the\nsandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`\nanything, `curl`, publish, or install dependencies (those fail inside the sandbox\nwith a DNS/host-resolution error). Ask only for local code changes; do any network\nstep yourself afterward. This does NOT mean nothing leaves the machine: the Codex\nmodel call still sends your `task` to OpenAI and lets Codex read tracked files in\nthe worktree and send their content. The tracked `AGENTS.md` and `.agents/skills/`\nskills seeded into the worktree auto-load there too — their content can be sent even\nif your `task` never mentions them (the plugin's isolation flags do not suppress\nthis). Your `task` is sent raw — secret redaction is best-effort and does not cover\nit or files Codex reads itself.\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nsubstantial or multi-file task that may exceed it, prefer `codex_delegate_async` (a background\njob, built-in default 1800s deadline; poll `codex_job_status`). Coarse `notifications/progress`\nstreams while it blocks when your client requests it; the detached run (`meta.job_id`) is\nrecoverable via `codex_job_list`→`codex_job_result` if the connection drops.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -3875,7 +3903,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -3892,7 +3920,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -3918,7 +3946,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           },
           "task": {
             "description": "The coding task for Codex to implement inside a throwaway git worktree; the resulting diff is returned for review, not applied to your tree.",
@@ -3946,7 +3974,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -4154,7 +4182,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\nit runs detached; prefer it for a substantial or multi-file implementation task that can\nexceed the synchronous deadline (built-in default 180s), since a sync run whose deadline\nexpires loses its partial work (this job's own deadline is separately configured, built-in\ndefault 1800s). Starting a job commits to spend (it runs to completion or its\nwall-clock deadline even if you never poll). Poll with `codex_job_status`, read\nwith `codex_job_result`, delete after successful read with `codex_job_consume_result`,\nor stop with `codex_job_cancel`. Requires a git repo with at least one commit;\npass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex\nread tracked files in the worktree and send their content — including the tracked\n`AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret\nredaction is best-effort and does not cover your `task` or files Codex reads\nitself.",
+      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\ndetached; prefer it for a substantial or multi-file implementation task that can exceed the\nsynchronous deadline (built-in default 180s), since a sync run whose deadline expires loses\nits partial work (this job's own deadline is separately configured, built-in default 1800s).\nStarting a job commits to spend (it runs to completion or its wall-clock deadline even if\nyou never poll). Poll `codex_job_status`; read/consume with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Requires a git\nrepo with at least one commit; pass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex\nread tracked files in the worktree and send their content — including the tracked\n`AGENTS.md` and `.agents/skills/` skills, which auto-load in the worktree. Secret\nredaction is best-effort and does not cover your `task` or files Codex reads\nitself.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4171,7 +4199,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -4188,7 +4216,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -4214,7 +4242,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           },
           "task": {
             "description": "The coding task for Codex to implement inside a throwaway git worktree; the resulting diff is returned for review, not applied to your tree.",
@@ -4230,7 +4258,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -4372,7 +4400,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -4414,7 +4442,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -4676,7 +4704,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -4749,7 +4777,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "type": "object"
@@ -5074,7 +5102,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -5301,7 +5329,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -5386,7 +5414,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "type": "object"
@@ -5569,7 +5597,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -5658,7 +5686,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [
@@ -6023,7 +6051,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (tracked changes vs HEAD — untracked files follow the\n`untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo.\n\nThe result's top-level `review_status` and `coverage` disclose whether the model\nactually ran and what it was shown: a `pass` over partial coverage is surfaced as\n`unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.\n\n`extra_context` (optional) is author intent — why the change was made, what you\nalready verified, constraints — added to the prompt as clearly-labeled UNTRUSTED\ndata (Codex is instructed to treat embedded directives as data, not commands — a\nbest-effort injection mitigation, not a guarantee) to cut false positives. It is\nbounded by the same input-byte limit as the diff.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run typically needs (a writable cache/temp), so Codex can't\nrely on running the project's checks to confirm its findings. Treat findings as\nunvalidated claims to verify by running those checks yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files — including the workspace's `AGENTS.md`\nand `.agents/skills/` skills, which it auto-loads even if your prompt never mentions\nthem (the plugin's isolation flags do not suppress this). Redaction is not a guarantee. Do not\nrely on it to protect live credentials; keep them out of the reviewed tree and your\nsupplied inputs, or do not request a review of that tree.\n\nProgress & recovery: blocks until Codex finishes, up to the resolved deadline\n(`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in\ndefault 180s). If that deadline expires the run is terminated and its partial output is not\nrecoverable or resumable, so for a multi-file or whole-branch review that can exceed it,\nprefer `codex_review_changes_async` (a background job whose deadline is separately\nconfigured, built-in default 1800s; poll `codex_job_status`) and keep this sync tool for\nsmall, localized diffs. Coarse `notifications/progress` streams while it blocks when your\nclient requests it; the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_result` if the connection drops.",
+      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nscope: `working_tree` (tracked changes vs HEAD — untracked files follow the\n`untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo. Optional\n`extra_context` (author intent, bounded like the diff) cuts false positives.\n\nThe result's top-level `review_status` and `coverage` disclose whether the model\nactually ran and what it was shown: a `pass` over partial coverage is surfaced as\n`unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run needs, so Codex can't run the project's checks to confirm its\nfindings — treat them as unvalidated claims you verify yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),\nand Codex may read and send other repo files — including the workspace's `AGENTS.md`\nand `.agents/skills/` skills, which it auto-loads even if your prompt never mentions\nthem (the plugin's isolation flags do not suppress this). Redaction is not a guarantee. Do not\nrely on it to protect live credentials; keep them out of the reviewed tree and your\nsupplied inputs, or do not request a review of that tree.\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nmulti-file or whole-branch review that may exceed it, prefer `codex_review_changes_async` (a\nbackground job, built-in default 1800s deadline; poll `codex_job_status`). Coarse\n`notifications/progress` streams while it blocks when your client requests it; the detached run\n(`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result` if the connection\ndrops.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6085,7 +6113,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -6102,7 +6130,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -6143,7 +6171,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           },
           "scope": {
             "default": "working_tree",
@@ -6187,7 +6215,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "type": "object"
@@ -6465,7 +6493,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Review your git changes in the background; get a `job_id` back immediately.\n\nSame read-only behavior as `codex_review_changes` (the diff is gathered, secret-\nredacted, and bounded, then reviewed read-only), but it runs detached — prefer it for a\nmulti-file or whole-branch review that can exceed the synchronous deadline (built-in\ndefault 180s), since a sync run whose deadline expires loses its partial work; this job's\nown deadline is separately configured (built-in default 1800s). The diff is gathered\ninside the job, so a bad\n`base`/`commit` comes back as the same structured error with **zero spend** (a bad\n`scope` is an out-of-enum value rejected by MCP input validation before the job\nstarts). Starting a job commits to spend. Poll with `codex_job_status`, read the\nreview envelope with `codex_job_result`, delete it after successful read with\n`codex_job_consume_result`, or stop it with `codex_job_cancel`. Pass\n`workspace_root` (absolute).\n\nData egress: same as `codex_review_changes` — sends the secret-redacted diff plus\nyour raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also\nread other repo files, including the auto-loaded `AGENTS.md`/`.agents/skills/`\nworkspace context. Redaction is best-effort, not a guarantee.",
+      "description": "Review your git changes in the background; get a `job_id` back immediately.\n\nSame read-only behavior as `codex_review_changes` (the diff is gathered, secret-\nredacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file\nor whole-branch review that can exceed the synchronous deadline (built-in default 180s),\nsince a sync run whose deadline expires loses its partial work; this job's own deadline is\nseparately configured (built-in default 1800s). The diff is gathered inside the job, so a bad\n`base`/`commit` comes back as the same structured error with **zero spend** (a bad\n`scope` is rejected by MCP input validation before the job starts). Starting a job commits to\nspend. Poll `codex_job_status`; read/consume the review envelope with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Pass\n`workspace_root` (absolute).\n\nData egress: same as `codex_review_changes` — sends the secret-redacted diff plus\nyour raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also\nread other repo files, including the auto-loaded `AGENTS.md`/`.agents/skills/`\nworkspace context. Redaction is best-effort, not a guarantee.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6518,7 +6546,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response."
+            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -6535,7 +6563,7 @@
               }
             ],
             "default": null,
-            "description": "Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. Defaults to the server's configured isolation (built-in default 'inherit'; `codex_status` reports the resolved value)."
+            "description": "Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. Defaults to the server's configured value (built-in 'inherit'; `codex_status` reports the resolved one)."
           },
           "model": {
             "anyOf": [
@@ -6576,7 +6604,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments."
+            "description": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           },
           "scope": {
             "default": "working_tree",
@@ -6608,7 +6636,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "type": "object"
@@ -6919,7 +6947,7 @@
               }
             ],
             "default": null,
-            "description": "Absolute path to the target repository root. Pass it (or rely on an MCP root) so the call targets the intended repo; otherwise it falls back to the server's own cwd and meta.workspace_warning is set."
+            "description": "Absolute path to the target repo root — pass it (or an MCP root) to target the intended repo; otherwise the call falls back to the server's own cwd and sets meta.workspace_warning."
           }
         },
         "required": [

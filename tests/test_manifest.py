@@ -7,7 +7,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "3da5f0f1fbfccaa50753564d7a351e239be1c07bcee53f6b29fcf005641eabb8"
+EXPECTED_MANIFEST_HASH = "cae4adfc214e7c2b40b041c26cd8fd305b74da1b16307085e7f18708824c552f"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -91,6 +91,7 @@ async def test_fingerprint_covers_accounts_for_every_section():
         "result_meta": {"result_meta_schema"},
         "capabilities_result": {"capabilities_result_schema"},
         "status_result": {"status_result_schema"},
+        "params": {"parameter_contracts"},
         "capabilities": {"capabilities_payload", "capability_guarantees"},
     }
     m = await manifest.build_manifest()
@@ -170,6 +171,19 @@ async def test_build_manifest_captures_status_result_schema():
     parsed = [b["text"] for b in m["status_result"] if isinstance(b.get("text"), dict)]
     assert parsed, "status-result content was not parsed into JSON"
     assert any("RateLimit" in block.get("$defs", {}) for block in parsed)
+
+
+async def test_build_manifest_captures_params_contracts():
+    """The codex://params body (compressed param summaries + full text) is captured
+    AND parsed (#333), so a weakened summary or altered full contract moves the
+    snapshot and is flagged for the FINGERPRINT bump."""
+    m = await manifest.build_manifest()
+    assert m["params"], "params section is empty"
+    parsed = [b["text"] for b in m["params"] if isinstance(b.get("text"), dict)]
+    assert parsed, "params content was not parsed into JSON"
+    # The idempotency_key contract (the largest moved-out detail) is present with both
+    # its inline summary and its full text.
+    assert any("idempotency_key" in block.get("params", {}) for block in parsed)
 
 
 async def test_build_manifest_captures_initialize_without_version():
