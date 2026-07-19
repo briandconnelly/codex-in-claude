@@ -329,7 +329,6 @@ _STEER = [
     ("codex_review_changes", "codex_review_changes_async", "whole-branch"),
     ("codex_delegate", "codex_delegate_async", "substantial"),
 ]
-_SYNC_TO_ASYNC = {sync: asy for sync, asy, _ in _STEER}
 
 
 @pytest.mark.parametrize("sync_name,async_name,shape", _STEER)

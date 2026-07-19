@@ -41,7 +41,7 @@ and verification skills instead of replacing them.
 | Stuck mid-debugging or choosing between viable approaches | `codex_consult` | [active workflows](references/active-workflows.md) |
 | Review changes already represented in git | `codex_review_changes` | [active workflows](references/active-workflows.md) |
 | Proposed implementation diff from an isolated worktree | `codex_delegate` | [active workflows](references/active-workflows.md) |
-| A consult, review, or delegate that can exceed the synchronous deadline — high reasoning effort, broad repo-grounded work, a multi-file or whole-branch review, or a substantial implementation task | matching `_async` tool | [background jobs](references/background-jobs.md) |
+| A consult, review, or delegate that can exceed the synchronous deadline — high-reasoning-effort or broad repo-grounded work, a multi-file or whole-branch review, or a substantial implementation task | matching `_async` tool | [background jobs](references/background-jobs.md) |
 | Move the Claude session into a resumable Codex thread | `codex_transfer` | [session transfer](references/transfer.md) |
 | Claude and Codex attempt independently, then synthesize | independent two-member attempt | [independent attempt](references/independent-attempt.md) |
 | Claude drafts, Codex critiques, Claude revises | declared review–revise | [review–revise](references/review-revise.md) |
