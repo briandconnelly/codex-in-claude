@@ -5,6 +5,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex://params` resource and `parameter-contracts` capabilities fold-in** (#333). A new
+  read-only resource serves the full lifecycle/validation semantics for parameters whose
+  `tools/list` description is a compressed summary, backed by a single-source
+  `PARAMETER_CONTRACTS` registry so the inline summary and the resource body cannot drift.
+  `codex_capabilities(include_schemas=["parameter-contracts"])` embeds the same document for
+  resource-blind clients. Its content is guarded by the new `parameter_contracts`
+  `FINGERPRINT_COVERS` category and the manifest snapshot.
+
+### Changed
+
+- **Slimmed the `tools/list` catalog** (#333). MCP inlines each parameter description into every
+  tool's schema, so a long shared description repeats on the wire. The `idempotency_key` and
+  `reasoning_effort` inline descriptions are compressed to their selection-, safety-, and
+  spend-critical facts (the full lifecycle/validation detail moves to `codex://params`),
+  `workspace_root`/`isolation` are tightened, and the sync/async tool docstrings are slimmed —
+  reducing the serialized `tools` catalog by ~6% (~85.2 KB → ~80.2 KB, snapshot measure) with
+  **no weakened guarantee**: a table-driven per-tool freeze test asserts every egress/security
+  guarantee (raw-input, files-read, auto-loaded `AGENTS.md`/`.agents/skills`, isolation, best-
+  effort redaction, delegate no-network, review diff-redaction) still ships inline. This is a
+  `FINGERPRINT` bump (`schema-47` → `schema-48`), not a breaking change; the deeper `≤60 KB`
+  target requires opaquing the output schemas (tracked separately).
+
 ### Fixed
 
 - **Untracked-file handling now honors the user's global gitignore** (#330). The git

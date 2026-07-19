@@ -112,6 +112,10 @@ async def build_manifest() -> dict[str, Any]:
         status_result = [
             _envelope_block(c) for c in await client.read_resource("codex://status-result")
         ]
+        # codex://params body is guarantee/contract-bearing discovered surface (#333),
+        # so capture AND parse it (like the schema resources above) — a weakened summary
+        # or a moved-detail change then moves the snapshot and is flagged for review.
+        params = [_envelope_block(c) for c in await client.read_resource("codex://params")]
 
     caps = {k: v for k, v in codex_capabilities().items() if k not in _CAPABILITIES_EXCLUDE}
 
@@ -125,6 +129,7 @@ async def build_manifest() -> dict[str, Any]:
         "result_meta": result_meta,
         "capabilities_result": capabilities_result,
         "status_result": status_result,
+        "params": params,
         "capabilities": _canonicalize(caps),
     }
 

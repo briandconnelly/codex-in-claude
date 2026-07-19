@@ -45,6 +45,7 @@ from codex_in_claude import (
     delegate,
     obs,
     orchestration,
+    param_contracts,
     preflight,
     prompts,
     rate_limit,
@@ -587,9 +588,9 @@ TaskParam = Annotated[
 WorkspaceRootParam = Annotated[
     str | None,
     Field(
-        description="Absolute path to the target repository root. Pass it (or rely on an "
-        "MCP root) so the call targets the intended repo; otherwise it falls back to the "
-        "server's own cwd and meta.workspace_warning is set."
+        description="Absolute path to the target repo root — pass it (or an MCP root) to "
+        "target the intended repo; otherwise the call falls back to the server's own cwd "
+        "and sets meta.workspace_warning."
     ),
 ]
 TranscriptPathParam = Annotated[
@@ -632,15 +633,8 @@ ReasoningEffortParam = Annotated[
     Field(
         max_length=_REASONING_EFFORT_MAX_LENGTH,
         pattern=_REASONING_EFFORT_VALUE_PATTERN,
-        description="Override the Codex reasoning effort for this call (sent as a "
-        "`model_reasoning_effort` config override); omit (or pass null) for the server "
-        "default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An "
-        "open per-model string the Codex backend validates at run time — commonly "
-        "minimal|low|medium|high|xhigh; codex_models lists each model's advertised set "
-        "(advisory). A backend-rejected value fails as invalid_reasoning_effort; an "
-        "explicit empty string is sent as-is (and rejected by the backend), never "
-        "treated as unset. Control characters, surrogates, and values over "
-        f"{_REASONING_EFFORT_MAX_LENGTH} chars are rejected as invalid_arguments.",
+        # Compressed inline (#333); full rejection/bounds semantics at codex://params.
+        description=param_contracts.PARAMETER_CONTRACTS["reasoning_effort"].summary,
     ),
 ]
 TimeoutSecondsParam = Annotated[
@@ -669,9 +663,9 @@ PathsParam = Annotated[
 IsolationParam = Annotated[
     Isolation | None,
     Field(
-        description="Codex config isolation: 'inherit', 'ignore-config', or 'ignore-rules'. "
-        "Defaults to the server's configured isolation (built-in default 'inherit'; "
-        "`codex_status` reports the resolved value)."
+        description="Codex config isolation: 'inherit' | 'ignore-config' | 'ignore-rules'. "
+        "Defaults to the server's configured value (built-in 'inherit'; `codex_status` "
+        "reports the resolved one)."
     ),
 ]
 ScopeParam = Annotated[
@@ -711,29 +705,27 @@ IdempotencyKeyParam = Annotated[
     Field(
         min_length=1,
         max_length=200,
-        description="Optional client-supplied dedup key, scoped to THIS concrete tool on "
-        "the same workspace. Reusing it on the same tool with the same arguments replays "
-        "the existing run instead of starting — and paying for — a duplicate Codex call "
-        "(a sync call reattaches to the in-flight run and returns its result; an _async "
-        "call returns the same job_id). The sync and _async variants are DIFFERENT tools "
-        "and never share a key's run. Reuse with different arguments — including a "
-        "different timeout_seconds — is refused (idempotency_conflict); a key whose prior "
-        "result was already consumed/evicted is idempotency_result_unavailable; a "
-        "still-publishing reservation is idempotency_in_progress (retry). Omit it for the "
-        "prior no-dedup behavior. A completed result stays replayable while its job record "
-        "lives (its TTL), subject to consumption or count-eviction; the fail-closed "
-        "conflict/in-progress window can last longer — up to the job's max runtime + "
-        "termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) "
-        "response.",
+        # Compressed inline (#333); full lifecycle semantics at codex://params.
+        description=param_contracts.PARAMETER_CONTRACTS["idempotency_key"].summary,
     ),
 ]
 IncludeSchemasParam = Annotated[
-    list[Literal["error-envelope", "result-meta", "capabilities-result", "status-result"]] | None,
+    list[
+        Literal[
+            "error-envelope",
+            "result-meta",
+            "capabilities-result",
+            "status-result",
+            "parameter-contracts",
+        ]
+    ]
+    | None,
     Field(
         description="Opt-in tool-reachable fallback for resource-blind clients: also embed "
         "the full 'error-envelope', 'result-meta', 'capabilities-result', and/or "
-        "'status-result' schema in the response (the default payload omits them and points "
-        "at the codex:// resources instead).",
+        "'status-result' schema, and/or the 'parameter-contracts' document (a contract "
+        "doc, not a JSON Schema), in the response — the default payload omits them and "
+        "points at the codex:// resources instead.",
     ),
 ]
 # codex_delegate_dry_run reuses these params but never calls Codex or returns a diff, so
@@ -1923,6 +1915,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
             "result-meta": RESULT_META_SCHEMA,
             "capabilities-result": CAPABILITIES_RESULT_SCHEMA,
             "status-result": STATUS_RESULT_SCHEMA,
+            # A contract document (not a JSON Schema): the full codex://params body, so a
+            # resource-blind client can still reach the compressed params' full semantics (#333).
+            "parameter-contracts": param_contracts.resource_body(),
         }
         caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas) if k in available}
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
@@ -2007,6 +2002,21 @@ def status_result_resource() -> dict:
     """The canonical full codex_status result schema. The tool's outputSchema opaques
     `rate_limit`/`raw_defaults`/`resolved_defaults` and points here for the full shape (#242)."""
     return STATUS_RESULT_SCHEMA
+
+
+@mcp.resource(
+    "codex://params",
+    name="codex-params",
+    title="Codex tool parameter contracts",
+    mime_type="application/json",
+)
+def params_resource() -> dict:
+    """Full semantics for parameters whose tools/list description is a compressed summary
+    (#333). MCP inlines each parameter description into every tool's inputSchema, so the
+    lengthy lifecycle/validation prose is shipped once here instead of repeated on the
+    wire; the inline summary keeps the first-call selection, safety, and spend-critical
+    facts and points here for the complete lifecycle and recovery semantics."""
+    return param_contracts.resource_body()
 
 
 # --------------------------------------------------------------------------- #
@@ -2409,13 +2419,12 @@ async def codex_consult(
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
-    Runs `codex exec` in a read-only sandbox — Codex never edits files. This is a
-    STATIC review, not a verify mode: the read-only sandbox blocks the writes a
-    test/build/lint run typically needs (a writable cache/temp), so Codex can't
-    rely on executing your checks to confirm its claims. For a repo-grounded
-    question, pass `workspace_root` (absolute) so Codex reasons about the right repo;
-    it is optional for pure Q&A that needs no codebase. Returns a result envelope.
-    Treat findings as unvalidated claims; verify them by running the checks yourself.
+    Runs `codex exec` in a read-only sandbox — Codex never edits files. A STATIC
+    review, not a verify mode: the read-only sandbox blocks the writes a
+    test/build/lint run needs, so Codex can't run your checks to confirm its claims —
+    treat findings as unvalidated claims you verify yourself. Pass `workspace_root`
+    (absolute) for a repo-grounded question; omit it for pure Q&A. Returns a result
+    envelope.
 
     Data egress: this sends your `question` and `extra_context` to OpenAI via the
     codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
@@ -2427,16 +2436,14 @@ async def codex_consult(
     redaction is best-effort and does not cover them (it covers gathered diffs and
     Codex's returned output, not what you type or what Codex reads from files).
 
-    Progress & recovery: blocks until Codex finishes, up to the resolved deadline
-    (`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in
-    default 180s). If that deadline expires the run is terminated and its partial output is not
-    recoverable or resumable, so for a high-`reasoning_effort` or broad repo-grounded consult
-    that can exceed it, prefer `codex_consult_async` (a background job whose deadline is
-    separately configured, built-in default 1800s; poll `codex_job_status`) and keep this sync
-    tool for focused questions that finish well inside the deadline. Coarse
-    `notifications/progress` streams while it blocks when your client requests it; the detached
-    run (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result` if the connection
-    drops."""
+    Progress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped
+    10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline
+    expires the run is terminated and its partial output is not recoverable or resumable, so for a
+    high-`reasoning_effort` or broad repo-grounded consult that may exceed it, prefer
+    `codex_consult_async` (a background job, built-in default 1800s deadline; poll
+    `codex_job_status`). Coarse `notifications/progress` streams while it blocks when your client
+    requests it; the detached run (`meta.job_id`) is recoverable via
+    `codex_job_list`→`codex_job_result` if the connection drops."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2498,22 +2505,16 @@ async def codex_review_changes(
     `untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews
     `base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-
     redacted, and bounded by this server; Codex reviews it read-only and returns
-    structured findings. Pass `workspace_root` (absolute) for the right repo.
+    structured findings. Pass `workspace_root` (absolute) for the right repo. Optional
+    `extra_context` (author intent, bounded like the diff) cuts false positives.
 
     The result's top-level `review_status` and `coverage` disclose whether the model
     actually ran and what it was shown: a `pass` over partial coverage is surfaced as
     `unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.
 
-    `extra_context` (optional) is author intent — why the change was made, what you
-    already verified, constraints — added to the prompt as clearly-labeled UNTRUSTED
-    data (Codex is instructed to treat embedded directives as data, not commands — a
-    best-effort injection mitigation, not a guarantee) to cut false positives. It is
-    bounded by the same input-byte limit as the diff.
-
     STATIC review, not a verify mode: the read-only sandbox blocks the writes a
-    test/build/lint run typically needs (a writable cache/temp), so Codex can't
-    rely on running the project's checks to confirm its findings. Treat findings as
-    unvalidated claims to verify by running those checks yourself before acting.
+    test/build/lint run needs, so Codex can't run the project's checks to confirm its
+    findings — treat them as unvalidated claims you verify yourself before acting.
 
     Data egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is
     secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),
@@ -2523,15 +2524,14 @@ async def codex_review_changes(
     rely on it to protect live credentials; keep them out of the reviewed tree and your
     supplied inputs, or do not request a review of that tree.
 
-    Progress & recovery: blocks until Codex finishes, up to the resolved deadline
-    (`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in
-    default 180s). If that deadline expires the run is terminated and its partial output is not
-    recoverable or resumable, so for a multi-file or whole-branch review that can exceed it,
-    prefer `codex_review_changes_async` (a background job whose deadline is separately
-    configured, built-in default 1800s; poll `codex_job_status`) and keep this sync tool for
-    small, localized diffs. Coarse `notifications/progress` streams while it blocks when your
-    client requests it; the detached run (`meta.job_id`) is recoverable via
-    `codex_job_list`→`codex_job_result` if the connection drops."""
+    Progress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped
+    10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline
+    expires the run is terminated and its partial output is not recoverable or resumable, so for a
+    multi-file or whole-branch review that may exceed it, prefer `codex_review_changes_async` (a
+    background job, built-in default 1800s deadline; poll `codex_job_status`). Coarse
+    `notifications/progress` streams while it blocks when your client requests it; the detached run
+    (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result` if the connection
+    drops."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2603,15 +2603,13 @@ async def codex_delegate(
     this). Your `task` is sent raw — secret redaction is best-effort and does not cover
     it or files Codex reads itself.
 
-    Progress & recovery: blocks until Codex finishes, up to the resolved deadline
-    (`timeout_seconds`, clamped 10-600s; when omitted, the server-configured value, built-in
-    default 180s). If that deadline expires the run is terminated and its partial output is not
-    recoverable or resumable, so for a substantial or multi-file implementation task that can
-    exceed it, prefer `codex_delegate_async` (a background job whose deadline is separately
-    configured, built-in default 1800s; poll `codex_job_status`) and keep this sync tool for
-    small, self-contained changes. Coarse `notifications/progress` streams while it blocks when
-    your client requests it; the detached run (`meta.job_id`) is recoverable via
-    `codex_job_list`→`codex_job_result` if the connection drops."""
+    Progress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped
+    10-600s; when omitted, the server-configured value, built-in default 180s). If that deadline
+    expires the run is terminated and its partial output is not recoverable or resumable, so for a
+    substantial or multi-file task that may exceed it, prefer `codex_delegate_async` (a background
+    job, built-in default 1800s deadline; poll `codex_job_status`). Coarse `notifications/progress`
+    streams while it blocks when your client requests it; the detached run (`meta.job_id`) is
+    recoverable via `codex_job_list`→`codex_job_result` if the connection drops."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2661,14 +2659,13 @@ async def codex_delegate_async(
 
     Same propose-tier behavior as `codex_delegate` — Codex works in a throwaway git
     worktree and the result carries a **reviewable diff that is NOT applied** — but
-    it runs detached; prefer it for a substantial or multi-file implementation task that can
-    exceed the synchronous deadline (built-in default 180s), since a sync run whose deadline
-    expires loses its partial work (this job's own deadline is separately configured, built-in
-    default 1800s). Starting a job commits to spend (it runs to completion or its
-    wall-clock deadline even if you never poll). Poll with `codex_job_status`, read
-    with `codex_job_result`, delete after successful read with `codex_job_consume_result`,
-    or stop with `codex_job_cancel`. Requires a git repo with at least one commit;
-    pass `workspace_root` (absolute).
+    detached; prefer it for a substantial or multi-file implementation task that can exceed the
+    synchronous deadline (built-in default 180s), since a sync run whose deadline expires loses
+    its partial work (this job's own deadline is separately configured, built-in default 1800s).
+    Starting a job commits to spend (it runs to completion or its wall-clock deadline even if
+    you never poll). Poll `codex_job_status`; read/consume with
+    `codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Requires a git
+    repo with at least one commit; pass `workspace_root` (absolute).
 
     NO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks
     network egress for commands Codex RUNS in the sandbox — the task must be
@@ -3223,15 +3220,13 @@ async def codex_consult_async(
     """Ask Codex for a read-only second opinion in the background; get a `job_id`
     back immediately instead of blocking.
 
-    Same read-only behavior as `codex_consult` (Codex never edits files), but it runs
-    detached — prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can
-    exceed the synchronous deadline (built-in default 180s), since a sync run whose deadline
-    expires loses its partial work; this job's own deadline is separately configured (built-in
-    default 1800s). Starting a job commits to spend
-    (it runs to completion or its wall-clock deadline even if you never poll). Poll
-    with `codex_job_status`, read the consult envelope with `codex_job_result`, delete
-    it after successful read with `codex_job_consume_result`, or stop it with
-    `codex_job_cancel`.
+    Same read-only behavior as `codex_consult` (Codex never edits files), but detached —
+    prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the
+    synchronous deadline (built-in default 180s), since a sync run whose deadline expires loses
+    its partial work; this job's own deadline is separately configured (built-in default 1800s).
+    Starting a job commits to spend (it runs to completion or its wall-clock deadline even if
+    you never poll). Poll `codex_job_status`; read/consume the consult envelope with
+    `codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.
 
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
     (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
@@ -3283,16 +3278,14 @@ async def codex_review_changes_async(
     """Review your git changes in the background; get a `job_id` back immediately.
 
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
-    redacted, and bounded, then reviewed read-only), but it runs detached — prefer it for a
-    multi-file or whole-branch review that can exceed the synchronous deadline (built-in
-    default 180s), since a sync run whose deadline expires loses its partial work; this job's
-    own deadline is separately configured (built-in default 1800s). The diff is gathered
-    inside the job, so a bad
+    redacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file
+    or whole-branch review that can exceed the synchronous deadline (built-in default 180s),
+    since a sync run whose deadline expires loses its partial work; this job's own deadline is
+    separately configured (built-in default 1800s). The diff is gathered inside the job, so a bad
     `base`/`commit` comes back as the same structured error with **zero spend** (a bad
-    `scope` is an out-of-enum value rejected by MCP input validation before the job
-    starts). Starting a job commits to spend. Poll with `codex_job_status`, read the
-    review envelope with `codex_job_result`, delete it after successful read with
-    `codex_job_consume_result`, or stop it with `codex_job_cancel`. Pass
+    `scope` is rejected by MCP input validation before the job starts). Starting a job commits to
+    spend. Poll `codex_job_status`; read/consume the review envelope with
+    `codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Pass
     `workspace_root` (absolute).
 
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
