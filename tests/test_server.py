@@ -182,6 +182,19 @@ def test_status_ready(monkeypatch, clean_env):
     assert res["version_supported"] is True
 
 
+def test_status_reports_raised_default_timeout(monkeypatch, clean_env):
+    # #341 acceptance: codex_status surfaces the raised built-in sync deadline (300)
+    # in both raw_defaults and resolved_defaults. These are readiness-independent, so
+    # force not-ready (codex absent) to keep the test hermetic — a ready status would
+    # call rate_limit.live_read and spawn the real app-server.
+    monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    res = server.codex_status()
+    assert res["ready"] is False
+    assert res["raw_defaults"]["timeout_seconds"] == 300
+    assert res["resolved_defaults"]["timeout_seconds"] == 300
+    assert res["resolved_defaults"]["timeout_bounds"] == [10, 600]
+
+
 def test_status_not_found(monkeypatch, clean_env):
     monkeypatch.setattr(server.codex, "codex_version", lambda: None)
     res = server.codex_status()
@@ -315,7 +328,7 @@ async def test_codex_dry_run_frames_redaction_as_best_effort_not_confirmation():
 
 
 # --- #338: selection-time steer from the sync tools to their _async variants ------
-# A sync active call blocks to a resolved deadline (built-in default 180s) whose expiry
+# A sync active call blocks to a resolved deadline (built-in default 300s) whose expiry
 # SIGKILLs the run and loses its partial paid work; the recovery repair only fires AFTER
 # that spend. These pin a pre-spend, shape-based steer at every selection home an agent
 # reads — the sync/async tool descriptions, the capabilities use_when, and the
@@ -2070,7 +2083,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-48"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-49"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5630,7 +5643,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-48")
+    assert result["fingerprint"].endswith("schema-49")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

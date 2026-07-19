@@ -32,6 +32,14 @@ def test_defaults_builtin(clean_env):
     assert d.timeout_seconds == config.DEFAULT_TIMEOUT_SECONDS
 
 
+def test_default_timeout_seconds_is_300(clean_env):
+    # #341: the built-in sync deadline was raised from 180 to 300 to recover the
+    # observed mid-tier consult/review runs (246s/267s) that the old cap SIGKILLed.
+    # A literal guard so the value cannot drift silently; the clamp bounds are unchanged.
+    assert config.DEFAULT_TIMEOUT_SECONDS == 300
+    assert (config.MIN_TIMEOUT_SECONDS, config.MAX_TIMEOUT_SECONDS) == (10, 600)
+
+
 def test_defaults_env_overrides(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_TIER_DEFAULT", "propose")
     clean_env.setenv("CODEX_IN_CLAUDE_MODEL", "gpt-5.4")

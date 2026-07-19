@@ -60,7 +60,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   time** (#338). The `codex_consult` / `codex_review_changes` / `codex_delegate` descriptions,
   their `_async` counterparts' descriptions, all six `codex_capabilities` `use_when` entries, and
   the server `instructions` block now name the shapes that can exceed the synchronous deadline
-  (built-in default 180s) — a high-reasoning-effort or broad repo-grounded consult, a multi-file or
+  (built-in default 300s, raised from 180 in this release — see below) — a high-reasoning-effort or
+  broad repo-grounded consult, a multi-file or
   whole-branch review, or a substantial implementation task — and recommend the matching `_async`
   tool for them, because a sync call whose deadline expires is terminated with its partial paid work
   unrecoverable. Previously that steer lived only in the post-timeout repair, i.e. after the paid
@@ -68,8 +69,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   no guarantee, so it bumps the result `fingerprint` (schema-47) but is **not** breaking. The
   `collaborating-with-codex` skill routing (`SKILL.md`, `active-workflows.md`, `background-jobs.md`)
   and the `/codex:consult|review|delegate` command prompts carry the same steer (not
-  fingerprint-covered). Two related follow-ups are tracked separately: raising the default sync
-  `timeout_seconds`, and a `codex_dry_run` size advisory.
+  fingerprint-covered). The related default-timeout raise landed this release (see below, #341); a
+  `codex_dry_run` size advisory remains tracked separately (#342).
+- **Raised the built-in default sync `timeout_seconds` from 180 to 300** (#341, split out of #338).
+  This changes blocking behavior for sync `codex_consult` / `codex_review_changes` / `codex_delegate`
+  calls that omit `timeout_seconds`: the server now waits up to 300s (was 180s) before terminating
+  the run. The 10–600s clamp and the `CODEX_IN_CLAUDE_TIMEOUT_SECONDS` operator override are
+  unchanged, and a caller wanting the prior deadline can pass `timeout_seconds=180`. **Value
+  rationale (a conservative, targeted choice — not a full timing distribution):** 300 is the
+  smallest round value that recovers the mid-tier consult/review runs observed exceeding the old
+  180s cap while working #338 (which completed at 246s and 267s once re-run async); 360/420 add no
+  demonstrated benefit over the available (censored) sample, and the destructive >~420s cliff stays
+  the domain of the `_async` variants (separate 1800s job deadline), so the raise reduces the
+  *frequency* of mid-tier sync timeouts rather than removing the cliff. **Client-blocking
+  tradeoff:** a longer sync deadline only helps a client whose own tool-call window is at least the
+  server deadline; a client with a short foreground window already backgrounds long sync calls and
+  is unaffected — and a client that hard-cancels at exactly its own deadline could race the server
+  result, for which the `timeout_seconds`/env override remains the escape hatch. The value is named
+  in six `tools/list` tool descriptions (plus README and the skill/command guidance), so updating
+  them moves the discovered surface: the result `fingerprint` bumps (`schema-48` → `schema-49`). A
+  description reword that narrows no input and weakens no guarantee — the deadline was already
+  documented as overridable — so it is **not** breaking.
 - Internal: the stripped git-subprocess environment is now built by a single
   `gitdiff._base_git_env()` helper shared across `_core` (previously duplicated at five
   call sites), so the hardening posture cannot drift between them.

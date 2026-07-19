@@ -1,7 +1,7 @@
 # Background jobs
 
 Use the `_async` form when the corresponding consult, review, or delegate can exceed the synchronous
-deadline (built-in default 180s) — a high-reasoning-effort or broad repo-grounded consult, a
+deadline (built-in default 300s) — a high-reasoning-effort or broad repo-grounded consult, a
 multi-file or whole-branch review, or a substantial implementation task — since a sync deadline
 expiry terminates the run and loses its partial paid work, whereas the job runs to a separately
 configured deadline (built-in default 1800s). Starting it commits spend immediately; abandoning

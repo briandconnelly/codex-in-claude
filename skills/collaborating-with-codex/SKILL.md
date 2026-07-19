@@ -50,7 +50,7 @@ and verification skills instead of replacing them.
 | None of these, or a Codex call would not change the decision | no call — proceed without Codex | — |
 
 When a request matches both a sync row and the async row, prefer the matching `_async` tool: a
-sync call whose deadline expires (built-in default 180s) is terminated and its partial paid work is
+sync call whose deadline expires (built-in default 300s) is terminated and its partial paid work is
 lost, whereas the async job runs to a separately configured deadline (built-in default 1800s). The
 sync tool is for focused work that finishes well inside the deadline.
 
