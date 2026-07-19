@@ -282,6 +282,49 @@ def test_commands_present():
     assert {"status", "consult", "review", "delegate", "dry-run"} <= names
 
 
+def test_skill_routing_steers_long_work_to_async():
+    """#338: the collaborating-with-codex routing steers work that can exceed the sync
+    deadline to the matching _async tool with a stated precedence, so the sync and async
+    rows no longer both claim the same long-running workload; the reference files carry the
+    concrete shapes rather than the vague pre-#338 threshold."""
+
+    # Normalize whitespace: these docs use semantic line breaks, so a pinned phrase can
+    # wrap across a newline in the source.
+    def _flat(path):
+        return " ".join((ROOT / path).read_text().split())
+
+    skill = _flat("skills/collaborating-with-codex/SKILL.md")
+    bg = _flat("skills/collaborating-with-codex/references/background-jobs.md")
+    aw = _flat("skills/collaborating-with-codex/references/active-workflows.md")
+    assert "prefer the matching `_async` tool" in skill
+    assert "can exceed the synchronous deadline" in skill
+    assert "can exceed the synchronous deadline" in aw
+    # The vague pre-#338 threshold is replaced by the concrete deadline framing.
+    assert "may outlast a useful synchronous wait" not in bg
+    assert "can exceed the synchronous deadline" in bg
+    # Each route's distinctive shape is named, so a generic-only reword can't pass this.
+    for shape in ("repo-grounded", "whole-branch", "substantial"):
+        assert shape in skill, shape  # the shape-named async routing row
+        assert shape in aw, shape  # the per-section active-workflow caveats
+        assert shape in bg, shape  # the background-jobs shape list
+
+
+def test_slash_commands_note_async_for_long_work():
+    """#338: each sync /codex:* command prompt points at its async variant for work that
+    can exceed the sync deadline — naming this route's shape and the deadline framing, not
+    just the async tool name — so a user-invoked sync command still surfaces the steer."""
+    cmd_dir = ROOT / "commands/codex"
+    for stem, async_tool, shape in (
+        ("consult", "codex_consult_async", "repo-grounded"),
+        ("review", "codex_review_changes_async", "whole-branch"),
+        ("delegate", "codex_delegate_async", "substantial"),
+    ):
+        text = " ".join((cmd_dir / f"{stem}.md").read_text().split())
+        assert async_tool in text, stem
+        assert shape in text, stem
+        assert "can exceed the synchronous deadline" in text, stem
+
+
 async def test_capabilities_match_registered_tools():
     caps = server.codex_capabilities()
     advertised = set(caps["active_tools"]) | set(caps["free_tools"])

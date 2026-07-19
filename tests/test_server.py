@@ -313,6 +313,94 @@ async def test_codex_dry_run_frames_redaction_as_best_effort_not_confirmation():
     assert "confirm the scope and that secrets are redacted" not in desc
 
 
+# --- #338: selection-time steer from the sync tools to their _async variants ------
+# A sync active call blocks to a resolved deadline (built-in default 180s) whose expiry
+# SIGKILLs the run and loses its partial paid work; the recovery repair only fires AFTER
+# that spend. These pin a pre-spend, shape-based steer at every selection home an agent
+# reads — the sync/async tool descriptions, the capabilities use_when, and the
+# first-read instructions — so the two members of each sync/async pair no longer both
+# claim the same long-running workload.
+# (sync tool, async tool, distinctive request-shape token). The shape token is the
+# per-pair discriminator — its presence proves the steer names *this* pair's workload,
+# not just generic deadline prose that could be copy-pasted across all three (the F2
+# regression a generic-only assertion would miss).
+_STEER = [
+    ("codex_consult", "codex_consult_async", "repo-grounded"),
+    ("codex_review_changes", "codex_review_changes_async", "whole-branch"),
+    ("codex_delegate", "codex_delegate_async", "substantial"),
+]
+
+
+@pytest.mark.parametrize("sync_name,async_name,shape", _STEER)
+async def test_sync_active_tool_steers_to_async_on_deadline(sync_name, async_name, shape):
+    """#338: each sync active tool's description states the deadline consequence and steers
+    THIS pair's distinctive long-running shape to its _async variant at selection time —
+    while keeping progress streaming conditional on the client requesting it."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    desc = " ".join((tools[sync_name].description or "").split())
+    # The agent-visible consequence of expiry — not billing/clamp language.
+    assert (
+        "If that deadline expires the run is terminated and its partial output is not "
+        "recoverable or resumable" in desc
+    ), sync_name
+    # The pre-spend steer names the matching async tool AND this pair's own shape.
+    assert f"prefer `{async_name}`" in desc, sync_name
+    assert shape in desc, sync_name
+    # Regression: progress streaming stays conditional on the client requesting it.
+    assert "when your client requests it" in desc, sync_name
+    # Regression: termination is deadline expiry, never input coercion ("clamp hit").
+    assert "clamp hit" not in desc, sync_name
+
+
+@pytest.mark.parametrize("async_name,shape", [(a, s) for _, a, s in _STEER])
+async def test_async_active_tool_primary_description_names_selection_shape(async_name, shape):
+    """#338: each async tool's primary tools/list description names THIS pair's shape that
+    makes it the right pre-spend choice (it can exceed the synchronous deadline), replacing
+    the vague "may run long" — agents commonly select from tools/list without first calling
+    codex_capabilities."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    desc = " ".join((tools[async_name].description or "").split())
+    assert "can exceed the synchronous deadline" in desc, async_name
+    assert shape in desc, async_name
+    # Regression: the vague pre-#338 selection phrase is gone.
+    assert "may run long" not in desc, async_name
+
+
+def test_capability_summary_steers_long_work_to_async():
+    """#338: the first-read instructions (served as MCP `instructions`) steer work that can
+    exceed the synchronous deadline to the matching _async variant, naming every pair's
+    shape, so cold-start routing does not send every workload to the sync tools."""
+    summary = server.CAPABILITY_SUMMARY
+    assert "Prefer the matching _async variant" in summary
+    assert "can exceed the synchronous deadline" in summary
+    for _, async_name, shape in _STEER:
+        assert async_name in summary, async_name
+        assert shape in summary, shape
+
+
+@pytest.mark.parametrize("sync_name,async_name,shape", _STEER)
+def test_sync_use_when_points_at_async_for_its_shape(sync_name, async_name, shape):
+    """#338: the codex_capabilities use_when for each SYNC tool carries the steer too —
+    naming its async variant and this pair's shape — so a capabilities-driven agent reading
+    the sync entry is not left with an unqualified 'always use sync' recommendation."""
+    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    use_when = by_name[sync_name]["use_when"]
+    assert async_name in use_when, sync_name
+    assert shape in use_when, sync_name
+
+
+@pytest.mark.parametrize("async_name,shape", [(a, s) for _, a, s in _STEER])
+def test_async_use_when_names_shape_not_may_run_long(async_name, shape):
+    """#338: the codex_capabilities use_when for each async tool names THIS pair's selection
+    shape rather than a vague duration hint, so a capabilities-driven client gets the same
+    pre-spend steer as a tools/list-driven one."""
+    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    use_when = by_name[async_name]["use_when"]
+    assert "can exceed the synchronous deadline" in use_when, async_name
+    assert shape in use_when, async_name
+    assert "may run long" not in use_when, async_name
+
+
 def test_workspace_write_no_egress_is_documented():
     """The propose-tier no-network constraint of workspace-write is discoverable (issue #24).
 
@@ -1846,7 +1934,7 @@ def test_capabilities_lists_m4_tools():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-46"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-47"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5379,7 +5467,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-46")
+    assert result["fingerprint"].endswith("schema-47")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
