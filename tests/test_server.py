@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import time
 from typing import get_args
@@ -445,13 +446,27 @@ def test_egress_disclosed_in_active_tool_docstrings(name):
 # deliberately carry a compressed subset (they reference their sync sibling), so
 # requiring the full set on them would be a spurious failure. Adjust a tool's row
 # only when deliberately, reviewably changing what that tool guarantees inline.
+#
+# The files-read disclosure: a genuine `read`/`reads`/`reading` verb adjacent (either
+# order, within one sentence) to a file token, over the lowercased docstring. The `read`
+# in "read-only" is excluded — that is the decoupled token that let the old, coarser
+# "read" + "file"/"repo" co-occurrence pass on stray "read-only sandbox" + "repo-grounded"
+# text even after the real disclosure was deleted (#345). Adjacency (not mere
+# co-occurrence) is what keeps "codex never edits files" and "repo-grounded question" from
+# standing in for "codex reads … files … and sends their content".
+_FILES_READ_DISCLOSED = re.compile(
+    r"read(?:s|ing)?(?!-only)\b[^.]{0,45}\b(?:file|tracked|repo)"
+    r"|\b(?:file|tracked|repo)[a-z]*\b[^.]{0,45}read(?:s|ing)?(?!-only)\b"
+)
 _GUARANTEE_MATCHERS = {
     # Caller content is sent to OpenAI.
     "openai": lambda d: "openai" in d,
     # The caller's supplied input is sent raw / unredacted.
     "raw_input": lambda d: "unredacted" in d or "raw" in d,
-    # Codex may read and send other files in the resolved workspace/worktree.
-    "files_read": lambda d: "read" in d and ("file" in d or "tracked" in d or "repo" in d),
+    # Codex may read (and send) other files in the resolved workspace/worktree. Keyed on a
+    # genuine read-verb adjacent to a file token, excluding "read-only" — see
+    # _FILES_READ_DISCLOSED for why the old coarse check missed the omission (#345).
+    "files_read": lambda d: bool(_FILES_READ_DISCLOSED.search(d)),
     # The workspace AGENTS.md auto-loads (its content can be sent).
     "autoload_agents": lambda d: "agents.md" in d,
     # The workspace .agents/skills/ skills auto-load.
@@ -495,6 +510,24 @@ def test_guarantee_matchers_are_discriminating():
     the guarantee was deleted (a broken instrument and a clean result look alike)."""
     for key, matcher in _GUARANTEE_MATCHERS.items():
         assert matcher("") is False, key
+
+
+def test_files_read_matcher_rejects_decoupled_tokens():
+    """The `files_read` matcher must not pass on stray read-only/file/repo tokens.
+
+    Its predecessor did: a docstring that dropped the real "Codex reads … files … and
+    sends their content" disclosure but still said "read-only sandbox" and "repo-grounded
+    question" kept a "read" and a "repo"/"file" token, so the coarse co-occurrence check
+    stayed green over the exact omission it was meant to catch (#345). This pins that a
+    guarantee-free docstring reads as a failure."""
+    decoupled = (
+        "runs in a read-only sandbox — codex never edits files. a static review, not a "
+        "verify mode. pass workspace_root for a repo-grounded question."
+    )
+    assert _GUARANTEE_MATCHERS["files_read"](decoupled) is False
+    # …while a minimal genuine disclosure, in either token order, still registers.
+    assert _GUARANTEE_MATCHERS["files_read"]("codex may read other repo files and send them")
+    assert _GUARANTEE_MATCHERS["files_read"]("files codex reads are sent to openai")
 
 
 @pytest.mark.parametrize(
