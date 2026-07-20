@@ -1532,6 +1532,7 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
     list_tool="codex_job_list",
     status_field="status",
     result_ready_field="result_available",
+    result_ok_field="result_ok",
     poll_after_field="poll_after_ms",
     activity_support="codex_events",
     event_count_field="events_seen",
@@ -1735,7 +1736,9 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "meta.job_id.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root"],
-                returns="Status, elapsed time, expiry, and result_available.",
+                returns="Status, elapsed time, expiry, result_available, and "
+                "result_ok (a done job's outcome: true=success, false=stored error, "
+                "null=not-yet-known/unclassifiable — triage a failure without a fetch).",
             ),
             ToolCapability(
                 name="codex_job_result",
@@ -1777,7 +1780,10 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 use_when="To recover job_ids or inspect known jobs for a workspace, "
                 "including sync-originated ones.",
                 key_optional_params=["workspace_root"],
-                returns="Compact job summaries, newest first. Not permanent storage: "
+                returns="Compact job summaries, newest first, each with result_ok "
+                "(true=success, false=stored error, null=running/unclassifiable) so a "
+                "stored failure is triageable without a per-job fetch. Not permanent "
+                "storage: "
                 "terminal records expire after the TTL, and a per-workspace soft cap "
                 "(default 50) evicts the oldest terminal records as new jobs start. "
                 "Running jobs are never evicted, so the list can transiently exceed the "
@@ -3747,6 +3753,10 @@ def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
         ttl_seconds=data["ttl_seconds"],
         expires_at=data["expires_at"],
         result_available=data["result_available"],
+        # Strict: the store always stamps result_ok (null-valued when unknown), so a
+        # missing key is an internal contract break that must surface, not silently
+        # become null and defeat the required-nullable field (#335).
+        result_ok=data["result_ok"],
         detail=detail,
         cleanup_warnings=data.get("cleanup_warnings", []),
         events_seen=data.get("events_seen", 0),
@@ -3766,7 +3776,12 @@ async def codex_job_status(
     Use after any `*_async` call (codex_delegate_async, codex_consult_async,
     codex_review_changes_async) or any sync consult/review/delegate (whose `meta.job_id`
     names its record). Returns status, elapsed time, expiry, and `result_available`; when
-    it is true, call codex_job_result. Free — no model call.
+    it is true, call codex_job_result. `result_ok` reports a done job's producer-declared
+    outcome — true (success), false (a stored error envelope), or null (running, no stored
+    envelope, an unclassifiable payload, or a record finalized before this field) — so you
+    can spot a stored FAILURE without fetching it. It does not guarantee the payload is
+    still fetchable; a cross-release record may report an outcome yet fail codex_job_result
+    with job_result_incompatible. Free — no model call.
 
     Honor `poll_after_ms` between polls — for a running job it GROWS with elapsed
     runtime (bounded), so following it backs you off instead of tight-looping (a
@@ -4094,8 +4109,9 @@ async def codex_job_list(
     """List the background jobs known for this workspace, newest first.
 
     Use to recover job_ids lost across context compaction or interruption. Returns
-    each job's id, kind, status, start time, result_available, and expiry. Free —
-    no model call.
+    each job's id, kind, status, start time, result_available, `result_ok` (a done
+    job's outcome — true/false/null; see codex_job_status), and expiry, so a stored
+    failure is triageable without fetching each result. Free — no model call.
 
     Read a job's result promptly — a finished record can silently drop off. This list is
     not permanent storage: terminal records expire after the TTL (default 24h), and a
@@ -4117,6 +4133,7 @@ async def codex_job_list(
             started_at=r["started_at"],
             elapsed_ms=r["elapsed_ms"],
             result_available=r["result_available"],
+            result_ok=r["result_ok"],  # strict, same contract as codex_job_status (#335)
             expires_at=r["expires_at"],
         )
         for r in rows

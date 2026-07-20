@@ -830,11 +830,38 @@ def test_jobstatus_has_advisory_activity_fields_defaulting_safely():
         elapsed_ms=1,
         deadline_seconds=60,
         ttl_seconds=60,
+        result_ok=None,
         workspace={"cwd": "/x", "workspace_source": "param"},
     )
     assert s_obj.events_seen == 0
     assert s_obj.last_event_at is None
     assert s_obj.event_age_ms is None
+
+
+def test_result_ok_is_required_nullable_on_job_models():
+    # #335: result_ok has defined null meaning and must always be present, so it is
+    # declared without a default — a missed mapping site fails construction, not
+    # silently defaults to null.
+    from codex_in_claude.schemas import JobSummary
+
+    with pytest.raises(ValidationError):
+        JobStatus(
+            job_id="j",
+            kind="codex_consult",
+            status="done",
+            started_at="t",
+            elapsed_ms=1,
+            deadline_seconds=60,
+            ttl_seconds=60,
+            workspace={"cwd": "/x", "workspace_source": "param"},
+        )  # no result_ok
+    with pytest.raises(ValidationError):
+        # no result_ok
+        JobSummary(job_id="j", kind="k", status="done", started_at="t", elapsed_ms=1)
+    ok = JobSummary(
+        job_id="j", kind="k", status="done", started_at="t", elapsed_ms=1, result_ok=False
+    )
+    assert ok.result_ok is False
 
 
 def test_async_lifecycle_advertises_activity_without_touching_progress_support():
@@ -846,6 +873,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
         list_tool="l",
         status_field="status",
         result_ready_field="result_available",
+        result_ok_field="result_ok",
         poll_after_field="poll_after_ms",
         activity_support="codex_events",
         event_count_field="events_seen",
@@ -854,10 +882,11 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
     )
     assert lc.progress_support == "none"  # native progress meaning preserved
     assert lc.activity_support == "codex_events"
+    assert lc.result_ok_field == "result_ok"  # #335 outcome-triage field, discoverable
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-49"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-50"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

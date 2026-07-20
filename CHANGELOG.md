@@ -5,6 +5,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`result_ok` on job status and list entries** (#335). `codex_job_status` and each
+  `codex_job_list` entry now carry `result_ok`, a done job's producer-declared outcome
+  (`true` = success, `false` = a stored error envelope, `null` = running, no stored envelope,
+  an unclassifiable payload, or a record finalized before this field). A stored failure is
+  otherwise indistinguishable from a success at the list/status level — both show
+  `status: "done"`, `result_available: true` — forcing a per-job fetch to triage. The outcome
+  is stamped into the job record once, at finalization, and never backfilled onto older records.
+  It reports the outcome recorded when the result was written and does **not** guarantee this
+  reader can still parse the payload — a cross-release record may report an outcome yet fail
+  `codex_job_result` with `job_result_incompatible`. `codex_capabilities` gains an
+  `async_lifecycle.result_ok_field` entry so the field is discoverable structurally. Backward-
+  compatible output addition — bumps the result `fingerprint` (`schema-49` → `schema-50`), not
+  breaking; the persisted result-format (`RESULT_FORMAT`) is unchanged.
+
 ## [0.14.0] - 2026-07-19
 
 A discovery-slimming and sync-timeout release. The `tools/list` catalog gets lighter and a new

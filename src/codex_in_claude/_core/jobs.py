@@ -12,6 +12,13 @@ command is expected to write a final, already-normalized result envelope to
 otherwise the process exiting without one means ``failed``. Cancel/deadline reaps
 mark ``cancelled``/``timeout``.
 
+The one structural detail the store reads out of an otherwise-opaque envelope is a
+top-level boolean ``ok`` — a widespread success/failure discriminator convention.
+At finalization it stamps that flag (or ``None`` when absent/non-boolean) into the
+record as ``result_ok``, so status/list can flag a stored failure without every
+caller re-parsing the envelope. It is the producer-declared outcome at write time,
+never re-derived, so a record finalized before this field existed reports ``None``.
+
 State lives on disk keyed by workspace, so status/result/cancel survive MCP server
 restarts. There is no daemon: single-job calls refresh and TTL-clean the requested
 record, list calls clean the whole workspace, and the count cap is enforced when
@@ -386,6 +393,25 @@ class JobStore:
         return env if isinstance(env, dict) else None
 
     @staticmethod
+    def _envelope_ok(env: dict) -> bool | None:
+        """The stored envelope's producer-declared outcome: its top-level boolean
+        ``ok``, or ``None`` when that key is absent or not a real boolean. An
+        unclassifiable payload is reported ``None``, never guessed as a failure."""
+        ok = env.get("ok")
+        return ok if isinstance(ok, bool) else None
+
+    def _mark_done(self, jd: Path, meta: dict, env: dict) -> None:
+        """Stamp the terminal ``done`` outcome on first observation only: the
+        completion clock (drives expiry) and ``result_ok`` (the envelope's ``ok``
+        discriminator). Guarded by ``completed_epoch`` so it writes meta once and
+        never re-derives — a record already finalized (including by a release that
+        predates ``result_ok``) is left untouched, so the field is never backfilled."""
+        if meta.get("completed_epoch") is None:
+            meta["completed_epoch"] = time.time()
+            meta["result_ok"] = self._envelope_ok(env)
+            self._write_meta(jd, meta)
+
+    @staticmethod
     def _read_cleanup_manifest(jd: Path) -> list[str]:
         """External paths a job declared it owns, from <job_dir>/cleanup.json.
 
@@ -608,18 +634,26 @@ class JobStore:
                 )
                 # The worker may have completed during the grace window — prefer its
                 # result over masking it as a timeout (result-first finalization).
-                if self._read_envelope(jd) is not None:
-                    if meta.get("completed_epoch") is None:
-                        meta["completed_epoch"] = time.time()
-                        self._write_meta(jd, meta)
+                env = self._read_envelope(jd)
+                if env is not None:
+                    self._mark_done(jd, meta, env)
                     return "done"
                 self._finalize_cleanup(jd, meta, "timeout", self._read_cleanup_manifest(jd))
                 return "timeout"
             return "running"
+        env = self._read_envelope(jd)
+        if env is not None:
+            self._mark_done(jd, meta, env)
+            return "done"
         if meta.get("completed_epoch") is None:
             meta["completed_epoch"] = time.time()
             self._write_meta(jd, meta)
-        return "done" if self._read_envelope(jd) is not None else "failed"
+        # No envelope at finalization -> "failed", and completed_epoch is now set, so if
+        # result.json later materializes (e.g. an unowned worker read as not-running post-
+        # restart that then finishes) a subsequent read flips to "done" but _mark_done's
+        # guard leaves result_ok unstamped -> null. Safe degradation, not a false outcome;
+        # a cancel() during that window repairs it via setdefault.
+        return "failed"
 
     @staticmethod
     def _elapsed_ms(meta: dict) -> int:
@@ -673,6 +707,15 @@ class JobStore:
             "completed_epoch": meta.get("completed_epoch"),
             "expires_at": self._expires_at(meta),
             "result_available": state == "done",
+            # Producer-declared outcome, surfaced only for a done record and only
+            # when it was actually stamped as a real boolean — a malformed or absent
+            # stamp (corrupt meta, or a record from before this field) degrades to
+            # None rather than a stale/guessed value.
+            "result_ok": (
+                meta.get("result_ok")
+                if state == "done" and isinstance(meta.get("result_ok"), bool)
+                else None
+            ),
             "poll_after_ms": poll,
             "ttl_seconds": self.ttl_seconds,
             "cleanup_warnings": meta.get("cleanup_warnings", []),
@@ -812,10 +855,14 @@ class JobStore:
             if meta is None:
                 return None  # consumed or expired while we waited
             terminal = meta.get("terminal_status")
-            if terminal is None and self._read_envelope(jd) is not None:
+            env = self._read_envelope(jd)
+            if terminal is None and env is not None:
                 # The worker completed during the window — preserve its result
-                # rather than masking it as cancelled.
+                # rather than masking it as cancelled, stamping its outcome if the
+                # done-transition here is the record's first (setdefault: a prior
+                # _status_of finalization may already have recorded it).
                 meta["completed_epoch"] = meta.get("completed_epoch") or time.time()
+                meta.setdefault("result_ok", self._envelope_ok(env))
                 meta["terminal_status"] = terminal = "done"
                 self._write_meta(jd, meta)
             if terminal is not None:

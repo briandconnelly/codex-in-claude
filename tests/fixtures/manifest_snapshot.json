@@ -131,6 +131,7 @@
           "poll_after_field": "poll_after_ms",
           "poll_tool": "codex_job_status",
           "progress_support": "none",
+          "result_ok_field": "result_ok",
           "result_ready_field": "result_available",
           "result_tool": "codex_job_result",
           "status_field": "status"
@@ -236,6 +237,7 @@
           "poll_after_field": "poll_after_ms",
           "poll_tool": "codex_job_status",
           "progress_support": "none",
+          "result_ok_field": "result_ok",
           "result_ready_field": "result_available",
           "result_tool": "codex_job_result",
           "status_field": "status"
@@ -341,6 +343,7 @@
           "poll_after_field": "poll_after_ms",
           "poll_tool": "codex_job_status",
           "progress_support": "none",
+          "result_ok_field": "result_ok",
           "result_ready_field": "result_available",
           "result_tool": "codex_job_result",
           "status_field": "status"
@@ -400,7 +403,7 @@
         "required_params": [
           "job_id"
         ],
-        "returns": "Status, elapsed time, expiry, and result_available.",
+        "returns": "Status, elapsed time, expiry, result_available, and result_ok (a done job's outcome: true=success, false=stored error, null=not-yet-known/unclassifiable — triage a failure without a fetch).",
         "stability": "experimental",
         "use_when": "To poll a background job's state without fetching the result. Jobs may originate from an async call or a sync consult/review/delegate's meta.job_id."
       },
@@ -489,7 +492,7 @@
         ],
         "name": "codex_job_list",
         "required_params": [],
-        "returns": "Compact job summaries, newest first. Not permanent storage: terminal records expire after the TTL, and a per-workspace soft cap (default 50) evicts the oldest terminal records as new jobs start. Running jobs are never evicted, so the list can transiently exceed the cap; older finished jobs drop off. Includes sync-originated records; the cap/TTL eviction covers both.",
+        "returns": "Compact job summaries, newest first, each with result_ok (true=success, false=stored error, null=running/unclassifiable) so a stored failure is triageable without a per-job fetch. Not permanent storage: terminal records expire after the TTL, and a per-workspace soft cap (default 50) evicts the oldest terminal records as new jobs start. Running jobs are never evicted, so the list can transiently exceed the cap; older finished jobs drop off. Includes sync-originated records; the cap/TTL eviction covers both.",
         "stability": "experimental",
         "use_when": "To recover job_ids or inspect known jobs for a workspace, including sync-originated ones."
       },
@@ -682,6 +685,10 @@
                 "title": "Progress Support",
                 "type": "string"
               },
+              "result_ok_field": {
+                "title": "Result Ok Field",
+                "type": "string"
+              },
               "result_ready_field": {
                 "title": "Result Ready Field",
                 "type": "string"
@@ -704,6 +711,7 @@
               "list_tool",
               "poll_after_field",
               "poll_tool",
+              "result_ok_field",
               "result_ready_field",
               "result_tool",
               "status_field"
@@ -858,7 +866,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-49",
+            "default": "codex-in-claude/0.1/schema-50",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1380,7 +1388,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-49",
+                "default": "codex-in-claude/0.1/schema-50",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2416,7 +2424,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-49",
+            "default": "codex-in-claude/0.1/schema-50",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3062,7 +3070,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-49",
+            "default": "codex-in-claude/0.1/schema-50",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -5191,6 +5199,16 @@
               "result_available": {
                 "type": "boolean"
               },
+              "result_ok": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "server_version": {
                 "anyOf": [
                   {
@@ -5255,6 +5273,7 @@
               "elapsed_ms",
               "job_id",
               "kind",
+              "result_ok",
               "started_at",
               "status",
               "ttl_seconds",
@@ -5399,7 +5418,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List the background jobs known for this workspace, newest first.\n\nUse to recover job_ids lost across context compaction or interruption. Returns\neach job's id, kind, status, start time, result_available, and expiry. Free —\nno model call.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so the list can transiently exceed the cap. Includes\nsync-originated records (any sync consult/review/delegate call); the cap/TTL eviction\ncovers both.",
+      "description": "List the background jobs known for this workspace, newest first.\n\nUse to recover job_ids lost across context compaction or interruption. Returns\neach job's id, kind, status, start time, result_available, `result_ok` (a done\njob's outcome — true/false/null; see codex_job_status), and expiry, so a stored\nfailure is triageable without fetching each result. Free — no model call.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so the list can transiently exceed the cap. Includes\nsync-originated records (any sync consult/review/delegate call); the cap/TTL eviction\ncovers both.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5455,6 +5474,16 @@
                     "result_available": {
                       "type": "boolean"
                     },
+                    "result_ok": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "started_at": {
                       "type": "string"
                     },
@@ -5473,6 +5502,7 @@
                     "elapsed_ms",
                     "job_id",
                     "kind",
+                    "result_ok",
                     "started_at",
                     "status"
                   ],
@@ -5667,7 +5697,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Check a background job's lifecycle state without fetching the full result.\n\nUse after any `*_async` call (codex_delegate_async, codex_consult_async,\ncodex_review_changes_async) or any sync consult/review/delegate (whose `meta.job_id`\nnames its record). Returns status, elapsed time, expiry, and `result_available`; when\nit is true, call codex_job_result. Free — no model call.\n\nHonor `poll_after_ms` between polls — for a running job it GROWS with elapsed\nruntime (bounded), so following it backs you off instead of tight-looping (a\ndelegate often runs ~20s). `expires_at` is null while running and is set once the\njob finishes; results are then retained `ttl_seconds` past that completion.",
+      "description": "Check a background job's lifecycle state without fetching the full result.\n\nUse after any `*_async` call (codex_delegate_async, codex_consult_async,\ncodex_review_changes_async) or any sync consult/review/delegate (whose `meta.job_id`\nnames its record). Returns status, elapsed time, expiry, and `result_available`; when\nit is true, call codex_job_result. `result_ok` reports a done job's producer-declared\noutcome — true (success), false (a stored error envelope), or null (running, no stored\nenvelope, an unclassifiable payload, or a record finalized before this field) — so you\ncan spot a stored FAILURE without fetching it. It does not guarantee the payload is\nstill fetchable; a cross-release record may report an outcome yet fail codex_job_result\nwith job_result_incompatible. Free — no model call.\n\nHonor `poll_after_ms` between polls — for a running job it GROWS with elapsed\nruntime (bounded), so following it backs you off instead of tight-looping (a\ndelegate often runs ~20s). `expires_at` is null while running and is set once the\njob finishes; results are then retained `ttl_seconds` past that completion.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5775,6 +5805,16 @@
               "result_available": {
                 "type": "boolean"
               },
+              "result_ok": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "server_version": {
                 "anyOf": [
                   {
@@ -5839,6 +5879,7 @@
               "elapsed_ms",
               "job_id",
               "kind",
+              "result_ok",
               "started_at",
               "status",
               "ttl_seconds",

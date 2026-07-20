@@ -1730,6 +1730,7 @@ def _ok_record(status="done"):
         "completed_epoch": 2.0,
         "expires_at": "2026-06-18T00:00:00+00:00",
         "result_available": status == "done",
+        "result_ok": True if status == "done" else None,
         "poll_after_ms": 1000,
         "ttl_seconds": 86400,
         "extra": {},
@@ -2082,8 +2083,19 @@ def test_capabilities_lists_m4_tools():
         assert t in caps["free_tools"]
 
 
+def test_job_status_model_requires_result_ok_from_store():
+    # #335: the boundary maps result_ok strictly (data["result_ok"], not .get) so a
+    # store record that omits it fails loud instead of silently emitting null — the
+    # whole reason the field is required-nullable. Tested on the pure mapper because
+    # _guard would otherwise turn the KeyError into an internal_error envelope.
+    rec = _ok_record("done")
+    del rec["result_ok"]
+    with pytest.raises(KeyError):
+        server._job_status_model(rec, {"cwd": "/x", "workspace_source": "param"})
+
+
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-49"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-50"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3074,6 +3086,7 @@ def test_job_status_model_surfaces_cleanup_warnings():
         "completed_epoch": 1.0,
         "expires_at": None,
         "result_available": False,
+        "result_ok": None,
         "poll_after_ms": 1000,
         "ttl_seconds": 3600,
         "cleanup_warnings": ["could not remove temporary path: /tmp/cic-worktree-x"],
@@ -3098,6 +3111,7 @@ def test_job_status_model_maps_activity_fields():
         "ttl_seconds": 60,
         "expires_at": None,
         "result_available": False,
+        "result_ok": None,
         "cleanup_warnings": [],
         "events_seen": 3,
         "last_event_at": "2026-06-27T00:00:00+00:00",
@@ -4822,6 +4836,40 @@ async def test_sync_error_envelope_is_recorded_done(clean_env, tmp_path, monkeyp
     assert res["error"]["code"] == "timeout"
 
 
+async def test_job_list_and_status_flag_stored_error_result_ok_false(
+    clean_env, tmp_path, monkeypatch
+):
+    # #335: a stored ERROR envelope lists/reports status done, result_available true —
+    # result_ok=false is the only field that tells it apart from a success without a fetch.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _timeout_error_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    listing = await server.codex_job_list(workspace_root=str(tmp_path))
+    assert len(listing["jobs"]) == 1
+    entry = listing["jobs"][0]
+    assert entry["status"] == "done" and entry["result_available"] is True
+    assert entry["result_ok"] is False
+    st = await server.codex_job_status(entry["job_id"], workspace_root=str(tmp_path))
+    assert st["result_ok"] is False
+
+
+async def test_job_status_flags_stored_success_result_ok_true(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    monkeypatch.setattr(
+        server, "_worker_cmd", _fake_worker_cmd(_consult_success_envelope(str(tmp_path)))
+    )
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    st = await server.codex_job_status(res["meta"]["job_id"], workspace_root=str(tmp_path))
+    assert st["result_ok"] is True
+    listing = await server.codex_job_list(workspace_root=str(tmp_path))
+    assert listing["jobs"][0]["result_ok"] is True
+
+
 async def test_sync_review_runs_through_job_store(clean_env, tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
     _no_codex_sentinel(monkeypatch)
@@ -5643,7 +5691,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-49")
+    assert result["fingerprint"].endswith("schema-50")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

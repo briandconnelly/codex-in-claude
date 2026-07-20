@@ -1288,3 +1288,124 @@ def test_idempotent_publish_failure_returns_running_job(tmp_path, monkeypatch, c
     )
     assert retry["kind"] == idempotency.IN_PROGRESS  # fails closed, no double-spend
     store.cancel(cwd, out["job_id"])
+
+
+# --- result_ok stamping (#335) -------------------------------------------------
+# The store stamps a done record's producer-declared outcome (`result.json`'s
+# top-level boolean `ok`) into meta at finalization, so status/list can flag a
+# stored failure without re-parsing the envelope. null = running, no stored
+# envelope, an unclassifiable payload, or a record finalized before the stamp.
+
+_WRITE_ERROR = (
+    "import json; open('result.json','w').write("
+    "json.dumps({'ok': False, 'tool': 't', 'error': {'code': 'timeout'}}))"
+)
+_WRITE_NO_OK = "import json; open('result.json','w').write(json.dumps({'tool': 't'}))"
+# A sloppy producer that writes `ok: 1` instead of `ok: true`: since Python's bool is an
+# int subtype, `isinstance(ok, bool)` — not truthiness — is what keeps this None.
+_WRITE_INT_OK = "import json; open('result.json','w').write(json.dumps({'ok': 1, 'tool': 't'}))"
+
+
+def test_result_ok_true_for_stored_success(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="codex_delegate")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    assert store.status(cwd, job_id)["result_ok"] is True
+    assert store.list_jobs(cwd)[0]["result_ok"] is True  # same on the list surface
+
+
+def test_result_ok_false_for_stored_error(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_ERROR), cwd, kind="codex_consult")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    assert store.status(cwd, job_id)["result_ok"] is False
+    assert store.list_jobs(cwd)[0]["result_ok"] is False
+
+
+def test_result_ok_null_for_unclassifiable_payload(tmp_path):
+    # A stored object without a boolean `ok` is not classifiable -> null, never guessed.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_NO_OK), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    assert store.status(cwd, job_id)["result_ok"] is None
+
+
+def test_result_ok_null_for_non_bool_ok_value(tmp_path):
+    # `ok: 1` is truthy but not a real boolean; the isinstance guard (not truthiness)
+    # must classify it as unclassifiable -> None, never True.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_INT_OK), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    assert store.status(cwd, job_id)["result_ok"] is None
+
+
+def test_result_ok_null_when_stamped_value_is_corrupt(tmp_path):
+    # The read guard degrades a present-but-non-bool stamp (corrupt meta) to None rather
+    # than surfacing it — a mutant dropping the isinstance check would fail here.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    jd = store._job_dir(cwd, job_id)
+    meta = json.loads((jd / "meta.json").read_text())
+    meta["result_ok"] = "yes"  # not a bool
+    (jd / "meta.json").write_text(json.dumps(meta))
+    assert store.status(cwd, job_id)["result_ok"] is None
+
+
+def test_result_ok_null_while_running(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    try:
+        st = store.status(cwd, job_id)
+        assert st["status"] == "running"
+        assert st["result_ok"] is None
+    finally:
+        store.cancel(cwd, job_id)
+
+
+def test_result_ok_null_for_failed_without_envelope(tmp_path):
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("raise SystemExit(1)"), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "failed"
+    assert store.status(cwd, job_id)["result_ok"] is None
+
+
+def test_result_ok_not_backfilled_onto_prestamp_record(tmp_path):
+    # A record finalized by a release predating this feature carries no stamp; the
+    # store reports null and never re-derives it (mirrors server_version's never-
+    # backfilled posture), even though result.json is still readable.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory(_WRITE_DONE), cwd, kind="k")
+    assert _wait_terminal(store, cwd, job_id) == "done"
+    jd = store._job_dir(cwd, job_id)
+    meta = json.loads((jd / "meta.json").read_text())
+    assert meta["result_ok"] is True  # stamped once, at finalization
+    del meta["result_ok"]  # simulate a pre-feature record (completed_epoch already set)
+    (jd / "meta.json").write_text(json.dumps(meta))
+    assert store.status(cwd, job_id)["result_ok"] is None
+
+
+def test_result_ok_stamped_when_worker_completes_during_cancel_grace(tmp_path, monkeypatch):
+    # The one done-transition outside _status_of: the worker finishes during the
+    # cancel grace window. Its stored outcome must be stamped too.
+    store = _store(tmp_path)
+    cwd = str(tmp_path)
+    job_id, _ = store.start(_factory("import time; time.sleep(30)"), cwd, kind="k")
+    jd = store._job_dir(cwd, job_id)
+
+    def fake_terminate(pid, grace_seconds, **kwargs):
+        (jd / "result.json").write_text('{"ok": false, "tool": "t", "error": {"code": "x"}}')
+        jobs._kill_pid_tree(pid)
+
+    monkeypatch.setattr(jobs, "_terminate_pid_tree", fake_terminate)
+    st = store.cancel(cwd, job_id)
+    assert st["status"] == "done"  # completed result preserved, not masked as cancelled
+    assert st["result_ok"] is False
