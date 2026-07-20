@@ -49,7 +49,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-49"
+FINGERPRINT = "codex-in-claude/0.1/schema-50"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -866,6 +866,9 @@ class AsyncLifecycle(BaseModel):
     # JobStatus fields a client branches on while polling.
     status_field: str  # "status" — the lifecycle state
     result_ready_field: str  # "result_available" — true once the result can be fetched
+    # "result_ok" — the done record's producer-declared outcome (true/false/null),
+    # so a poll or list can flag a stored failure without fetching the result.
+    result_ok_field: str
     poll_after_field: str  # "poll_after_ms" — backoff to honor before the next poll
     # Polled event-activity (#139). SEPARATE from progress_support: this is not
     # native notifications/progress, it is a disk-persisted, poll-read activity
@@ -1070,6 +1073,15 @@ class JobStatus(BaseModel):
     ttl_seconds: int
     expires_at: str | None = None
     result_available: bool = False  # true once status == done
+    # The finished job's producer-declared outcome, so a poll can tell a stored
+    # FAILURE from a success without fetching the result: true = stored ok:true,
+    # false = a stored error envelope, null = not yet known (running), no stored
+    # envelope, an unclassifiable payload, or a record finalized before this field.
+    # It reports the outcome recorded when the result was written; it does NOT
+    # guarantee this reader can still parse the payload — a cross-release record may
+    # report an outcome yet fail codex_job_result with job_result_incompatible, so
+    # fetch for the structured error. Always present (null-meaningful), never omitted.
+    result_ok: bool | None
     detail: str | None = None  # short human hint (e.g. failure reason)
     # Non-empty when a cancelled/timed-out job's throwaway worktree could not be
     # removed; each entry names the leaked path and reason.
@@ -1170,6 +1182,9 @@ class JobSummary(BaseModel):
     started_at: str
     elapsed_ms: int
     result_available: bool = False
+    # Same producer-declared outcome as JobStatus.result_ok — lets a list-level
+    # triage spot a stored failure without a per-job fetch. Always present.
+    result_ok: bool | None
     expires_at: str | None = None
 
 
