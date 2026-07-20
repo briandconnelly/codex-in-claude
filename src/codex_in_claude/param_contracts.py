@@ -65,10 +65,14 @@ _REASONING_EFFORT_FULL = (
     "default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open "
     "per-model string the Codex backend validates at run time — commonly "
     "minimal|low|medium|high|xhigh; codex_models lists each model's advertised set "
-    "(advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit "
-    "empty string is sent as-is (and rejected by the backend), never treated as unset. "
-    f"Control characters, surrogates, and values over {config.REASONING_EFFORT_MAX_LENGTH} "
-    "chars are rejected as invalid_arguments."
+    "(advisory). A backend-rejected value fails as invalid_reasoning_effort (repair steers "
+    "to codex_models); an explicit empty string is sent as-is (and rejected by the backend), "
+    "never treated as unset. Control characters, surrogates, and values over "
+    f"{config.REASONING_EFFORT_MAX_LENGTH} chars in this per-call argument are rejected at "
+    "the MCP boundary as invalid_arguments; the same hostile shape in the resolved "
+    "CODEX_IN_CLAUDE_REASONING_EFFORT default — which never crosses that boundary — is "
+    "instead refused pre-spend as invalid_reasoning_effort (repair: correct the config; "
+    "zero spend, the value never reaches codex)."
 )
 
 

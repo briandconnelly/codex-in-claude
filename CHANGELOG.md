@@ -5,6 +5,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`invalid_reasoning_effort` machine repair for the local config-shape guard** (#332). The
+  error code is emitted from two paths: the Codex backend rejecting a sent effort (table repair
+  `correct_arguments` + `codex_models`, correct there), and the local pre-spend guard refusing a
+  hostile *resolved* value before any subprocess (zero spend, the backend never saw it). The guard
+  previously inherited the backend repair, misdirecting an agent that branches on `error.repair`
+  to a useless `codex_models` call while the real fix went untouched. The guard now emits a
+  provenance-specific repair with **no** tool: `correct_config` when the invalid value is the
+  resolved `CODEX_IN_CLAUDE_REASONING_EFFORT` default, `correct_arguments` when it is an explicit
+  per-call argument (only reachable via a direct in-process call — over MCP such a value is
+  `invalid_arguments` at the boundary). `make_error` gains the ability to clear the table's repair
+  tool (explicit `repair_tool=None`), and the `codex://params` reasoning_effort contract now
+  documents the env-default pre-spend failure. Bumps the result `fingerprint` (`schema-50` →
+  `schema-51`) for the corrected parameter contract; not breaking (`correct_config` is already a
+  published `RepairStep`, and no field, tool, or error code was removed or retyped).
+
 ### Added
 
 - **`result_ok` on job status and list entries** (#335). `codex_job_status` and each

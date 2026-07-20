@@ -94,6 +94,24 @@ def test_make_error_repair_tool_override_names_the_failing_tool():
     assert e.repair.arguments is None
 
 
+def test_make_error_repair_tool_omitted_keeps_table_tool():
+    # The default (repair_tool omitted) leaves the per-code table's tool in place.
+    # invalid_reasoning_effort's table repair points at codex_models (the backend path).
+    e = make_error("invalid_reasoning_effort", "bad effort")
+    assert e.repair.tool == "codex_models"
+
+
+def test_make_error_repair_tool_none_clears_table_tool():
+    # Explicit None now CLEARS the table tool (distinct from omitting it), so a call site
+    # whose failure the table's tool does not fit can emit a repair with no tool. On the
+    # wire (exclude_none) the tool key is omitted entirely, not serialized as null.
+    e = make_error("invalid_reasoning_effort", "bad effort", repair_tool=None)
+    assert e.repair.tool is None
+    env = ErrorResult(error=e, meta=_meta())
+    d = serialize_error(env)
+    assert "tool" not in d["error"]["repair"]
+
+
 def test_serialize_error_strips_nulls_but_keeps_retry_after_ms():
     env = ErrorResult(error=make_error("invalid_arguments", "bad"), meta=_meta())
     d = serialize_error(env)

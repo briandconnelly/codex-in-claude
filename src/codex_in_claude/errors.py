@@ -18,6 +18,21 @@ from codex_in_claude.schemas import (
     RepairStep,
 )
 
+
+class _KeepTableTool:
+    """Sentinel for `make_error`'s `repair_tool`: leave the per-code table's tool in place.
+
+    Distinct from `None`, which explicitly CLEARS the tool (the emitted repair carries no
+    `tool`). A plain `None` default could not express "clear" — it was indistinguishable
+    from "not overridden" — so a call site whose failure the table's tool does not fit
+    (e.g. a local config-shape refusal that must not steer to codex_models) uses this
+    sentinel default and passes `repair_tool=None` to drop the tool."""
+
+    __slots__ = ()
+
+
+_KEEP_TABLE_TOOL = _KeepTableTool()
+
 # code -> (next_step, repair_tool, temporary, default alternative prose)
 _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
     "codex_not_found": (
@@ -290,7 +305,7 @@ def make_error(
     retry_after_ms: int | None = None,
     temporary: bool | None = None,
     repair_next_step: RepairStep | None = None,
-    repair_tool: str | None = None,
+    repair_tool: str | None | _KeepTableTool = _KEEP_TABLE_TOOL,
     repair_arguments: dict[str, Any] | None = None,
     repair_alternative: str | None = None,
     details: ErrorDetail | None = None,
@@ -307,11 +322,14 @@ def make_error(
     per code (e.g. invalid_arguments names the tool that was called — #184/N3).
     `repair_next_step` likewise overrides the table's symbolic step when one code's
     recovery differs by call site (e.g. a KEYED sync timeout leaves a still-running job
-    to poll rather than retry — #201)."""
+    to poll rather than retry — #201). `repair_tool` distinguishes three states: omitted
+    keeps the table's tool; a string overrides it; explicit `None` CLEARS it (no tool in
+    the emitted repair) for a call site the table's tool does not fit — e.g. #332's local
+    config-shape refusal, which must not steer to codex_models."""
     next_step, tool, temp_default, alt_default = _REPAIR_BY_CODE[code]
     if repair_next_step is not None:
         next_step = repair_next_step
-    if repair_tool is not None:
+    if not isinstance(repair_tool, _KeepTableTool):
         tool = repair_tool
     is_temp = temp_default if temporary is None else temporary
     backoff = retry_after_ms if is_temp else None
