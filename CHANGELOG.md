@@ -7,6 +7,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`branch` and `commit` diffs now gather atomically against pinned object IDs** (#355). A diff
+  gather runs the context summary and the transmitted diff as separate git invocations, and the
+  refs feeding them were symbolic — `working_tree` used `HEAD`, `branch` used `<base>...HEAD`,
+  `commit` used the caller-supplied (possibly symbolic) ref. A concurrent commit/reset/checkout/
+  ref-update between the two invocations could make the summary and the reviewed patch describe
+  different objects while `coverage.status` still reported `"complete"` — the same inconsistency
+  class as #336, but for the `branch`/`commit` scopes its working-tree state token deliberately left
+  out. `gather_diff` now resolves `HEAD`, a branch `base`, and a `commit` ref to immutable commit
+  object IDs **once**, up front (`git rev-parse --verify <ref>^{commit}`), and builds every
+  summary/diff invocation from those IDs, so a mid-gather ref move can no longer split them.
+  `<base_sha>...<head_sha>` preserves the three-dot merge-base semantics; validation and error
+  messages are unchanged (the reachability check that was a separate `git rev-parse` is now folded
+  into resolution). Internal correctness fix — the discovered surface (`DiffResult` shape, coverage
+  fields) is unchanged, so no `fingerprint`/`RESULT_FORMAT` bump; not breaking.
 - **`working_tree` reviews now disclose a concurrent edit made while the diff was gathered** (#336).
   A `working_tree` gather runs several sequential git invocations — the context summary, the
   transmitted diff, and the untracked enumeration — so a concurrent edit between them could make the

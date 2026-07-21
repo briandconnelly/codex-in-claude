@@ -410,7 +410,17 @@ def _global_excludes_flags(cwd: str, timeout: int) -> list[str]:
     return ["-c", f"core.excludesFile={value}"]
 
 
-def _ref_exists(cwd: str, ref: str, timeout: int) -> bool:
+def _resolve_commit(cwd: str, ref: str, timeout: int) -> str | None:
+    """Resolve ``ref`` to its immutable commit object ID via
+    ``git rev-parse --verify --quiet <ref>^{commit}``, or ``None`` if it does not resolve to a
+    commit. Maps launch/repo failures onto this module's error vocabulary exactly as
+    :func:`_git` does.
+
+    Pinning the mutable refs a gather reads (``HEAD``, a branch ``base``, a symbolic ``commit``)
+    to object IDs BEFORE the summary/diff invocations is what keeps those separate ``git`` calls
+    describing the SAME object: a concurrent commit/reset/ref-update between them can no longer
+    split the summary from the transmitted patch while coverage still reports ``complete`` (#355).
+    """
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
@@ -427,17 +437,30 @@ def _ref_exists(cwd: str, ref: str, timeout: int) -> bool:
         raise GitUnavailableError("git executable not found") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"git rev-parse timed out after {timeout}s") from exc
-    if proc.returncode != 0 and _is_not_git_repo_error(proc.stderr):
-        raise NotAGitRepoError(proc.stderr.strip() or "not a git repository")
-    return proc.returncode == 0
+    if proc.returncode != 0:
+        if _is_not_git_repo_error(proc.stderr):
+            raise NotAGitRepoError(proc.stderr.strip() or "not a git repository")
+        return None
+    return proc.stdout.strip() or None
 
 
-def _diff_args(scope: str, base: str | None, commit: str | None) -> list[str]:
+def _diff_args(
+    cwd: str, scope: str, base: str | None, commit: str | None, timeout: int
+) -> list[str]:
     # --no-ext-diff + --no-textconv prevent configured external/textconv diff
     # drivers from executing commands during our own git call.
+    #
+    # #355: every ref that feeds these args is resolved to an immutable object ID HERE, once, so
+    # the summary and the transmitted diff — separate git invocations sharing this arg list — can
+    # never describe different objects under a concurrent ref move. `_resolve_commit` returning
+    # None means the ref does not resolve to a commit; that failure is surfaced per scope below.
     common = ["diff", "--no-ext-diff", "--no-textconv"]
     if scope == "working_tree":
-        return [*common, "--end-of-options", "HEAD"]
+        # Pin HEAD's tree (the diff's base side); the working tree it is compared against is still
+        # mutable, which is #336's state-token concern, not this one. An unborn HEAD does not
+        # resolve — keep the symbolic form so `git diff HEAD`'s existing error path is unchanged.
+        head = _resolve_commit(cwd, "HEAD", timeout)
+        return [*common, "--end-of-options", head or "HEAD"]
     if scope == "branch":
         # Distinguish an omitted base from a present-but-invalid one: an omitted input
         # renders as "omitted" rather than leaking the Python literal `None`/`''` into
@@ -447,15 +470,25 @@ def _diff_args(scope: str, base: str | None, commit: str | None) -> list[str]:
             raise InvalidBaseError("base ref is required for a branch diff but was omitted")
         if not _valid_ref(base):
             raise InvalidBaseError(f"invalid base ref: {base!r}")
-        return [*common, "--end-of-options", f"{base}...HEAD"]
+        base_sha = _resolve_commit(cwd, base, timeout)
+        if base_sha is None:
+            raise InvalidBaseError(f"base ref does not resolve to a commit: {base!r}")
+        # Pin both ends of the range. `<base_sha>...<head_sha>` preserves the three-dot
+        # merge-base semantics of `<base>...HEAD` while being immutable. An unborn HEAD keeps
+        # the symbolic form (the existing error path).
+        head = _resolve_commit(cwd, "HEAD", timeout)
+        return [*common, "--end-of-options", f"{base_sha}...{head or 'HEAD'}"]
     if scope == "commit":
         if not commit:
             raise InvalidCommitError("commit is required for a commit diff but was omitted")
         if not _valid_ref(commit):
             raise InvalidCommitError(f"invalid commit: {commit!r}")
+        commit_sha = _resolve_commit(cwd, commit, timeout)
+        if commit_sha is None:
+            raise InvalidCommitError(f"commit does not resolve: {commit!r}")
         # `git show` (not diff) gives the commit's own change set and handles root
         # commits (which have no parent for a `^!`/`^..` form to resolve against).
-        return ["show", "--format=", "--no-ext-diff", "--no-textconv", commit]
+        return ["show", "--format=", "--no-ext-diff", "--no-textconv", commit_sha]
     raise InvalidScopeError(f"invalid scope: {scope}")
 
 
@@ -987,11 +1020,11 @@ def gather_diff(
             f"untracked must be one of {sorted(_UNTRACKED_POLICIES)}, got {untracked!r}"
         )
     norm_paths = normalize_paths(paths)
-    diff_args = _diff_args(scope, base, commit)
-    if scope == "branch" and not _ref_exists(cwd, base or "", timeout):
-        raise InvalidBaseError(f"base ref does not resolve to a commit: {base!r}")
-    if scope == "commit" and not _ref_exists(cwd, commit or "", timeout):
-        raise InvalidCommitError(f"commit does not resolve: {commit!r}")
+    # #355: `_diff_args` resolves every ref (HEAD, base, commit) to an immutable object ID here,
+    # once, so the summary and the transmitted diff below cannot describe different objects under
+    # a concurrent ref move. It also raises InvalidBaseError/InvalidCommitError for an
+    # unresolvable ref, folding in the reachability check that used to be a separate `_ref_exists`.
+    diff_args = _diff_args(cwd, scope, base, commit, timeout)
     if norm_paths:
         diff_args = [*diff_args, "--", *norm_paths]
     # #336: bracket the whole working_tree gather (summary + diff + untracked — several

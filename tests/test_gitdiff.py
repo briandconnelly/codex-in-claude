@@ -352,6 +352,72 @@ def test_branch_scope_skips_snapshot_detection(repo):
     assert res.tree_changed_during_gather is False
 
 
+def test_working_tree_pins_head_across_concurrent_commit(repo, monkeypatch):
+    # #355: working_tree diffs against HEAD. If a concurrent commit advances HEAD BETWEEN the
+    # summary and the transmitted diff, a symbolic `git diff HEAD` would make the two describe
+    # different base objects: the summary records one changed file, but by the time the diff
+    # runs the change is committed, so `git diff HEAD` (now the new commit) shows NOTHING.
+    # Pinning HEAD to a resolved object ID once keeps both consistent.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")  # working-tree change
+    orig_summary = gitdiff._summary
+
+    def committing_summary(cwd, diff_args, timeout):
+        s = orig_summary(cwd, diff_args, timeout)
+        _git(repo, "commit", "-qam", "concurrent")  # advances HEAD after the summary
+        return s
+
+    monkeypatch.setattr(gitdiff, "_summary", committing_summary)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.summary.files_changed == 1
+    assert "return a - b" in res.text  # diff still describes the pinned pre-commit HEAD
+
+
+def test_branch_pins_head_across_concurrent_commit(repo, monkeypatch):
+    # #355: a branch diff is `base...HEAD`. A concurrent commit advancing HEAD between the summary
+    # and the diff would, with a symbolic `HEAD`, splice the later commit's files into the reviewed
+    # patch while the summary counted only the earlier ones. Pinning both ends to resolved object
+    # IDs keeps the summary and the diff describing the same range.
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b + 1\n")
+    _git(repo, "commit", "-qam", "h1")  # HEAD = H1; base...HEAD covers only calc.py
+    orig_summary = gitdiff._summary
+
+    def committing_summary(cwd, diff_args, timeout):
+        s = orig_summary(cwd, diff_args, timeout)
+        (repo / "extra.py").write_text("x = 1\n")
+        _git(repo, "add", "extra.py")
+        _git(repo, "commit", "-qm", "h2")  # advances HEAD to H2, adding extra.py
+        return s
+
+    monkeypatch.setattr(gitdiff, "_summary", committing_summary)
+    res = gitdiff.gather_diff(str(repo), "branch", base=base, timeout=30, max_bytes=200_000)
+    assert res.summary.files_changed == 1
+    assert "extra.py" not in res.text  # H2's file must not appear in the H1-pinned diff
+
+
+def test_commit_pins_symbolic_ref_across_concurrent_move(repo, monkeypatch):
+    # #355: commit scope accepts a symbolic ref. If that ref is force-moved to a different commit
+    # between the summary and the `git show` diff, a symbolic ref would make the two describe
+    # different commits. Pinning the ref to its resolved object ID once keeps them consistent.
+    _git(repo, "branch", "target")  # target -> C1 (the init commit that adds calc.py)
+    orig_summary = gitdiff._summary
+
+    def moving_summary(cwd, diff_args, timeout):
+        s = orig_summary(cwd, diff_args, timeout)
+        (repo / "newfile.py").write_text("y = 2\n")
+        _git(repo, "add", "newfile.py")
+        _git(repo, "commit", "-qm", "c2")
+        _git(repo, "branch", "-f", "target", "HEAD")  # target -> C2 (adds newfile.py)
+        return s
+
+    monkeypatch.setattr(gitdiff, "_summary", moving_summary)
+    res = gitdiff.gather_diff(str(repo), "commit", commit="target", timeout=30, max_bytes=200_000)
+    assert "calc.py" in res.text  # pinned to C1
+    assert "newfile.py" not in res.text  # C2's file must not appear
+
+
 def test_state_token_streams_large_listing(repo):
     # The token capture is bounded like count_untracked: a listing far larger than one read
     # chunk must digest without materializing the whole status output (#336 / #322 F1).
