@@ -12,17 +12,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   transmitted diff, and the untracked enumeration — so a concurrent edit between them could make the
   summary describe different content than the diff Codex actually reviewed, or add/remove files after
   enumeration, while `coverage.status` still reported `"complete"` because no omission flag was set.
-  The gather now brackets that window with a cheap best-effort state token
+  The working_tree gather now brackets that window with a cheap best-effort state token
   (`git status --porcelain -z`, streamed through the bounded runner, scoped to the same pathspec and
   global-excludes as the diff); a mismatch sets a new `tree_changed_during_gather` value on
   `coverage.omission_reasons`, degrading coverage to `partial` (and, via the #319 rules, a `pass`
-  verdict to `unknown`). The token is a porcelain classification, not a content hash, so it catches
-  file-set/status changes but **not** a content-only re-edit of an already-modified file or an
-  A→B→A round trip — its absence is therefore not proof the tree held still, and the `complete`
-  documentation is corrected to say so. `branch`/`commit` scopes read immutable objects and are
-  unaffected. Backward-compatible value-set widening of `CoverageOmissionReason` — bumps the result
-  `fingerprint` (`schema-51` → `schema-52`) and the persisted result-format (`RESULT_FORMAT` `4` →
-  `5`, since an older closed-schema reader could reject the new enum value); not breaking.
+  verdict to `unknown`). It is a **consistency caveat** — "the tree was modified while it was read"
+  — not a claim that specific content was omitted, so `partial`'s documented meaning is widened to
+  cover it. The token is a porcelain classification, not a content hash: it trips on file
+  additions/removals and status changes (including a concurrent `git add`), but **not** on a
+  content-only re-edit of an already-modified file or an A→B→A round trip — its absence is therefore
+  not proof the tree held still, and the `complete` documentation is corrected to say so.
+  `branch`/`commit` scopes gather from git objects and skip the check; the `complete`
+  documentation no longer claims those scopes are atomic, since their diff is still gathered by
+  separate git invocations (ref-pinning tracked separately). Backward-compatible value-set widening
+  of `CoverageOmissionReason` — bumps the result `fingerprint` (`schema-51` → `schema-52`) and the
+  persisted result-format (`RESULT_FORMAT` `4` → `5`, since an older closed-schema reader could
+  reject the new enum value); not breaking.
 - **Carriage return in a git-produced filename no longer corrupts the untracked gather** (#353).
   The bounded git-subprocess runner (`_core/gitproc.run_lines`) spawned its child with
   `text=True`, so Python's universal-newline translation rewrote a raw `\r` (or `\r\n`) in git's

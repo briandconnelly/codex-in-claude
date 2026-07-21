@@ -559,25 +559,30 @@ class Meta(BaseModel):
 # "never reviewed" (#319).
 ReviewStatus = Literal["completed", "not_run"]
 
-# Whether everything in the requested git/path scope was actually put in front of the
-# model. `complete` is a strong claim: no omission was detected — nothing in scope was left
-# unreviewed by any mechanism the gather can see. `partial` means some in-scope content was
-# not — see `omission_reasons`. For working_tree, one input (a concurrent edit during
-# gathering) is only BEST-EFFORT detected — see the `tree_changed_during_gather` reason — so
-# `complete` is not an absolute guarantee against a tree mutated while it was read; for
-# branch/commit (immutable objects) it is exact (#336).
+# Whether everything in the requested git/path scope was put in front of the model AND the
+# gather could treat it as one consistent snapshot. `complete`: no omission and no concurrent
+# modification was detected. `partial`: some in-scope content was not reviewed, OR (working_tree
+# only) the working tree was modified while the diff was being gathered, so the pieces may not
+# reflect a single snapshot — see `omission_reasons`. The concurrent-modification signal is
+# BEST-EFFORT (see the `tree_changed_during_gather` reason), so `complete` is not an absolute
+# guarantee that no concurrent edit occurred. The gather also issues its git commands as
+# separate processes for every scope, so `complete` likewise does not prove ref stability under
+# a concurrent commit/reset for branch/commit scopes (#336).
 CoverageStatus = Literal["complete", "partial"]
 
 # Why in-scope content went unreviewed. A closed set:
 #   untracked_omitted          — untracked files exist in scope but were not gathered (see the
 #                                `untracked` input policy); their contents were never sent.
-#   tree_changed_during_gather — (working_tree only) a change to the working tree's
-#                                changed-file set was detected while the diff was being
-#                                gathered, so the summary/diff/untracked pieces may not
-#                                describe one consistent snapshot. Best-effort detection: it
-#                                catches file-set/status changes, not a content-only re-edit
-#                                of an already-modified file — so its ABSENCE is not proof the
-#                                tree held still (#336).
+#   tree_changed_during_gather — (working_tree only) the working tree was modified while the
+#                                diff was being gathered — its changed-file set or a file's
+#                                git status changed between the start and end of the gather —
+#                                so the summary/diff/untracked pieces may not describe one
+#                                consistent snapshot. A consistency caveat, not a claim that
+#                                specific content was omitted. Best-effort: it trips on file
+#                                additions/removals and status changes (including a concurrent
+#                                `git add`), but NOT on a content-only re-edit of an
+#                                already-modified file — so its ABSENCE is not proof the tree
+#                                held still (#336).
 #   truncated                  — the gathered diff hit the byte cap and was cut off.
 #   redacted                   — a secret-looking file's hunk was dropped from the diff, so
 #                                the model saw a marker instead of its content.

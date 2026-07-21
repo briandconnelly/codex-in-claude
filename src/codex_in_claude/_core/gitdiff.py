@@ -120,9 +120,10 @@ class DiffResult:
     untracked_detected: int | None = None
     untracked_included: int = 0
     # #336: working_tree gathers run several sequential git invocations (summary, diff,
-    # untracked). This flags a best-effort detection that the working tree changed across
-    # that window, so the gathered pieces may not describe one consistent snapshot. Always
-    # False for branch/commit scopes (immutable objects) and never set for them.
+    # untracked). This flags a best-effort detection that the working tree was modified across
+    # that window, so the gathered pieces may not describe one consistent snapshot. Only ever
+    # set for working_tree; branch/commit gather from git objects and do not run the check
+    # (which does not, on its own, make those scopes atomic — see _diff_args' separate calls).
     tree_changed_during_gather: bool = False
 
 
@@ -923,12 +924,16 @@ def _worktree_state_token(
     - ``--no-optional-locks`` + the shared ``core.fsmonitor=false`` hardening — status must
       not write the index or run a repo-configured fsmonitor in this process.
 
-    This is a CLASSIFICATION fingerprint, not a content hash: it reliably catches file-set
-    and status-code changes (files added/removed/staged), but a content-only edit that leaves
-    a path's porcelain code unchanged (e.g. re-editing an already-modified file), or an
-    A->B->A round trip between the two captures, is NOT detected. It therefore only ever
-    fails toward a missed detection, never a false one, and does not — on its own — make
-    ``coverage.status == complete`` a guarantee against concurrent mutation.
+    This is a CLASSIFICATION fingerprint, not a content hash. It is a best-effort signal that
+    the working tree was *modified during the gather*, not a proof of diff inconsistency: it
+    trips on file additions/removals and porcelain status changes (including a concurrent
+    ``git add`` that does not alter the reviewed ``git diff HEAD`` patch, and an edit that
+    lands anywhere in the bracketed window — both are real concurrent modifications, disclosed
+    conservatively). It does NOT trip on a content-only re-edit of an already-modified file or
+    an A->B->A round trip between the two captures, so its ABSENCE is not proof the tree held
+    still. A staging-insensitive token (``git diff HEAD --name-status`` plus a separate
+    untracked scan) or a retry-to-stabilize loop would narrow the conservative cases, but both
+    were judged disproportionate for this low-priority disclosure (#336).
     """
     hasher = hashlib.sha256()
 

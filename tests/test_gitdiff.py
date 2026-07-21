@@ -248,16 +248,35 @@ def test_count_untracked_does_not_run_repo_fsmonitor(repo, tmp_path):
 
 # --- working_tree snapshot-consistency detection (#336) ----------------------
 def test_working_tree_detects_mutation_during_gather(repo, monkeypatch):
-    # A file entering the changed-file set between the two state-token captures must be
-    # detected: the summary/diff Codex saw may not describe a single consistent snapshot.
-    orig_summary = gitdiff._summary
+    # An edit landing BETWEEN the summary and the transmitted diff is a genuine inconsistency:
+    # the summary describes the pre-edit tree while the diff Codex reviewed describes the
+    # post-edit tree. The detector must flag it so coverage is not reported `complete`.
+    orig_stream = gitdiff._stream_redacted_diff
 
-    def mutating_summary(cwd, diff_args, timeout):
-        # A previously-clean tracked file becomes modified mid-gather (after t1 was captured).
+    def mutating_stream(cwd, diff_args, timeout, acc, **kw):
+        # After _summary has read the (clean) tree, a second session edits it before the diff.
         (repo / "calc.py").write_text("def add(a, b):\n    return a * b\n")
-        return orig_summary(cwd, diff_args, timeout)
+        return orig_stream(cwd, diff_args, timeout, acc, **kw)
 
-    monkeypatch.setattr(gitdiff, "_summary", mutating_summary)
+    monkeypatch.setattr(gitdiff, "_stream_redacted_diff", mutating_stream)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is True
+
+
+def test_concurrent_staging_detected_as_modification(repo, monkeypatch):
+    # A concurrent `git add` mid-gather does not change the reviewed `git diff HEAD` patch, but
+    # it IS a real concurrent modification of the repo. The porcelain token trips (` M` -> `M `),
+    # and we disclose it conservatively rather than silently claim a consistent snapshot (#336
+    # Codex review). This pins that intended behavior — not a false positive under the tool's
+    # best-effort "modified during gather" semantics.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")  # already dirty
+    orig_stream = gitdiff._stream_redacted_diff
+
+    def staging_stream(cwd, diff_args, timeout, acc, **kw):
+        _git(repo, "add", "calc.py")  # index-only transition; diff-vs-HEAD is unchanged
+        return orig_stream(cwd, diff_args, timeout, acc, **kw)
+
+    monkeypatch.setattr(gitdiff, "_stream_redacted_diff", staging_stream)
     res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
     assert res.tree_changed_during_gather is True
 
