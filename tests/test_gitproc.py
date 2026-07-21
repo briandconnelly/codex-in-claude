@@ -135,6 +135,39 @@ def test_run_lines_drains_remainder_when_consumer_stops_early():
     assert got == "l0"
 
 
+def test_run_lines_nul_delimited_counts_exactly():
+    # A `-z`/NUL-delimited listing (git ls-files -z) is streamed record-by-record when
+    # sep="\0" — counted exactly, never materialized whole (#331).
+    n = 4000
+    cmd = _emit(f"import sys\nfor i in range({n}): sys.stdout.write(f'pkg_{{i:05d}}\\0')")
+    got = gitproc.run_lines(
+        cmd, cwd=".", env=_ENV, timeout=30, max_line_bytes=1 << 20, sep="\0", consume=_count_lines
+    )
+    assert got == n
+
+
+def test_run_lines_nul_preserves_embedded_newline():
+    # A NUL record containing a newline (a filename with \n) is one entry, not two.
+    cmd = _emit("import sys\nsys.stdout.write('we\\nird.py\\0plain.py\\0')")
+    got = gitproc.run_lines(
+        cmd, cwd=".", env=_ENV, timeout=30, max_line_bytes=1 << 20, sep="\0", consume=list
+    )
+    assert got == ["we\nird.py\0", "plain.py\0"]
+
+
+def test_run_lines_rejects_unsupported_sep():
+    with pytest.raises(ValueError, match="sep"):
+        gitproc.run_lines(
+            _emit("pass"),
+            cwd=".",
+            env=_ENV,
+            timeout=30,
+            max_line_bytes=1024,
+            sep="||",
+            consume=list,
+        )
+
+
 def test_run_lines_bounds_large_stderr():
     # A pathological stderr must be retained under the cap, not materialized whole.
     cmd = _emit(
