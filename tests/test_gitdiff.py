@@ -912,6 +912,57 @@ def test_untracked_newline_in_regular_filename_gathered_once(repo):
     assert "we\nird.py" not in res.text  # the raw (unquoted) newline never reaches the output
 
 
+def test_untracked_carriage_return_in_regular_filename_gathered_once(repo):
+    """An untracked file whose name contains a raw carriage return is gathered as ONE file.
+    Universal-newline text mode rewrites \\r -> \\n before the NUL-splitter sees it, so the
+    throwaway-index build would stat a nonexistent `we\\nird.py` and raise an unstructured
+    FileNotFoundError instead of gathering the file (#353)."""
+    (repo / "we\rird.py").write_text("w = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+    )
+    assert res.summary.files_changed == 1
+    assert res.untracked_included == 1
+    # git C-quotes the carriage return in the diff header (\r renders as two chars \ + r).
+    assert '"a/we\\rird.py"' in res.text
+    assert "we\rird.py" not in res.text  # the raw (unquoted) CR never reaches the output
+
+
+def test_untracked_cr_and_lf_named_files_both_gathered(repo):
+    """Two DISTINCT untracked files "we\\rird.py" and "we\\nird.py" must both be gathered.
+    Under \\r -> \\n translation the CR record collapses onto the LF name: the LF file is
+    hashed twice and the CR file is silently omitted while still counted as included, a quiet
+    detected==included coverage-contract violation the #322 F3 invariant cannot catch (#353)."""
+    (repo / "we\rird.py").write_text("r = 1\n")
+    (repo / "we\nird.py").write_text("n = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+    )
+    assert res.summary.files_changed == 2
+    assert res.untracked_included == 2
+    assert '"a/we\\rird.py"' in res.text
+    assert '"a/we\\nird.py"' in res.text
+
+
+def test_untracked_vanished_path_raises_structured_error(repo, monkeypatch):
+    """A concurrently-deleted untracked file — enumerated by ls-files, gone before the index
+    build stats it — must surface as a RuntimeError (in orchestration.GITDIFF_EXCEPTIONS, so it
+    maps to a structured envelope), not a raw FileNotFoundError escaping the gather (#353)."""
+    (repo / "fresh.py").write_text("x = 1\n")
+    real_stat = Path.stat
+
+    def vanish(self, *args, **kwargs):
+        if self.name == "fresh.py":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", vanish)
+    with pytest.raises(RuntimeError):
+        gitdiff.gather_diff(
+            str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+        )
+
+
 def test_untracked_oversized_path_record_fails_loudly(repo, monkeypatch):
     """#331 / Codex MEDIUM: an over-long untracked path (a genuinely absurd one, or one the
     bounded reader truncated) must be rejected loudly rather than hashed under a corrupt name.
@@ -1336,6 +1387,18 @@ def test_global_excludes_flags_preserves_newline_in_value(tmp_path, monkeypatch)
     # the WHOLE value (via -z), not silently drop everything after the first newline — which
     # would point at a different ignore file and re-open the egress this fixes (#330 review).
     weird = f"{tmp_path / 'alpha'}\n{tmp_path / 'beta'}"  # absolute path with an embedded \n
+    config = tmp_path / "gc"
+    run_git(tmp_path, "config", "-f", str(config), "core.excludesFile", weird)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    flags = gitdiff._global_excludes_flags(str(tmp_path), timeout=30)
+    assert flags == ["-c", f"core.excludesFile={weird}"]
+
+
+def test_global_excludes_flags_preserves_carriage_return_in_value(tmp_path, monkeypatch):
+    # A core.excludesFile value can contain a raw carriage return. It is read via `git config
+    # -z` through the same run_lines runner, so universal-newline text mode would rewrite \r ->
+    # \n and corrupt the path. The whole byte-exact value must survive (#353).
+    weird = f"{tmp_path / 'al'}\r{tmp_path / 'pha'}"  # absolute path with an embedded \r
     config = tmp_path / "gc"
     run_git(tmp_path, "config", "-f", str(config), "core.excludesFile", weird)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))

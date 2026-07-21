@@ -556,15 +556,24 @@ def _untracked_new_file_diff(
                         "refusing to hash it"
                     )
                 full = Path(cwd) / path
-                if full.is_symlink():
-                    # Hash the link target text, not the dereferenced file, as a 120000 blob.
-                    mode = "120000"
-                    target = os.readlink(full)  # noqa: PTH115 — raw target, not a normalized Path
-                    blob = _git(cwd, ["hash-object", "-w", "--stdin"], _budget(), env, stdin=target)
-                else:
-                    mode = "100755" if full.stat().st_mode & 0o111 else "100644"
-                    hash_args = ["hash-object", "--no-filters", "-w", "--", path]
-                    blob = _git(cwd, hash_args, _budget(), env)
+                try:
+                    if full.is_symlink():
+                        # Hash the link target text, not the dereferenced file, as a 120000 blob.
+                        mode = "120000"
+                        target = os.readlink(full)  # noqa: PTH115 — raw target, not a Path
+                        blob = _git(
+                            cwd, ["hash-object", "-w", "--stdin"], _budget(), env, stdin=target
+                        )
+                    else:
+                        mode = "100755" if full.stat().st_mode & 0o111 else "100644"
+                        hash_args = ["hash-object", "--no-filters", "-w", "--", path]
+                        blob = _git(cwd, hash_args, _budget(), env)
+                except FileNotFoundError as exc:
+                    # The file was enumerated by ls-files but vanished (a concurrent delete)
+                    # before this build could stat/read it. Surface a structured RuntimeError
+                    # (caught by orchestration.GITDIFF_EXCEPTIONS) instead of letting a raw
+                    # FileNotFoundError escape the gather as an unstructured error (#353).
+                    raise RuntimeError(f"untracked file vanished during gather: {path!r}") from exc
                 cacheinfo = f"{mode},{blob.strip()},{path}"
                 update_args = ["update-index", "--add", "--cacheinfo", cacheinfo]
                 _git(cwd, update_args, _budget(), env)
