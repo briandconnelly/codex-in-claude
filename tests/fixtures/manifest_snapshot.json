@@ -866,7 +866,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-50",
+            "default": "codex-in-claude/0.1/schema-51",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1388,7 +1388,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-50",
+                "default": "codex-in-claude/0.1/schema-51",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2020,7 +2020,7 @@
             "summary": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
           },
           "reasoning_effort": {
-            "full": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort; an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars are rejected as invalid_arguments.",
+            "full": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort (repair steers to codex_models); an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars in this per-call argument are rejected at the MCP boundary as invalid_arguments; the same hostile shape in the resolved CODEX_IN_CLAUDE_REASONING_EFFORT default — which never crosses that boundary — is instead refused pre-spend as invalid_reasoning_effort (repair: correct the config; zero spend, the value never reaches codex).",
             "summary": "Override the Codex reasoning effort for this call (a model_reasoning_effort override); omit or pass null for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open, per-model string the backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). Rejection and bounds detail: codex://params."
           }
         }
@@ -2424,7 +2424,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-50",
+            "default": "codex-in-claude/0.1/schema-51",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3070,7 +3070,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-50",
+            "default": "codex-in-claude/0.1/schema-51",
             "title": "Fingerprint",
             "type": "string"
           },

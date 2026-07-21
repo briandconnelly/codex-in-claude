@@ -886,14 +886,24 @@ def _extra_args_error(meta: Meta) -> dict | None:
     )
 
 
-def _reasoning_effort_shape_error(effort: str | None, meta: Meta) -> dict | None:
+def _reasoning_effort_shape_error(
+    effort: str | None, meta: Meta, *, from_config: bool
+) -> dict | None:
     """Pre-spend guard on the RESOLVED reasoning effort (#309, Codex re-review).
 
     The MCP boundary already enforces the shape bounds on the per-call parameter, but
     the CODEX_IN_CLAUDE_REASONING_EFFORT env default (and a direct in-process call)
     never crosses that boundary — without this check an argv-hostile operator default
     would reach Popen (a NUL raises ValueError; an argv-scale value surfaces as a
-    misleading codex_not_found). Zero spend: the run is refused before any subprocess."""
+    misleading codex_not_found). Zero spend: the run is refused before any subprocess.
+
+    `invalid_reasoning_effort` is shared with the backend-rejection path, whose table
+    repair steers to codex_models (correct there). That is wrong here: the value never
+    reached the backend, so the machine repair is provenance-specific and carries no tool
+    (#332). `from_config` is True when the invalid value is the resolved env default
+    (repair `correct_config` — fix the operator config) and False when it is an explicit
+    per-call argument that reached this guard via a direct in-process call (repair
+    `correct_arguments` — over MCP such a value is invalid_arguments at the boundary)."""
     if effort is None:
         return None
     reason = config.reasoning_effort_shape_error(effort)
@@ -909,6 +919,8 @@ def _reasoning_effort_shape_error(effort: str | None, meta: Meta) -> dict | None
                 "invalid_reasoning_effort",
                 f"the requested reasoning_effort {reason}.",
                 details=ErrorDetail(field="reasoning_effort"),
+                repair_next_step="correct_config" if from_config else "correct_arguments",
+                repair_tool=None,  # clear the table's codex_models: the backend never saw it
                 repair_alternative=(
                     "Fix the per-call reasoning_effort or the "
                     f"{config.ENV_PREFIX}REASONING_EFFORT default (≤"
@@ -1346,8 +1358,10 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     "invalid_json",
     "schema_violation",
     "cli_contract_changed",
-    # Reachable on every Codex-running tool: the backend rejected the effort the
-    # per-call reasoning_effort param or CODEX_IN_CLAUDE_REASONING_EFFORT sent (#309).
+    # Reachable on every Codex-running tool, from two paths (#309, #332): the backend
+    # rejected the sent effort, OR the local pre-spend guard refused a hostile resolved
+    # value (the per-call reasoning_effort or the CODEX_IN_CLAUDE_REASONING_EFFORT default)
+    # before any subprocess. The two paths carry different machine repairs.
     "invalid_reasoning_effort",
     "extra_args_rejected",
     "codex_rate_limited",
@@ -2122,7 +2136,7 @@ async def _prepare_consult(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
-    effort_err = _reasoning_effort_shape_error(effort, meta)
+    effort_err = _reasoning_effort_shape_error(effort, meta, from_config=reasoning_effort is None)
     if effort_err is not None:
         return effort_err
 
@@ -2248,7 +2262,7 @@ async def _prepare_review(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
-    effort_err = _reasoning_effort_shape_error(effort, meta)
+    effort_err = _reasoning_effort_shape_error(effort, meta, from_config=reasoning_effort is None)
     if effort_err is not None:
         return effort_err
 
@@ -2339,7 +2353,7 @@ async def _prepare_delegate(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
-    effort_err = _reasoning_effort_shape_error(effort, meta)
+    effort_err = _reasoning_effort_shape_error(effort, meta, from_config=reasoning_effort is None)
     if effort_err is not None:
         return effort_err
 
@@ -3413,7 +3427,9 @@ async def codex_dry_run(
     extra_args_err = _extra_args_error(dry_meta)
     if extra_args_err is not None:
         return extra_args_err
-    effort_err = _reasoning_effort_shape_error(effort, dry_meta)
+    effort_err = _reasoning_effort_shape_error(
+        effort, dry_meta, from_config=reasoning_effort is None
+    )
     if effort_err is not None:
         return effort_err
 
@@ -3586,7 +3602,7 @@ async def codex_delegate_dry_run(
     extra_args_err = _extra_args_error(meta)
     if extra_args_err is not None:
         return extra_args_err
-    effort_err = _reasoning_effort_shape_error(effort, meta)
+    effort_err = _reasoning_effort_shape_error(effort, meta, from_config=reasoning_effort is None)
     if effort_err is not None:
         return effort_err
 

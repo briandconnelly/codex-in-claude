@@ -2095,7 +2095,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-50"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-51"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5691,7 +5691,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-50")
+    assert result["fingerprint"].endswith("schema-51")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6464,6 +6464,46 @@ async def test_env_reasoning_effort_shape_rejected_in_dry_runs(monkeypatch, clea
     res2 = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
     assert res2["ok"] is False
     assert res2["error"]["code"] == "invalid_reasoning_effort"
+
+
+async def test_env_reasoning_effort_shape_repair_points_at_config(monkeypatch, clean_env, tmp_path):
+    # #332: when the hostile value is the resolved env DEFAULT (no per-call override),
+    # the machine repair must steer to the operator config — next_step "correct_config"
+    # with NO repair tool — not the backend-rejection repair (correct_arguments +
+    # codex_models), which would send an agent to make a useless codex_models call while
+    # the real fix is the CODEX_IN_CLAUDE_REASONING_EFFORT default.
+    clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "z" * 129)
+
+    async def never_run(*a, **k):
+        raise AssertionError("no run may start for an invalid effort default")
+
+    monkeypatch.setattr(server, "_run_sync", never_run)
+    res = await server.codex_consult("q", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "invalid_reasoning_effort"
+    repair = res["error"]["repair"]
+    assert repair["next_step"] == "correct_config"
+    assert "tool" not in repair  # codex_models does not apply to a config-shape refusal
+    # Both free dry runs (which advertise this code) emit the same config repair.
+    res_dry = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res_dry["error"]["repair"]["next_step"] == "correct_config"
+    assert "tool" not in res_dry["error"]["repair"]
+    _init_repo(tmp_path)
+    res_del = await server.codex_delegate_dry_run("task", workspace_root=str(tmp_path))
+    assert res_del["error"]["repair"]["next_step"] == "correct_config"
+    assert "tool" not in res_del["error"]["repair"]
+
+
+async def test_explicit_reasoning_effort_shape_repair_points_at_arguments(clean_env, tmp_path):
+    # #332 provenance: when the hostile value is an EXPLICIT per-call argument that
+    # bypassed MCP-boundary validation (only reachable via a direct in-process call —
+    # over MCP such a value is invalid_arguments at the boundary and never reaches this
+    # guard), the machine repair names the argument: next_step "correct_arguments" with
+    # NO tool. The guard must not report it as a config problem.
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), reasoning_effort="y" * 129)
+    assert res["error"]["code"] == "invalid_reasoning_effort"
+    repair = res["error"]["repair"]
+    assert repair["next_step"] == "correct_arguments"
+    assert "tool" not in repair
 
 
 async def test_reasoning_effort_surrogate_rejected_with_serializable_envelope(clean_env, tmp_path):
