@@ -16,14 +16,16 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from codex_in_claude._core import gitproc, streamcap
 from codex_in_claude._core.redaction import DiffRedactor
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from typing import TextIO
+
+T = TypeVar("T")
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -151,7 +153,7 @@ def _is_not_git_repo_error(stderr: str) -> bool:
 def _git(
     cwd: str,
     args: list[str],
-    timeout: int,
+    timeout: float,
     extra_env: dict[str, str] | None = None,
     stdin: str | None = None,
 ) -> str:
@@ -184,6 +186,65 @@ def _git(
             raise NotAGitRepoError(message)
         raise RuntimeError(message)
     return proc.stdout
+
+
+# Generous per-record cap (UTF-8 BYTES) for the streamed untracked listing and its numstat.
+# A single path or numstat line far larger than any real one (a genuine path is < PATH_MAX)
+# is truncated by the bounded reader; the listing consumer then fails loudly rather than
+# hashing a fabricated name. Bounds transient per-record memory without touching real input.
+_UNTRACKED_RECORD_MAX = 1 << 20
+
+# Sanity ceiling (UTF-8 BYTES) on a single untracked path. No real repo-relative path
+# approaches this (OS PATH_MAX is ~4 KiB), so a longer record — a genuinely absurd path or one
+# the bounded reader truncated near its byte cap — is rejected outright rather than hashed under
+# a corrupt name. A pure length test, so it cannot false-positive a normal filename that merely
+# happens to end in the reader's truncation-marker text.
+#
+# INVARIANT (`_UNTRACKED_RECORD_MAX` > this): a reader-truncated record is ~`_UNTRACKED_RECORD_MAX`
+# bytes, so it only trips this reject while the reader cap stays well ABOVE this ceiling. If the two
+# ever crossed, a truncated (corrupt) path could fall under this ceiling and be hashed anyway,
+# silently restoring the bug this reject removes. Pinned by
+# test_untracked_reject_ceiling_below_reader_cap.
+_MAX_UNTRACKED_PATH_BYTES = 8192
+
+
+def _run_git_lines(
+    args: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    timeout: int,
+    sep: str,
+    consume: Callable[[Iterator[str]], T],
+    excludes: list[str] | None = None,
+) -> T:
+    """Run a hardened ``git`` command through the bounded streaming runner
+    (:func:`gitproc.run_lines`), mapping its typed errors back onto this module's git error
+    vocabulary exactly as :func:`_git` does — same error types, and a timeout message naming the
+    same ``args`` — so a streamed call and a captured call fail the same way. ``excludes``
+    (``-c core.excludesFile=...``) is injected ahead of the subcommand for the untracked-
+    enumeration calls (#330). A record cap of :data:`_UNTRACKED_RECORD_MAX` keeps transient
+    memory O(one record + chunk)."""
+    argv = ["git", *_GIT_HARDENING_FLAGS, *(excludes or []), *args]
+    try:
+        return gitproc.run_lines(
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            max_line_bytes=_UNTRACKED_RECORD_MAX,
+            sep=sep,
+            consume=consume,
+        )
+    except gitproc.GitBinaryNotFound as exc:
+        raise GitUnavailableError("git executable not found") from exc
+    except gitproc.GitStreamTimeout as exc:
+        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s") from exc
+    except gitproc.GitStreamFailed as exc:
+        message = exc.stderr.strip() or "git failed"
+        if _is_not_git_repo_error(message):
+            raise NotAGitRepoError(message) from exc
+        raise RuntimeError(message) from exc
 
 
 def _path() -> str:
@@ -428,22 +489,34 @@ def _untracked_new_file_diff(
     Object writes are redirected to a temp object dir (``GIT_OBJECT_DIRECTORY``), with
     the repo's real objects as a read-only alternate, so the raw (pre-redaction) bytes
     of an untracked secret never persist as a blob in the repo's own ``.git/objects``.
-    The temp index and objects are discarded with the tempdir, leaving no trace."""
+    The temp index and objects are discarded with the tempdir, leaving no trace.
+
+    Both cardinality-driven git outputs are streamed, never captured whole (#331): the
+    ``ls-files -z`` listing is fed record-by-record into the per-path index build (single
+    enumeration — no second count that could disagree under concurrent mutation, #322 F3),
+    and ``--numstat`` is summed through the same bounded reader. Memory stays O(one record +
+    chunk) regardless of how many untracked files the workspace has. The whole composed
+    listing-plus-index-build phase is bounded by one absolute ``deadline``: each per-path
+    ``git`` child gets only the remaining time, and a consumer raise mid-stream reaps the
+    ``ls-files`` producer, so the phase cannot run past ``timeout`` even though the producer's
+    own watchdog only bounds the producer."""
     # `-c core.excludesFile=...` re-supplies the user's global ignore layer, which the
     # HOME-stripped env would otherwise drop, so a globally-ignored file is not gathered
-    # and sent (#330). It precedes the subcommand, so it goes in the args list.
+    # and sent (#330). Passed via `_run_git_lines(excludes=...)`, which injects it ahead of the
+    # subcommand.
     excludes = _global_excludes_flags(cwd, timeout)
-    listing = _git(
-        cwd,
-        [*excludes, "ls-files", "--others", "--exclude-standard", "-z", "--", *norm_paths],
-        timeout,
-    )
-    paths = [p for p in listing.split("\0") if p]
-    if not paths:
-        return 0, 0
+    # Streaming the listing straight into the index build is a single enumeration (no separate
+    # count that could disagree under concurrent mutation, #322 F3), so the temp object dir must
+    # exist before enumeration starts. That means rev-parse + tempdir run even for a clean tree
+    # (the old whole-capture path could early-return on an empty listing first); the extra work is
+    # one cheap git call on a path only reached when untracked gathering was requested.
     real_objects = _git(
         cwd, ["rev-parse", "--path-format=absolute", "--git-path", "objects"], timeout
     ).strip()
+    # One budget for the streamed producer AND the per-path consumer work it drives, so the
+    # composed phase is bounded by `timeout` (the producer watchdog alone would not stop the
+    # consumer once ls-files is killed — Codex #331 review, HIGH).
+    deadline = time.monotonic() + timeout
     with tempfile.TemporaryDirectory() as tmp:
         objects = Path(tmp) / "objects"
         objects.mkdir()
@@ -452,35 +525,89 @@ def _untracked_new_file_diff(
             "GIT_OBJECT_DIRECTORY": str(objects),
             "GIT_ALTERNATE_OBJECT_DIRECTORIES": real_objects,
         }
-        for path in paths:
-            full = Path(cwd) / path
-            if full.is_symlink():
-                # Hash the link target text, not the dereferenced file, as a 120000 blob.
-                mode = "120000"
-                target = os.readlink(full)  # noqa: PTH115 — raw target, not a normalized Path
-                obj_args = ["hash-object", "-w", "--stdin"]
-                blob = _git(cwd, obj_args, timeout, extra_env=env, stdin=target)
-            else:
-                mode = "100755" if full.stat().st_mode & 0o111 else "100644"
-                hash_args = ["hash-object", "--no-filters", "-w", "--", path]
-                blob = _git(cwd, hash_args, timeout, extra_env=env)
-            cacheinfo = f"{mode},{blob.strip()},{path}"
-            _git(cwd, ["update-index", "--add", "--cacheinfo", cacheinfo], timeout, extra_env=env)
+
+        def _budget() -> float:
+            # Time left in the phase deadline, recomputed at EVERY nested git call so a slow
+            # `hash-object` shrinks what `update-index` gets — the composed phase never runs
+            # materially past `timeout` (Codex #331 review, HIGH). Raises the moment it is spent
+            # so the raise reaps the ls-files producer via run_lines.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"untracked index build timed out after {timeout}s")
+            return remaining
+
+        def _index_untracked(records: Iterator[str]) -> int:
+            # ls-files -z emits `path\0` per file; the bounded reader yields each record WITH
+            # its trailing NUL (embedded newlines preserved). Build the throwaway index one
+            # path at a time — never materialising the whole listing.
+            count = 0
+            for record in records:
+                path = record[:-1] if record.endswith("\0") else record
+                if not path:  # defensive: ls-files -z does not emit an empty record
+                    continue
+                if len(path.encode("utf-8", "surrogateescape")) > _MAX_UNTRACKED_PATH_BYTES:
+                    # No real repo-relative path approaches this ceiling, so an over-long record
+                    # — whether a genuinely huge path or one the reader truncated (leaving it
+                    # near the byte cap) — is pathological. Fail loudly rather than hash it; a
+                    # length test can't false-positive a normal name the way sniffing the
+                    # reader's truncation marker could (Codex #331 review, MEDIUM).
+                    raise RuntimeError(
+                        f"untracked path exceeds {_MAX_UNTRACKED_PATH_BYTES} bytes; "
+                        "refusing to hash it"
+                    )
+                full = Path(cwd) / path
+                if full.is_symlink():
+                    # Hash the link target text, not the dereferenced file, as a 120000 blob.
+                    mode = "120000"
+                    target = os.readlink(full)  # noqa: PTH115 — raw target, not a normalized Path
+                    blob = _git(cwd, ["hash-object", "-w", "--stdin"], _budget(), env, stdin=target)
+                else:
+                    mode = "100755" if full.stat().st_mode & 0o111 else "100644"
+                    hash_args = ["hash-object", "--no-filters", "-w", "--", path]
+                    blob = _git(cwd, hash_args, _budget(), env)
+                cacheinfo = f"{mode},{blob.strip()},{path}"
+                update_args = ["update-index", "--add", "--cacheinfo", cacheinfo]
+                _git(cwd, update_args, _budget(), env)
+                count += 1
+            return count
+
+        indexed = _run_git_lines(
+            ["ls-files", "--others", "--exclude-standard", "-z", "--", *norm_paths],
+            cwd=cwd,
+            env=_base_git_env(),
+            timeout=timeout,
+            sep="\0",
+            consume=_index_untracked,
+            excludes=excludes,
+        )
+        if indexed == 0:
+            return 0, 0
         diff_args = ["diff", "--no-ext-diff", "--no-textconv", "--cached", _EMPTY_TREE]
         # F1b: stream through the bounded redactor instead of materialising the whole
         # patch as a string; extra_env carries GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY.
         _stream_redacted_diff(cwd, diff_args, timeout, acc, extra_env=env)
-        # numstat is one line per file (bounded, fine as a captured string).
-        numstat = _git(cwd, [*diff_args, "--numstat"], timeout, extra_env=env)
-    files = added = 0
-    for line in numstat.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        files += 1
-        if parts[0].isdigit():  # "-" for binary; left out of the line tally
-            added += int(parts[0])
-    return files, added
+
+        def _sum_numstat(lines: Iterator[str]) -> tuple[int, int]:
+            # `--numstat` is one line per file; stream-sum it rather than capture the whole
+            # output, which is unbounded in file count (#331). Parsing matches _summary.
+            files = added = 0
+            for line in lines:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 3:
+                    continue
+                files += 1
+                if parts[0].isdigit():  # "-" for binary; left out of the line tally
+                    added += int(parts[0])
+            return files, added
+
+        return _run_git_lines(
+            [*diff_args, "--numstat"],
+            cwd=cwd,
+            env={**_base_git_env(), **env},
+            timeout=timeout,
+            sep="\n",
+            consume=_sum_numstat,
+        )
 
 
 def _summary(cwd: str, diff_args: list[str], timeout: int) -> DiffSummary:

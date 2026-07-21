@@ -37,22 +37,40 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
     from typing import TextIO
 
-_LINE_TRUNC_MARKER = "…[line truncated]\n"
+# The truncation sentinel, and the default (newline-terminated) marker. The marker's
+# terminator follows the record separator in use (``\n`` or ``\0``), so a truncated NUL
+# record stays NUL-delimited; both separators are one byte, so the marker's byte length
+# (and thus the reserved budget) is identical either way.
+_LINE_TRUNC_SENTINEL = "…[line truncated]"
+_LINE_TRUNC_MARKER = _LINE_TRUNC_SENTINEL + "\n"
 _LINE_TRUNC_MARKER_BYTES = len(_LINE_TRUNC_MARKER.encode("utf-8"))
 _OUTPUT_TRUNC_MARKER = "[output truncated]\n"
+
+# The only record separators supported by the assembler: the two git actually emits
+# (newline for ordinary output, NUL for ``-z`` listings). Both are a single character —
+# an empty separator would never make progress, and a multi-character one would need
+# cross-chunk matching the single-``find`` assembler does not implement. Validated at the
+# public entry points so ``_core`` callers who do not exist yet cannot pass a bad value.
+_SUPPORTED_SEPS = ("\n", "\0")
+
+
+def _validate_sep(sep: str) -> None:
+    if sep not in _SUPPORTED_SEPS:
+        msg = f"sep must be one of {_SUPPORTED_SEPS!r}, got {sep!r}"
+        raise ValueError(msg)
 
 
 def _nbytes(text: str) -> int:
     return len(text.encode("utf-8", "replace"))
 
 
-def _truncate_to_marker(text: str, max_line_bytes: int) -> str:
-    """Truncate ``text`` (a logical line WITHOUT its trailing newline) so that the
-    returned line — truncated content plus ``_LINE_TRUNC_MARKER`` — encodes to
+def _truncate_to_marker(text: str, max_line_bytes: int, sep: str) -> str:
+    """Truncate ``text`` (a logical record WITHOUT its trailing separator) so that the
+    returned record — truncated content plus the ``sep``-terminated marker — encodes to
     ``<= max_line_bytes`` bytes. UTF-8-safe: never splits a multibyte character."""
     content_limit = max(0, max_line_bytes - _LINE_TRUNC_MARKER_BYTES)
     encoded = text.encode("utf-8", "replace")
-    return encoded[:content_limit].decode("utf-8", "ignore") + _LINE_TRUNC_MARKER
+    return encoded[:content_limit].decode("utf-8", "ignore") + _LINE_TRUNC_SENTINEL + sep
 
 
 def _drain_chunks(stream: TextIO, chunk_size: int) -> Iterator[str]:
@@ -91,13 +109,20 @@ def _available_chunks(stream: io.BufferedIOBase, chunk_size: int, encoding: str)
             yield text
 
 
-def _assemble_bounded_lines(chunks: Iterable[str], max_line_bytes: int) -> Iterator[str]:
-    """Yield complete lines from a stream of text ``chunks`` (each line ending in ``\\n``
-    except possibly the last), capping any single logical line at ``max_line_bytes``.
+def _assemble_bounded_lines(
+    chunks: Iterable[str], max_line_bytes: int, sep: str = "\n"
+) -> Iterator[str]:
+    """Yield complete records from a stream of text ``chunks`` (each record ending in
+    ``sep`` except possibly the last), capping any single record at ``max_line_bytes``.
 
-    The bound holds *while* a line is being buffered, not after its newline arrives:
-    once the pending line exceeds the cap it is flushed truncated and the remainder is
-    discarded up to the next newline. Memory is therefore bounded by
+    ``sep`` is the single-character record delimiter — ``\\n`` for ordinary output or
+    ``\\0`` for a git ``-z`` listing — and the truncation marker is terminated with it, so
+    a truncated NUL record stays NUL-delimited. A NUL split preserves a newline embedded in
+    a record (a filename containing ``\\n`` is one record, not two).
+
+    The bound holds *while* a record is being buffered, not after its separator arrives:
+    once the pending record exceeds the cap it is flushed truncated and the remainder is
+    discarded up to the next separator. Memory is therefore bounded by
     ``max_line_bytes + chunk_size`` regardless of what the producer emits."""
     pending: list[str] = []
     pending_bytes = 0
@@ -105,7 +130,7 @@ def _assemble_bounded_lines(chunks: Iterable[str], max_line_bytes: int) -> Itera
     for chunk in chunks:
         start = 0
         while True:
-            nl = chunk.find("\n", start)
+            nl = chunk.find(sep, start)
             if nl == -1:
                 seg = chunk[start:]
                 if seg and not overflowing:
@@ -116,7 +141,7 @@ def _assemble_bounded_lines(chunks: Iterable[str], max_line_bytes: int) -> Itera
                         # Reserve space for the marker so content + marker fits
                         # within max_line_bytes (not just content alone).
                         # max(0, ...) guards against a pathologically tiny cap.
-                        pending = [_truncate_to_marker("".join(pending), max_line_bytes)]
+                        pending = [_truncate_to_marker("".join(pending), max_line_bytes, sep)]
                         pending_bytes = _nbytes(pending[0])
                 break
             if overflowing:
@@ -126,9 +151,9 @@ def _assemble_bounded_lines(chunks: Iterable[str], max_line_bytes: int) -> Itera
             else:
                 line = "".join(pending) + chunk[start : nl + 1]
                 if _nbytes(line) > max_line_bytes:
-                    # strip the line's own trailing newline; the marker brings its own
+                    # strip the record's own trailing separator; the marker brings its own
                     line = _truncate_to_marker(
-                        line[:-1] if line.endswith("\n") else line, max_line_bytes
+                        line[:-1] if line.endswith(sep) else line, max_line_bytes, sep
                     )
                 yield line
             pending = []
@@ -142,10 +167,11 @@ def _assemble_bounded_lines(chunks: Iterable[str], max_line_bytes: int) -> Itera
 
 
 def iter_bounded_lines(
-    stream: TextIO, max_line_bytes: int, chunk_size: int = 65536
+    stream: TextIO, max_line_bytes: int, chunk_size: int = 65536, *, sep: str = "\n"
 ) -> Iterator[str]:
-    """Yield complete lines from a text ``stream`` that is being **drained to EOF**,
-    capping any single logical line at ``max_line_bytes``.
+    """Yield complete records from a text ``stream`` that is being **drained to EOF**,
+    capping any single record at ``max_line_bytes``. ``sep`` selects the record delimiter
+    (``\\n`` default, or ``\\0`` for a git ``-z`` listing); unsupported values are rejected.
 
     Constraint: this reader **must never back an interactive stream.** It is fed by
     ``stream.read(chunk_size)``, which on a blocking pipe waits for ``chunk_size``
@@ -155,7 +181,8 @@ def iter_bounded_lines(
     enough bytes to fill the chunk. Use ``iter_bounded_lines_interactive`` there.
 
     Correct callers run a subprocess to completion and read what it wrote."""
-    return _assemble_bounded_lines(_drain_chunks(stream, chunk_size), max_line_bytes)
+    _validate_sep(sep)
+    return _assemble_bounded_lines(_drain_chunks(stream, chunk_size), max_line_bytes, sep)
 
 
 def iter_bounded_lines_interactive(

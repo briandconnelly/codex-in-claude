@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 import sys
@@ -526,9 +527,9 @@ def test_large_diff_is_memory_bounded(repo, monkeypatch):
     real_iter = streamcap.iter_bounded_lines
     seen_chunked = {"used": False}
 
-    def spy(stream, max_line_bytes, chunk_size=65536):
+    def spy(stream, max_line_bytes, chunk_size=65536, *, sep="\n"):
         seen_chunked["used"] = True
-        yield from real_iter(stream, max_line_bytes, chunk_size)
+        yield from real_iter(stream, max_line_bytes, chunk_size, sep=sep)
 
     monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", spy)
     res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=500)
@@ -675,8 +676,8 @@ def test_f3_long_line_diff_bytes_exact(repo, monkeypatch):
     # multiple chunks and the per-line cap is actually enforced.
     real_iter = streamcap.iter_bounded_lines
 
-    def small_chunk_iter(stream, max_line_bytes, chunk_size=65536):
-        yield from real_iter(stream, max_line_bytes, chunk_size=90)
+    def small_chunk_iter(stream, max_line_bytes, chunk_size=65536, *, sep="\n"):
+        yield from real_iter(stream, max_line_bytes, chunk_size=90, sep=sep)
 
     monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", small_chunk_iter)
 
@@ -728,8 +729,8 @@ def test_f3_long_line_secret_beyond_per_line_cap_redacted(repo, monkeypatch):
 
     real_iter = streamcap.iter_bounded_lines
 
-    def small_chunk_iter(stream, max_line_bytes, chunk_size=65536):
-        yield from real_iter(stream, max_line_bytes, chunk_size=60)
+    def small_chunk_iter(stream, max_line_bytes, chunk_size=65536, *, sep="\n"):
+        yield from real_iter(stream, max_line_bytes, chunk_size=60, sep=sep)
 
     monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", small_chunk_iter)
 
@@ -789,9 +790,9 @@ def test_f1b_large_untracked_uses_bounded_reader(repo, monkeypatch):
     call_count: dict[str, int] = {"n": 0}
     real_iter = streamcap.iter_bounded_lines
 
-    def counting_iter(stream, max_line_bytes, chunk_size=65536):
+    def counting_iter(stream, max_line_bytes, chunk_size=65536, *, sep="\n"):
         call_count["n"] += 1
-        yield from real_iter(stream, max_line_bytes, chunk_size)
+        yield from real_iter(stream, max_line_bytes, chunk_size, sep=sep)
 
     monkeypatch.setattr(gitdiff.streamcap, "iter_bounded_lines", counting_iter)
 
@@ -816,6 +817,174 @@ def test_f1b_large_untracked_file_text_bounded(repo):
     assert len(res.text.encode("utf-8")) <= max_bytes
     assert res.diff_bytes > max_bytes
     assert res.summary.files_changed == 1
+
+
+# ---------------------------------------------------------------------------
+# #331: the untracked listing and numstat are streamed, not captured whole
+# ---------------------------------------------------------------------------
+
+
+def test_untracked_listing_and_numstat_stream_through_run_lines(repo, monkeypatch):
+    """The untracked-gather path must route its `ls-files -z` listing and its `--numstat`
+    through the bounded `gitproc.run_lines` runner — never `_git` (whole capture). RED
+    before #331: both used `_git`, so only the excludes resolver reaches run_lines."""
+    for i in range(5):
+        (repo / f"u_{i}.py").write_text("x = 1\n")
+
+    calls: list[tuple[list[str], str]] = []
+    real = gitdiff.gitproc.run_lines
+
+    def spy(argv, **kwargs):
+        calls.append((list(argv), kwargs.get("sep", "\n")))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", spy)
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+    )
+    assert res.summary.files_changed == 5
+    # The NUL-delimited listing streamed with sep="\0"...
+    assert any("ls-files" in argv and sep == "\0" for argv, sep in calls)
+    # ...and the numstat streamed (newline-delimited).
+    assert any("--numstat" in argv for argv, _ in calls)
+
+
+def test_untracked_index_build_bounded_by_deadline(repo, monkeypatch):
+    """#331 / Codex HIGH: the composed producer+consumer phase (ls-files streamed into
+    per-path hashing) must be bounded by ONE deadline, not merely the producer's watchdog.
+    With slow per-path work and a short timeout, the whole call must bail near the timeout
+    instead of grinding through every buffered path. RED before the deadline check: the
+    consumer runs to completion (~files * sleep) before run_lines reports the timeout."""
+    import time as _time
+
+    for i in range(20):
+        (repo / f"slow_{i:02d}.py").write_text("x = 1\n")
+
+    real_git = gitdiff._git
+    budgets: list[tuple[str, float]] = []
+
+    def slow_git(cwd, args, timeout, extra_env=None, stdin=None):
+        # Simulate slow per-path index work; leave enumeration/rev-parse untouched.
+        if args and args[0] in ("hash-object", "update-index"):
+            budgets.append((args[0], timeout))
+            _time.sleep(0.3)
+        return real_git(cwd, args, timeout, extra_env=extra_env, stdin=stdin)
+
+    monkeypatch.setattr(gitdiff, "_git", slow_git)
+
+    start = _time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        gitdiff.gather_diff(
+            str(repo), "working_tree", untracked="include", timeout=1, max_bytes=200_000
+        )
+    elapsed = _time.monotonic() - start
+    # 20 files * 0.3s = 6s unbounded; the shared deadline must cut it near the 1s timeout.
+    assert elapsed < 2.5, f"phase not deadline-bounded: {elapsed:.1f}s"
+    # The budget must be recomputed per nested call (not a stale per-path value reused for both
+    # hash-object and update-index), so every git call receives strictly less time than the last.
+    passed = [t for _, t in budgets]
+    assert len(passed) >= 2, f"need >=2 nested calls to prove recomputation, got {budgets}"
+    assert all(a > b for a, b in itertools.pairwise(passed)), (
+        f"budgets not strictly shrinking (a stale per-path timeout was reused): {budgets}"
+    )
+
+
+def test_untracked_reject_ceiling_below_reader_cap():
+    """#331 / fable review: the oversized-path reject is only sound while the reader's byte cap
+    stays above the path ceiling — a truncated record is ~reader-cap bytes, so it must exceed the
+    ceiling to be rejected. Pin the invariant so a future cap change can't silently reopen the
+    corrupt-name hole with every other test still green."""
+    assert gitdiff._UNTRACKED_RECORD_MAX > gitdiff._MAX_UNTRACKED_PATH_BYTES + 64
+
+
+def test_untracked_newline_in_regular_filename_gathered_once(repo):
+    """A regular (non-symlink) untracked file whose name contains a newline is gathered as
+    ONE file — the NUL-delimited listing must keep the embedded newline intact (#331)."""
+    (repo / "we\nird.py").write_text("w = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+    )
+    assert res.summary.files_changed == 1
+    assert res.untracked_included == 1
+    # git C-quotes the newline in the diff header (the \n renders as two chars \ + n), so the
+    # header stays one physical line and a raw newline can't forge a second `diff --git` entry.
+    assert '"a/we\\nird.py"' in res.text
+    assert "we\nird.py" not in res.text  # the raw (unquoted) newline never reaches the output
+
+
+def test_untracked_oversized_path_record_fails_loudly(repo, monkeypatch):
+    """#331 / Codex MEDIUM: an over-long untracked path (a genuinely absurd one, or one the
+    bounded reader truncated) must be rejected loudly rather than hashed under a corrupt name.
+    A real path is < PATH_MAX, so force the ceiling low to exercise the reject."""
+    (repo / "an_untracked_file.py").write_text("x = 1\n")
+    monkeypatch.setattr(gitdiff, "_MAX_UNTRACKED_PATH_BYTES", 4)  # any real path now exceeds it
+    with pytest.raises(RuntimeError, match="exceeds"):
+        gitdiff.gather_diff(
+            str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+        )
+
+
+def test_untracked_filename_ending_in_truncation_marker_text_is_gathered(repo):
+    """#331 / Codex MEDIUM regression: a legitimate (short, non-truncated) filename that ends
+    in the reader's truncation-marker text must still be gathered — the reject is a pure length
+    test, not a content sniff, so it cannot false-positive this name."""
+    name = f"report{streamcap._LINE_TRUNC_SENTINEL}.txt"
+    (repo / name).write_text("ok = 1\n")
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", untracked="include", timeout=30, max_bytes=200_000
+    )
+    assert res.summary.files_changed == 1
+    assert res.untracked_included == 1
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (gitdiff.gitproc.GitBinaryNotFound("nope"), gitdiff.GitUnavailableError),
+        (gitdiff.gitproc.GitStreamTimeout("slow"), RuntimeError),
+        (
+            gitdiff.gitproc.GitStreamFailed(128, "fatal: not a git repository"),
+            gitdiff.NotAGitRepoError,
+        ),
+        (gitdiff.gitproc.GitStreamFailed(1, "some other failure"), RuntimeError),
+    ],
+)
+def test_run_git_lines_maps_gitproc_errors_to_module_vocabulary(monkeypatch, raised, expected):
+    """The streamed calls must fail with the same error types `_git` raises (#331), so a
+    caller sees one vocabulary whether a git output was captured or streamed."""
+
+    def boom(*_args, **_kwargs):
+        raise raised
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", boom)
+    with pytest.raises(expected):
+        gitdiff._run_git_lines(
+            ["ls-files"],
+            cwd=".",
+            env={},
+            timeout=5,
+            sep="\n",
+            consume=list,
+        )
+
+
+def test_run_git_lines_timeout_message_names_the_git_args(monkeypatch):
+    """The streamed timeout message names the actual git args, matching `_git` — not a short
+    label — so a streamed and a captured call are equally debuggable (Copilot #352)."""
+
+    def boom(*_args, **_kwargs):
+        raise gitdiff.gitproc.GitStreamTimeout("slow")
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", boom)
+    with pytest.raises(RuntimeError, match=r"git ls-files --others .* timed out after 5s"):
+        gitdiff._run_git_lines(
+            ["ls-files", "--others", "-z"],
+            cwd=".",
+            env={},
+            timeout=5,
+            sep="\0",
+            consume=list,
+        )
 
 
 # ---------------------------------------------------------------------------

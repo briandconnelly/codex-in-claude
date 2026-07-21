@@ -38,6 +38,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   compatible output addition — bumps the result `fingerprint` (`schema-49` → `schema-50`), not
   breaking; the persisted result-format (`RESULT_FORMAT`) is unchanged.
 
+### Changed
+
+- **The untracked-file diff gather counts in bounded memory** (#331). `_core/gitdiff.py`'s
+  `_untracked_new_file_diff` — the `untracked="include"` / explicit-`paths` gathering path, also
+  reachable from the free `codex_dry_run` — previously materialized two whole git outputs in memory:
+  the `git ls-files --others -z` listing (unbounded in file count) and the `--numstat` output (one
+  line per file). Both now stream through the shared `_core/gitproc.run_lines` runner, which gains a
+  validated `sep` parameter (`"\n"` or `"\0"`) so a NUL-delimited listing — whose records may contain
+  newlines — is split correctly. The `ls-files` listing is fed record-by-record into the per-path
+  index build (a single enumeration, so `detected == included` cannot break under concurrent
+  mutation), and the whole composed listing-plus-index-build phase is bounded by one deadline rather
+  than only the producer's watchdog, so a pathological workspace can neither exhaust server memory nor
+  stall a review past the timeout. An oversized (truncated) path record fails loudly instead of being
+  hashed under a fabricated name. Reported counts, the streamed diff, and failure semantics are
+  unchanged, so **no `fingerprint` change**. (Two siblings remain: `_summary`'s tracked-diff
+  `--numstat` capture (#350) and `count_untracked`'s post-EOF stderr read (#351) — filed as
+  follow-ups.)
+
 ## [0.14.0] - 2026-07-19
 
 A discovery-slimming and sync-timeout release. The `tools/list` catalog gets lighter and a new

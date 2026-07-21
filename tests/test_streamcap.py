@@ -116,6 +116,58 @@ def test_iter_bounded_lines_truncates_within_chunk_line():
     assert out[-1] == "ok\n"
 
 
+# --- NUL-delimited records (sep parameter, #331) ------------------------------------
+
+
+def test_iter_bounded_lines_nul_separator_splits_on_nul():
+    # A `-z`/NUL-delimited stream (git ls-files -z) must split on \0, yielding each
+    # record WITH its trailing NUL, exactly as the \n path yields a trailing newline.
+    stream = io.StringIO("a\0bb\0ccc\0")
+    out = list(streamcap.iter_bounded_lines(stream, max_line_bytes=1024, sep="\0"))
+    assert out == ["a\0", "bb\0", "ccc\0"]
+
+
+def test_iter_bounded_lines_nul_preserves_embedded_newline():
+    # The load-bearing property for #331: a filename containing a newline is ONE NUL
+    # record, its embedded \n preserved — a \n split would wrongly cut it in two.
+    stream = io.StringIO("we\nird.py\0plain.py\0")
+    out = list(streamcap.iter_bounded_lines(stream, max_line_bytes=1024, sep="\0"))
+    assert out == ["we\nird.py\0", "plain.py\0"]
+
+
+def test_iter_bounded_lines_nul_counts_multichunk_exactly():
+    # NUL records spanning many read chunks are assembled and counted exactly, never
+    # materialized whole — the cardinality-bounding guarantee #331 relies on.
+    n = 5000
+    stream = io.StringIO("".join(f"pkg_{i:05d}\0" for i in range(n)))
+    out = list(
+        streamcap.iter_bounded_lines(stream, max_line_bytes=1 << 20, chunk_size=64, sep="\0")
+    )
+    assert len(out) == n
+    assert out[0] == "pkg_00000\0"
+    assert out[-1] == f"pkg_{n - 1:05d}\0"
+
+
+def test_iter_bounded_lines_nul_truncation_marker_uses_sep():
+    # An oversized single NUL record is truncated with a NUL-terminated marker (not \n),
+    # so the record stays NUL-delimited and the reader recovers on the next NUL.
+    stream = io.StringIO("Z" * 10_000 + "\0" + "tail\0")
+    out = list(streamcap.iter_bounded_lines(stream, max_line_bytes=100, chunk_size=64, sep="\0"))
+    assert out[0].endswith("[line truncated]\0")
+    assert not out[0].endswith("\n")  # marker followed the chosen sep, not a hardcoded newline
+    assert len(out[0].encode("utf-8")) <= 100
+    assert out[-1] == "tail\0"
+
+
+@pytest.mark.parametrize("bad", ["", "\r\n", "ab", "x"])
+def test_iter_bounded_lines_rejects_unsupported_sep(bad):
+    # sep is new API surface: only the single-char delimiters git actually emits (\n, \0)
+    # are supported. An empty sep would never make progress; a multi-char sep needs
+    # cross-chunk matching the assembler does not implement. Reject at the boundary.
+    with pytest.raises(ValueError, match="sep"):
+        list(streamcap.iter_bounded_lines(io.StringIO("a\0"), max_line_bytes=1024, sep=bad))
+
+
 # --- iter_bounded_lines_interactive -------------------------------------------------
 #
 # The drain reader (`iter_bounded_lines`) is fed by `stream.read(n)`, which on a blocking

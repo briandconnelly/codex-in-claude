@@ -77,9 +77,13 @@ def run_lines(  # noqa: PLR0915
     timeout: int,
     max_line_bytes: int,
     consume: Callable[[Iterator[str]], T],
+    sep: str = "\n",
 ) -> T:
     """Run ``argv`` under ``cwd``/``env`` and feed its stdout to ``consume`` as a bounded
-    line iterator (each line capped at ``max_line_bytes``), returning ``consume``'s value.
+    record iterator (each record capped at ``max_line_bytes``), returning ``consume``'s value.
+
+    ``sep`` selects the record delimiter — ``\\n`` (default) or ``\\0`` for a git ``-z``
+    listing, whose records may themselves contain newlines; unsupported values are rejected.
 
     ``consume`` MAY stop iterating early — the runner drains and discards any remainder
     so the child never blocks on a full stdout pipe. If ``consume`` raises, the process
@@ -89,6 +93,7 @@ def run_lines(  # noqa: PLR0915
     run exceeds ``timeout`` (the group is killed), and ``GitStreamFailed`` on a non-zero
     exit. Memory stays O(``max_line_bytes`` + chunk + ``_STDERR_CAP``).
     """
+    streamcap._validate_sep(sep)  # fail fast before spending a subprocess on a bad delimiter
     try:
         proc = subprocess.Popen(
             argv,
@@ -141,7 +146,7 @@ def run_lines(  # noqa: PLR0915
         assert proc.stdout is not None
         timer.start()
         stderr_thread.start()
-        lines = streamcap.iter_bounded_lines(cast("TextIO", proc.stdout), max_line_bytes)
+        lines = streamcap.iter_bounded_lines(cast("TextIO", proc.stdout), max_line_bytes, sep=sep)
         try:
             result = consume(lines)
             # Drain whatever consume left unread so the child is not blocked on a full
