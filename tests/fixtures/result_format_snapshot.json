@@ -1,5 +1,5 @@
 {
-  "result_format": 4,
+  "result_format": 5,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -2515,6 +2515,7 @@
               "items": {
                 "enum": [
                   "untracked_omitted",
+                  "tree_changed_during_gather",
                   "truncated",
                   "redacted"
                 ],

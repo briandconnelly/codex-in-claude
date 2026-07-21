@@ -866,7 +866,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-51",
+            "default": "codex-in-claude/0.1/schema-52",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1388,7 +1388,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-51",
+                "default": "codex-in-claude/0.1/schema-52",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2424,7 +2424,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-51",
+            "default": "codex-in-claude/0.1/schema-52",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3070,7 +3070,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-51",
+            "default": "codex-in-claude/0.1/schema-52",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -4846,6 +4846,7 @@
                     "items": {
                       "enum": [
                         "redacted",
+                        "tree_changed_during_gather",
                         "truncated",
                         "untracked_omitted"
                       ],
@@ -6289,6 +6290,7 @@
                     "items": {
                       "enum": [
                         "redacted",
+                        "tree_changed_during_gather",
                         "truncated",
                         "untracked_omitted"
                       ],

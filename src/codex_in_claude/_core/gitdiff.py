@@ -7,6 +7,7 @@ stays free of project config. Scopes: working_tree | branch | commit."""
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import re
 import signal
@@ -118,6 +119,12 @@ class DiffResult:
     # sent). `detected - included` is the omitted (unreviewed) count.
     untracked_detected: int | None = None
     untracked_included: int = 0
+    # #336: working_tree gathers run several sequential git invocations (summary, diff,
+    # untracked). This flags a best-effort detection that the working tree was modified across
+    # that window, so the gathered pieces may not describe one consistent snapshot. Only ever
+    # set for working_tree; branch/commit gather from git objects and do not run the check
+    # (which does not, on its own, make those scopes atomic — see _diff_args' separate calls).
+    tree_changed_during_gather: bool = False
 
 
 def _valid_ref(ref: str) -> bool:
@@ -897,6 +904,61 @@ def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
     return count
 
 
+def _worktree_state_token(
+    cwd: str, paths: list[str] | None, excludes: list[str], timeout: int
+) -> str:
+    """A cheap best-effort fingerprint of the working tree's changed-file set, used to
+    detect a concurrent mutation across a ``working_tree`` gather (#336).
+
+    Streams ``git status --porcelain -z`` through the bounded runner (never captured whole,
+    like :func:`count_untracked`), folding each NUL record into a digest. Scoped and
+    configured to MATCH the gathered diff so the token moves for exactly the changes a review
+    covers, no more:
+
+    - ``--untracked-files=all`` — plain status collapses an untracked *directory* to one
+      entry, but the untracked enumeration (``ls-files --others``) lists every file; ``all``
+      keeps the two consistent and also overrides a hostile ``status.showUntrackedFiles=no``.
+    - the same normalized ``paths`` pathspec — an out-of-scope edit must not trip detection.
+    - the same global-``excludes`` layer the enumeration uses — a globally-ignored scratch
+      file must not trip it either.
+    - ``--no-optional-locks`` + the shared ``core.fsmonitor=false`` hardening — status must
+      not write the index or run a repo-configured fsmonitor in this process.
+
+    This is a CLASSIFICATION fingerprint, not a content hash. It is a best-effort signal that
+    the working tree was *modified during the gather*, not a proof of diff inconsistency: it
+    trips on file additions/removals and porcelain status changes (including a concurrent
+    ``git add`` that does not alter the reviewed ``git diff HEAD`` patch, and an edit that
+    lands anywhere in the bracketed window — both are real concurrent modifications, disclosed
+    conservatively). It does NOT trip on a content-only re-edit of an already-modified file or
+    an A->B->A round trip between the two captures, so its ABSENCE is not proof the tree held
+    still. A staging-insensitive token (``git diff HEAD --name-status`` plus a separate
+    untracked scan) or a retry-to-stabilize loop would narrow the conservative cases, but both
+    were judged disproportionate for this low-priority disclosure (#336).
+    """
+    hasher = hashlib.sha256()
+
+    def _fold(records: Iterator[str]) -> str:
+        for rec in records:
+            # surrogateescape mirrors the runner's decode so a non-UTF-8 path round-trips
+            # instead of raising; the NUL keeps record boundaries unambiguous in the digest.
+            hasher.update(rec.encode("utf-8", "surrogateescape"))
+            hasher.update(b"\0")
+        return hasher.hexdigest()
+
+    args = ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "-z"]
+    if paths:
+        args = [*args, "--", *paths]
+    return _run_git_lines(
+        args,
+        cwd=cwd,
+        env=_base_git_env(),
+        timeout=timeout,
+        sep="\0",
+        consume=_fold,
+        excludes=excludes,
+    )
+
+
 def gather_diff(
     cwd: str,
     scope: str,
@@ -932,6 +994,16 @@ def gather_diff(
         raise InvalidCommitError(f"commit does not resolve: {commit!r}")
     if norm_paths:
         diff_args = [*diff_args, "--", *norm_paths]
+    # #336: bracket the whole working_tree gather (summary + diff + untracked — several
+    # sequential git invocations) with a cheap state token so a concurrent mutation across
+    # that window can be disclosed instead of being hidden under a false `complete`. Resolve
+    # the global-excludes layer once and reuse it for both captures so they stay comparable.
+    # branch/commit scopes read immutable objects and need no check.
+    state_excludes: list[str] = []
+    state_token: str | None = None
+    if scope == "working_tree":
+        state_excludes = _global_excludes_flags(cwd, timeout)
+        state_token = _worktree_state_token(cwd, norm_paths, state_excludes, timeout)
     summary = _summary(cwd, diff_args, timeout)
     acc = _BoundedDiffAccumulator(max_bytes)
     _stream_redacted_diff(cwd, diff_args, timeout, acc)
@@ -957,6 +1029,13 @@ def gather_diff(
             # Not gathering: count (only) the untracked files being omitted, so the blind
             # spot is disclosed. included stays 0, so omitted == detected — no race.
             untracked_detected = count_untracked(cwd, norm_paths, timeout)
+    # #336: re-capture the token after the last gather step. A mismatch means the tree's
+    # changed-file set moved while we were reading it, so the pieces may be inconsistent.
+    tree_changed_during_gather = False
+    if scope == "working_tree":
+        tree_changed_during_gather = (
+            _worktree_state_token(cwd, norm_paths, state_excludes, timeout) != state_token
+        )
     diff_bytes = acc.diff_bytes
     truncated = acc.truncated
     hint = None
@@ -974,4 +1053,5 @@ def gather_diff(
         diff_bytes=diff_bytes,
         untracked_detected=untracked_detected,
         untracked_included=untracked_included,
+        tree_changed_during_gather=tree_changed_during_gather,
     )

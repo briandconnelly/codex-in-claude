@@ -57,6 +57,14 @@ def build_coverage(*, scope: str, diff: DiffResult) -> Coverage:
         omt: int | None = omitted
         if omitted > 0:
             reasons.append("untracked_omitted")
+        # #336: the working tree was modified across the gather window, so the
+        # summary/diff/untracked may not describe one consistent snapshot. Disclosed as a
+        # consistency caveat (not a claim that specific content was omitted) so `complete`
+        # cannot silently overpromise; the #319 verdict downgrade (partial + pass -> unknown)
+        # then applies. Best-effort — see gitdiff's `_worktree_state_token` for what it does
+        # and does not catch.
+        if diff.tree_changed_during_gather:
+            reasons.append("tree_changed_during_gather")
     else:
         det = inc = omt = None
     if diff.truncated:

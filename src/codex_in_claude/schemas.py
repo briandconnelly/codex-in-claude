@@ -49,7 +49,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-51"
+FINGERPRINT = "codex-in-claude/0.1/schema-52"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -65,7 +65,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-51"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 4
+RESULT_FORMAT: int = 5
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -559,18 +559,40 @@ class Meta(BaseModel):
 # "never reviewed" (#319).
 ReviewStatus = Literal["completed", "not_run"]
 
-# Whether everything in the requested git/path scope was actually put in front of the
-# model. `complete` is a strict claim: NOTHING was left unreviewed. `partial` means some
-# in-scope content was not — see `omission_reasons`.
+# Whether everything in the requested git/path scope was put in front of the model AND the
+# gather could treat it as one consistent snapshot. `complete`: no omission and no concurrent
+# modification was detected. `partial`: some in-scope content was not reviewed, OR (working_tree
+# only) the working tree was modified while the diff was being gathered, so the pieces may not
+# reflect a single snapshot — see `omission_reasons`. The concurrent-modification signal is
+# BEST-EFFORT (see the `tree_changed_during_gather` reason), so `complete` is not an absolute
+# guarantee that no concurrent edit occurred. The gather also issues its git commands as
+# separate processes for EVERY scope (each diffs against a symbolic ref — working_tree against
+# `HEAD`, branch against `base...HEAD`, commit against the given ref), so `complete` does not
+# prove ref stability under a concurrent commit/reset/checkout. working_tree's token catches a
+# HEAD move that changes a path's worktree-vs-HEAD status, but not one that alters diff content
+# while leaving the status code unchanged (the same limitation class as a content-only re-edit);
+# branch/commit run no such check (ref-pinning tracked in #355) (#336).
 CoverageStatus = Literal["complete", "partial"]
 
 # Why in-scope content went unreviewed. A closed set:
-#   untracked_omitted — untracked files exist in scope but were not gathered (see the
-#                       `untracked` input policy); their contents were never sent.
-#   truncated         — the gathered diff hit the byte cap and was cut off.
-#   redacted          — a secret-looking file's hunk was dropped from the diff, so the
-#                       model saw a marker instead of its content.
-CoverageOmissionReason = Literal["untracked_omitted", "truncated", "redacted"]
+#   untracked_omitted          — untracked files exist in scope but were not gathered (see the
+#                                `untracked` input policy); their contents were never sent.
+#   tree_changed_during_gather — (working_tree only) the working tree was modified while the
+#                                diff was being gathered — its changed-file set or a file's
+#                                git status changed between the start and end of the gather —
+#                                so the summary/diff/untracked pieces may not describe one
+#                                consistent snapshot. A consistency caveat, not a claim that
+#                                specific content was omitted. Best-effort: it trips on file
+#                                additions/removals and status changes (including a concurrent
+#                                `git add`), but NOT on a content-only re-edit of an
+#                                already-modified file — so its ABSENCE is not proof the tree
+#                                held still (#336).
+#   truncated                  — the gathered diff hit the byte cap and was cut off.
+#   redacted                   — a secret-looking file's hunk was dropped from the diff, so
+#                                the model saw a marker instead of its content.
+CoverageOmissionReason = Literal[
+    "untracked_omitted", "tree_changed_during_gather", "truncated", "redacted"
+]
 
 
 class Coverage(BaseModel):
