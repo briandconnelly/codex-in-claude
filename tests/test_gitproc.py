@@ -155,6 +155,17 @@ def test_run_lines_nul_preserves_embedded_newline():
     assert got == ["we\nird.py\0", "plain.py\0"]
 
 
+def test_run_lines_nul_preserves_embedded_carriage_return():
+    # A NUL record whose name contains a raw carriage return must survive byte-exact.
+    # Universal-newline text mode would rewrite \r (and \r\n) to \n before the NUL-splitter
+    # sees it, corrupting the filename a `-z` listing is supposed to deliver intact (#353).
+    cmd = _emit("import sys\nsys.stdout.write('we\\rird.py\\0cr\\r\\nlf.py\\0')")
+    got = gitproc.run_lines(
+        cmd, cwd=".", env=_ENV, timeout=30, max_line_bytes=1 << 20, sep="\0", consume=list
+    )
+    assert got == ["we\rird.py\0", "cr\r\nlf.py\0"]
+
+
 def test_run_lines_rejects_unsupported_sep():
     with pytest.raises(ValueError, match="sep"):
         gitproc.run_lines(

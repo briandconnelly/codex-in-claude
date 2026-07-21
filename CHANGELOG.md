@@ -7,6 +7,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Carriage return in a git-produced filename no longer corrupts the untracked gather** (#353).
+  The bounded git-subprocess runner (`_core/gitproc.run_lines`) spawned its child with
+  `text=True`, so Python's universal-newline translation rewrote a raw `\r` (or `\r\n`) in git's
+  `-z` output to `\n` **before** the NUL-splitter saw it. An untracked file whose name contained
+  a carriage return was then looked up under the wrong path — a raw `FileNotFoundError` escaped
+  the gather as an unstructured internal error, and if both `we\rird.py` and `we\nird.py` existed
+  the carriage-return file was silently omitted yet still counted as included (a quiet
+  `detected == included` coverage-contract violation the #322 F3 invariant could not catch). The
+  runner now reads binary pipes wrapped in `TextIOWrapper(..., newline="")`, disabling the
+  translation while keeping the `surrogateescape` byte round-trip, so every `-z` consumer — the
+  untracked enumeration and the `core.excludesFile` read both route through this runner — is
+  byte-exact. `_index_untracked` additionally maps a `FileNotFoundError` from a concurrently
+  deleted untracked file onto a structured `RuntimeError`. Pre-existing (present before #331);
+  no `fingerprint` change (byte-identical for ordinary filenames).
 - **`invalid_reasoning_effort` machine repair for the local config-shape guard** (#332). The
   error code is emitted from two paths: the Codex backend rejecting a sent effort (table repair
   `correct_arguments` + `codex_models`, correct there), and the local pre-spend guard refusing a

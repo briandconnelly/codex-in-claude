@@ -31,18 +31,18 @@ this module carries no project config or git-hardening policy of its own.
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import signal
 import subprocess
 import threading
 import time
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
 from codex_in_claude._core import streamcap
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-    from typing import TextIO
 
 T = TypeVar("T")
 
@@ -100,14 +100,26 @@ def run_lines(  # noqa: PLR0915
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="surrogateescape",
             env=env,
             start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise GitBinaryNotFound("git executable not found") from exc
+
+    # Binary pipes wrapped with an explicit ``newline=""`` decoder: universal-newline text
+    # mode (``text=True``, i.e. ``newline=None``) rewrites a raw ``\r`` or ``\r\n`` to ``\n``
+    # BEFORE the NUL-splitter sees it, corrupting a filename or config value that a ``-z``
+    # listing is supposed to deliver byte-exact (#353). ``newline=""`` disables that
+    # translation while ``surrogateescape`` keeps the byte round-trip; the splitter still
+    # reads via ``.read(n)``. The wrappers own the raw pipes and are closed in ``finally``.
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    stdout_text = io.TextIOWrapper(
+        proc.stdout, encoding="utf-8", errors="surrogateescape", newline=""
+    )
+    stderr_text = io.TextIOWrapper(
+        proc.stderr, encoding="utf-8", errors="surrogateescape", newline=""
+    )
 
     deadline = time.monotonic() + timeout
     timed_out = threading.Event()
@@ -134,19 +146,17 @@ def run_lines(  # noqa: PLR0915
     def _drain_stderr() -> None:
         # Drain to EOF (avoids the >64 KiB pipe-buffer deadlock) while retaining at most
         # _STDERR_CAP bytes so a large diagnostic cannot OOM the server.
-        if proc.stderr is not None:
-            cap = streamcap.BoundedCapture(_STDERR_CAP)
-            for line in streamcap.iter_bounded_lines(cast("TextIO", proc.stderr), _STDERR_CAP):
-                cap.add(line)
-            stderr_buf.append(cap.result())
+        cap = streamcap.BoundedCapture(_STDERR_CAP)
+        for line in streamcap.iter_bounded_lines(stderr_text, _STDERR_CAP):
+            cap.add(line)
+        stderr_buf.append(cap.result())
 
     timer = threading.Timer(timeout, _watchdog)
     stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
     try:
-        assert proc.stdout is not None
         timer.start()
         stderr_thread.start()
-        lines = streamcap.iter_bounded_lines(cast("TextIO", proc.stdout), max_line_bytes, sep=sep)
+        lines = streamcap.iter_bounded_lines(stdout_text, max_line_bytes, sep=sep)
         try:
             result = consume(lines)
             # Drain whatever consume left unread so the child is not blocked on a full
@@ -182,10 +192,11 @@ def run_lines(  # noqa: PLR0915
             stderr_thread.join(timeout=5)
     finally:
         timer.cancel()  # idempotent: cleans up on exception paths
-        for pipe in (proc.stdout, proc.stderr):
-            if pipe is not None:
-                with contextlib.suppress(OSError):
-                    pipe.close()
+        # Close the wrappers, not the raw pipes: each TextIOWrapper owns and closes its
+        # underlying buffer, so closing both would double-close (#353 review).
+        for pipe in (stdout_text, stderr_text):
+            with contextlib.suppress(OSError):
+                pipe.close()
     if timed_out.is_set():
         raise GitStreamTimeout(f"git command timed out after {timeout}s")
     stderr = "".join(stderr_buf)
