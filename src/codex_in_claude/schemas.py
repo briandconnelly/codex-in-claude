@@ -566,8 +566,12 @@ ReviewStatus = Literal["completed", "not_run"]
 # reflect a single snapshot — see `omission_reasons`. The concurrent-modification signal is
 # BEST-EFFORT (see the `tree_changed_during_gather` reason), so `complete` is not an absolute
 # guarantee that no concurrent edit occurred. The gather also issues its git commands as
-# separate processes for every scope, so `complete` likewise does not prove ref stability under
-# a concurrent commit/reset for branch/commit scopes (#336).
+# separate processes for EVERY scope (each diffs against a symbolic ref — working_tree against
+# `HEAD`, branch against `base...HEAD`, commit against the given ref), so `complete` does not
+# prove ref stability under a concurrent commit/reset/checkout. working_tree's token catches a
+# HEAD move that changes a path's worktree-vs-HEAD status, but not one that alters diff content
+# while leaving the status code unchanged (the same limitation class as a content-only re-edit);
+# branch/commit run no such check (ref-pinning tracked in #355) (#336).
 CoverageStatus = Literal["complete", "partial"]
 
 # Why in-scope content went unreviewed. A closed set:
