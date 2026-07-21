@@ -425,6 +425,7 @@ def test_run_review_forwards_on_event(monkeypatch):
         redacted_paths=[],
         truncated=False,
         truncation_hint=None,
+        tree_changed_during_gather=False,
         text="diff --git a/foo b/foo\n+added",
     )
     monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: fake_diff)
@@ -504,6 +505,7 @@ def test_run_review_forwards_reasoning_effort(monkeypatch):
         redacted_paths=[],
         truncated=False,
         truncation_hint=None,
+        tree_changed_during_gather=False,
         text="diff --git a/foo b/foo\n+added",
     )
     monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: fake_diff)

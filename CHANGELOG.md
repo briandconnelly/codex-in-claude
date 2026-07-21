@@ -7,6 +7,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`working_tree` reviews now disclose a concurrent edit made while the diff was gathered** (#336).
+  A `working_tree` gather runs several sequential git invocations — the context summary, the
+  transmitted diff, and the untracked enumeration — so a concurrent edit between them could make the
+  summary describe different content than the diff Codex actually reviewed, or add/remove files after
+  enumeration, while `coverage.status` still reported `"complete"` because no omission flag was set.
+  The gather now brackets that window with a cheap best-effort state token
+  (`git status --porcelain -z`, streamed through the bounded runner, scoped to the same pathspec and
+  global-excludes as the diff); a mismatch sets a new `tree_changed_during_gather` value on
+  `coverage.omission_reasons`, degrading coverage to `partial` (and, via the #319 rules, a `pass`
+  verdict to `unknown`). The token is a porcelain classification, not a content hash, so it catches
+  file-set/status changes but **not** a content-only re-edit of an already-modified file or an
+  A→B→A round trip — its absence is therefore not proof the tree held still, and the `complete`
+  documentation is corrected to say so. `branch`/`commit` scopes read immutable objects and are
+  unaffected. Backward-compatible value-set widening of `CoverageOmissionReason` — bumps the result
+  `fingerprint` (`schema-51` → `schema-52`) and the persisted result-format (`RESULT_FORMAT` `4` →
+  `5`, since an older closed-schema reader could reject the new enum value); not breaking.
 - **Carriage return in a git-produced filename no longer corrupts the untracked gather** (#353).
   The bounded git-subprocess runner (`_core/gitproc.run_lines`) spawned its child with
   `text=True`, so Python's universal-newline translation rewrote a raw `\r` (or `\r\n`) in git's

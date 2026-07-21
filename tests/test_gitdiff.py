@@ -246,6 +246,122 @@ def test_count_untracked_does_not_run_repo_fsmonitor(repo, tmp_path):
     assert not sentinel.exists(), "repo-configured fsmonitor program must not execute"
 
 
+# --- working_tree snapshot-consistency detection (#336) ----------------------
+def test_working_tree_detects_mutation_during_gather(repo, monkeypatch):
+    # A file entering the changed-file set between the two state-token captures must be
+    # detected: the summary/diff Codex saw may not describe a single consistent snapshot.
+    orig_summary = gitdiff._summary
+
+    def mutating_summary(cwd, diff_args, timeout):
+        # A previously-clean tracked file becomes modified mid-gather (after t1 was captured).
+        (repo / "calc.py").write_text("def add(a, b):\n    return a * b\n")
+        return orig_summary(cwd, diff_args, timeout)
+
+    monkeypatch.setattr(gitdiff, "_summary", mutating_summary)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is True
+
+
+def test_content_reedit_of_already_dirty_file_is_a_known_miss(repo, monkeypatch):
+    # HONEST LIMITATION (Codex review #336): the token is a porcelain CLASSIFICATION, not a
+    # content hash. Re-editing a file that is ALREADY modified leaves its status code ` M`
+    # unchanged, so this concurrent edit is NOT detected. This pins the documented gap so a
+    # future change that silently "fixes" it (e.g. switching to a content hash) is noticed.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")  # already dirty
+    orig_summary = gitdiff._summary
+
+    def mutating_summary(cwd, diff_args, timeout):
+        (repo / "calc.py").write_text("def add(a, b):\n    return a * b\n")  # still ` M`
+        return orig_summary(cwd, diff_args, timeout)
+
+    monkeypatch.setattr(gitdiff, "_summary", mutating_summary)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is False  # undetected, by design
+
+
+def test_working_tree_clean_gather_reports_stable(repo):
+    # Negative control: an untouched tree during gather is not flagged as changed.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is False
+
+
+def test_out_of_scope_mutation_does_not_trip_detection(repo, monkeypatch):
+    # The detector is scoped to the review's pathspec, exactly like the gathered diff — an
+    # edit outside `paths` must not downgrade a legitimate, consistent in-scope review.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    (repo / "other.py").write_text("o = 1\n")
+    _git(repo, "add", "other.py")
+    _git(repo, "commit", "-qm", "other")
+    orig_summary = gitdiff._summary
+
+    def mutating_summary(cwd, diff_args, timeout):
+        (repo / "other.py").write_text("o = 2\n")  # outside paths=["calc.py"]
+        return orig_summary(cwd, diff_args, timeout)
+
+    monkeypatch.setattr(gitdiff, "_summary", mutating_summary)
+    res = gitdiff.gather_diff(
+        str(repo), "working_tree", paths=["calc.py"], timeout=30, max_bytes=200_000
+    )
+    assert res.tree_changed_during_gather is False
+
+
+def test_nested_untracked_added_mid_gather_trips_detection(repo, monkeypatch):
+    # A file appearing inside an ALREADY-untracked directory changes the file set that
+    # `ls-files --others` enumerates. The token must use --untracked-files=all so it does
+    # not collapse the directory to one entry and miss the addition (Codex review #336).
+    (repo / "sub").mkdir()
+    (repo / "sub" / "a.txt").write_text("a\n")  # `sub/` is untracked before gather
+    orig_summary = gitdiff._summary
+
+    def mutating_summary(cwd, diff_args, timeout):
+        (repo / "sub" / "b.txt").write_text("b\n")  # new file in the untracked dir
+        return orig_summary(cwd, diff_args, timeout)
+
+    monkeypatch.setattr(gitdiff, "_summary", mutating_summary)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is True
+
+
+def test_branch_scope_skips_snapshot_detection(repo):
+    # branch/commit scopes read immutable objects; the flag stays False and no status is run.
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b + 1\n")
+    res = gitdiff.gather_diff(str(repo), "branch", base=base, timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is False
+
+
+def test_state_token_streams_large_listing(repo):
+    # The token capture is bounded like count_untracked: a listing far larger than one read
+    # chunk must digest without materializing the whole status output (#336 / #322 F1).
+    for i in range(4000):
+        (repo / f"pkg_{i:05d}_module.py").write_text("x = 1\n")
+    tok = gitdiff._worktree_state_token(str(repo), None, [], timeout=60)
+    assert tok == gitdiff._worktree_state_token(str(repo), None, [], timeout=60)  # stable
+
+
+def test_state_token_non_utf8_path_digests(repo):
+    # A non-UTF-8 filename must fold into the digest via surrogateescape, not raise.
+    (repo / "blob.bin").write_bytes(b"\xff\xfe raw\n")
+    tok = gitdiff._worktree_state_token(str(repo), None, [], timeout=30)
+    assert isinstance(tok, str) and tok
+
+
+def test_state_token_does_not_run_repo_fsmonitor(repo, tmp_path):
+    # `git status` for the token must not execute a repo-configured fsmonitor program in the
+    # server process (outside the Codex sandbox), just like the untracked enumeration.
+    sentinel = tmp_path / "fsmonitor_ran"
+    hook = tmp_path / "evil-fsmonitor.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {sentinel}\n")
+    hook.chmod(0o755)
+    _git(repo, "config", "core.fsmonitor", str(hook))
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    gitdiff._worktree_state_token(str(repo), None, [], timeout=30)
+    assert not sentinel.exists(), "repo-configured fsmonitor program must not execute"
+
+
 # --- untracked policy + coverage counts on DiffResult (#319) -----------------
 def test_gather_explicit_only_default_omits_untracked_but_counts_it(repo):
     # The bug's shape: an untracked-only tree. Default policy omits it (preserving #74's
