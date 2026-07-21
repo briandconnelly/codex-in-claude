@@ -565,13 +565,13 @@ ReviewStatus = Literal["completed", "not_run"]
 # only) the working tree was modified while the diff was being gathered, so the pieces may not
 # reflect a single snapshot — see `omission_reasons`. The concurrent-modification signal is
 # BEST-EFFORT (see the `tree_changed_during_gather` reason), so `complete` is not an absolute
-# guarantee that no concurrent edit occurred. The gather also issues its git commands as
-# separate processes for EVERY scope (each diffs against a symbolic ref — working_tree against
-# `HEAD`, branch against `base...HEAD`, commit against the given ref), so `complete` does not
-# prove ref stability under a concurrent commit/reset/checkout. working_tree's token catches a
-# HEAD move that changes a path's worktree-vs-HEAD status, but not one that alters diff content
-# while leaving the status code unchanged (the same limitation class as a content-only re-edit);
-# branch/commit run no such check (ref-pinning tracked in #355) (#336).
+# guarantee that no concurrent edit occurred. The gather issues its git commands as separate
+# processes, but every ref they read is resolved to an immutable object ID once up front (#355):
+# `branch`/`commit` diff pinned objects, so a concurrent commit/reset/checkout cannot make their
+# summary and diff disagree, and they run no snapshot check. working_tree pins HEAD too and
+# additionally brackets the gather with a token: it catches a HEAD move and a change to a path's
+# worktree-vs-HEAD status, but not a diff-content change that leaves the status code unchanged
+# (the same limitation class as a content-only re-edit or an A→B→A round trip) (#336).
 CoverageStatus = Literal["complete", "partial"]
 
 # Why in-scope content went unreviewed. A closed set:

@@ -352,6 +352,127 @@ def test_branch_scope_skips_snapshot_detection(repo):
     assert res.tree_changed_during_gather is False
 
 
+def test_working_tree_pins_head_across_concurrent_commit(repo, monkeypatch):
+    # #355: working_tree diffs against HEAD. If a concurrent commit advances HEAD BETWEEN the
+    # summary and the transmitted diff, a symbolic `git diff HEAD` would make the two describe
+    # different base objects: the summary records one changed file, but by the time the diff
+    # runs the change is committed, so `git diff HEAD` (now the new commit) shows NOTHING.
+    # Pinning HEAD to a resolved object ID once keeps both consistent.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")  # working-tree change
+    orig_summary = gitdiff._summary
+
+    def committing_summary(cwd, diff_args, timeout):
+        s = orig_summary(cwd, diff_args, timeout)
+        _git(repo, "commit", "-qam", "concurrent")  # advances HEAD after the summary
+        return s
+
+    monkeypatch.setattr(gitdiff, "_summary", committing_summary)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.summary.files_changed == 1
+    assert "return a - b" in res.text  # diff still describes the pinned pre-commit HEAD
+    assert res.tree_changed_during_gather is True  # and the HEAD move is disclosed (review F2)
+
+
+def test_working_tree_head_move_before_first_token_is_disclosed(repo, monkeypatch):
+    # #355 review F2: pinning HEAD froze the diff's base. A concurrent HEAD move (here a commit)
+    # that lands BEFORE the first porcelain token leaves both tokens agreeing — they are
+    # HEAD-relative and see only the post-move state — while the diff still uses the pre-move base.
+    # Comparing the pinned base to HEAD at the end discloses it; without it the move is undetected.
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")  # dirty working tree
+    orig_token = gitdiff._worktree_state_token
+    moved = [False]
+
+    def moving_token(cwd, paths, excludes, timeout):
+        if not moved[0]:  # advance HEAD after it was pinned but before the first token is captured
+            moved[0] = True
+            _git(repo, "commit", "-qam", "concurrent")
+        return orig_token(cwd, paths, excludes, timeout)
+
+    monkeypatch.setattr(gitdiff, "_worktree_state_token", moving_token)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.tree_changed_during_gather is True
+
+
+def test_working_tree_unborn_head_fails_closed(tmp_path):
+    # #355 review F1: an unborn HEAD has no committed base and must not fall back to a mutable
+    # symbolic ref. gather_diff fails closed with a clear error rather than pinning to "HEAD".
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@t.co")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n")  # staged content exists, but HEAD is unborn
+    _git(tmp_path, "add", "-A")
+    with pytest.raises(RuntimeError, match="cannot resolve HEAD"):
+        gitdiff.gather_diff(str(tmp_path), "working_tree", timeout=30, max_bytes=200_000)
+
+
+def test_branch_unborn_head_fails_closed(repo):
+    # #355 review F1: branch scope has no state token, so an unresolvable HEAD (an orphan branch,
+    # with a still-valid base on another branch) must fail closed rather than pin to symbolic HEAD.
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    _git(repo, "checkout", "-q", "--orphan", "fresh")  # HEAD now unborn; `base` still resolves
+    with pytest.raises(RuntimeError, match="cannot resolve HEAD"):
+        gitdiff.gather_diff(str(repo), "branch", base=base, timeout=30, max_bytes=200_000)
+
+
+def test_commit_scope_peels_annotated_tag_to_its_commit(repo):
+    # #355: a commit ref is resolved to its commit object ID (`<ref>^{commit}`) before gathering, so
+    # an annotated tag peels to the commit it points at — the review shows that commit's diff, not
+    # the tag object's metadata (tagger / annotation message). Pins that intended behavior.
+    _git(repo, "tag", "-a", "v1", "-m", "annotated release message LINE")
+    res = gitdiff.gather_diff(str(repo), "commit", commit="v1", timeout=30, max_bytes=200_000)
+    assert "def add" in res.text  # the commit's own diff is present
+    assert "annotated release message LINE" not in res.text  # tag annotation is not
+    assert "Tagger" not in res.text  # nor the tag object header
+
+
+def test_branch_pins_head_across_concurrent_commit(repo, monkeypatch):
+    # #355: a branch diff is `base...HEAD`. A concurrent commit advancing HEAD between the summary
+    # and the diff would, with a symbolic `HEAD`, splice the later commit's files into the reviewed
+    # patch while the summary counted only the earlier ones. Pinning both ends to resolved object
+    # IDs keeps the summary and the diff describing the same range.
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b + 1\n")
+    _git(repo, "commit", "-qam", "h1")  # HEAD = H1; base...HEAD covers only calc.py
+    orig_summary = gitdiff._summary
+
+    def committing_summary(cwd, diff_args, timeout):
+        s = orig_summary(cwd, diff_args, timeout)
+        (repo / "extra.py").write_text("x = 1\n")
+        _git(repo, "add", "extra.py")
+        _git(repo, "commit", "-qm", "h2")  # advances HEAD to H2, adding extra.py
+        return s
+
+    monkeypatch.setattr(gitdiff, "_summary", committing_summary)
+    res = gitdiff.gather_diff(str(repo), "branch", base=base, timeout=30, max_bytes=200_000)
+    assert res.summary.files_changed == 1
+    assert "extra.py" not in res.text  # H2's file must not appear in the H1-pinned diff
+
+
+def test_commit_pins_symbolic_ref_across_concurrent_move(repo, monkeypatch):
+    # #355: commit scope accepts a symbolic ref. If that ref is force-moved to a different commit
+    # between the summary and the `git show` diff, a symbolic ref would make the two describe
+    # different commits. Pinning the ref to its resolved object ID once keeps them consistent.
+    _git(repo, "branch", "target")  # target -> C1 (the init commit that adds calc.py)
+    orig_summary = gitdiff._summary
+
+    def moving_summary(cwd, diff_args, timeout):
+        s = orig_summary(cwd, diff_args, timeout)
+        (repo / "newfile.py").write_text("y = 2\n")
+        _git(repo, "add", "newfile.py")
+        _git(repo, "commit", "-qm", "c2")
+        _git(repo, "branch", "-f", "target", "HEAD")  # target -> C2 (adds newfile.py)
+        return s
+
+    monkeypatch.setattr(gitdiff, "_summary", moving_summary)
+    res = gitdiff.gather_diff(str(repo), "commit", commit="target", timeout=30, max_bytes=200_000)
+    assert "calc.py" in res.text  # pinned to C1
+    assert "newfile.py" not in res.text  # C2's file must not appear
+
+
 def test_state_token_streams_large_listing(repo):
     # The token capture is bounded like count_untracked: a listing far larger than one read
     # chunk must digest without materializing the whole status output (#336 / #322 F1).
