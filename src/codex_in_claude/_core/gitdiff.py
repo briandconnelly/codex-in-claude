@@ -122,8 +122,8 @@ class DiffResult:
     # #336: working_tree gathers run several sequential git invocations (summary, diff,
     # untracked). This flags a best-effort detection that the working tree was modified across
     # that window, so the gathered pieces may not describe one consistent snapshot. Only ever
-    # set for working_tree; branch/commit gather from git objects and do not run the check
-    # (which does not, on its own, make those scopes atomic — see _diff_args' separate calls).
+    # set for working_tree; branch/commit gather from immutable git objects (their refs are pinned
+    # to object IDs once, so their separate invocations can't disagree — #355) and run no check.
     tree_changed_during_gather: bool = False
 
 
@@ -444,23 +444,44 @@ def _resolve_commit(cwd: str, ref: str, timeout: int) -> str | None:
     return proc.stdout.strip() or None
 
 
+def _require_head(cwd: str, timeout: int) -> str:
+    """Resolve HEAD to its commit object ID, or raise if it does not resolve (an unborn branch).
+
+    #355 review F1: the pre-fix scopes fell back to the symbolic ``HEAD`` when it could not be
+    pinned, but that reintroduces exactly the mutable ref this change removes — if HEAD is unborn
+    at resolution but a first commit appears mid-gather, the separate summary/diff invocations can
+    resolve different commits, and ``branch`` scope has no state token to catch it. There is no
+    committed base to diff against anyway, so fail closed (a `RuntimeError`, caught by
+    ``orchestration.GITDIFF_EXCEPTIONS`` like the git error the old fallback ultimately produced)
+    rather than pin to something mutable."""
+    head = _resolve_commit(cwd, "HEAD", timeout)
+    if head is None:
+        raise RuntimeError(
+            "cannot resolve HEAD to a commit (unborn branch?); the diff has no committed base"
+        )
+    return head
+
+
 def _diff_args(
     cwd: str, scope: str, base: str | None, commit: str | None, timeout: int
-) -> list[str]:
+) -> tuple[list[str], str | None]:
+    """Build the git argv for ``scope`` and return it alongside the pinned HEAD object ID (only
+    for ``working_tree``; ``None`` otherwise).
+
+    #355: every ref that feeds these args is resolved to an immutable object ID HERE, once, so the
+    summary and the transmitted diff — separate git invocations sharing this arg list — can never
+    describe different objects under a concurrent ref move. The returned HEAD id lets the
+    ``working_tree`` caller also disclose a HEAD move that its porcelain token cannot see on its
+    own (review F2)."""
     # --no-ext-diff + --no-textconv prevent configured external/textconv diff
     # drivers from executing commands during our own git call.
-    #
-    # #355: every ref that feeds these args is resolved to an immutable object ID HERE, once, so
-    # the summary and the transmitted diff — separate git invocations sharing this arg list — can
-    # never describe different objects under a concurrent ref move. `_resolve_commit` returning
-    # None means the ref does not resolve to a commit; that failure is surfaced per scope below.
     common = ["diff", "--no-ext-diff", "--no-textconv"]
     if scope == "working_tree":
         # Pin HEAD's tree (the diff's base side); the working tree it is compared against is still
-        # mutable, which is #336's state-token concern, not this one. An unborn HEAD does not
-        # resolve — keep the symbolic form so `git diff HEAD`'s existing error path is unchanged.
-        head = _resolve_commit(cwd, "HEAD", timeout)
-        return [*common, "--end-of-options", head or "HEAD"]
+        # mutable, which is #336's state-token concern, not this one. Return the pinned id so the
+        # caller can compare it to HEAD at the end of the gather (review F2).
+        head_sha = _require_head(cwd, timeout)
+        return [*common, "--end-of-options", head_sha], head_sha
     if scope == "branch":
         # Distinguish an omitted base from a present-but-invalid one: an omitted input
         # renders as "omitted" rather than leaking the Python literal `None`/`''` into
@@ -473,22 +494,25 @@ def _diff_args(
         base_sha = _resolve_commit(cwd, base, timeout)
         if base_sha is None:
             raise InvalidBaseError(f"base ref does not resolve to a commit: {base!r}")
-        # Pin both ends of the range. `<base_sha>...<head_sha>` preserves the three-dot
-        # merge-base semantics of `<base>...HEAD` while being immutable. An unborn HEAD keeps
-        # the symbolic form (the existing error path).
-        head = _resolve_commit(cwd, "HEAD", timeout)
-        return [*common, "--end-of-options", f"{base_sha}...{head or 'HEAD'}"]
+        # Pin both ends of the range. `<base_sha>...<head_sha>` preserves the three-dot merge-base
+        # semantics of `<base>...HEAD` while being immutable. `branch` has no state token, so an
+        # unresolvable HEAD fails closed (review F1) rather than falling back to a mutable ref.
+        head_sha = _require_head(cwd, timeout)
+        return [*common, "--end-of-options", f"{base_sha}...{head_sha}"], None
     if scope == "commit":
         if not commit:
             raise InvalidCommitError("commit is required for a commit diff but was omitted")
         if not _valid_ref(commit):
             raise InvalidCommitError(f"invalid commit: {commit!r}")
+        # `^{commit}` peels an annotated tag to the commit it points at, so a `commit=<tag>` review
+        # shows that commit's own diff rather than the tag object's metadata (tagger/message) —
+        # the reviewable change set, matching this scope's intent (#355 review).
         commit_sha = _resolve_commit(cwd, commit, timeout)
         if commit_sha is None:
             raise InvalidCommitError(f"commit does not resolve: {commit!r}")
         # `git show` (not diff) gives the commit's own change set and handles root
         # commits (which have no parent for a `^!`/`^..` form to resolve against).
-        return ["show", "--format=", "--no-ext-diff", "--no-textconv", commit_sha]
+        return ["show", "--format=", "--no-ext-diff", "--no-textconv", commit_sha], None
     raise InvalidScopeError(f"invalid scope: {scope}")
 
 
@@ -1023,8 +1047,10 @@ def gather_diff(
     # #355: `_diff_args` resolves every ref (HEAD, base, commit) to an immutable object ID here,
     # once, so the summary and the transmitted diff below cannot describe different objects under
     # a concurrent ref move. It also raises InvalidBaseError/InvalidCommitError for an
-    # unresolvable ref, folding in the reachability check that used to be a separate `_ref_exists`.
-    diff_args = _diff_args(cwd, scope, base, commit, timeout)
+    # unresolvable ref, folding in the reachability check that used to be a separate `_ref_exists`,
+    # and fails closed on an unborn HEAD rather than pinning to a mutable ref. `pinned_head` is the
+    # resolved HEAD object ID for working_tree (None otherwise), used below to disclose a HEAD move.
+    diff_args, pinned_head = _diff_args(cwd, scope, base, commit, timeout)
     if norm_paths:
         diff_args = [*diff_args, "--", *norm_paths]
     # #336: bracket the whole working_tree gather (summary + diff + untracked — several
@@ -1066,9 +1092,16 @@ def gather_diff(
     # changed-file set moved while we were reading it, so the pieces may be inconsistent.
     tree_changed_during_gather = False
     if scope == "working_tree":
-        tree_changed_during_gather = (
-            _worktree_state_token(cwd, norm_paths, state_excludes, timeout) != state_token
-        )
+        token_moved = _worktree_state_token(cwd, norm_paths, state_excludes, timeout) != state_token
+        # #355 review F2: pinning HEAD froze the diff's base, so the porcelain token — which is
+        # HEAD-relative — can no longer, on its own, catch a concurrent HEAD move (reset/checkout)
+        # that landed before the first capture: both captures would then see only the post-move
+        # state and compare equal while the diff still uses the pre-move base. Re-read HEAD and
+        # compare it to the pinned id; any move discloses that the base and worktree may not
+        # describe one snapshot. (An A→B→A round trip is still missed, matching the token's own
+        # best-effort limitation.)
+        head_moved = _resolve_commit(cwd, "HEAD", timeout) != pinned_head
+        tree_changed_during_gather = token_moved or head_moved
     diff_bytes = acc.diff_bytes
     truncated = acc.truncated
     hint = None
