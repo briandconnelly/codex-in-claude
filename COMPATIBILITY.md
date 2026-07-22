@@ -138,23 +138,33 @@ seeded, so scrubbing the worktree does not exclude them.
 
 ### Re-verifying on a Codex upgrade
 
-Marker probes are the only way to observe any of this. Build the fixture in a scratch git repo:
+Marker probes are the only way to observe any of this. **Every row of the table below needs its own
+marker** — a row whose marker is absent produces a trivial negative that looks identical to a real
+one, so the probe would report "unchanged" no matter what upstream did. Build the fixture as
+`<parent>/repo`, where `repo` is a scratch git repo (`git init` + one commit) and `<parent>` is
+**outside** it, with a distinct codeword in each of these five places:
 
-1. A unique codeword in `AGENTS.md`.
-2. A marker skill at `.agents/skills/<name>/SKILL.md` with a second codeword.
-3. A **temporary** global skill at `$CODEX_HOME/skills/<name>/SKILL.md` with a third.
+| Marker | Path | Tests |
+|---|---|---|
+| Project `AGENTS.md` | `repo/AGENTS.md` | positive control |
+| Project skill | `repo/.agents/skills/<name>/SKILL.md` | positive control |
+| Global skill | `$CODEX_HOME/skills/<name>/SKILL.md` — **temporary** | row 1 |
+| Claude-dir skill | `repo/.claude/skills/<name>/SKILL.md` | row 2 |
+| Parent `AGENTS.md` | `<parent>/AGENTS.md` (above the git root) | row 3 |
 
 Each `SKILL.md` needs YAML frontmatter — `---` / `name: <name>` / `description: <one line>` / `---`
 — then the codeword in the body. **A skill without frontmatter is silently not discovered**, which
-would make a "not discovered" result indistinguishable from upstream having changed. Treat the
-`.agents/skills/` marker as the positive control: if *it* fails to appear, the instrument is broken
-and every negative in the table below is meaningless.
+would make a "not discovered" result indistinguishable from upstream having changed. The two
+positive controls are what make the negatives meaningful: if the project `AGENTS.md` codeword or the
+`.agents/skills/` marker fails to appear, the instrument is broken and every negative below is
+worthless — fix the fixture before recording anything.
 
-Then run **two** consults (a consult is single-turn, so this cannot be one call), neither
-mentioning those files:
+Then run **two** consults with `--cd <parent>/repo` (a consult is single-turn, so this cannot be one
+call), neither mentioning those files:
 
 - **Discovery** — ask it to list every available skill by name and every codeword visible in
-  context. The marker skills appearing by name confirms discovery.
+  context, and to name explicitly which of the five markers it can and cannot see. Requesting each
+  marker by name is what separates "not discovered" from "the model did not bother to mention it".
 - **Body egress** — ask it to use the global marker skill by name and report the codeword in its
   body. The codeword coming back confirms the body reached the model.
 
@@ -171,7 +181,7 @@ probe rather than assuming they still hold):
 |---|---|
 | `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes**, body content reached the model |
 | Project `.claude/skills/` discovered? | **No** |
-| Parent-directory `AGENTS.md` above the git root loaded? | **No** (probed with cwd == git root; the cwd ≠ root case was not disambiguated) |
+| Parent-directory `AGENTS.md` above the git root loaded? | **No** (probed with `--cd` == git root; the cwd ≠ root case was not disambiguated) |
 | `project_doc_max_bytes=0` fully disables loading? | **Not verified — do not assume** |
 
 ## Flag classes

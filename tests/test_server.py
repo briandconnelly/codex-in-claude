@@ -471,6 +471,43 @@ _FILES_READ_DISCLOSED = re.compile(
     r"read(?:s|ing)?(?!-only)\b[^.]{0,45}\b(?:file|tracked|repo)"
     r"|\b(?:file|tracked|repo)[a-z]*\b[^.]{0,45}read(?:s|ing)?(?!-only)\b"
 )
+# Naming the canonical path is not the guarantee — the guarantee is that those skills
+# reach the model (#358). So the sentence naming it must also carry an affirmative
+# discovery/loading verb and must not negate it: "$CODEX_HOME/skills is never loaded"
+# names the path and a verb, yet states the opposite of what this freeze protects.
+_GLOBAL_SKILLS_PATH = "$codex_home/skills"
+_GLOBAL_SKILLS_VERB = re.compile(r"\b(?:discover|auto-?load|load|expose|reach|send|read)[a-z]*\b")
+_GLOBAL_SKILLS_NEGATION = re.compile(r"\b(?:not|never|no|without|excludes?|suppress(?:es|ed)?)\b")
+# Negations that REINFORCE the disclosure rather than deny it, and so must not veto a
+# sentence: the caveats legitimately say the isolation flags do NOT suppress this, that the
+# skills are NEITHER tracked NOR seeded, and that content is sent even if your prompt NEVER
+# mentions it. Stripped before the negation check so only a genuine denial vetoes.
+_GLOBAL_SKILLS_BENIGN_NEGATION = re.compile(
+    r"do(?:es)?\s+not\s+suppress|not\s+suppress|never\s+mentions?"
+    r"|neither\s+tracked|not\s+tracked|nor\s+seeded"
+    r"|do(?:es)?\s+not\s+exclude|not\s+exclude|no\s+\S+\s+choice\s+excludes?"
+)
+
+
+def _sentences_naming_global_skills(text):
+    return [s for s in re.split(r"(?<=[.;])\s+", text) if _GLOBAL_SKILLS_PATH in s]
+
+
+def _global_skills_disclosed(text):
+    """True when a sentence names the path and affirmatively asserts the behavior.
+
+    Naming the path is not enough — the freeze protects the claim that those skills reach
+    the model, so a sentence that names the path while denying it must read as a failure.
+    """
+    for sentence in _sentences_naming_global_skills(text):
+        if not _GLOBAL_SKILLS_VERB.search(sentence):
+            continue
+        if _GLOBAL_SKILLS_NEGATION.search(_GLOBAL_SKILLS_BENIGN_NEGATION.sub("", sentence)):
+            continue
+        return True
+    return False
+
+
 _GUARANTEE_MATCHERS = {
     # Caller content is sent to OpenAI.
     "openai": lambda d: "openai" in d,
@@ -486,10 +523,11 @@ _GUARANTEE_MATCHERS = {
     "autoload_skills": lambda d: ".agents/skills" in d,
     # User-global skills under $CODEX_HOME/skills/ are discovered too — outside the
     # workspace, and not suppressed by the config-isolation flags (#358). Keyed on the
-    # exact canonical path: a looser "skills" check would be satisfied by the
-    # .agents/skills disclosure alone, i.e. green over the exact omission it guards
-    # (see test_global_skills_matcher_rejects_project_only_prose).
-    "autoload_global_skills": lambda d: "$codex_home/skills" in d,
+    # exact canonical path (a looser "skills" check would be satisfied by the
+    # .agents/skills disclosure alone) AND on an affirmative discovery/loading verb near
+    # it, so prose that merely NAMES the path while denying the behavior does not pass.
+    # See test_global_skills_matcher_rejects_project_only_prose.
+    "autoload_global_skills": _global_skills_disclosed,
     # The isolation flags do NOT suppress that auto-loaded context.
     "isolation_suppress": lambda d: "isolation" in d and "suppress" in d,
     # Secret redaction is best-effort, not a guarantee.
@@ -570,10 +608,30 @@ def test_global_skills_matcher_rejects_project_only_prose():
         "prompt never mentions them; the isolation flags do not suppress this."
     )
     assert _GUARANTEE_MATCHERS["autoload_global_skills"](project_only) is False
-    # …while naming the canonical path registers, in either casing the sites use.
+    # …while a genuine affirmative disclosure registers.
     assert _GUARANTEE_MATCHERS["autoload_global_skills"](
         "skills under $codex_home/skills/ are discovered too"
     )
+
+
+def test_global_skills_matcher_rejects_negated_prose():
+    """Naming the path is not the guarantee — asserting the behavior is.
+
+    A matcher keyed on the bare path would pass text that names `$CODEX_HOME/skills` while
+    denying it reaches the model, i.e. stay green over a disclosure that had been inverted
+    into a false claim. Pin that the negation reads as a failure."""
+    for negated in (
+        "skills under $codex_home/skills/ are never loaded by this plugin.",
+        "the isolation flags suppress $codex_home/skills/ discovery.",
+        "$codex_home/skills/ is not read and its content is not sent.",
+    ):
+        assert _GUARANTEE_MATCHERS["autoload_global_skills"](negated) is False, negated
+    # A negated sentence elsewhere must not mask a genuine disclosure in another sentence.
+    mixed = (
+        "$codex_home/skills/ skills are discovered from outside the workspace. "
+        "Note that $codex_home/config.toml is not loaded."
+    )
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](mixed)
 
 
 # The four runtime caveat sites below are NOT function docstrings, so
