@@ -4,7 +4,7 @@ This plugin shells out to the OpenAI `codex` CLI. Every assumption it makes live
 `src/codex_in_claude/cli_contract.py` so an upstream change is a one-file, greppable edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.144.1`.
+Verified against `codex-cli 0.145.0`.
 
 ## Platform support
 
@@ -61,7 +61,7 @@ Two flows reach the `app-server` surface: `codex_transfer` (transcript import) a
 rate-limit read (`account/rateLimits/read`, added for #321 when codex 0.144 moved quota off the
 `codex exec` stream). Both are quarantined the same way: the surface is experimental upstream, so
 every assumption lives in `cli_contract.py` and `appserver.py`, neither call spends model tokens, and
-no paid call depends on either. The rate-limit read verifies against **codex-cli 0.144.4** (probe:
+no paid call depends on either. The rate-limit read verifies against **codex-cli 0.145.0** (probe:
 drive `codex app-server` and confirm `account/rateLimits/read` returns a quota block; an integration
 test does this live). See "Session transfer" below for the import flow.
 
@@ -111,9 +111,20 @@ that knob with profiles you control.
 **auto-discovers** skills under `.agents/skills/` (per upstream docs: name/description metadata up
 front; a skill's body loads when the skill is selected). It needs no tool-directed read, and every
 model-bearing call in this plugin runs `codex exec`, so that content can reach OpenAI even when the
-caller's prompt never mentions those files. Verified empirically against codex-cli 0.144.1
-(2026-07-12, issue #300); the behavior is invisible in `codex exec --help` (no flag, no
-subcommand), so the mechanical help-drift check cannot catch upstream changes to it. Re-verify on a
+caller's prompt never mentions those files. Re-verified empirically against codex-cli 0.145.0
+(2026-07-21, issue #300) — including an A/B against 0.144.1, which behaved identically despite
+0.145 shipping the new default-on `skill_search` feature; the behavior is invisible in
+`codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
+upstream changes to it.
+
+**Known incomplete — see [#358](https://github.com/briandconnelly/codex-in-claude/issues/358).**
+The same probe showed a *user-global* skill under `$CODEX_HOME/skills/` (default `~/.codex/skills/`)
+is **also** auto-discovered, and its body reaches the model **despite `--ignore-user-config`** —
+on 0.144.1 and 0.145.0 alike, so this is pre-existing rather than new. This section and the
+`cli_contract.py` comment block record it; the **remaining** disclosure sites — the server
+instructions, the `codex_status` caveat, tool descriptions and docstrings, `README.md`,
+`SECURITY.md`, and the `collaborating-with-codex` skill — still name only the project's `AGENTS.md`
+and `.agents/skills/`. #358 is scoped to those. Re-verify on a
 Codex upgrade with a marker probe: in a scratch repo whose `AGENTS.md` demands a unique codeword
 (and with a marker skill under `.agents/skills/`), run a consult that never mentions those files —
 the codeword appearing unprompted confirms the auto-load. Upstream docs:
@@ -140,8 +151,9 @@ whether `project_doc_max_bytes=0` fully disables loading. The assumption is reco
 
 ## Reasoning-effort control (`model_reasoning_effort`, #309)
 
-`codex exec` 0.144.3 has no dedicated reasoning-effort flag (verified against
-`codex exec --help`, 2026-07-13), so the per-call `reasoning_effort` parameter and
+`codex exec` 0.145.0 has no dedicated reasoning-effort flag (verified against
+`codex exec --help`, 2026-07-21 — byte-identical to 0.144.1's), so the per-call
+`reasoning_effort` parameter and
 `CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
 `-c model_reasoning_effort="<value>"`, with the value **TOML-string-encoded** (JSON string syntax,
 which is valid TOML). Codex TOML-parses the `-c` right-hand side and falls back to a string only
@@ -254,7 +266,10 @@ so an event-schema change degrades metadata rather than breaking a run.
 `Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
 labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
 every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
-`appserver.py`. Verified against `codex-cli 0.144.1` via `codex app-server generate-json-schema --out <DIR>`.
+`appserver.py`. Verified against `codex-cli 0.145.0` via `codex app-server generate-json-schema --out <DIR>`.
+The 0.144.1 → 0.145.0 schema diff is additive only for the consumed surface (an optional
+`migrationSource`, a `MEMORY` item type, an optional `memory` details array, an optional
+`subErrorType` on failures), so nothing this plugin sends or reads changed.
 
 The flow: `initialize` (with `capabilities.experimentalApi=true`) → `initialized` notification → one
 `externalAgentConfig/import` request carrying a single `SESSIONS` migration item → wait for the

@@ -6,7 +6,7 @@ versions, and the stderr phrasings that mean the contract drifted — lives here
 an upstream breaking change is a one-file, greppable, testable edit. See
 COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.144.1`.
+Verified against `codex-cli 0.145.0`.
 """
 
 from __future__ import annotations
@@ -37,8 +37,11 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
 # [experimental] and the import method rides behind the `experimentalApi` capability),
 # so every wire assumption lives here; see COMPATIBILITY.md. Verified against
-# codex-cli 0.144.1 on 2026-07-10 via `codex app-server generate-json-schema --out <DIR>`
-# (the generator now requires an --out directory instead of writing to stdout).
+# codex-cli 0.145.0 on 2026-07-21 via `codex app-server generate-json-schema --out <DIR>`
+# (the generator requires an --out directory instead of writing to stdout). The 0.144.1 -> 0.145.0
+# schema diff was additive only for the surface consumed here: optional `migrationSource` on the
+# import params, a `MEMORY` migration item type, an optional `memory` details array, and an optional
+# `subErrorType` on a failure entry — none of which change what we send or read.
 APP_SERVER_SUBCOMMAND = ("app-server",)
 # JSON-RPC handshake (v1) + the experimental import request/notifications (v2).
 APP_SERVER_INITIALIZE_METHOD = "initialize"
@@ -88,7 +91,9 @@ JSONRPC_RESERVED_ERROR_MAX = -32000
 # counts remains). Quota moved onto the app-server protocol: `account/rateLimits/read`
 # (params: null) is a READ-ONLY, no-model-spend request that returns the current quota
 # snapshot after the same initialize/initialized handshake codex_transfer uses. Verified
-# against codex-cli 0.144.4 on 2026-07-14 via `codex app-server`. See #321, COMPATIBILITY.md.
+# against codex-cli 0.145.0 on 2026-07-21 via `codex app-server` (live read) and the generated
+# schema. See #321, COMPATIBILITY.md. 0.145 adds one field we deliberately do not consume yet,
+# `spendControlReached` (#359); the parse is key-by-key, so an unread field is inert.
 APP_SERVER_RATE_LIMITS_READ_METHOD = "account/rateLimits/read"
 # read response → `result.rateLimits` is the single-bucket RateLimitSnapshot. Its windows
 # are `primary`/`secondary`, but — unlike the old exec-stream block, which fixed primary=5h
@@ -187,7 +192,12 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # name/description metadata up front, a skill's body when it is selected). It needs no
 # tool-directed read, and every model-bearing call here runs `codex exec` — so that
 # content can reach OpenAI even when the caller's prompt never mentions those files.
-# Verified empirically against codex-cli 0.144.1 (2026-07-12) via marker probes;
+# Re-verified empirically against codex-cli 0.145.0 (2026-07-21) via marker probes — including an
+# A/B against 0.144.1, which behaved identically despite 0.145 shipping the new default-on
+# `skill_search` feature. Those probes ALSO showed a user-global skill under `$CODEX_HOME/skills/`
+# is auto-discovered and reaches the model despite `--ignore-user-config`; this comment and
+# COMPATIBILITY.md record it, but the prose sites named in the RULE below do not yet disclose it,
+# which is tracked as #358. Marker probes are the only way to see any of this;
 # invisible in `codex exec --help` (no flag, no subcommand), so the mechanical
 # help-drift check CANNOT catch upstream changes to it. The isolation flags do NOT
 # suppress it: `--ignore-user-config` drops `$CODEX_HOME/config.toml` and
@@ -242,8 +252,9 @@ HELP_GATED_FLAGS = {
 }
 
 # --- Reasoning-effort config override (issue #309) --------------------------------
-# `codex exec` 0.144.3 has no dedicated reasoning-effort flag (verified against
-# `codex exec --help` 2026-07-13); the only route is the `model_reasoning_effort`
+# `codex exec` 0.145.0 has no dedicated reasoning-effort flag (verified against
+# `codex exec --help` 2026-07-21, byte-identical to 0.144.1's); the only route is the
+# `model_reasoning_effort`
 # config key, sent as `-c model_reasoning_effort=<value>`. A config KEY cannot be
 # help-gated — `--help` advertises flags, not config keys — so when a caller (or the
 # CODEX_IN_CLAUDE_REASONING_EFFORT default) requests an effort it is sent
@@ -303,7 +314,8 @@ MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # malformed/hostile cache surfacing junk to an agent).
 MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Bundled advisory fallback used ONLY when the on-disk cache is absent/unreadable.
-# Copied from codex-cli 0.144.1's models_cache.json on 2026-07-10 (cache order preserved).
+# Copied from codex-cli 0.144.1's models_cache.json on 2026-07-10 (cache order preserved); the slug
+# set was re-verified unchanged against codex-cli 0.145.0's cache on 2026-07-21.
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
 # live account's available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping
 # the CLI.
@@ -322,11 +334,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.144.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.145.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 144)})
+SUPPORTED_VERSIONS = frozenset({(0, 145)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

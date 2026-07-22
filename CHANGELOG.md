@@ -5,6 +5,47 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tracked Codex version bumped to `0.145`.** `SUPPORTED_VERSIONS` now tracks `(0, 145)`; the CLI
+  contract, help snapshots (`docs/codex-help/0.145.0/`), and `KNOWN_MODEL_SLUGS` fallback are
+  verified against `codex-cli 0.145.0`. Advisory only — an untracked version warns in `codex_status`
+  but never blocks, and the `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` override still applies. **No
+  agent-visible surface change**, so no `fingerprint` bump; not breaking.
+
+  0.145 required no code change. `codex exec/review/exec review --help` are byte-identical to
+  0.144.1's (the only `codex --help` delta is one cosmetic word), the sandbox values and all
+  `ALWAYS_SEND_FLAGS` are intact, the **contract-drift** signatures still match real observed output
+  (probed: unknown flag, invalid `--sandbox` value, unknown feature name), the
+  `model_reasoning_effort` config key is still applied (the backend still rejects a bad value with
+  both `[ReasoningEffortParam]` and `[reasoning.effort]` markers), the `models_cache.json` slug set
+  and reasoning-effort field shapes are unchanged, the allowlisted `CODEX_IN_CLAUDE_EXTRA_ARGS`
+  option forms still parse, and the live integration suite passes against the new CLI. The **auth
+  and rate-limit** stderr signatures were *not* re-observed for 0.145 — triggering them requires a
+  real failing account state — so those patterns still rest on the earlier observations that
+  introduced them.
+
+  Verification for this bump used a **true A/B against a side-by-side install of the previous
+  version** (`npm install --prefix <scratch> @openai/codex@0.144.1`) rather than only the committed
+  help snapshots, which settled two questions the snapshots could not:
+
+  - The app-server protocol diff (`generate-json-schema`) is **additive only** for the surface this
+    plugin consumes. `RateLimitSnapshot.spendControlReached` is the sole genuinely new field, and it
+    is deliberately not consumed yet (#359) — the rate-limit parse is key-by-key, so an unread field
+    is inert. Every other unconsumed field on that response already existed in 0.144.1.
+  - 0.145's new default-on `skill_search` feature causes **no observable change** under this
+    plugin's isolation flags: both versions returned an identical skill catalog and identical
+    auto-loaded context in a marker probe.
+
+  That probe also surfaced a **pre-existing** disclosure gap, present on 0.144.1 and 0.145.0 alike:
+  a user-global skill under `$CODEX_HOME/skills/` is auto-discovered and reaches the model despite
+  `--ignore-user-config`. `COMPATIBILITY.md` and the `cli_contract.py` comment now record it; the
+  remaining user-facing caveat sites (server instructions, `codex_status`, tool descriptions,
+  `README.md`, `SECURITY.md`, the `collaborating-with-codex` skill) still name only the project's
+  `AGENTS.md` and `.agents/skills/`, and #358 tracks correcting those. The behavior is unchanged by
+  this bump. #360 tracks folding the A/B technique into
+  `docs/UPGRADING-CODEX.md`.
+
 ### Fixed
 
 - **`branch` and `commit` diffs now gather atomically against pinned object IDs** (#355). A diff
