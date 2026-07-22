@@ -2862,6 +2862,80 @@ async def test_bad_isolation_enum_lists_allowed_values_from_anyof():
     assert err["details"]["allowed_values"] == list(server.config.VALID_ISOLATIONS)
 
 
+async def test_bad_list_literal_element_lists_allowed_values_from_items():
+    """An out-of-enum *element* of a `list[Literal] | None` param surfaces the element
+    domain, which lives at `anyOf[].items.enum` (#373). The failing field is positional,
+    so the advertised values describe what that element must be."""
+    res = await server.mcp.call_tool("codex_capabilities", {"include_schemas": ["nope"]})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    tokens = list(get_args(server.IncludeSchemasToken))
+    # the positional field is the premise for advertising the *element* domain
+    assert err["details"]["field"] == "include_schemas[0]"
+    assert err["details"]["allowed_values"] == tokens
+    assert err["invalid_arguments"][0]["field"] == "include_schemas[0]"
+    assert err["invalid_arguments"][0]["allowed_values"] == tokens
+
+
+async def test_container_shape_failure_does_not_advertise_the_element_domain():
+    """A whole-list failure (`include_schemas="nope"`) names the container, not an
+    element — advertising the element tokens as that field's allowed values would tell
+    the client to retry with another scalar. The element domain is offered only for an
+    indexed failure (#373)."""
+    res = await server.mcp.call_tool("codex_capabilities", {"include_schemas": "nope"})
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["details"]["field"] == "include_schemas"
+    # absent, not null: the envelope serializer is exclude_none, so asserting absence
+    # also pins the wire shape (Copilot review).
+    assert "allowed_values" not in err["details"]
+    assert "allowed_values" not in err["invalid_arguments"][0]
+
+
+# The shape matrix for the resolver itself: the enum can sit at the property root or
+# inside an anyOf branch, and for a list param it sits one level down under `items`.
+_SCALAR = {"enum": ["a", "b"], "type": "string"}
+_OPTIONAL_SCALAR = {"anyOf": [_SCALAR, {"type": "null"}]}
+_NULL_FIRST_SCALAR = {"anyOf": [{"type": "null"}, _SCALAR]}
+_LIST = {"items": _SCALAR, "type": "array"}
+_OPTIONAL_LIST = {"anyOf": [_LIST, {"type": "null"}]}
+_NULL_FIRST_LIST = {"anyOf": [{"type": "null"}, _LIST]}
+_PLAIN = {"type": "string"}
+_SINGLE_VALUE_LITERAL = {"const": "only", "type": "string"}
+
+
+@pytest.mark.parametrize(
+    ("schema", "element", "expected"),
+    [
+        # scalar params: the field itself carries the domain
+        (_SCALAR, False, ["a", "b"]),
+        (_OPTIONAL_SCALAR, False, ["a", "b"]),
+        (_NULL_FIRST_SCALAR, False, ["a", "b"]),  # branch order is irrelevant
+        # list params: the domain is the element's, reachable only for an indexed failure
+        (_LIST, True, ["a", "b"]),
+        (_OPTIONAL_LIST, True, ["a", "b"]),
+        (_NULL_FIRST_LIST, True, ["a", "b"]),
+        # ...and the two modes never borrow each other's level
+        (_LIST, False, None),
+        (_OPTIONAL_LIST, False, None),
+        (_SCALAR, True, None),
+        (_OPTIONAL_SCALAR, True, None),
+        # no enum anywhere, and the documented non-dict guard
+        (_PLAIN, False, None),
+        (_PLAIN, True, None),
+        (None, False, None),
+        ("not-a-schema", False, None),
+        # a single-value Literal renders as `const`, not `enum` — deliberately unhandled
+        (_SINGLE_VALUE_LITERAL, False, None),
+    ],
+)
+def test_enum_for_property_shape_matrix(schema, element, expected):
+    """Every enum-bearing property shape this server can generate, plus the negatives
+    that must stay None (#373)."""
+    assert server._enum_for_property(schema, element=element) == expected
+
+
 async def test_rejected_argument_value_is_never_echoed():
     """No rejected input value is copied into the result — not for an unknown key, a
     wrong-typed free-form param, or even an out-of-enum value (a Literal param accepts
