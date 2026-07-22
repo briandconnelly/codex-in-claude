@@ -233,6 +233,112 @@ def test_count_untracked_newline_in_filename_counts_once(repo):
     assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
 
 
+def test_count_untracked_streams_through_run_lines(repo, monkeypatch):
+    """#351: the `ls-files -z` enumeration must route through the bounded
+    `gitproc.run_lines` runner, which drains stderr CONCURRENTLY under a byte cap and owns
+    the process-group kill/reap. RED before #351: the hand-rolled reader read stderr
+    post-EOF and unbounded, so only the excludes resolver (`git config`) reached run_lines.
+
+    The assertion is command-specific for that reason: `_global_excludes_flags` already
+    routes a `config` call through run_lines, so a bare "run_lines was called" check would
+    pass against the very code this guards.
+    """
+    (repo / "u.py").write_text("x = 1\n")
+
+    calls: list[tuple[list[str], dict]] = []
+    real = gitdiff.gitproc.run_lines
+
+    def spy(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", spy)
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+
+    enumerations = [(argv, kw) for argv, kw in calls if "ls-files" in argv]
+    assert len(enumerations) == 1, f"expected exactly one ls-files call; saw {calls}"
+    argv, kwargs = enumerations[0]
+    # Assert the EXACT argv, not a token subset: ordering, duplicates, and any extra
+    # argument matter here (a stray flag would change what git enumerates).
+    assert argv[0] == "git"
+    assert argv[1 : 1 + len(gitdiff._GIT_HARDENING_FLAGS)] == list(gitdiff._GIT_HARDENING_FLAGS)
+    # No pathspec was passed, so the subcommand is the whole tail after the hardening
+    # flags and whatever `-c core.excludesFile=...` the environment resolved.
+    assert argv[-4:] == ["ls-files", "--others", "--exclude-standard", "-z"]
+    assert kwargs["sep"] == "\0"
+    assert kwargs["max_line_bytes"] == gitdiff._STREAM_RECORD_MAX
+    assert kwargs["timeout"] == 30
+    assert kwargs["cwd"] == str(repo)
+
+
+def test_count_untracked_passes_pathspec_to_the_runner(repo, monkeypatch):
+    """The conditional `-- <paths>` suffix must survive the fold onto the runner: it is
+    appended only when `normalize_paths` returns a non-empty list, and it is what scopes
+    the count to the review's pathspec."""
+    (repo / "sub").mkdir()
+    (repo / "sub" / "inside.py").write_text("i = 1\n")
+    (repo / "outside.py").write_text("o = 1\n")
+
+    seen: list[list[str]] = []
+    real = gitdiff.gitproc.run_lines
+
+    def spy(argv, **kwargs):
+        if "ls-files" in argv:
+            seen.append(list(argv))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", spy)
+    assert gitdiff.count_untracked(str(repo), ["sub"], timeout=30) == 1
+    assert seen and seen[0][-6:] == [
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        "sub",
+    ]
+
+
+def test_count_untracked_counts_reader_truncated_record_once(repo, monkeypatch):
+    """Characterization, NOT a red-green regression test — it passes against the
+    pre-#351 code too (which had no per-record cap at all, so nothing to truncate).
+
+    It pins the property the fold DEPENDS on: a path long enough for the bounded reader
+    to truncate is still exactly ONE record, so record-counting stays equivalent to the
+    NUL-counting it replaces. Unlike `_index_untracked`, this path deliberately does NOT
+    reject an over-long record (see `count_untracked`'s comment) — nothing is hashed or
+    sent, so counting it keeps the disclosure honest.
+    """
+    monkeypatch.setattr(gitdiff, "_STREAM_RECORD_MAX", 32)
+    (repo / ("l" * 200 + ".py")).write_text("x = 1\n")
+
+    # Assert the mutation actually APPLIED. Without this the test is vacuous: if the
+    # lowered cap ever stopped reaching the runner, nothing would be truncated and the
+    # count would still be 1 — a green result proving nothing about the property named
+    # in the docstring.
+    records: list[str] = []
+    real = gitdiff.gitproc.run_lines
+
+    def spy(argv, **kwargs):
+        if "ls-files" in argv:
+            assert kwargs["max_line_bytes"] == 32, "the lowered record cap never reached run_lines"
+            inner = kwargs["consume"]
+
+            def tapping(it):
+                return inner(records.append(r) or r for r in it)
+
+            kwargs = {**kwargs, "consume": tapping}
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", spy)
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+    assert len(records) == 1
+    assert streamcap._LINE_TRUNC_SENTINEL in records[0], (
+        f"record was never truncated, so the test proves nothing: {records[0]!r}"
+    )
+    assert records[0].endswith("\0"), "a truncated record must stay NUL-terminated"
+
+
 def test_count_untracked_does_not_run_repo_fsmonitor(repo, tmp_path):
     # A working-tree review of an untrusted repo must not execute a repo-configured
     # fsmonitor program in the server process, outside the Codex sandbox.

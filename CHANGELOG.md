@@ -7,6 +7,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The untracked-file count no longer reads git's stderr unbounded** (#351). `_core/gitdiff.py`'s
+  `count_untracked` — the egress-free blind-spot disclosure on the default `working_tree` review
+  path — already stream-counted its `git ls-files -z` *stdout* in bounded chunks, but it hand-rolled
+  the subprocess lifecycle and read the child's *stderr* with an unbounded post-EOF
+  `proc.stderr.read()`, duplicating the process-group kill/reap that `_core/gitproc.run_lines`
+  owns. It now streams through that shared runner like every other cardinality-driven git read in
+  the module, which drains stderr concurrently under a byte cap — also removing a latent deadlock
+  the old comment knowingly bet against, where a >64 KiB diagnostic emitted before stdout EOF would
+  wedge the post-EOF read until the watchdog fired. The returned count is unchanged (the runner
+  yields exactly one record per NUL-terminated path, so record-counting equals the NUL-counting it
+  replaces), as is the error vocabulary and the timeout message, so **no `fingerprint` change**.
+  Behavior differs only for a pathological producer: a git diagnostic larger than the 64 KiB stderr
+  cap is no longer retained whole, so its message text can differ — a multi-line diagnostic keeps a
+  head and tail window, while a single oversized *line* is truncated at its prefix and its tail is
+  dropped. A "not a git repository" signature surviving only in discarded stderr would therefore
+  surface as `RuntimeError` rather than `NotAGitRepoError`; git emits that diagnostic on its own
+  short line, so this is a pathological-producer case, not a real one. Unlike the
+  untracked *gather*, this path deliberately counts a reader-truncated over-long path instead of
+  rejecting it — nothing is read, hashed, or transmitted here, so counting keeps the disclosure
+  honest where rejecting would fail a review over a path it never touches.
+
 - **The tracked diff's file/line summary is now counted in bounded memory** (#350). `_core/gitdiff.py`'s
   `_summary` — reached on *every* gathered diff, including the default `codex_review_changes` and the
   free `codex_dry_run` — captured `git diff --numstat` whole and then split it, one record per changed
@@ -19,7 +40,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   and a record the reader truncated mid-pathname still counts exactly (both numeric columns precede
   the pathname), so no diff that counts today starts failing. Reported counts and error vocabulary are
   unchanged, so **no `fingerprint` change**. (#351, `count_untracked`'s unbounded post-EOF stderr read,
-  remains open.)
+  is folded onto the same runner above.)
 
 - **`AGENTS.md` now routes a codex upgrade to `docs/UPGRADING-CODEX.md`** (#364). The always-loaded
   instruction file never named the upgrade runbook, and its "update that one file" phrasing read as
