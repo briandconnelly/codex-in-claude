@@ -4752,20 +4752,40 @@ def test_status_result_resource_returns_full_schema():
     assert "RateLimit" in schema["$defs"]
 
 
-def test_capabilities_include_schemas_covers_all_four_tokens():
-    from codex_in_claude.server import codex_capabilities
+def test_capabilities_include_schemas_returns_every_advertised_token_verbatim():
+    """Every token the input Literal advertises must resolve to its canonical payload.
 
-    caps = codex_capabilities(
-        include_schemas=["error-envelope", "result-meta", "capabilities-result", "status-result"]
+    Two drifts this closes (#370). Advertised-but-unwired: the token set comes from
+    get_args on the same Literal the MCP enum renders from, so widening it without
+    wiring the payload fails here. Wired-to-the-wrong-payload: the assertion is exact
+    equality against the canonical constants, not a marker lookup — `RateLimit` lives in
+    three of the four `$defs` blocks, so a marker check passed a mis-wired token.
+    """
+    from codex_in_claude import param_contracts
+    from codex_in_claude.schemas import (
+        CAPABILITIES_RESULT_SCHEMA,
+        ERROR_ENVELOPE_SCHEMA,
+        RESULT_META_SCHEMA,
+        STATUS_RESULT_SCHEMA,
     )
-    assert set(caps["schemas"]) == {
-        "error-envelope",
-        "result-meta",
-        "capabilities-result",
-        "status-result",
+    from codex_in_claude.server import IncludeSchemasToken, codex_capabilities
+
+    expected = {
+        "error-envelope": ERROR_ENVELOPE_SCHEMA,
+        "result-meta": RESULT_META_SCHEMA,
+        "capabilities-result": CAPABILITIES_RESULT_SCHEMA,
+        "status-result": STATUS_RESULT_SCHEMA,
+        # A contract document, not a JSON Schema — the same body the codex://params
+        # resource serves.
+        "parameter-contracts": param_contracts.resource_body(),
     }
-    assert "ToolCapability" in caps["schemas"]["capabilities-result"]["$defs"]
-    assert "RateLimit" in caps["schemas"]["status-result"]["$defs"]
+    tokens = list(get_args(IncludeSchemasToken))
+    assert set(expected) == set(tokens), (
+        "this test's expected mapping has drifted from the advertised token set — add "
+        "the new token's canonical payload above"
+    )
+    caps = codex_capabilities(include_schemas=tokens)
+    assert caps["schemas"] == expected
 
 
 async def test_include_schemas_input_enum_lists_all_tokens():
@@ -4786,6 +4806,22 @@ async def test_include_schemas_input_enum_lists_all_tokens():
         "status-result",
         "parameter-contracts",
     }
+
+
+async def test_off_enum_include_schemas_token_is_rejected_at_the_boundary():
+    """An unrecognized token never reaches the handler (#370).
+
+    This is the precondition for `codex_capabilities` indexing its payload dict
+    unguarded: because FastMCP rejects an off-enum token here, a missing key inside the
+    handler can only mean the advertised Literal and the dict have drifted, so failing
+    loudly there is correct rather than client-hostile.
+    """
+    res = await server.mcp.call_tool("codex_capabilities", {"include_schemas": ["nope"]})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["details"]["field"] == "include_schemas[0]"
+    assert "'error-envelope'" in err["details"]["reason"]
 
 
 # --------------------------------------------------------------------------- #

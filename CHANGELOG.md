@@ -7,6 +7,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_capabilities(include_schemas=…)` can no longer drift from its advertised tokens** (#370).
+  The documented fallback that lets a resource-blind client reach the full contracts from
+  `tools/list` alone had two guard gaps — neither a live bug, both missing regression guards. Its
+  only payload assertion looked for `RateLimit` in the `status-result` schema's `$defs`, but
+  `RateLimit` appears in three of the four schemas, so mis-wiring that token to the error-envelope
+  schema passed the entire suite (verified by mutation). And the advertised token `Literal` and the
+  runtime payload dict were built independently, with the response filtered by `if k in available`
+  — so a token added to the enum but never wired would be *silently omitted* rather than surfaced,
+  and nothing forced the wiring. The token set is now a named `IncludeSchemasToken` alias that one
+  test derives with `get_args` and asserts, by exact equality, against the payload every token
+  actually returns — closing both drifts and covering `parameter-contracts`, which previously had
+  no behavioral assertion. The silent-omission filter is gone: FastMCP rejects an off-enum token as
+  `invalid_arguments` before the handler runs, so a missing key can only mean server-side drift,
+  which now fails loudly. Tests and internal wiring only — the advertised input schema is
+  byte-identical, so **no `fingerprint` change** and not breaking.
+
 - **The advertised fingerprint coverage no longer overclaims** (#337). `fingerprint_covers` lists
   `initialize_response` and `capabilities_payload` as covered categories, and the promise was that
   any change within a covered category bumps `fingerprint`. But the guard deliberately excludes
