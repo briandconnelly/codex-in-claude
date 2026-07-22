@@ -146,6 +146,14 @@ complete, or codex is not ready — retry) / `unavailable` (this codex/account e
 On codex 0.144+ the quota block no longer rides the `codex exec` stream, so a run's `meta.rate_limit`
 is `null`. The block is advisory.
 
+`status` is also `blocked` when the backend reports a **spend** control — codex 0.145+ carries
+`spendControlReached`, surfaced as `spend_control_reached`. It is not a quota window: no reset
+clears it, so `blocked` outranks every window verdict and reports `limiting_window: null` while
+still showing the windows. The field is tri-state, and null is *not* false: a codex/backend that
+does not report the state leaves it null, and the window verdicts stay window-scoped — `available`
+attests that the reported windows are healthy, never that spending is administratively permitted.
+When the state is unreported and the windows are healthy, `note` says so.
+
 ## Workspace selection
 
 When calling the MCP tools directly, pass `workspace_root` as an absolute path to the repository you

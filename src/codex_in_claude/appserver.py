@@ -962,6 +962,17 @@ def _valid_reached_type(value: object) -> str | None:
     return norm if norm in cli_contract.RATE_LIMIT_REACHED_TYPES else None
 
 
+def _valid_spend_control(value: object) -> bool | None:
+    """The backend's `spendControlReached` answer, or None when it did not give one (#359).
+
+    STRICT on purpose — `type(value) is bool`, not truthiness or Pydantic's coercion. A truthy
+    non-bool (`1`, `"true"`) must never become a false administrative block, and a falsy one
+    (`0`, `""`) must never become a real `False`; both mean "the backend did not say". Note
+    `isinstance` would be wrong here: `bool` is the only accepted type, and `True`/`False`
+    already are bools, so the identity check costs nothing and refuses everything else."""
+    return value if type(value) is bool else None
+
+
 def _assign_window_slots(
     windows: list[tuple[int | None, RateLimitWindowSnapshot, str]],
 ) -> tuple[RateLimitWindowSnapshot | None, RateLimitWindowSnapshot | None]:
@@ -1018,14 +1029,21 @@ def _parse_rate_limits(result: object) -> tuple[RateLimitReadStatus, RateLimitSn
         if parsed is None:
             return RateLimitReadStatus.PROTOCOL_ERROR, None  # present but malformed → drift
         windows.append((parsed[0], parsed[1], slot))
-    if not windows:
+    spend_control = _valid_spend_control(
+        block.get(cli_contract.RATE_LIMIT_SPEND_CONTROL_REACHED_KEY)
+    )
+    if not windows and spend_control is not True:
         return RateLimitReadStatus.NO_QUOTA, None  # block present, no windows → no quota
-    primary, secondary = _assign_window_slots(windows)
+    # A windowless block that DOES report a spend block is not "no quota" — returning NO_QUOTA
+    # here would discard the one signal the read found (#359). Note this is checked after the
+    # malformed-window drift returns above, so drift is still drift.
+    primary, secondary = _assign_window_slots(windows) if windows else (None, None)
     return RateLimitReadStatus.OK, RateLimitSnapshot(
         plan_type=_valid_plan_type(block.get(cli_contract.RATE_LIMIT_PLAN_TYPE_KEY)),
         rate_limit_reached_type=_valid_reached_type(
             block.get(cli_contract.RATE_LIMIT_REACHED_TYPE_KEY)
         ),
+        spend_control_reached=spend_control,
         primary=primary,
         secondary=secondary,
     )

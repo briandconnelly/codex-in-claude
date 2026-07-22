@@ -133,9 +133,10 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
 
 - `codex_status` — readiness, version, auth, resolved defaults, and a `rate_limit` block
   (remaining Codex quota for the shorter/rolling and longer windows, read **live** from the Codex
-  app-server with no model spend; `status` is `available`/`limited`/`exhausted`/`unknown`/
-  `unavailable`). Advisory — informs whether to spend; `unknown`/`unavailable` mean no usable
-  reading, not a problem.
+  app-server with no model spend; `status` is `available`/`limited`/`exhausted`/`blocked`/
+  `unknown`/`unavailable`). Advisory — informs whether to spend; `unknown`/`unavailable` mean no
+  usable reading, not a problem, while `blocked` reports a backend spend control that waiting
+  does not clear.
 - `codex_transfer(transcript_path, …)` — hand off the current Claude Code session to a resumable
   Codex thread; returns `resume_command` (`codex resume <thread_id>`) to continue that exact
   conversation in Codex. No model call or token spend (a local file conversion via the experimental

@@ -38,6 +38,14 @@ _REFRESH_HINT = (
     "No Codex rate-limit reading available; run codex_status to fetch the current quota."
 )
 _LIMITED_THRESHOLD = 25.0  # remaining_percent below this on an open window -> 'limited'
+_SPEND_CONTROL_BLOCKED = (
+    "Codex reports a backend spend control on this account; paid calls will fail until it is"
+    " lifted. Unlike a quota window, waiting for a reset does not clear it."
+)
+_SPEND_CONTROL_UNREPORTED = (
+    "Spend-control state was not reported by this codex/backend, so this reading covers the"
+    " quota windows only and does not attest that spending is permitted."
+)
 _EXPECTED_WINDOWS = ("primary", "secondary")
 
 
@@ -83,6 +91,7 @@ def interpret(
         is_stale=is_stale,
         plan_type=snapshot.plan_type,
         home_unverified=home_unverified,
+        spend_control_reached=snapshot.spend_control_reached,
         limiting_window=limiting,
         primary=primary,
         secondary=secondary,
@@ -200,6 +209,13 @@ def _status(
     """Return (status, limiting_window, note)."""
     windows = dict(zip(_EXPECTED_WINDOWS, (primary, secondary), strict=True))
     present = {name: w for name, w in windows.items() if w is not None}
+
+    # 0. A backend SPEND control outranks everything below, including a windowless snapshot:
+    #    it is account-level, not window-level, and no quota reset clears it. Only an explicit
+    #    True is a verdict — null means the backend did not report the state (see step 3).
+    if snapshot.spend_control_reached is True:
+        return "blocked", None, _SPEND_CONTROL_BLOCKED
+
     if not present:
         return "unknown", None, _REFRESH_HINT
     open_windows: dict[str, RateLimitWindow] = {
@@ -263,7 +279,13 @@ def _status(
             " (reset or stale); refresh before relying on availability.",
         )
     n = min(open_windows, key=lambda k: _remaining(open_windows[k]))
-    return "available", cast('Literal["primary", "secondary"]', n), None
+    # A healthy window reading is still only a WINDOW reading. When the backend did not report
+    # its spend-control state (a CLI predating codex 0.145, or an explicit upstream null), say
+    # so rather than let `available` be read as "spending is permitted" (#359). The reading
+    # itself is fresh and usable, so it stays `available` — degrading it to `unknown` would
+    # claim a retry might help when nothing about it can change.
+    note = _SPEND_CONTROL_UNREPORTED if snapshot.spend_control_reached is None else None
+    return "available", cast('Literal["primary", "secondary"]', n), note
 
 
 def _iso(epoch: int) -> str:

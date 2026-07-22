@@ -1,5 +1,5 @@
 {
-  "result_format": 5,
+  "result_format": 6,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -516,13 +516,26 @@
               "title": "Source",
               "type": "string"
             },
+            "spend_control_reached": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spend Control Reached"
+            },
             "status": {
               "enum": [
                 "available",
                 "limited",
                 "exhausted",
                 "unknown",
-                "unavailable"
+                "unavailable",
+                "blocked"
               ],
               "title": "Status",
               "type": "string"
@@ -1280,13 +1293,26 @@
               "title": "Source",
               "type": "string"
             },
+            "spend_control_reached": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spend Control Reached"
+            },
             "status": {
               "enum": [
                 "available",
                 "limited",
                 "exhausted",
                 "unknown",
-                "unavailable"
+                "unavailable",
+                "blocked"
               ],
               "title": "Status",
               "type": "string"
@@ -2245,13 +2271,26 @@
               "title": "Source",
               "type": "string"
             },
+            "spend_control_reached": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spend Control Reached"
+            },
             "status": {
               "enum": [
                 "available",
                 "limited",
                 "exhausted",
                 "unknown",
-                "unavailable"
+                "unavailable",
+                "blocked"
               ],
               "title": "Status",
               "type": "string"
@@ -3066,13 +3105,26 @@
               "title": "Source",
               "type": "string"
             },
+            "spend_control_reached": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Spend Control Reached"
+            },
             "status": {
               "enum": [
                 "available",
                 "limited",
                 "exhausted",
                 "unknown",
-                "unavailable"
+                "unavailable",
+                "blocked"
               ],
               "title": "Status",
               "type": "string"

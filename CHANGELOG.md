@@ -5,6 +5,34 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_status` reports a backend spend control** (#359). codex 0.145 added
+  `spendControlReached` to the app-server's rate-limit snapshot — a *spend* control the backend
+  enforces, distinct from a quota window: no reset clears it. Until now the plugin ignored the
+  field, so an account blocked from spending showed healthy quota percentages and
+  `rate_limit.status: "available"`, with nothing to say paid calls would fail.
+  - `rate_limit` carries `spend_control_reached` (`true` | `false` | `null`), and
+    `rate_limit.status` gains the value `blocked`. `blocked` outranks every window-derived
+    verdict — including `rateLimitReachedType` — because its remedy is not waiting. It reports
+    `limiting_window: null` (no window binds an account-level block) while still showing the
+    windows, and its `note` says a reset will not clear it.
+  - A windowless response that reports the block is no longer collapsed to `unavailable`; that
+    path used to return "no quota" before the field was read, discarding the one signal present.
+    A *present but malformed* window is still protocol drift, unchanged.
+  - The tri-state is load-bearing and null is **not** false. Only a real boolean is an answer —
+    a truthy non-bool (`1`, `"true"`) never becomes a false administrative block, and a falsy one
+    (`0`, `""`) never becomes a real `false`. A codex that predates 0.145 omits the key, which
+    reads as null.
+  - Null does **not** downgrade a healthy reading. The window verdicts stay window-scoped:
+    `available` attests that the reported windows are healthy, never that spending is
+    administratively permitted, and when the state is unreported it says so in `note`. Turning
+    that reading into `unknown` would have claimed a retry might help when nothing can change —
+    reintroducing the permanent-`unknown` failure #321 removed.
+
+  Bumps `FINGERPRINT` (`schema-53` → `schema-54`) and `RESULT_FORMAT` (`5` → `6`) for the added
+  field and status value. Backward-compatible: nothing was removed, retyped, or narrowed.
+
 ### Changed
 
 - **The untracked-file count no longer reads git's stderr unbounded** (#351). `_core/gitdiff.py`'s
