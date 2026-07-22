@@ -18,9 +18,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   and nothing forced the wiring. The token set is now a named `IncludeSchemasToken` alias that one
   test derives with `get_args` and asserts, by exact equality, against the payload every token
   actually returns — closing both drifts and covering `parameter-contracts`, which previously had
-  no behavioral assertion. The silent-omission filter is gone: FastMCP rejects an off-enum token as
-  `invalid_arguments` before the handler runs, so a missing key can only mean server-side drift,
-  which now fails loudly. Tests and internal wiring only — the advertised input schema is
+  no behavioral assertion. The silent-omission filter is gone: on an MCP call FastMCP rejects an
+  off-enum token as `invalid_arguments` before the handler runs, so a missing key there can only
+  mean server-side drift, which now fails loudly. (A direct Python call bypasses that validation
+  and gets a raw `KeyError` instead — it violates the annotated `Literal`'s domain, and the module
+  is not a public Python API.) Tests and internal wiring only — the advertised input schema is
   byte-identical, so **no `fingerprint` change** and not breaking.
 
 - **The advertised fingerprint coverage no longer overclaims** (#337). `fingerprint_covers` lists

@@ -1961,10 +1961,12 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
             # resource-blind client can still reach the compressed params' full semantics (#333).
             "parameter-contracts": param_contracts.resource_body(),
         }
-        # No `if k in available` guard: FastMCP rejects an off-enum token as
-        # invalid_arguments before this runs, so a missing key can only mean the advertised
-        # Literal and this dict have drifted — a server bug that must fail loudly rather
-        # than silently omit the schema the client asked for (#370).
+        # No `if k in available` guard: on an MCP call FastMCP rejects an off-enum token as
+        # invalid_arguments before this runs, so a missing key there can only mean the
+        # advertised Literal and this dict have drifted — a server bug that must fail loudly
+        # rather than silently omit the schema the client asked for (#370). A direct Python
+        # call bypasses that validation and gets a raw KeyError for an off-enum token; that
+        # violates the annotated Literal's domain, and this module is not a public Python API.
         caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas)}
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
     # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
