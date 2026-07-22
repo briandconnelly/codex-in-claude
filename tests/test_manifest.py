@@ -1,13 +1,16 @@
 """Guard: the manifest snapshot covers the full agent-visible surface (issue #140)."""
 
+import re
 from pathlib import Path
+
+from fastmcp import Client
 
 from codex_in_claude import manifest, server
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "94cdc8225aad3b66a0fd4d26c872d692131e027ceb6cd97309eed8b7001c2152"
+EXPECTED_MANIFEST_HASH = "35a952e839badfd233da332016313484d7dda508834b6afc6f46732c5a141a73"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -128,6 +131,47 @@ async def test_build_manifest_excludes_dynamic_fields():
     # Resource METADATA for codex://models is present; its dynamic CONTENT is not read.
     uris = {r["uri"] for r in m["resources"]}
     assert "codex://models" in uris
+
+
+async def test_manifest_drops_exactly_the_declared_capability_fields():
+    """The membership assertions above prove the declared exclusions ARE excluded; they
+    cannot catch the opposite failure — an exclusion set silently WIDENED, which would
+    drop real contract surface out of the guard without moving the snapshot's field list.
+    Asserted as set EQUALITY against the live payload, so any added `.pop()`/filter in
+    build_manifest's capabilities handling fails here (#337)."""
+    m = await manifest.build_manifest()
+    dropped = set(server.codex_capabilities()) - set(m["capabilities"])
+    assert dropped == manifest._RELEASE_VARIABLE_EXCLUDE | manifest._SELF_REFERENTIAL_EXCLUDE
+    # Positive control: the live payload really does carry the excluded keys, so the
+    # difference above is a genuine drop and not an empty-set comparison.
+    assert set(server.codex_capabilities()) >= manifest._RELEASE_VARIABLE_EXCLUDE
+
+
+async def test_manifest_drops_exactly_the_declared_server_info_fields():
+    """Same widening guard for the initialize response: `serverInfo.version` is popped
+    inline, so only equality against the live serverInfo catches a second pop (#337)."""
+    m = await manifest.build_manifest()
+    async with Client(server.mcp) as client:
+        live_info = manifest._dump(client.initialize_result).get("serverInfo", {})
+    dropped = set(live_info) - set(m["initialize"]["serverInfo"])
+    assert dropped == {"version"}
+
+
+def test_release_variable_exclusions_are_disclosed_in_the_coverage_description():
+    """The manifest's release-variable exclusions and the agent-visible carve-out must
+    stay in lockstep: widening one without disclosing the other re-opens the #337 gap.
+    `serverInfo.version` is popped inline rather than declared, so it is named directly."""
+    from codex_in_claude.schemas import _FINGERPRINT_COVERS_DESC
+
+    assert manifest._RELEASE_VARIABLE_EXCLUDE  # positive control: non-empty
+    for field in manifest._RELEASE_VARIABLE_EXCLUDE:
+        assert re.search(rf"(?<![\w.]){re.escape(field)}(?![\w])", _FINGERPRINT_COVERS_DESC), (
+            f"manifest excludes {field!r} but the coverage description does not disclose it"
+        )
+    assert "serverInfo.version" in _FINGERPRINT_COVERS_DESC
+    # The self-referential `fingerprint` removal is deliberately NOT disclosed as a
+    # carve-out: its value changes precisely BECAUSE something covered changed.
+    assert {"fingerprint"} == manifest._SELF_REFERENTIAL_EXCLUDE
 
 
 async def test_build_manifest_captures_error_envelope_schema():

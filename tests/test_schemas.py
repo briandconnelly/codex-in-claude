@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -886,7 +887,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-54"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-55"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
@@ -900,6 +901,56 @@ def test_fingerprint_covers_is_a_nonempty_stable_tuple():
     assert all(c == c.lower() and " " not in c for c in FINGERPRINT_COVERS)
     # Completeness relative to the actual fingerprint guard (the manifest surface) is
     # asserted structurally in test_manifest.py::test_fingerprint_covers_accounts_for_every_section.
+
+
+def test_fingerprint_covers_description_discloses_the_release_identity_carveout():
+    """The coverage promise is only honest if the release-identity carve-out travels with
+    it (#337): `serverInfo.version`/`version`/`server_version` change every release without
+    moving the fingerprint, because it tracks CONTRACT identity, not release identity.
+
+    Boundary-aware matching: a bare `in` check for "version" is satisfied by the mention of
+    `server_version`, so deleting the standalone mention would pass falsely."""
+    from codex_in_claude.schemas import _FINGERPRINT_COVERS_DESC
+
+    desc = _FINGERPRINT_COVERS_DESC
+    for field in ("serverInfo.version", "server_version"):
+        assert field in desc, f"the carve-out does not name {field}"
+    # Standalone `version` — `(?<![\w.])` rejects both `server_version` and `serverInfo.version`.
+    assert re.search(r"(?<![\w.])version(?![\w])", desc), (
+        "the carve-out does not name the bare capabilities `version` field"
+    )
+    # The carve-out is scoped, NOT a claim to enumerate every unguarded detail: the manifest
+    # also strips framework `_meta` and normalizes set-like array order. Promising
+    # exhaustiveness would recreate the very overclaim this field exists to correct.
+    assert "contract" in desc.lower()
+
+
+def test_fingerprint_covers_description_survives_schema_noise_stripping():
+    """`_strip_schema_noise` drops every description not in `_KEPT_DESCRIPTIONS`, matched by
+    exact string identity. Without registration the carve-out would reach the
+    codex://capabilities-result resource but be stripped from the advertised
+    `codex_capabilities` outputSchema — the surface most schema-reading clients use.
+
+    This also guards the silent-no-op failure mode: if the Field description and the kept
+    constant ever drift apart, stripping silently resumes and only this test notices."""
+    from codex_in_claude.schemas import (
+        _FINGERPRINT_COVERS_DESC,
+        _KEPT_DESCRIPTIONS,
+        CapabilitiesResult,
+        published_schema,
+    )
+
+    assert _FINGERPRINT_COVERS_DESC in _KEPT_DESCRIPTIONS
+    # The Field carries the identical string (identity, not merely a similar one).
+    field = CapabilitiesResult.model_fields["fingerprint_covers"]
+    assert field.description == _FINGERPRINT_COVERS_DESC
+    # published_schema returns success branch(es) + one opaque error branch under anyOf.
+    success = published_schema(CapabilitiesResult)["anyOf"][0]
+    covers = success["properties"]["fingerprint_covers"]
+    assert covers.get("description") == _FINGERPRINT_COVERS_DESC
+    # Positive control: the stripper is live on this very schema — generated `title` noise
+    # is gone, so the assertion above cannot pass by the stripper being inert.
+    assert "title" not in covers
 
 
 def test_capabilities_result_exposes_fingerprint_covers_derived_from_constant():
