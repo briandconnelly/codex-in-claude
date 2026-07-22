@@ -7,6 +7,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The tracked diff's file/line summary is now counted in bounded memory** (#350). `_core/gitdiff.py`'s
+  `_summary` — reached on *every* gathered diff, including the default `codex_review_changes` and the
+  free `codex_dry_run` — captured `git diff --numstat` whole and then split it, one record per changed
+  file and so unbounded in the workspace's changed-file count. It now streams through the shared
+  `_core/gitproc.run_lines` runner, the last of #331's three siblings on this path. Both numstat
+  parsers (this one and the untracked gather's) are folded into a single `_sum_numstat` consumer
+  returning `(files, added, removed)`, so they cannot drift; the per-record byte cap is renamed
+  `_STREAM_RECORD_MAX`, since it now bounds every streamed git read here rather than only the
+  untracked listing. Deliberately preserved: a malformed record is still skipped rather than fatal,
+  and a record the reader truncated mid-pathname still counts exactly (both numeric columns precede
+  the pathname), so no diff that counts today starts failing. Reported counts and error vocabulary are
+  unchanged, so **no `fingerprint` change**. (#351, `count_untracked`'s unbounded post-EOF stderr read,
+  remains open.)
+
 - **`AGENTS.md` now routes a codex upgrade to `docs/UPGRADING-CODEX.md`** (#364). The always-loaded
   instruction file never named the upgrade runbook, and its "update that one file" phrasing read as
   a single edit to `cli_contract.py` — so an agent handed an ad-hoc "codex 0.146 is out, upgrade it"
