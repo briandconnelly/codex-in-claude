@@ -5,344 +5,114 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
-### Fixed
+## [0.15.0] - 2026-07-22
 
-- **`codex_capabilities`' tool description now lists all five `include_schemas` tokens** (#372). The
-  docstring reaching `tools/list` advertised only the `error-envelope` and `result-meta` schemas,
-  omitting `capabilities-result`, `status-result`, and `parameter-contracts` — so an agent reading
-  the tool description (rather than the parameter schema, whose `Field(description=...)` already
-  listed all five) could conclude the resource-blind fallback reached only two of the five
-  contracts; `parameter-contracts`, the resource-blind route to the full `codex://params`
-  semantics, was invisible. The description is agent-visible surface, so this **bumps the result
-  `fingerprint`** (a wording correction that widens what is documented — no guarantee weakened, not
-  breaking). A co-located internal source comment carrying the same stale two-token list was
-  corrected alongside it.
-
-- **`invalid_arguments` now advertises `allowed_values` for a rejected list element** (#373). The
-  resolver that reads a parameter's domain from the tool input schema — authoritatively, rather
-  than by parsing validator prose — handled a required `Literal` (a top-level `enum`) and an
-  Optional one (an `enum` under an `anyOf` branch), but not the `list[Literal] | None` shape, whose
-  enum sits one level further down under `items`. `include_schemas` is the only parameter with that
-  shape, so `codex_capabilities(include_schemas=["nope"])` omitted `allowed_values` entirely on the
-  very field whose repair hint says to "use one of the field's `allowed_values`", pushing the client
-  back to parsing prose. The resolver now also reads the element domain, but only for an *indexed*
-  failure (`include_schemas[0]`), where the fix really is a single token: a whole-list failure
-  (`include_schemas="nope"`) names the container and still advertises nothing, rather than offering
-  element tokens as if the field accepted one. A single-value `Literal` renders as `const` rather
-  than `enum` and remains unresolved by design; no parameter uses that shape. `allowed_values` is
-  per-call envelope data under an already-optional field — no discovered surface, type, or
-  documented meaning changes — so **no `fingerprint` change** (the manifest snapshot is
-  byte-identical) and not breaking.
-
-- **`codex_capabilities(include_schemas=…)` can no longer drift from its advertised tokens** (#370).
-  The documented fallback that lets a resource-blind client reach the full contracts from
-  `tools/list` alone had two guard gaps — neither a live bug, both missing regression guards. Its
-  only payload assertion looked for `RateLimit` in the `status-result` schema's `$defs`, but
-  `RateLimit` appears in three of the four schemas, so mis-wiring that token to the error-envelope
-  schema passed the entire suite (verified by mutation). And the advertised token `Literal` and the
-  runtime payload dict were built independently, with the response filtered by `if k in available`
-  — so a token added to the enum but never wired would be *silently omitted* rather than surfaced,
-  and nothing forced the wiring. The token set is now a named `IncludeSchemasToken` alias that one
-  test derives with `get_args` and asserts, by exact equality, against the payload every token
-  actually returns — closing both drifts and covering `parameter-contracts`, which previously had
-  no behavioral assertion. The silent-omission filter is gone: on an MCP call FastMCP rejects an
-  off-enum token as `invalid_arguments` before the handler runs, so a missing key there can only
-  mean server-side drift, which now fails loudly. (A direct Python call bypasses that validation
-  and gets a raw `KeyError` instead — it violates the annotated `Literal`'s domain, and the module
-  is not a public Python API.) Tests and internal wiring only — the advertised input schema is
-  byte-identical, so **no `fingerprint` change** and not breaking.
-
-- **The advertised fingerprint coverage no longer overclaims** (#337). `fingerprint_covers` lists
-  `initialize_response` and `capabilities_payload` as covered categories, and the promise was that
-  any change within a covered category bumps `fingerprint`. But the guard deliberately excludes
-  release-identity fields — `serverInfo.version`, and `version`/`server_version` in the
-  capabilities payload — so an ordinary release changes them without moving the fingerprint. The
-  advertised guarantee was broader than the implemented one, and a caching client reading the
-  machine-readable coverage list had no way to tell.
-  - `fingerprint_covers` now carries a description stating both directions: the forward invariant
-    a caching client needs (a contract-semantic change in a listed category **does** change the
-    fingerprint, so an unchanged fingerprint means the cached contract is still valid) and the
-    carve-out (release identity is excluded). It is registered in `_KEPT_DESCRIPTIONS`, so it
-    survives schema-noise stripping and reaches the advertised `codex_capabilities` outputSchema —
-    not only the `codex://capabilities-result` resource.
-  - Deliberately **not** an exhaustive list of everything the guard normalizes away: the snapshot
-    also strips framework-owned `_meta` and sorts set-like arrays, both non-contractual. Promising
-    exhaustiveness would have recreated the same class of overclaim. The self-referential
-    `fingerprint` exclusion is likewise not disclosed as a carve-out — its value changes precisely
-    *because* a covered category changed.
-  - The carve-out is stated at the coverage tuple's own category comments, so every doc that
-    refers to `FINGERPRINT_COVERS` by name stays correct without restating it.
-  - New guards: the manifest's exclusions are asserted as set **equality** against the live
-    payload (the previous membership checks could not catch a silently *widened* exclusion), and a
-    lockstep test fails if the excluded fields and the disclosed carve-out drift apart.
-
-  Bumps `FINGERPRINT` (`schema-54` → `schema-55`) for the added description. Backward-compatible:
-  nothing was removed, retyped, or narrowed, and the promise is corrected rather than weakened —
-  it was never client-visible before.
+A status-signal and diff-gather-hardening release. `codex_status` learns to report an
+administrative spend block, `codex_job_status`/`codex_job_list` expose a finished job's
+success/failure without a fetch, the diff-gather paths gain consistency and bounded-memory
+guarantees across every review scope, and several capability-discovery contracts are corrected to
+match what they advertise. Tracked Codex is bumped to 0.145. The agent-visible surface changed
+(result `fingerprint` `codex-in-claude/0.1/schema-49` → `schema-56`, and the persisted
+`RESULT_FORMAT` `4` → `6`), so pre-1.0 this is a minor release; clients that cache by `fingerprint`
+re-fetch the contract. Every change is backward-compatible — no tool, field, or error code was
+removed or retyped.
 
 ### Added
 
-- **`codex_status` reports a backend spend control** (#359). codex 0.145 added
+- **`codex_status` reports an administrative spend block** (#359). codex 0.145 added
   `spendControlReached` to the app-server's rate-limit snapshot — a *spend* control the backend
-  enforces, distinct from a quota window: no reset clears it. Until now the plugin ignored the
-  field, so an account blocked from spending showed healthy quota percentages and
-  `rate_limit.status: "available"`, with nothing to say paid calls would fail.
-  - `rate_limit` carries `spend_control_reached` (`true` | `false` | `null`), and
-    `rate_limit.status` gains the value `blocked`. `blocked` outranks every window-derived
-    verdict — including `rateLimitReachedType` — because its remedy is not waiting. It reports
-    `limiting_window: null` (no window binds an account-level block) while still showing the
-    windows, and its `note` says a reset will not clear it.
-  - A windowless response that reports the block is no longer collapsed to `unavailable`; that
-    path used to return "no quota" before the field was read, discarding the one signal present.
-    A *present but malformed* window is still protocol drift, unchanged.
-  - The tri-state is load-bearing and null is **not** false. Only a real boolean is an answer —
-    a truthy non-bool (`1`, `"true"`) never becomes a false administrative block, and a falsy one
-    (`0`, `""`) never becomes a real `false`. A codex that predates 0.145 omits the key, which
-    reads as null.
-  - Null does **not** downgrade a healthy reading. The window verdicts stay window-scoped:
-    `available` attests that the reported windows are healthy, never that spending is
-    administratively permitted, and when the state is unreported it says so in `note`. Turning
-    that reading into `unknown` would have claimed a retry might help when nothing can change —
-    reintroducing the permanent-`unknown` failure #321 removed.
-
-  - The bundled `collaborating-with-codex` skill gains the matching rule: `blocked` is the one
-    non-advisory rate-limit state — refuse the paid call rather than deferring it, and tell the
-    user spending is administratively blocked. Covered by a new S14 behavioral scenario with a
-    recorded passing run.
-
-  Bumps `FINGERPRINT` (`schema-53` → `schema-54`) and `RESULT_FORMAT` (`5` → `6`) for the added
-  field and status value. Backward-compatible: nothing was removed, retyped, or narrowed.
-
-### Changed
-
-- **The untracked-file count no longer reads git's stderr unbounded** (#351). `_core/gitdiff.py`'s
-  `count_untracked` — the egress-free blind-spot disclosure on the default `working_tree` review
-  path — already stream-counted its `git ls-files -z` *stdout* in bounded chunks, but it hand-rolled
-  the subprocess lifecycle and read the child's *stderr* with an unbounded post-EOF
-  `proc.stderr.read()`, duplicating the process-group kill/reap that `_core/gitproc.run_lines`
-  owns. It now streams through that shared runner like every other cardinality-driven git read in
-  the module, which drains stderr concurrently under a byte cap — also removing a latent deadlock
-  the old comment knowingly bet against, where a >64 KiB diagnostic emitted before stdout EOF would
-  wedge the post-EOF read until the watchdog fired. The returned count is unchanged (the runner
-  yields exactly one record per NUL-terminated path, so record-counting equals the NUL-counting it
-  replaces), as is the error vocabulary and the timeout message, so **no `fingerprint` change**.
-  Behavior differs only for a pathological producer: a git diagnostic larger than the 64 KiB stderr
-  cap is no longer retained whole, so its message text can differ — a multi-line diagnostic keeps a
-  head and tail window, while a single oversized *line* is truncated at its prefix and its tail is
-  dropped. A "not a git repository" signature surviving only in discarded stderr would therefore
-  surface as `RuntimeError` rather than `NotAGitRepoError`; git emits that diagnostic on its own
-  short line, so this is a pathological-producer case, not a real one. Unlike the
-  untracked *gather*, this path deliberately counts a reader-truncated over-long path instead of
-  rejecting it — nothing is read, hashed, or transmitted here, so counting keeps the disclosure
-  honest where rejecting would fail a review over a path it never touches.
-
-- **The tracked diff's file/line summary is now counted in bounded memory** (#350). `_core/gitdiff.py`'s
-  `_summary` — reached on *every* gathered diff, including the default `codex_review_changes` and the
-  free `codex_dry_run` — captured `git diff --numstat` whole and then split it, one record per changed
-  file and so unbounded in the workspace's changed-file count. It now streams through the shared
-  `_core/gitproc.run_lines` runner, the last of #331's three siblings on this path. Both numstat
-  parsers (this one and the untracked gather's) are folded into a single `_sum_numstat` consumer
-  returning `(files, added, removed)`, so they cannot drift; the per-record byte cap is renamed
-  `_STREAM_RECORD_MAX`, since it now bounds every streamed git read here rather than only the
-  untracked listing. Deliberately preserved: a malformed record is still skipped rather than fatal,
-  and a record the reader truncated mid-pathname still counts exactly (both numeric columns precede
-  the pathname), so no diff that counts today starts failing. Reported counts and error vocabulary are
-  unchanged, so **no `fingerprint` change**. (#351, `count_untracked`'s unbounded post-EOF stderr read,
-  is folded onto the same runner above.)
-
-- **`AGENTS.md` now routes a codex upgrade to `docs/UPGRADING-CODEX.md`** (#364). The always-loaded
-  instruction file never named the upgrade runbook, and its "update that one file" phrasing read as
-  a single edit to `cli_contract.py` — so an agent handed an ad-hoc "codex 0.146 is out, upgrade it"
-  had nothing routing it to the real multi-step procedure. (The triggered path was already covered:
-  the release-watch workflow and both check scripts print the path.) The pointer also names its
-  trigger — a new upstream **minor**, or a change to the supported version set — instead of the
-  vaguer "when Codex changes", matching the minor-level policy the runbook and
-  `scripts/check_codex_release.py` already share (a patch bump within a tracked minor stays the
-  softer "may refresh"). `COMPATIBILITY.md` and `cli_contract.py`'s docstring carried the same
-  "one-file edit" framing and are corrected alongside: the contract is *centralized* in one file,
-  but revising it is a lockstep procedure. Deliberately a pointer only: the procedure's steps stay
-  in their one home, since partial copies in this repo have gone stale before (#227). Docs and
-  comments only; no `FINGERPRINT` change, no behavior change.
-
-- **`docs/UPGRADING-CODEX.md` now diffs against a retrievable previous `codex` build, not just the
-  committed help snapshots** (#360). The old procedure rested on a false premise — that an in-place
-  upgrade destroys the old binary, making those snapshots the only diff source. It doesn't: `codex`
-  ships on npm, so any prior version installs side-by-side. A new **step 2A** owns evidence
-  acquisition (step 2 keeps the judgment checklist) and extends the diffed surface beyond help text
-  to the generated app-server JSON schemas and to behavior with no CLI surface at all. The committed
-  snapshots keep a role, a truer one — they **authenticate** a retrieved stand-in binary, and remain
-  the offline fallback. `COMPATIBILITY.md`'s marker probe gains its recording rules (presence matrix,
-  failed-control handling), and `cli_contract.py` now names the seven generated schemas the plugin
-  consumes, next to the constants they cover. Docs and comments only — no `FINGERPRINT` change, no
-  behavior change.
-
-- **Every egress caveat now discloses that user-global Codex skills auto-load too**, not just the
-  project's `AGENTS.md` and `.agents/skills/` (#358). Skills under `$CODEX_HOME/skills/` (default
-  `~/.codex/skills/`) are discovered from **outside** the workspace and their bodies can reach
-  OpenAI on any active call — verified against `codex-cli 0.145.0`, and pre-existing rather than new
-  (0.144.1 behaves identically). Updated: the server instructions, the `codex_status` caveat, all
-  six active tool descriptions and their capability `returns`, `codex_capabilities`'
-  `negative_scope`, `README.md`, `SECURITY.md`, `COMPATIBILITY.md`, `cli_contract.py`, and the
-  `collaborating-with-codex` skill. **Bumps `fingerprint`** (a reword of covered descriptions and
-  instructions); **not breaking** — behavior is unchanged and no documented guarantee weakens, since
-  the contract only ever promised `ignore-config` drops `$CODEX_HOME/config.toml`, never that all
-  `$CODEX_HOME` content stays local.
-
-  Two narrower corrections ride along. `SECURITY.md` and `COMPATIBILITY.md` previously said
-  isolation "still helps for `$CODEX_HOME` state" — true only of the *specific* state those flags
-  name, so the claim is narrowed: `--ignore-user-config` does **not** suppress `$CODEX_HOME/skills/`
-  despite reading as user-level isolation. And the delegate wording now places user-global skills
-  outside the "tracked … seeded into the worktree" clause, because they are neither tracked nor
-  seeded — scrubbing the worktree does not exclude them. Neither site is fingerprint-covered.
-
-  `COMPATIBILITY.md`'s section (renamed to "Implicit Codex context" — `$CODEX_HOME` is not the
-  workspace) remains the single home for the detail, and its re-verification probe now plants a
-  global marker skill as well. Two edge cases it previously listed as unverified are now answered
-  under 0.145.0: a project `.claude/skills/` is **not** discovered, and a parent-directory
-  `AGENTS.md` above the git root is **not** loaded. `project_doc_max_bytes=0` remains unverified.
-
-- **Tracked Codex version bumped to `0.145`.** `SUPPORTED_VERSIONS` now tracks `(0, 145)`; the CLI
-  contract, help snapshots (`docs/codex-help/0.145.0/`), and `KNOWN_MODEL_SLUGS` fallback are
-  verified against `codex-cli 0.145.0`. Advisory only — an untracked version warns in `codex_status`
-  but never blocks, and the `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` override still applies. **No
-  agent-visible surface change**, so no `fingerprint` bump; not breaking.
-
-  0.145 required no code change. `codex exec/review/exec review --help` are byte-identical to
-  0.144.1's (the only `codex --help` delta is one cosmetic word), the sandbox values and all
-  `ALWAYS_SEND_FLAGS` are intact, the **contract-drift** signatures still match real observed output
-  (probed: unknown flag, invalid `--sandbox` value, unknown feature name), the
-  `model_reasoning_effort` config key is still applied (the backend still rejects a bad value with
-  both `[ReasoningEffortParam]` and `[reasoning.effort]` markers), the `models_cache.json` slug set
-  and reasoning-effort field shapes are unchanged, the allowlisted `CODEX_IN_CLAUDE_EXTRA_ARGS`
-  option forms still parse, and the live integration suite passes against the new CLI. The **auth
-  and rate-limit** stderr signatures were *not* re-observed for 0.145 — triggering them requires a
-  real failing account state — so those patterns still rest on the earlier observations that
-  introduced them.
-
-  Verification for this bump used a **true A/B against a side-by-side install of the previous
-  version** (`npm install --prefix <scratch> @openai/codex@0.144.1`) rather than only the committed
-  help snapshots, which settled two questions the snapshots could not:
-
-  - The app-server protocol diff (`generate-json-schema`) is **additive only** for the surface this
-    plugin consumes. `RateLimitSnapshot.spendControlReached` is the sole genuinely new field, and it
-    is deliberately not consumed yet (#359) — the rate-limit parse is key-by-key, so an unread field
-    is inert. Every other unconsumed field on that response already existed in 0.144.1.
-  - 0.145's new default-on `skill_search` feature causes **no observable change** under this
-    plugin's isolation flags: both versions returned an identical skill catalog and identical
-    auto-loaded context in a marker probe.
-
-  That probe also surfaced a **pre-existing** disclosure gap, present on 0.144.1 and 0.145.0 alike:
-  a user-global skill under `$CODEX_HOME/skills/` is auto-discovered and reaches the model despite
-  `--ignore-user-config`. The behavior is unchanged by this bump; the disclosure was corrected
-  across every caveat site under #358, below. #360 tracks folding the A/B technique into
-  `docs/UPGRADING-CODEX.md`.
-
-### Fixed
-
-- **`branch` and `commit` diffs now gather atomically against pinned object IDs** (#355). A diff
-  gather runs the context summary and the transmitted diff as separate git invocations, and the
-  refs feeding them were symbolic — `working_tree` used `HEAD`, `branch` used `<base>...HEAD`,
-  `commit` used the caller-supplied (possibly symbolic) ref. A concurrent commit/reset/checkout/
-  ref-update between the two invocations could make the summary and the reviewed patch describe
-  different objects while `coverage.status` still reported `"complete"` — the same inconsistency
-  class as #336, but for the `branch`/`commit` scopes its working-tree state token deliberately left
-  out. `gather_diff` now resolves `HEAD`, a branch `base`, and a `commit` ref to immutable commit
-  object IDs **once**, up front (`git rev-parse --verify <ref>^{commit}`), and builds every
-  summary/diff invocation from those IDs, so a mid-gather ref move can no longer split them.
-  `<base_sha>...<head_sha>` preserves the three-dot merge-base semantics; validation and error
-  messages are unchanged (the reachability check that was a separate `git rev-parse` is now folded
-  into resolution). Three follow-on hardenings from the Codex review of this change: (1) an unborn
-  HEAD now **fails closed** with a clear error rather than falling back to the mutable symbolic
-  `HEAD` the fix set out to remove; (2) because pinning froze `working_tree`'s diff base, a
-  concurrent HEAD move (reset/checkout) is now also disclosed via `tree_changed_during_gather` by
-  comparing the pinned HEAD to HEAD at the end of the gather — the porcelain token alone could miss
-  it; (3) a `commit=<annotated-tag>` review now peels the tag to its commit, so the review shows
-  that commit's diff rather than the tag object's metadata (tagger/message). Internal correctness
-  fix — the discovered surface (`DiffResult` shape, coverage fields) is unchanged, so no
-  `fingerprint`/`RESULT_FORMAT` bump; not breaking.
-- **`working_tree` reviews now disclose a concurrent edit made while the diff was gathered** (#336).
-  A `working_tree` gather runs several sequential git invocations — the context summary, the
-  transmitted diff, and the untracked enumeration — so a concurrent edit between them could make the
-  summary describe different content than the diff Codex actually reviewed, or add/remove files after
-  enumeration, while `coverage.status` still reported `"complete"` because no omission flag was set.
-  The working_tree gather now brackets that window with a cheap best-effort state token
-  (`git status --porcelain -z`, streamed through the bounded runner, scoped to the same pathspec and
-  global-excludes as the diff); a mismatch sets a new `tree_changed_during_gather` value on
-  `coverage.omission_reasons`, degrading coverage to `partial` (and, via the #319 rules, a `pass`
-  verdict to `unknown`). It is a **consistency caveat** — "the tree was modified while it was read"
-  — not a claim that specific content was omitted, so `partial`'s documented meaning is widened to
-  cover it. The token is a porcelain classification, not a content hash: it trips on file
-  additions/removals and status changes (including a concurrent `git add`), but **not** on a
-  content-only re-edit of an already-modified file or an A→B→A round trip — its absence is therefore
-  not proof the tree held still, and the `complete` documentation is corrected to say so.
-  `branch`/`commit` scopes gather from git objects and skip the check; the `complete`
-  documentation no longer claims those scopes are atomic, since their diff is still gathered by
-  separate git invocations (ref-pinning tracked separately). Backward-compatible value-set widening
-  of `CoverageOmissionReason` — bumps the result `fingerprint` (`schema-51` → `schema-52`) and the
-  persisted result-format (`RESULT_FORMAT` `4` → `5`, since an older closed-schema reader could
-  reject the new enum value); not breaking.
-- **Carriage return in a git-produced filename no longer corrupts the untracked gather** (#353).
-  The bounded git-subprocess runner (`_core/gitproc.run_lines`) spawned its child with
-  `text=True`, so Python's universal-newline translation rewrote a raw `\r` (or `\r\n`) in git's
-  `-z` output to `\n` **before** the NUL-splitter saw it. An untracked file whose name contained
-  a carriage return was then looked up under the wrong path — a raw `FileNotFoundError` escaped
-  the gather as an unstructured internal error, and if both `we\rird.py` and `we\nird.py` existed
-  the carriage-return file was silently omitted yet still counted as included (a quiet
-  `detected == included` coverage-contract violation the #322 F3 invariant could not catch). The
-  runner now reads binary pipes wrapped in `TextIOWrapper(..., newline="")`, disabling the
-  translation while keeping the `surrogateescape` byte round-trip, so every `-z` consumer — the
-  untracked enumeration and the `core.excludesFile` read both route through this runner — is
-  byte-exact. `_index_untracked` additionally maps a `FileNotFoundError` from a concurrently
-  deleted untracked file onto a structured `RuntimeError`. Pre-existing (present before #331);
-  no `fingerprint` change (byte-identical for ordinary filenames).
-- **`invalid_reasoning_effort` machine repair for the local config-shape guard** (#332). The
-  error code is emitted from two paths: the Codex backend rejecting a sent effort (table repair
-  `correct_arguments` + `codex_models`, correct there), and the local pre-spend guard refusing a
-  hostile *resolved* value before any subprocess (zero spend, the backend never saw it). The guard
-  previously inherited the backend repair, misdirecting an agent that branches on `error.repair`
-  to a useless `codex_models` call while the real fix went untouched. The guard now emits a
-  provenance-specific repair with **no** tool: `correct_config` when the invalid value is the
-  resolved `CODEX_IN_CLAUDE_REASONING_EFFORT` default, `correct_arguments` when it is an explicit
-  per-call argument (only reachable via a direct in-process call — over MCP such a value is
-  `invalid_arguments` at the boundary). `make_error` gains the ability to clear the table's repair
-  tool (explicit `repair_tool=None`), and the `codex://params` reasoning_effort contract now
-  documents the env-default pre-spend failure. Bumps the result `fingerprint` (`schema-50` →
-  `schema-51`) for the corrected parameter contract; not breaking (`correct_config` is already a
-  published `RepairStep`, and no field, tool, or error code was removed or retyped).
-
-### Added
+  enforces, distinct from a quota window: no reset clears it. `rate_limit` now carries
+  `spend_control_reached` (`true` | `false` | `null`) and `rate_limit.status` gains the value
+  `blocked`, which outranks every window-derived verdict because its remedy is not waiting; it
+  reports `limiting_window: null` and a `note` saying a reset will not clear it. The tri-state is
+  load-bearing — `null` is not `false`, and a null never downgrades a healthy window reading to
+  `unknown` (which would reintroduce the permanent-`unknown` failure #321 removed). The bundled
+  `collaborating-with-codex` skill gains the matching rule: `blocked` is the one non-advisory
+  rate-limit state — refuse the paid call rather than deferring it. Bumps the persisted
+  result-format (`RESULT_FORMAT` `5` → `6`) for the new status value; not breaking.
 
 - **`result_ok` on job status and list entries** (#335). `codex_job_status` and each
-  `codex_job_list` entry now carry `result_ok`, a done job's producer-declared outcome
-  (`true` = success, `false` = a stored error envelope, `null` = running, no stored envelope,
-  an unclassifiable payload, or a record finalized before this field). A stored failure is
-  otherwise indistinguishable from a success at the list/status level — both show
-  `status: "done"`, `result_available: true` — forcing a per-job fetch to triage. The outcome
-  is stamped into the job record once, at finalization, and never backfilled onto older records.
-  It reports the outcome recorded when the result was written and does **not** guarantee this
-  reader can still parse the payload — a cross-release record may report an outcome yet fail
-  `codex_job_result` with `job_result_incompatible`. `codex_capabilities` gains an
-  `async_lifecycle.result_ok_field` entry so the field is discoverable structurally. Backward-
-  compatible output addition — bumps the result `fingerprint` (`schema-49` → `schema-50`), not
-  breaking; the persisted result-format (`RESULT_FORMAT`) is unchanged.
+  `codex_job_list` entry now carry `result_ok` — a finished job's producer-declared outcome
+  (`true` = success, `false` = a stored error envelope, `null` = running, unclassifiable, or a
+  record finalized before this field) — so a stored failure can be triaged without a per-job fetch.
+  It reports the outcome recorded when the result was written and does **not** guarantee the payload
+  is still readable across releases. `codex_capabilities` gains an
+  `async_lifecycle.result_ok_field` entry for structural discovery. Backward-compatible output
+  addition; not breaking.
 
 ### Changed
 
-- **The untracked-file diff gather counts in bounded memory** (#331). `_core/gitdiff.py`'s
-  `_untracked_new_file_diff` — the `untracked="include"` / explicit-`paths` gathering path, also
-  reachable from the free `codex_dry_run` — previously materialized two whole git outputs in memory:
-  the `git ls-files --others -z` listing (unbounded in file count) and the `--numstat` output (one
-  line per file). Both now stream through the shared `_core/gitproc.run_lines` runner, which gains a
-  validated `sep` parameter (`"\n"` or `"\0"`) so a NUL-delimited listing — whose records may contain
-  newlines — is split correctly. The `ls-files` listing is fed record-by-record into the per-path
-  index build (a single enumeration, so `detected == included` cannot break under concurrent
-  mutation), and the whole composed listing-plus-index-build phase is bounded by one deadline rather
-  than only the producer's watchdog, so a pathological workspace can neither exhaust server memory nor
-  stall a review past the timeout. An oversized (truncated) path record fails loudly instead of being
-  hashed under a fabricated name. Reported counts, the streamed diff, and failure semantics are
-  unchanged, so **no `fingerprint` change**. (Two siblings remain: `_summary`'s tracked-diff
-  `--numstat` capture (#350) and `count_untracked`'s post-EOF stderr read (#351) — filed as
-  follow-ups.)
+- **Diff-gather git reads are now counted in bounded memory** (#331, #350, #351, #353). The
+  untracked-file listing, the tracked-diff `--numstat` summary, and the untracked-count stderr read
+  — all reached on the default `codex_review_changes` and free `codex_dry_run` paths — previously
+  materialized whole git outputs unbounded in the workspace's changed-file count. They now stream
+  through a single shared bounded runner, so a pathological workspace can neither exhaust server
+  memory nor stall a review past its deadline, and a latent stderr deadlock is removed. The same
+  work fixed a real corruption bug: a carriage return in a git-produced filename was rewritten by
+  Python's universal-newline translation before the NUL-splitter saw it, silently omitting one file
+  while still counting it as included — a quiet coverage-contract violation (#353). Reported counts
+  and error vocabulary are unchanged, so **no `fingerprint` change**.
+
+- **Every egress caveat now discloses that user-global Codex skills auto-load** (#358). Skills under
+  `$CODEX_HOME/skills/` (default `~/.codex/skills/`) are discovered from **outside** the workspace
+  and their bodies can reach OpenAI on any active call, despite `--ignore-user-config` — pre-existing
+  behavior (verified against `codex-cli 0.144.1` and `0.145.0`), not new. The disclosure is
+  corrected across the server instructions, all six tool descriptions and their capability entries,
+  `codex_capabilities`' negative scope, `README.md`, `SECURITY.md`, `COMPATIBILITY.md`,
+  `cli_contract.py`, and the `collaborating-with-codex` skill. A reword of covered descriptions, so
+  it **bumps the `fingerprint`**; not breaking — the contract only ever promised `ignore-config`
+  drops `$CODEX_HOME/config.toml`, never that all `$CODEX_HOME` content stays local.
+
+- **Tracked Codex version bumped to `0.145`** (#361). `SUPPORTED_VERSIONS` now tracks `(0, 145)`;
+  the CLI contract, help snapshots, and `KNOWN_MODEL_SLUGS` fallback are verified against
+  `codex-cli 0.145.0`, which required no code change — help text, sandbox values, drift/auth
+  signatures, and reasoning-effort handling are all intact, and the app-server schema diff is
+  additive-only for the surface this plugin consumes. Advisory only: an untracked version warns in
+  `codex_status` but never blocks, and the `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` override still
+  applies. No agent-visible surface change, so no `fingerprint` bump.
+
+### Fixed
+
+- **Diff gathers are now consistency-checked and atomic across every review scope** (#336, #355). A
+  gather runs its context summary and the transmitted diff as separate git invocations, so a
+  concurrent edit or ref move between them could make the summary and the reviewed patch describe
+  different content while `coverage.status` still reported `"complete"`. `working_tree` reviews now
+  bracket that window with a best-effort porcelain state token; on a mismatch they set a new
+  `tree_changed_during_gather` value on `coverage.omission_reasons`, degrading coverage to `partial`
+  and (via the #319 rules) a `pass` verdict to `unknown`. It is a consistency caveat, not a claim
+  that specific content was omitted, and it does not trip on a content-only re-edit — so `complete`
+  is documented as no longer proof the tree held still. `branch` and `commit` reviews now resolve
+  their refs to immutable commit object IDs once, up front, so the summary and diff cannot split
+  under a mid-gather commit/reset/checkout; an unborn HEAD fails closed, a concurrent HEAD move is
+  disclosed via the same token, and a `commit=<annotated-tag>` review peels the tag to its commit.
+  Widens `CoverageOmissionReason` and bumps the persisted result-format (`RESULT_FORMAT` `4` → `5`,
+  since an older closed-schema reader could reject the new enum value); not breaking.
+
+- **Capability-discovery contracts corrected to match what they advertise** (#337, #370, #372, #373).
+  Several `codex_capabilities` and error-envelope contracts were narrower or staler than their
+  promise. `fingerprint_covers` said any change in a covered category bumps the `fingerprint` but
+  silently excluded release-identity fields (`serverInfo.version`, the capabilities `version`); it
+  now carries a description disclosing the carve-out in both directions, so a caching client can
+  trust that an unchanged `fingerprint` means an unchanged contract. The `codex_capabilities` tool
+  **description** advertised only two of the five `include_schemas` tokens (the parameter schema
+  already listed all five), hiding the resource-blind route to `parameter-contracts`. And
+  `invalid_arguments` omitted `allowed_values` for a rejected `list[Literal]` element — the one
+  parameter shape the domain resolver did not read — on the very field whose repair hint says to use
+  those values. The `include_schemas` token set is additionally drift-proofed against its runtime
+  payload by an exact-equality test. Wording and coverage corrections that widen what is documented
+  and weaken no guarantee — the `fingerprint` bump is for the `fingerprint_covers` and tool-
+  description changes (the `allowed_values` fix is per-call envelope data, no discovered surface);
+  not breaking.
+
+- **`invalid_reasoning_effort` gives the local pre-spend guard a provenance-specific repair** (#332).
+  The code is emitted from two paths: the Codex backend rejecting a sent effort (table repair
+  `correct_arguments` + `codex_models`, correct there) and the local pre-spend guard refusing a
+  hostile *resolved* value before any subprocess (zero spend). The guard previously inherited the
+  backend repair, misdirecting an agent that branches on `error.repair` to a useless `codex_models`
+  call. It now emits a provenance-specific repair with **no** tool: `correct_config` when the
+  invalid value is the resolved `CODEX_IN_CLAUDE_REASONING_EFFORT` default, `correct_arguments` when
+  it is an explicit per-call argument. Bumps the `fingerprint` for the corrected parameter contract;
+  not breaking (`correct_config` is already a published `RepairStep`).
 
 ## [0.14.0] - 2026-07-19
 
