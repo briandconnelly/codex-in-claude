@@ -240,8 +240,8 @@ class RateLimitReadStatus(StrEnum):
     different facts with different repairs — never collapsed into one silent ``None`` (the
     tolerant-parse blind spot that let the token_count removal go unnoticed)."""
 
-    OK = "ok"  # read returned a snapshot with at least one quota window
-    NO_QUOTA = "no_quota"  # read succeeded but the account exposes no quota windows
+    OK = "ok"  # snapshot usable: at least one quota window, or an explicit spend-control block
+    NO_QUOTA = "no_quota"  # read succeeded but the account exposes neither (#359)
     UNSUPPORTED = "unsupported"  # app-server lacks the method (older codex, -32601)
     PROTOCOL_ERROR = "protocol_error"  # drift: bad handshake / exit / line / non-(-32601) error
     TIMED_OUT = "timed_out"  # never received the read response in time
@@ -998,9 +998,13 @@ def _assign_window_slots(
 def _parse_rate_limits(result: object) -> tuple[RateLimitReadStatus, RateLimitSnapshot | None]:
     """Discriminate an ``account/rateLimits/read`` result into (status, snapshot):
 
-    * ``OK`` with a snapshot when at least one quota window parses.
-    * ``NO_QUOTA`` when the block is explicitly null, or present with no quota windows — a
-      legitimate no-quota account.
+    * ``OK`` with a snapshot when at least one quota window parses, OR when the block reports
+      an explicit spend-control block (``spendControlReached: true``) with no windows at all —
+      that snapshot carries a real, actionable fact even though no window bounds it (#359).
+    * ``NO_QUOTA`` when the block is explicitly null, or present with neither a quota window nor
+      a spend-control block — a legitimate no-quota account. Note the window keys are OPTIONAL
+      in the upstream schema (``RateLimitSnapshot`` declares no ``required`` members), so an
+      omitted slot is indistinguishable from an explicit null BY CONTRACT and is not drift.
     * ``PROTOCOL_ERROR`` when the result is not an object, the required ``rateLimits`` key is
       absent, the block is the wrong type, or a *present* window is malformed. Collapsing these
       into ``NO_QUOTA`` would re-hide upstream drift behind a plausible "no quota" — the exact

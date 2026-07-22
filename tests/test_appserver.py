@@ -1484,6 +1484,25 @@ def test_parse_no_windows_without_spend_control_stays_no_quota(wire):
     assert appserver._parse_rate_limits(result) == (_NO_QUOTA, None)
 
 
+def test_parse_spend_control_true_with_window_keys_absent_matches_explicit_null():
+    # Upstream's RateLimitSnapshot declares NO required members, so an OMITTED window key is
+    # schema-valid and means exactly what an explicit null means. Pinning the equivalence keeps
+    # a future reader from "fixing" absence into drift (Codex review, declined with this
+    # evidence) — and note absence was already NO_QUOTA before #359, never PROTOCOL_ERROR.
+    absent = {"rateLimits": {"spendControlReached": True}}
+    explicit = {"rateLimits": {"primary": None, "secondary": None, "spendControlReached": True}}
+    status_a, snap_a = appserver._parse_rate_limits(absent)
+    status_e, snap_e = appserver._parse_rate_limits(explicit)
+    assert status_a is status_e is _OK
+    assert snap_a == snap_e
+
+
+def test_parse_no_windows_and_no_spend_control_keys_is_no_quota():
+    # The same absent-key shape WITHOUT the spend-control block stays a legitimate no-quota
+    # account — the pre-#359 behavior, unchanged.
+    assert appserver._parse_rate_limits({"rateLimits": {}}) == (_NO_QUOTA, None)
+
+
 def test_parse_malformed_window_still_drifts_even_with_spend_control():
     # A PRESENT but malformed window is drift regardless of spend control — the new field must
     # not turn protocol drift into a plausible OK.

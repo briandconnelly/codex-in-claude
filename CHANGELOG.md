@@ -30,6 +30,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
     that reading into `unknown` would have claimed a retry might help when nothing can change —
     reintroducing the permanent-`unknown` failure #321 removed.
 
+  - The bundled `collaborating-with-codex` skill gains the matching rule: `blocked` is the one
+    non-advisory rate-limit state — refuse the paid call rather than deferring it, and tell the
+    user spending is administratively blocked. Covered by a new S14 behavioral scenario with a
+    recorded passing run.
+
   Bumps `FINGERPRINT` (`schema-53` → `schema-54`) and `RESULT_FORMAT` (`5` → `6`) for the added
   field and status value. Backward-compatible: nothing was removed, retyped, or narrowed.
 
