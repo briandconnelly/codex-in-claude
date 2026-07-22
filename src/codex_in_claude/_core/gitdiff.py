@@ -195,11 +195,14 @@ def _git(
     return proc.stdout
 
 
-# Generous per-record cap (UTF-8 BYTES) for the streamed untracked listing and its numstat.
-# A single path or numstat line far larger than any real one (a genuine path is < PATH_MAX)
-# is truncated by the bounded reader; the listing consumer then fails loudly rather than
-# hashing a fabricated name. Bounds transient per-record memory without touching real input.
-_UNTRACKED_RECORD_MAX = 1 << 20
+# Generous per-record cap (UTF-8 BYTES) for EVERY git stream this module reads through
+# `_run_git_lines` — the untracked listing, both numstats, and the working-tree state token.
+# A single path or numstat record far larger than any real one (a genuine path is < PATH_MAX)
+# is truncated by the bounded reader; each consumer then decides what a truncated record
+# means for it (the untracked listing fails loudly rather than hashing a fabricated name;
+# `_sum_numstat` counts it, since its numeric fields precede the pathname). Bounds transient
+# per-record memory without touching real input.
+_STREAM_RECORD_MAX = 1 << 20
 
 # Sanity ceiling (UTF-8 BYTES) on a single untracked path. No real repo-relative path
 # approaches this (OS PATH_MAX is ~4 KiB), so a longer record — a genuinely absurd path or one
@@ -207,7 +210,7 @@ _UNTRACKED_RECORD_MAX = 1 << 20
 # a corrupt name. A pure length test, so it cannot false-positive a normal filename that merely
 # happens to end in the reader's truncation-marker text.
 #
-# INVARIANT (`_UNTRACKED_RECORD_MAX` > this): a reader-truncated record is ~`_UNTRACKED_RECORD_MAX`
+# INVARIANT (`_STREAM_RECORD_MAX` > this): a reader-truncated record is ~`_STREAM_RECORD_MAX`
 # bytes, so it only trips this reject while the reader cap stays well ABOVE this ceiling. If the two
 # ever crossed, a truncated (corrupt) path could fall under this ceiling and be hashed anyway,
 # silently restoring the bug this reject removes. Pinned by
@@ -230,7 +233,7 @@ def _run_git_lines(
     vocabulary exactly as :func:`_git` does — same error types, and a timeout message naming the
     same ``args`` — so a streamed call and a captured call fail the same way. ``excludes``
     (``-c core.excludesFile=...``) is injected ahead of the subcommand for the untracked-
-    enumeration calls (#330). A record cap of :data:`_UNTRACKED_RECORD_MAX` keeps transient
+    enumeration calls (#330). A record cap of :data:`_STREAM_RECORD_MAX` keeps transient
     memory O(one record + chunk)."""
     argv = ["git", *_GIT_HARDENING_FLAGS, *(excludes or []), *args]
     try:
@@ -239,7 +242,7 @@ def _run_git_lines(
             cwd=cwd,
             env=env,
             timeout=timeout,
-            max_line_bytes=_UNTRACKED_RECORD_MAX,
+            max_line_bytes=_STREAM_RECORD_MAX,
             sep=sep,
             consume=consume,
         )
@@ -252,6 +255,45 @@ def _run_git_lines(
         if _is_not_git_repo_error(message):
             raise NotAGitRepoError(message) from exc
         raise RuntimeError(message) from exc
+
+
+def _sum_numstat(records: Iterator[str]) -> tuple[int, int, int]:
+    """Sum a newline-delimited ``git diff --numstat`` stream into
+    ``(files, lines_added, lines_removed)``.
+
+    The single parser for every numstat this module reads — the tracked diff's summary and
+    the throwaway-index diff behind untracked gathering — so the two can never drift. It
+    consumes the stream record-by-record (never a whole capture), because ``--numstat``
+    emits one record per changed file and is therefore unbounded in the workspace's
+    changed-file count (#331, #350).
+
+    Format notes, all load-bearing:
+
+    * Records are newline-delimited, NOT ``-z``: a rename keeps its whole ``old => new``
+      pathname inside the third field, so the split still yields exactly three fields.
+      (``-z`` would restructure a rename into several NUL-separated fields.)
+    * ``-`` stands in for either count on a binary file: it is one changed *file* with no
+      line tally, so it is counted in ``files`` and left out of the line totals.
+    * A record whose split is not three fields is skipped rather than fatal — the
+      pre-existing posture of both parsers this replaced.
+    * A record the bounded reader truncated mid-pathname still counts exactly: both numeric
+      columns and both tabs precede the pathname. Counting it beats failing loudly (the
+      arithmetic is recoverable) and beats sniffing the truncation marker (which would
+      false-positive a real pathname containing that text).
+    * The trailing separator is stripped when present, so the final record of output that
+      does not end in a newline counts like any other.
+    """
+    files = added = removed = 0
+    for record in records:
+        parts = record.rstrip("\n").split("\t")
+        if len(parts) != 3:
+            continue
+        files += 1
+        if parts[0].isdigit():
+            added += int(parts[0])
+        if parts[1].isdigit():
+            removed += int(parts[1])
+    return files, added, removed
 
 
 def _path() -> str:
@@ -660,20 +702,7 @@ def _untracked_new_file_diff(
         # patch as a string; extra_env carries GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY.
         _stream_redacted_diff(cwd, diff_args, timeout, acc, extra_env=env)
 
-        def _sum_numstat(lines: Iterator[str]) -> tuple[int, int]:
-            # `--numstat` is one line per file; stream-sum it rather than capture the whole
-            # output, which is unbounded in file count (#331). Parsing matches _summary.
-            files = added = 0
-            for line in lines:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) != 3:
-                    continue
-                files += 1
-                if parts[0].isdigit():  # "-" for binary; left out of the line tally
-                    added += int(parts[0])
-            return files, added
-
-        return _run_git_lines(
+        files, added, _removed = _run_git_lines(
             [*diff_args, "--numstat"],
             cwd=cwd,
             env={**_base_git_env(), **env},
@@ -681,22 +710,24 @@ def _untracked_new_file_diff(
             sep="\n",
             consume=_sum_numstat,
         )
+        # Every entry is a never-committed file added whole, so `removed` is structurally 0.
+        return files, added
 
 
 def _summary(cwd: str, diff_args: list[str], timeout: int) -> DiffSummary:
     summary_args = list(diff_args)
     summary_args.insert(1, "--numstat")
-    numstat = _git(cwd, summary_args, timeout)
-    files = added = removed = 0
-    for line in numstat.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        files += 1
-        if parts[0].isdigit():
-            added += int(parts[0])
-        if parts[1].isdigit():
-            removed += int(parts[1])
+    # Streamed, not captured whole: `--numstat` is one record per changed file, so a
+    # whole capture is unbounded in the workspace's changed-file count on the DEFAULT
+    # review path (#350). Memory stays O(one record + chunk).
+    files, added, removed = _run_git_lines(
+        summary_args,
+        cwd=cwd,
+        env=_base_git_env(),
+        timeout=timeout,
+        sep="\n",
+        consume=_sum_numstat,
+    )
     return DiffSummary(files_changed=files, lines_added=added, lines_removed=removed)
 
 

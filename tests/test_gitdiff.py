@@ -1150,7 +1150,7 @@ def test_untracked_reject_ceiling_below_reader_cap():
     stays above the path ceiling — a truncated record is ~reader-cap bytes, so it must exceed the
     ceiling to be rejected. Pin the invariant so a future cap change can't silently reopen the
     corrupt-name hole with every other test still green."""
-    assert gitdiff._UNTRACKED_RECORD_MAX > gitdiff._MAX_UNTRACKED_PATH_BYTES + 64
+    assert gitdiff._STREAM_RECORD_MAX > gitdiff._MAX_UNTRACKED_PATH_BYTES + 64
 
 
 def test_untracked_newline_in_regular_filename_gathered_once(repo):
@@ -1787,3 +1787,93 @@ def test_gather_include_does_not_gather_globally_ignored_file(repo, outside, mon
     assert "TOKEN=abcdef" not in res.text
     assert res.untracked_included == 1
     assert "keep.py" in res.text
+
+
+# ---------------------------------------------------------------------------
+# #350: the TRACKED diff's --numstat is streamed, not captured whole
+# ---------------------------------------------------------------------------
+
+
+def test_tracked_summary_numstat_streams_through_run_lines(repo, monkeypatch):
+    """`_summary` must route the tracked diff's `--numstat` through the bounded
+    `gitproc.run_lines` runner — never `_git` (whole capture, unbounded in changed-file
+    count). RED before #350: `_summary` used `_git`, so the only run_lines calls on this
+    path were the excludes resolver and the #336 state token — which is why this asserts on
+    the concrete argv (`diff` + `--numstat`, newline-delimited) rather than merely that
+    run_lines was reached."""
+    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+
+    calls: list[tuple[list[str], str]] = []
+    real = gitdiff.gitproc.run_lines
+
+    def spy(argv, **kwargs):
+        calls.append((list(argv), kwargs.get("sep", "\n")))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", spy)
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+
+    assert res.summary.files_changed == 1
+    assert any("diff" in argv and "--numstat" in argv and sep == "\n" for argv, sep in calls), (
+        f"tracked numstat did not stream through run_lines: {calls}"
+    )
+
+
+def test_tracked_summary_counts_multichunk_numstat_exactly(repo):
+    """A numstat listing far larger than one read chunk must still be summed exactly by the
+    streaming reader — the counts are the agent-visible contract, so streaming may not cost
+    accuracy (#350)."""
+    n = 1500
+    for i in range(n):
+        (repo / f"pkg_{i:05d}_module.py").write_text("x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "bulk")
+    for i in range(n):
+        (repo / f"pkg_{i:05d}_module.py").write_text("x = 2\ny = 3\n")
+
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=120, max_bytes=200_000)
+    assert res.summary.files_changed == n
+    assert res.summary.lines_added == 2 * n
+    assert res.summary.lines_removed == n
+
+
+def test_sum_numstat_totals_added_and_removed():
+    assert gitdiff._sum_numstat(iter(["3\t1\ta.py\n", "10\t7\tb.py\n"])) == (2, 13, 8)
+
+
+def test_sum_numstat_binary_records_count_files_not_lines():
+    # git writes "-" for both columns of a binary file; it is one changed FILE with no
+    # line tally, exactly as the whole-capture parser treated it.
+    assert gitdiff._sum_numstat(iter(["-\t-\timg.png\n", "2\t1\ta.py\n"])) == (2, 2, 1)
+
+
+def test_sum_numstat_skips_malformed_records():
+    # A record whose tab-split is not 3 fields is skipped, not fatal — the pre-#350
+    # behavior of both parsers, preserved deliberately.
+    assert gitdiff._sum_numstat(iter(["garbage\n", "\n", "1\t1\ta.py\n"])) == (1, 1, 1)
+
+
+def test_sum_numstat_accepts_final_record_without_newline():
+    # The bounded reader yields a trailing record with no separator when output does not
+    # end in one; it must count like any other.
+    assert gitdiff._sum_numstat(iter(["1\t2\ta.py"])) == (1, 1, 2)
+
+
+def test_sum_numstat_counts_rename_record_once(repo):
+    # A rename's numstat keeps the whole "old => new" pathname in the THIRD field, so the
+    # tab-split is still 3 fields and the record counts once. Exercised end-to-end so a
+    # future git format change surfaces here rather than in production counts.
+    (repo / "renamed.py").write_bytes((repo / "calc.py").read_bytes())
+    (repo / "calc.py").unlink()
+    res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
+    assert res.summary.files_changed >= 1
+
+
+def test_sum_numstat_counts_reader_truncated_record_exactly():
+    # Both numeric columns and both tabs precede the pathname, so a record the bounded
+    # reader truncated mid-path still yields exact counts. Counting it (rather than
+    # failing loudly or skipping it) is the deliberate posture: the arithmetic is
+    # recoverable, and sniffing the truncation marker would false-positive a real path
+    # that happens to contain that text.
+    truncated = "1\t2\t" + "d" * 64 + "…[line truncated]\n"
+    assert gitdiff._sum_numstat(iter([truncated, "5\t5\tb.py\n"])) == (2, 6, 7)
