@@ -12,7 +12,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   than by parsing validator prose — handled a required `Literal` (a top-level `enum`) and an
   Optional one (an `enum` under an `anyOf` branch), but not the `list[Literal] | None` shape, whose
   enum sits one level further down under `items`. `include_schemas` is the only parameter with that
-  shape, so `codex_capabilities(include_schemas=["nope"])` returned `allowed_values: null` on the
+  shape, so `codex_capabilities(include_schemas=["nope"])` omitted `allowed_values` entirely on the
   very field whose repair hint says to "use one of the field's `allowed_values`", pushing the client
   back to parsing prose. The resolver now also reads the element domain, but only for an *indexed*
   failure (`include_schemas[0]`), where the fix really is a single token: a whole-list failure
