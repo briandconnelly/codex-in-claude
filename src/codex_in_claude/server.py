@@ -712,17 +712,18 @@ IdempotencyKeyParam = Annotated[
         description=param_contracts.PARAMETER_CONTRACTS["idempotency_key"].summary,
     ),
 ]
+# Named so a test can derive the advertised token set with get_args and assert it against
+# what codex_capabilities actually returns — widening the Literal without wiring the payload
+# would otherwise go unnoticed (#370).
+IncludeSchemasToken = Literal[
+    "error-envelope",
+    "result-meta",
+    "capabilities-result",
+    "status-result",
+    "parameter-contracts",
+]
 IncludeSchemasParam = Annotated[
-    list[
-        Literal[
-            "error-envelope",
-            "result-meta",
-            "capabilities-result",
-            "status-result",
-            "parameter-contracts",
-        ]
-    ]
-    | None,
+    list[IncludeSchemasToken] | None,
     Field(
         description="Opt-in tool-reachable fallback for resource-blind clients: also embed "
         "the full 'error-envelope', 'result-meta', 'capabilities-result', and/or "
@@ -1960,7 +1961,13 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
             # resource-blind client can still reach the compressed params' full semantics (#333).
             "parameter-contracts": param_contracts.resource_body(),
         }
-        caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas) if k in available}
+        # No `if k in available` guard: on an MCP call FastMCP rejects an off-enum token as
+        # invalid_arguments before this runs, so a missing key there can only mean the
+        # advertised Literal and this dict have drifted — a server bug that must fail loudly
+        # rather than silently omit the schema the client asked for (#370). A direct Python
+        # call bypasses that validation and gets a raw KeyError for an off-enum token; that
+        # violates the annotated Literal's domain, and this module is not a public Python API.
+        caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas)}
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
     # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
     # it, and only the *_async tools carry `async_lifecycle`.
