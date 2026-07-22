@@ -931,7 +931,7 @@ def test_fingerprint_covers_description_discloses_the_release_identity_carveout(
 
 def test_fingerprint_covers_description_survives_schema_noise_stripping():
     """`_strip_schema_noise` drops every description not in `_KEPT_DESCRIPTIONS`, matched by
-    exact string identity. Without registration the carve-out would reach the
+    exact string value. Without registration the carve-out would reach the
     codex://capabilities-result resource but be stripped from the advertised
     `codex_capabilities` outputSchema — the surface most schema-reading clients use.
 
@@ -945,7 +945,7 @@ def test_fingerprint_covers_description_survives_schema_noise_stripping():
     )
 
     assert _FINGERPRINT_COVERS_DESC in _KEPT_DESCRIPTIONS
-    # The Field carries the identical string (identity, not merely a similar one).
+    # The Field carries the exact same string value, not merely a similar one.
     field = CapabilitiesResult.model_fields["fingerprint_covers"]
     assert field.description == _FINGERPRINT_COVERS_DESC
     # published_schema returns success branch(es) + one opaque error branch under anyOf.
