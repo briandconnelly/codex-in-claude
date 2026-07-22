@@ -14,8 +14,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   capabilities payload — so an ordinary release changes them without moving the fingerprint. The
   advertised guarantee was broader than the implemented one, and a caching client reading the
   machine-readable coverage list had no way to tell.
-  - `fingerprint_covers` now carries a description stating the carve-out: coverage is over
-    **contract** semantics, not release identity. It is registered in `_KEPT_DESCRIPTIONS`, so it
+  - `fingerprint_covers` now carries a description stating both directions: the forward invariant
+    a caching client needs (a contract-semantic change in a listed category **does** change the
+    fingerprint, so an unchanged fingerprint means the cached contract is still valid) and the
+    carve-out (release identity is excluded). It is registered in `_KEPT_DESCRIPTIONS`, so it
     survives schema-noise stripping and reaches the advertised `codex_capabilities` outputSchema —
     not only the `codex://capabilities-result` resource.
   - Deliberately **not** an exhaustive list of everything the guard normalizes away: the snapshot

@@ -10,7 +10,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "35a952e839badfd233da332016313484d7dda508834b6afc6f46732c5a141a73"
+EXPECTED_MANIFEST_HASH = "ef6c23e3139b52d486a52ebe11262cc86b121c9fd94badb80688c13db4efb927"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -164,11 +164,17 @@ def test_release_variable_exclusions_are_disclosed_in_the_coverage_description()
     from codex_in_claude.schemas import _FINGERPRINT_COVERS_DESC
 
     assert manifest._RELEASE_VARIABLE_EXCLUDE  # positive control: non-empty
-    for field in manifest._RELEASE_VARIABLE_EXCLUDE:
-        assert re.search(rf"(?<![\w.]){re.escape(field)}(?![\w])", _FINGERPRINT_COVERS_DESC), (
-            f"manifest excludes {field!r} but the coverage description does not disclose it"
-        )
-    assert "serverInfo.version" in _FINGERPRINT_COVERS_DESC
+    # Parse the disclosed field list rather than searching the whole sentence: a loose
+    # search would let a future excluded field named e.g. `release` be "disclosed" by the
+    # prose phrase "Release identity", passing while saying nothing about that field.
+    clause = re.search(
+        r"Release identity is excluded: (.+?) change every release", _FINGERPRINT_COVERS_DESC
+    )
+    assert clause, "the coverage description no longer carries a parseable exclusion clause"
+    disclosed = {name.strip() for name in clause.group(1).split(",")}
+    # `serverInfo.version` lives in the initialize response, not this payload, and is popped
+    # inline rather than declared in a constant — so it is expected by name.
+    assert disclosed == manifest._RELEASE_VARIABLE_EXCLUDE | {"serverInfo.version"}
     # The self-referential `fingerprint` removal is deliberately NOT disclosed as a
     # carve-out: its value changes precisely BECAUSE something covered changed.
     assert {"fingerprint"} == manifest._SELF_REFERENTIAL_EXCLUDE

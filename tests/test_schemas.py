@@ -923,6 +923,10 @@ def test_fingerprint_covers_description_discloses_the_release_identity_carveout(
     # also strips framework `_meta` and normalizes set-like array order. Promising
     # exhaustiveness would recreate the very overclaim this field exists to correct.
     assert "contract" in desc.lower()
+    # The FORWARD invariant is the one a caching client needs: an unchanged fingerprint must
+    # mean the cached contract is still valid. Stating only what a change "may signal" leaves
+    # that unpromised, so the direction is asserted explicitly.
+    assert "changes the fingerprint" in desc
 
 
 def test_fingerprint_covers_description_survives_schema_noise_stripping():

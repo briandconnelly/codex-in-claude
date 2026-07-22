@@ -56,9 +56,9 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # — so it promises a scoped semantic (contract identity, not release identity) that stays true.
 # Registered in _KEPT_DESCRIPTIONS so it survives into the advertised outputSchema.
 _FINGERPRINT_COVERS_DESC = (
-    "Categories a fingerprint change may signal. Coverage is over CONTRACT semantics, not "
-    "release identity: serverInfo.version and this payload's version/server_version change "
-    "every release WITHOUT moving the fingerprint."
+    "A contract-semantic change in any listed category changes the fingerprint; nothing "
+    "outside them does. Release identity is excluded: serverInfo.version, version, "
+    "server_version change every release WITHOUT moving the fingerprint."
 )
 
 # Bump this whenever the agent-visible surface changes — see FINGERPRINT_COVERS above for the
