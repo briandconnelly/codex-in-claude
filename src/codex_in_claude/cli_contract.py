@@ -207,10 +207,10 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # body. Upstream docs:
 # https://developers.openai.com/codex/concepts/customization#agents-guidance and
 # https://developers.openai.com/codex/concepts/customization#skills.
-# Reader-facing detail — the re-verification probe, the verified negatives
-# (`.claude/skills/`, parent-dir `AGENTS.md`) and what remains unverified
-# (`project_doc_max_bytes=0`) — lives in COMPATIBILITY.md, "Implicit Codex context";
-# keep that section the single home for both.
+# Reader-facing detail — the re-verification probe, the verified negatives, and what
+# remains unverified — lives in COMPATIBILITY.md, "Implicit Codex context"; keep that
+# section the single home for all of it. Do not re-list its probe results here: they are
+# expected to change on the next Codex upgrade.
 #
 # RULE: every egress-caveat prose site — the server instructions, the codex_status
 # caveat, the tool capability descriptions and docstrings, codex_capabilities'

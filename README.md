@@ -202,7 +202,7 @@ reporting (`meta.rate_limit`), background-job semantics, and workspace selection
   load regardless of workspace, since they are discovered from outside it). The plugin's isolation
   flags do not suppress any of this — including `--ignore-user-config`, which drops
   `$CODEX_HOME/config.toml` but not `$CODEX_HOME/skills/`. Details, the verifying probe, and the
-  remaining unverified edge case are in [`COMPATIBILITY.md`](COMPATIBILITY.md). Best-effort redaction protects
+  remaining unverified edge cases are in [`COMPATIBILITY.md`](COMPATIBILITY.md). Best-effort redaction protects
   gathered diffs and returned free text
   (`summary`, `findings`, `raw_response.text`): secret-looking file hunks are dropped, and inline
   matches become `[redacted: secret value]`. It is output/diff defense-in-depth, not input

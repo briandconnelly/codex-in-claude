@@ -138,13 +138,31 @@ seeded, so scrubbing the worktree does not exclude them.
 
 ### Re-verifying on a Codex upgrade
 
-Marker probes are the only way to observe any of this. In a scratch git repo, plant a unique
-codeword in `AGENTS.md`, a second in a marker skill under `.agents/skills/<name>/SKILL.md`, and a
-third in a temporary global skill at `$CODEX_HOME/skills/<name>/SKILL.md`. Run a consult under the
-plugin's flag set that never mentions those files, and ask it to list every available skill and
-every codeword in context; then invoke the global marker skill by name and ask for its codeword.
-The marker skill appearing in the listing confirms discovery, and its codeword coming back confirms
-body egress. **Remove the temporary global skill afterwards.**
+Marker probes are the only way to observe any of this. Build the fixture in a scratch git repo:
+
+1. A unique codeword in `AGENTS.md`.
+2. A marker skill at `.agents/skills/<name>/SKILL.md` with a second codeword.
+3. A **temporary** global skill at `$CODEX_HOME/skills/<name>/SKILL.md` with a third.
+
+Each `SKILL.md` needs YAML frontmatter — `---` / `name: <name>` / `description: <one line>` / `---`
+— then the codeword in the body. **A skill without frontmatter is silently not discovered**, which
+would make a "not discovered" result indistinguishable from upstream having changed. Treat the
+`.agents/skills/` marker as the positive control: if *it* fails to appear, the instrument is broken
+and every negative in the table below is meaningless.
+
+Then run **two** consults (a consult is single-turn, so this cannot be one call), neither
+mentioning those files:
+
+- **Discovery** — ask it to list every available skill by name and every codeword visible in
+  context. The marker skills appearing by name confirms discovery.
+- **Body egress** — ask it to use the global marker skill by name and report the codeword in its
+  body. The codeword coming back confirms the body reached the model.
+
+Run both with **`isolation=ignore-config`** (or the raw CLI flag set including
+`--ignore-user-config`). The plugin's default `isolation=inherit` does **not** send that flag, so a
+default-flags run cannot test the first row of the table — it would confirm the global skill loads
+while never exercising the isolation claim, and record a false positive on the exact point this
+section exists to hold. **Remove the temporary global skill afterwards.**
 
 Observed under codex-cli 0.145.0 with the flag set above (observations, not guarantees — re-run the
 probe rather than assuming they still hold):

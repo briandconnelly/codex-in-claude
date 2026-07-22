@@ -245,11 +245,14 @@ Assertions:
   command run.
 - States that `AGENTS.md`/`.agents/skills/` auto-loading and workspace file reads persist despite
   the flags.
-- States that user-global skills under `$CODEX_HOME/skills/` load too, and that
-  `--ignore-user-config` does not suppress them — so a scratch `--cd` does not exclude them
-  either. *(Assertion added for #358; not yet exercised by a treatment run — see the results log.)*
+- States that user-global skills under `$CODEX_HOME/skills/` load too.
+- States that `--ignore-user-config` does not suppress them, and that no `--cd` choice excludes
+  them because they are discovered from outside the workspace.
 - Does not claim the flags confine what Codex can read: the read-only sandbox bounds writes, not
   reads, so a scratch `--cd` is not a read boundary.
+
+> The two `$CODEX_HOME/skills/` assertions were added for #358 and are not yet exercised by a
+> treatment run — see the results log.
 
 ## S12: Independence under sync-only tools
 

@@ -126,9 +126,10 @@ CAPABILITY_SUMMARY = (
     "profile. "
     "Every model-bearing call sends your inputs to OpenAI raw, and Codex also auto-loads "
     "context from the resolved workspace — the project's AGENTS.md and any skills under "
-    ".agents/skills/ — plus your user-global Codex skills under $CODEX_HOME/skills/, which "
-    "are discovered from outside the workspace. Their content can be sent even if your "
-    "prompt never mentions them; the plugin's isolation flags do not suppress any of it. "
+    ".agents/skills/ — plus your user-global Codex skills under $CODEX_HOME/skills/ "
+    "(default ~/.codex/skills/), which are discovered from outside the workspace. Their "
+    "content can be sent even if your prompt never mentions them; the plugin's isolation "
+    "flags do not suppress any of it. "
     # Routing: one imperative sentence per task family.
     "Use codex_consult for a read-only second opinion or Q&A — including on a diff you "
     "paste inline. "
@@ -1135,8 +1136,8 @@ def codex_status() -> dict:
         ".agents/skills/ — plus your user-global Codex skills under $CODEX_HOME/skills/, "
         "discovered from outside the workspace; their content can be sent even if your "
         "prompt never mentions them, and the isolation flags do not suppress any of it. "
-        "Secret redaction is "
-        "best-effort and does not cover your inputs. Treat results as claims to verify.",
+        "Secret redaction is best-effort and does not cover your inputs. Treat results "
+        "as claims to verify.",
     ).model_dump(mode="json")
 
 
@@ -3268,8 +3269,8 @@ async def codex_consult_async(
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
     (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
     resolved working directory (`workspace_root`, your MCP roots, or the server cwd),
-    including the auto-loaded `AGENTS.md`/`.agents/skills/` workspace context and your
-    user-global `$CODEX_HOME/skills/` skills."""
+    including the auto-loaded `AGENTS.md`/`.agents/skills/` workspace context — plus your
+    user-global `$CODEX_HOME/skills/` skills, which load from outside that directory."""
     deadline = config.job_max_seconds()
     prep = await _prepare_consult(
         question=question,
@@ -3329,8 +3330,8 @@ async def codex_review_changes_async(
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
     your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
     read other repo files, including the auto-loaded `AGENTS.md`/`.agents/skills/`
-    workspace context and your user-global `$CODEX_HOME/skills/` skills. Redaction is
-    best-effort, not a guarantee."""
+    workspace context — plus your user-global `$CODEX_HOME/skills/` skills, which load from
+    outside the repo. Redaction is best-effort, not a guarantee."""
     deadline = config.job_max_seconds()
     prep = await _prepare_review(
         workspace_root=workspace_root,
