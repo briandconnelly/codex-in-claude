@@ -484,6 +484,12 @@ _GUARANTEE_MATCHERS = {
     "autoload_agents": lambda d: "agents.md" in d,
     # The workspace .agents/skills/ skills auto-load.
     "autoload_skills": lambda d: ".agents/skills" in d,
+    # User-global skills under $CODEX_HOME/skills/ are discovered too — outside the
+    # workspace, and not suppressed by the config-isolation flags (#358). Keyed on the
+    # exact canonical path: a looser "skills" check would be satisfied by the
+    # .agents/skills disclosure alone, i.e. green over the exact omission it guards
+    # (see test_global_skills_matcher_rejects_project_only_prose).
+    "autoload_global_skills": lambda d: "$codex_home/skills" in d,
     # The isolation flags do NOT suppress that auto-loaded context.
     "isolation_suppress": lambda d: "isolation" in d and "suppress" in d,
     # Secret redaction is best-effort, not a guarantee.
@@ -495,7 +501,14 @@ _GUARANTEE_MATCHERS = {
     # review: the gathered diff is secret-redacted before it is sent.
     "diff_redacted": lambda d: "redact" in d and "diff" in d,
 }
-_COMMON_EGRESS = {"openai", "raw_input", "files_read", "autoload_agents", "autoload_skills"}
+_COMMON_EGRESS = {
+    "openai",
+    "raw_input",
+    "files_read",
+    "autoload_agents",
+    "autoload_skills",
+    "autoload_global_skills",
+}
 _REQUIRED_GUARANTEES = {
     "codex_consult": _COMMON_EGRESS | {"isolation_suppress", "redaction_best_effort"},
     "codex_consult_async": _COMMON_EGRESS,
@@ -541,6 +554,59 @@ def test_files_read_matcher_rejects_decoupled_tokens():
     # …while a minimal genuine disclosure, in either token order, still registers.
     assert _GUARANTEE_MATCHERS["files_read"]("codex may read other repo files and send them")
     assert _GUARANTEE_MATCHERS["files_read"]("files codex reads are sent to openai")
+
+
+def test_global_skills_matcher_rejects_project_only_prose():
+    """The `autoload_global_skills` matcher must fail on the pre-#358 wording.
+
+    That wording is the exact defect this guard exists to catch: it discloses the
+    project's `AGENTS.md` and `.agents/skills/` but not the user-global skills under
+    `$CODEX_HOME/skills/`, which are discovered from outside the workspace. A matcher
+    keyed on a bare "skills" token would be satisfied by this string and so would stay
+    green over the omission — the broken-instrument failure mode #345 hit."""
+    project_only = (
+        "codex also auto-loads context from that workspace — the project's agents.md and "
+        "any skills under .agents/skills/ — so their content can be sent even if your "
+        "prompt never mentions them; the isolation flags do not suppress this."
+    )
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](project_only) is False
+    # …while naming the canonical path registers, in either casing the sites use.
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](
+        "skills under $codex_home/skills/ are discovered too"
+    )
+
+
+# The four runtime caveat sites below are NOT function docstrings, so
+# test_active_tool_docstring_preserves_guarantee cannot see them; and the
+# codex_status caveat is absent from the manifest snapshot, so that guard cannot
+# see it either. Without these, the #358 disclosure could regress green (#358).
+def test_capability_summary_discloses_global_skills():
+    """The server instructions block names the user-global skills directory."""
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](server.CAPABILITY_SUMMARY.lower())
+
+
+def test_status_caveat_discloses_global_skills(monkeypatch, clean_env):
+    """The codex_status caveat names it too — it has no manifest-snapshot guard."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.145.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    caveat = server.codex_status()["caveat"].lower()
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](caveat)
+
+
+def test_negative_scope_discloses_global_skills():
+    """codex_capabilities' negative_scope is an independent safety inventory (#358)."""
+    blob = " ".join(server.codex_capabilities()["negative_scope"]).lower()
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](blob)
+
+
+@pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
+def test_capability_returns_disclose_global_skills(name):
+    """Each active tool's capability `returns` discloses it — asserted per entry.
+
+    A joined blob would pass while five of six entries dropped the disclosure."""
+    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    returns = by_name[name]["returns"].lower()
+    assert _GUARANTEE_MATCHERS["autoload_global_skills"](returns), name
 
 
 @pytest.mark.parametrize(
@@ -2095,7 +2161,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-52"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-53"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5691,7 +5757,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-52")
+    assert result["fingerprint"].endswith("schema-53")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

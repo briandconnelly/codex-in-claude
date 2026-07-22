@@ -105,40 +105,56 @@ like the sandbox/approval `-c` denials below, it is bounded by the **`--profile`
 boundary** — an opaque profile this server cannot inspect could re-enable the feature, so only enable
 that knob with profiles you control.
 
-## Auto-loaded workspace context (`AGENTS.md`, `.agents/skills/`, #300)
+## Implicit Codex context (`AGENTS.md`, both skills roots, #300, #358)
 
 `codex exec` **automatically loads** the resolved workspace's `AGENTS.md` into model context and
-**auto-discovers** skills under `.agents/skills/` (per upstream docs: name/description metadata up
-front; a skill's body loads when the skill is selected). It needs no tool-directed read, and every
-model-bearing call in this plugin runs `codex exec`, so that content can reach OpenAI even when the
-caller's prompt never mentions those files. Re-verified empirically against codex-cli 0.145.0
-(2026-07-21, issue #300) — including an A/B against 0.144.1, which behaved identically despite
-0.145 shipping the new default-on `skill_search` feature; the behavior is invisible in
-`codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
-upstream changes to it.
+**auto-discovers** skills from two roots (per upstream docs: name/description metadata up front; a
+skill's body loads when the skill is selected):
 
-**Known incomplete — see [#358](https://github.com/briandconnelly/codex-in-claude/issues/358).**
-The same probe showed a *user-global* skill under `$CODEX_HOME/skills/` (default `~/.codex/skills/`)
-is **also** auto-discovered, and its body reaches the model **despite `--ignore-user-config`** —
-on 0.144.1 and 0.145.0 alike, so this is pre-existing rather than new. This section and the
-`cli_contract.py` comment block record it; the **remaining** disclosure sites — the server
-instructions, the `codex_status` caveat, tool descriptions and docstrings, `README.md`,
-`SECURITY.md`, and the `collaborating-with-codex` skill — still name only the project's `AGENTS.md`
-and `.agents/skills/`. #358 is scoped to those. Re-verify on a
-Codex upgrade with a marker probe: in a scratch repo whose `AGENTS.md` demands a unique codeword
-(and with a marker skill under `.agents/skills/`), run a consult that never mentions those files —
-the codeword appearing unprompted confirms the auto-load. Upstream docs:
+- the workspace's **`.agents/skills/`** — project-level, and
+- **`$CODEX_HOME/skills/`** (default `~/.codex/skills/`) — **user-global, discovered from outside
+  the workspace**, so no choice of workspace excludes it.
+
+It needs no tool-directed read, and every model-bearing call in this plugin runs `codex exec`, so
+that content can reach OpenAI even when the caller's prompt never mentions those files. Verified
+empirically against codex-cli 0.145.0 (2026-07-21, issues #300 and #358) — including an A/B against
+0.144.1, which behaved identically despite 0.145 shipping the new default-on `skill_search` feature,
+so the user-global discovery is pre-existing rather than new. The behavior is invisible in
+`codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
+upstream changes to it. Upstream docs:
 [AGENTS guidance](https://developers.openai.com/codex/concepts/customization#agents-guidance) and
 [skills](https://developers.openai.com/codex/concepts/customization#skills).
 
 **The isolation flags do not suppress it.** `--ignore-user-config` and `--ignore-rules` cover
-`$CODEX_HOME` state — `config.toml` and execpolicy `.rules` respectively — not project-level
-`AGENTS.md` or `.agents/skills/`; no `isolation` value changes this. For the delegate tools the
-`AGENTS.md`/skills seeded into the throwaway worktree (committed content plus replayed uncommitted
-tracked changes; untracked files are not copied) auto-load there too. Not verified (do not assume):
-whether `.claude/skills/` is also discovered, whether parent-directory `AGENTS.md` files load, or
-whether `project_doc_max_bytes=0` fully disables loading. The assumption is recorded in
-`cli_contract.py`.
+specific `$CODEX_HOME` state — `config.toml` and execpolicy `.rules` respectively — and **not**
+`AGENTS.md`, `.agents/skills/`, or `$CODEX_HOME/skills/`; no `isolation` value changes this. The
+user-global case is the surprising one: `--ignore-user-config` reads as broad user-level isolation
+but drops only `config.toml`, and a probe run *with* that flag still emitted a `$CODEX_HOME/skills/`
+skill body. (The plugin's default `isolation=inherit` does not even send the flag — see
+`config.isolation_flags`.) For the delegate tools the `AGENTS.md`/skills seeded into the throwaway
+worktree (committed content plus replayed uncommitted tracked changes; untracked files are not
+copied) auto-load there too, and the user-global skills load alongside them — neither tracked nor
+seeded, so scrubbing the worktree does not exclude them.
+
+### Re-verifying on a Codex upgrade
+
+Marker probes are the only way to observe any of this. In a scratch git repo, plant a unique
+codeword in `AGENTS.md`, a second in a marker skill under `.agents/skills/<name>/SKILL.md`, and a
+third in a temporary global skill at `$CODEX_HOME/skills/<name>/SKILL.md`. Run a consult under the
+plugin's flag set that never mentions those files, and ask it to list every available skill and
+every codeword in context; then invoke the global marker skill by name and ask for its codeword.
+The marker skill appearing in the listing confirms discovery, and its codeword coming back confirms
+body egress. **Remove the temporary global skill afterwards.**
+
+Observed under codex-cli 0.145.0 with the flag set above (observations, not guarantees — re-run the
+probe rather than assuming they still hold):
+
+| Question | Observed |
+|---|---|
+| `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes**, body content reached the model |
+| Project `.claude/skills/` discovered? | **No** |
+| Parent-directory `AGENTS.md` above the git root loaded? | **No** (probed with cwd == git root; the cwd ≠ root case was not disambiguated) |
+| `project_doc_max_bytes=0` fully disables loading? | **Not verified — do not assume** |
 
 ## Flag classes
 

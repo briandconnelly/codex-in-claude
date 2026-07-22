@@ -7,6 +7,31 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Every egress caveat now discloses that user-global Codex skills auto-load too**, not just the
+  project's `AGENTS.md` and `.agents/skills/` (#358). Skills under `$CODEX_HOME/skills/` (default
+  `~/.codex/skills/`) are discovered from **outside** the workspace and their bodies can reach
+  OpenAI on any active call — verified against `codex-cli 0.145.0`, and pre-existing rather than new
+  (0.144.1 behaves identically). Updated: the server instructions, the `codex_status` caveat, all
+  six active tool descriptions and their capability `returns`, `codex_capabilities`'
+  `negative_scope`, `README.md`, `SECURITY.md`, `COMPATIBILITY.md`, `cli_contract.py`, and the
+  `collaborating-with-codex` skill. **Bumps `fingerprint`** (a reword of covered descriptions and
+  instructions); **not breaking** — behavior is unchanged and no documented guarantee weakens, since
+  the contract only ever promised `ignore-config` drops `$CODEX_HOME/config.toml`, never that all
+  `$CODEX_HOME` content stays local.
+
+  Two narrower corrections ride along. `SECURITY.md` and `COMPATIBILITY.md` previously said
+  isolation "still helps for `$CODEX_HOME` state" — true only of the *specific* state those flags
+  name, so the claim is narrowed: `--ignore-user-config` does **not** suppress `$CODEX_HOME/skills/`
+  despite reading as user-level isolation. And the delegate wording now places user-global skills
+  outside the "tracked … seeded into the worktree" clause, because they are neither tracked nor
+  seeded — scrubbing the worktree does not exclude them. Neither site is fingerprint-covered.
+
+  `COMPATIBILITY.md`'s section (renamed to "Implicit Codex context" — `$CODEX_HOME` is not the
+  workspace) remains the single home for the detail, and its re-verification probe now plants a
+  global marker skill as well. Two edge cases it previously listed as unverified are now answered
+  under 0.145.0: a project `.claude/skills/` is **not** discovered, and a parent-directory
+  `AGENTS.md` above the git root is **not** loaded. `project_doc_max_bytes=0` remains unverified.
+
 - **Tracked Codex version bumped to `0.145`.** `SUPPORTED_VERSIONS` now tracks `(0, 145)`; the CLI
   contract, help snapshots (`docs/codex-help/0.145.0/`), and `KNOWN_MODEL_SLUGS` fallback are
   verified against `codex-cli 0.145.0`. Advisory only — an untracked version warns in `codex_status`
@@ -39,11 +64,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
   That probe also surfaced a **pre-existing** disclosure gap, present on 0.144.1 and 0.145.0 alike:
   a user-global skill under `$CODEX_HOME/skills/` is auto-discovered and reaches the model despite
-  `--ignore-user-config`. `COMPATIBILITY.md` and the `cli_contract.py` comment now record it; the
-  remaining user-facing caveat sites (server instructions, `codex_status`, tool descriptions,
-  `README.md`, `SECURITY.md`, the `collaborating-with-codex` skill) still name only the project's
-  `AGENTS.md` and `.agents/skills/`, and #358 tracks correcting those. The behavior is unchanged by
-  this bump. #360 tracks folding the A/B technique into
+  `--ignore-user-config`. The behavior is unchanged by this bump; the disclosure was corrected
+  across every caveat site under #358, below. #360 tracks folding the A/B technique into
   `docs/UPGRADING-CODEX.md`.
 
 ### Fixed
