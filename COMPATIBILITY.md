@@ -1,7 +1,9 @@
 # Compatibility with the `codex` CLI
 
 This plugin shells out to the OpenAI `codex` CLI. Every assumption it makes lives in
-`src/codex_in_claude/cli_contract.py` so an upstream change is a one-file, greppable edit.
+`src/codex_in_claude/cli_contract.py`, so an upstream change is centralized and greppable — though
+incorporating one takes the lockstep procedure in
+[`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md), not a single edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
 Verified against `codex-cli 0.145.0`.
