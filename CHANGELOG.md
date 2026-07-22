@@ -7,6 +7,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`AGENTS.md` now routes a codex upgrade to `docs/UPGRADING-CODEX.md`** (#364). The always-loaded
+  instruction file never named the upgrade runbook, and its "update that one file" phrasing read as
+  a single edit to `cli_contract.py` — so an agent handed an ad-hoc "codex 0.146 is out, upgrade it"
+  had nothing routing it to the real multi-step procedure. (The triggered path was already covered:
+  the release-watch workflow and both check scripts print the path.) The pointer also names its
+  trigger — a new upstream release or a supported-version bump — instead of the vaguer "when Codex
+  changes". Deliberately a pointer only: the procedure's steps stay in their one home, since partial
+  copies in this repo have gone stale before (#227). Docs-only; no `FINGERPRINT` change, no behavior
+  change.
+
 - **`docs/UPGRADING-CODEX.md` now diffs against a retrievable previous `codex` build, not just the
   committed help snapshots** (#360). The old procedure rested on a false premise — that an in-place
   upgrade destroys the old binary, making those snapshots the only diff source. It doesn't: `codex`
