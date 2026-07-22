@@ -79,7 +79,7 @@ That leaves one uncontrolled variable: `$OLD` and `$NEW` come from different dis
 so a difference could in principle be packaging rather than version. To rule it out, install the
 **new** version from npm too and confirm it matches the installed one:
 
-```sh
+```bash
 npm install --prefix "$SCRATCH/new" @openai/codex@<new-version> >/dev/null
 diff <("$SCRATCH/new/node_modules/.bin/codex" --help) <("$NEW" --help)
 ```
@@ -191,7 +191,7 @@ Then compare the surfaces the snapshots don't cover:
     `$OLD`, and two "different" runs would silently invoke the same binary. Invoke each explicitly
     and echo which one you used, so the run records its own provenance:
 
-    ```sh
+    ```bash
     for bin in "$OLD" "$NEW"; do
       echo "=== $bin ($("$bin" --version))"
       "$bin" exec --cd "$FIXTURE" --ignore-user-config --sandbox read-only \
