@@ -42,7 +42,7 @@ Every assumption about the `codex` CLI lives in `src/codex_in_claude/cli_contrac
 sandbox values, version, drift/auth signatures. Guarantee-bearing flags (`ALWAYS_SEND_FLAGS`) are
 sent unconditionally and, if rejected, fail loudly as `cli_contract_changed` (zero spend).
 Depth-only flags (`HELP_GATED_FLAGS`) are feature-detected and dropped gracefully. When a new
-upstream `codex` release lands or the supported version is bumped, follow
+upstream `codex` minor appears, or the supported version set changes, follow
 `docs/UPGRADING-CODEX.md` — it owns the multi-step procedure, which is more than a one-file edit.
 `COMPATIBILITY.md` explains what each guarantee is for.
 

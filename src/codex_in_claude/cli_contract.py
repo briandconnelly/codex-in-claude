@@ -3,8 +3,9 @@
 Every assumption this server makes about the `codex` CLI — its subcommands,
 flags, sandbox values, the event/result extraction surface, supported major
 versions, and the stderr phrasings that mean the contract drifted — lives here so
-an upstream breaking change is a one-file, greppable, testable edit. See
-COMPATIBILITY.md for the assumption -> upstream-source map.
+an upstream breaking change is centralized, greppable, and testable. Revising it
+takes the lockstep procedure in docs/UPGRADING-CODEX.md, not an edit to this file
+alone. See COMPATIBILITY.md for the assumption -> upstream-source map.
 
 Verified against `codex-cli 0.145.0`.
 """
