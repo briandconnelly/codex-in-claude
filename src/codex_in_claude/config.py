@@ -167,10 +167,11 @@ ENV_PLACEHOLDER_REPAIR = (
 # prompt, hollowing out the fail-loud CLI contract.
 EXTRA_ARGS_ENV = f"{ENV_PREFIX}EXTRA_ARGS"
 
-# The allowlisted global options. All four are verified `codex` global+exec options
-# (codex-cli 0.144.1). Value-taking; a bare/unknown flag is rejected. Short `-c`/`-p`
-# are accepted only space-separated (an attached `-cKEY=VAL` is undocumented and
-# rejected); the long forms accept both `--config VAL` and `--config=VAL`.
+# The allowlisted global options — all value-taking, and all verified `codex` global+exec options
+# (re-probed against codex-cli 0.145.0 on 2026-07-21: every form below parses, while a bare or
+# unknown flag is rejected as `unexpected argument`). Short `-c`/`-p` are accepted only
+# space-separated (an attached `-cKEY=VAL` is undocumented and rejected); the long forms accept
+# both `--config VAL` and `--config=VAL`.
 _EXTRA_CONFIG_FLAGS = ("-c", "--config")  # -c KEY=VALUE  (a dotted-path config override)
 _EXTRA_PROFILE_FLAGS = ("-p", "--profile")  # -p NAME       (layer a named config profile)
 _EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE

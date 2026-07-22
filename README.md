@@ -107,7 +107,7 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
   under [WSL2](https://learn.microsoft.com/en-us/windows/wsl/) on Windows. See
   [`COMPATIBILITY.md`](COMPATIBILITY.md) for the platform contract.
 - The [`codex` CLI](https://developers.openai.com/codex/cli) on `PATH`, authenticated
-  (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.144`; the supported range lives
+  (`codex login` — ChatGPT or API key). Tested against `codex-cli 0.145`; the supported range lives
   in [`cli_contract.py`](src/codex_in_claude/cli_contract.py), `/codex:status` reports whether your
   version is in range, and
   [`COMPATIBILITY.md`](COMPATIBILITY.md) explains the policy.
