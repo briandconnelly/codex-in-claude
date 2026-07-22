@@ -233,6 +233,48 @@ def test_count_untracked_newline_in_filename_counts_once(repo):
     assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
 
 
+def test_count_untracked_streams_through_run_lines(repo, monkeypatch):
+    """#351: the `ls-files -z` enumeration must route through the bounded
+    `gitproc.run_lines` runner, which drains stderr CONCURRENTLY under a byte cap and owns
+    the process-group kill/reap. RED before #351: the hand-rolled reader read stderr
+    post-EOF and unbounded, so only the excludes resolver (`git config`) reached run_lines.
+
+    The assertion is command-specific for that reason: `_global_excludes_flags` already
+    routes a `config` call through run_lines, so a bare "run_lines was called" check would
+    pass against the very code this guards.
+    """
+    (repo / "u.py").write_text("x = 1\n")
+
+    calls: list[tuple[list[str], str]] = []
+    real = gitdiff.gitproc.run_lines
+
+    def spy(argv, **kwargs):
+        calls.append((list(argv), kwargs.get("sep", "\n")))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(gitdiff.gitproc, "run_lines", spy)
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+    assert any(
+        {"ls-files", "--others", "--exclude-standard", "-z"} <= set(argv) and sep == "\0"
+        for argv, sep in calls
+    ), f"ls-files enumeration did not reach run_lines with sep='\\0'; saw {calls}"
+
+
+def test_count_untracked_counts_reader_truncated_record_once(repo, monkeypatch):
+    """Characterization, NOT a red-green regression test — it passes against the
+    pre-#351 code too (which had no per-record cap at all, so nothing to truncate).
+
+    It pins the property the fold DEPENDS on: a path long enough for the bounded reader
+    to truncate is still exactly ONE record, so record-counting stays equivalent to the
+    NUL-counting it replaces. Unlike `_index_untracked`, this path deliberately does NOT
+    reject an over-long record (see `count_untracked`'s comment) — nothing is hashed or
+    sent, so counting it keeps the disclosure honest.
+    """
+    monkeypatch.setattr(gitdiff, "_STREAM_RECORD_MAX", 32)
+    (repo / ("l" * 200 + ".py")).write_text("x = 1\n")
+    assert gitdiff.count_untracked(str(repo), None, timeout=30) == 1
+
+
 def test_count_untracked_does_not_run_repo_fsmonitor(repo, tmp_path):
     # A working-tree review of an untrusted repo must not execute a repo-configured
     # fsmonitor program in the server process, outside the Codex sandbox.

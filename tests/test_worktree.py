@@ -267,9 +267,9 @@ def test_plan_tracked_and_uncommitted_counts_use_streamed_runner(repo, monkeypat
     # plan()'s tracked and uncommitted counts must route through the bounded streaming
     # runner (gitproc.run_lines), so a pathological listing is counted in bounded memory
     # (#326). Proven by spying: a clean plan() calls run_lines for BOTH counts. The untracked
-    # count uses gitdiff.count_untracked, whose own listing has a separate bounded reader but
-    # which now also routes its global-excludes resolution (`git config`) through run_lines
-    # (#330) — so a clean plan() makes exactly three run_lines calls.
+    # count uses gitdiff.count_untracked, which routes both its global-excludes resolution
+    # (`git config`, #330) and — since #351 — its own `ls-files -z` listing through the same
+    # runner, so a clean plan() makes exactly four run_lines calls.
     (repo / "a.py").write_text("x = 2\n")  # one uncommitted tracked change
     calls = []
     real = gitproc.run_lines
@@ -280,11 +280,13 @@ def test_plan_tracked_and_uncommitted_counts_use_streamed_runner(repo, monkeypat
 
     monkeypatch.setattr(gitproc, "run_lines", spy)
     worktree.plan(str(repo), timeout=30)
-    # ls-tree (tracked), diff --numstat (uncommitted), and the excludes resolver (config).
-    assert len(calls) == 3
+    # ls-tree (tracked), diff --numstat (uncommitted), the excludes resolver (config), and
+    # the untracked ls-files enumeration.
+    assert len(calls) == 4
     assert any("ls-tree" in c for c in calls)
     assert any("--numstat" in c for c in calls)
     assert any("config" in c and "core.excludesFile" in c for c in calls)
+    assert any("ls-files" in c and "--others" in c for c in calls)
 
 
 def test_plan_streams_large_tracked_and_uncommitted_listing_exactly(repo):

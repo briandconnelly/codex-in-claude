@@ -46,10 +46,6 @@ _GIT_HARDENING_FLAGS = ["-c", "core.quotepath=true", "-c", "core.fsmonitor=false
 # can't pass a bad value and get a silently-degraded review (#322).
 _UNTRACKED_POLICIES = frozenset({"explicit_only", "include", "exclude"})
 
-# Bounded read size for the untracked-inventory stream (count_untracked). Memory stays
-# O(this) regardless of how many untracked files the workspace has.
-_LSFILES_STDOUT_CHUNK = 65536
-
 # Upper bound (UTF-8 BYTES) on the resolved core.excludesFile value (#330 review). The
 # value comes from merged git config, which INCLUDES the untrusted repo-local `.git/config`,
 # so a workspace could set an arbitrarily large value. A real filesystem path is far under
@@ -196,12 +192,13 @@ def _git(
 
 
 # Generous per-record cap (UTF-8 BYTES) for EVERY git stream this module reads through
-# `_run_git_lines` — the untracked listing, both numstats, and the working-tree state token.
+# `_run_git_lines` — both untracked listings, both numstats, and the working-tree state token.
 # A single path or numstat record far larger than any real one (a genuine path is < PATH_MAX)
 # is truncated by the bounded reader; each consumer then decides what a truncated record
-# means for it (the untracked listing fails loudly rather than hashing a fabricated name;
-# `_sum_numstat` counts it, since its numeric fields precede the pathname). Bounds transient
-# per-record memory without touching real input.
+# means for it (the untracked GATHER fails loudly rather than hashing a fabricated name;
+# `count_untracked` counts it, since it never reads the file behind the name; `_sum_numstat`
+# counts it too, since its numeric fields precede the pathname). Bounds transient per-record
+# memory without touching real input.
 _STREAM_RECORD_MAX = 1 << 20
 
 # Sanity ceiling (UTF-8 BYTES) on a single untracked path. No real repo-relative path
@@ -936,62 +933,42 @@ def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
     args = ["ls-files", "--others", "--exclude-standard", "-z"]
     if norm_paths:
         args = [*args, "--", *norm_paths]
-    # Stream-count NUL separators in bounded chunks rather than capturing the whole
-    # listing (as `_git` would): an untrusted workspace can have arbitrarily many
-    # untracked files, and this runs on the default working_tree review path. Memory
-    # stays O(chunk), consistent with the rest of this module (see _stream_redacted_diff).
-    # ls-files emits negligible stderr, so a post-EOF read avoids a concurrent drain
-    # thread; the timeout timer is the backstop against any pathological block. (#322 F1)
-    env = _base_git_env()
-    try:
-        proc = subprocess.Popen(
-            ["git", *_GIT_HARDENING_FLAGS, *excludes, *args],
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="surrogateescape",
-            env=env,
-            start_new_session=True,
-        )
-    except FileNotFoundError as exc:
-        raise GitUnavailableError("git executable not found") from exc
-    timed_out = threading.Event()
 
-    def _kill() -> None:
-        timed_out.set()
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            if hasattr(os, "killpg"):
-                os.killpg(proc.pid, signal.SIGKILL)  # proc is its own group leader
-            else:  # pragma: no cover - non-POSIX fallback
-                proc.kill()
+    def _count_records(records: Iterator[str]) -> int:
+        # ls-files -z emits `path\0` per file; the bounded reader yields each record WITH
+        # its trailing NUL, so counting records is exactly the NUL count this used to take
+        # from raw stdout — a trailing separator adds no phantom record, and a record the
+        # reader truncated at `_STREAM_RECORD_MAX` is still one record. The empty-record
+        # skip mirrors `_index_untracked`, keeping the two enumerations' arithmetic aligned.
+        #
+        # Deliberately does NOT apply `_index_untracked`'s `_MAX_UNTRACKED_PATH_BYTES`
+        # reject: that guard exists so a corrupt (reader-truncated) name is never HASHED and
+        # sent. Nothing here is read, hashed, or transmitted — an over-long entry is still an
+        # untracked file, so counting it keeps the blind-spot disclosure honest where
+        # rejecting it would fail a review over a path it never touches.
+        count = 0
+        for record in records:
+            path = record[:-1] if record.endswith("\0") else record
+            if not path:  # defensive: ls-files -z does not emit an empty record
+                continue
+            count += 1
+        return count
 
-    timer = threading.Timer(timeout, _kill)
-    count = 0
-    stderr = ""
-    try:
-        timer.start()
-        assert proc.stdout is not None
-        while chunk := proc.stdout.read(_LSFILES_STDOUT_CHUNK):
-            count += chunk.count("\0")
-        if proc.stderr is not None:
-            stderr = proc.stderr.read()
-        proc.wait()
-    finally:
-        timer.cancel()
-        for pipe in (proc.stdout, proc.stderr):
-            if pipe is not None:
-                with contextlib.suppress(OSError):
-                    pipe.close()
-    if timed_out.is_set():
-        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s")
-    if proc.returncode != 0:
-        message = stderr.strip() or "git failed"
-        if _is_not_git_repo_error(message):
-            raise NotAGitRepoError(message)
-        raise RuntimeError(message)
-    return count
+    # Streamed through the shared bounded runner (#351) rather than a hand-rolled reader:
+    # an untrusted workspace can have arbitrarily many untracked files, and this runs on the
+    # default working_tree review path. `run_lines` bounds stdout to O(one record + chunk),
+    # drains stderr CONCURRENTLY under a byte cap (a post-EOF read would wedge on a >64 KiB
+    # diagnostic until the watchdog fired), and owns the process-group kill/reap — one copy
+    # of that lifecycle, shared with every other streamed git call in this module.
+    return _run_git_lines(
+        args,
+        cwd=cwd,
+        env=_base_git_env(),
+        timeout=timeout,
+        sep="\0",
+        consume=_count_records,
+        excludes=excludes,
+    )
 
 
 def _worktree_state_token(
