@@ -2887,8 +2887,10 @@ async def test_container_shape_failure_does_not_advertise_the_element_domain():
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
     assert err["details"]["field"] == "include_schemas"
-    assert err["details"].get("allowed_values") is None
-    assert err["invalid_arguments"][0].get("allowed_values") is None
+    # absent, not null: the envelope serializer is exclude_none, so asserting absence
+    # also pins the wire shape (Copilot review).
+    assert "allowed_values" not in err["details"]
+    assert "allowed_values" not in err["invalid_arguments"][0]
 
 
 # The shape matrix for the resolver itself: the enum can sit at the property root or
