@@ -7,6 +7,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`invalid_arguments` now advertises `allowed_values` for a rejected list element** (#373). The
+  resolver that reads a parameter's domain from the tool input schema — authoritatively, rather
+  than by parsing validator prose — handled a required `Literal` (a top-level `enum`) and an
+  Optional one (an `enum` under an `anyOf` branch), but not the `list[Literal] | None` shape, whose
+  enum sits one level further down under `items`. `include_schemas` is the only parameter with that
+  shape, so `codex_capabilities(include_schemas=["nope"])` returned `allowed_values: null` on the
+  very field whose repair hint says to "use one of the field's `allowed_values`", pushing the client
+  back to parsing prose. The resolver now also reads the element domain, but only for an *indexed*
+  failure (`include_schemas[0]`), where the fix really is a single token: a whole-list failure
+  (`include_schemas="nope"`) names the container and still advertises nothing, rather than offering
+  element tokens as if the field accepted one. A single-value `Literal` renders as `const` rather
+  than `enum` and remains unresolved by design; no parameter uses that shape. `allowed_values` is
+  per-call envelope data under an already-optional field — no discovered surface, type, or
+  documented meaning changes — so **no `fingerprint` change** (the manifest snapshot is
+  byte-identical) and not breaking.
+
 - **`codex_capabilities(include_schemas=…)` can no longer drift from its advertised tokens** (#370).
   The documented fallback that lets a resource-blind client reach the full contracts from
   `tools/list` alone had two guard gaps — neither a live bug, both missing regression guards. Its

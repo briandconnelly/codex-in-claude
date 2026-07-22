@@ -337,19 +337,33 @@ def _format_loc(loc: tuple[object, ...]) -> str:
     return out or "<arguments>"
 
 
-def _enum_for_property(prop_schema: dict | None) -> list[str] | None:
+def _enum_for_property(prop_schema: dict | None, *, element: bool = False) -> list[str] | None:
     """Pull a Literal/enum's allowed values from a tool's input-schema property —
     authoritatively, not by parsing validator prose (#136). The enum sits at the top
     level for a required Literal (``scope``) or inside an ``anyOf`` branch for an
-    Optional one (``isolation``); returns None when the property has no enum."""
+    Optional one (``isolation``); returns None when the property has no enum.
+
+    ``element`` selects which domain to resolve, and the two levels never substitute for
+    each other (#373). Default (False) answers "what may this *field* be" — the enum on
+    the property itself. True answers "what may this *element* be" — the enum under
+    ``items``, at either position — and is for an indexed failure like
+    ``include_schemas[0]``, whose repair is a token, not a whole list. A whole-list
+    failure (``include_schemas="nope"``) therefore advertises nothing rather than
+    offering element tokens as if the field accepted one.
+
+    Only ``enum`` is read: a *single*-value Literal renders as ``const``, which no
+    parameter uses today and which this deliberately does not resolve."""
     if not isinstance(prop_schema, dict):
         return None
-    enum = prop_schema.get("enum")
-    if isinstance(enum, list):
-        return [str(v) for v in enum]
-    for branch in prop_schema.get("anyOf", []):
-        if isinstance(branch, dict) and isinstance(branch.get("enum"), list):
-            return [str(v) for v in branch["enum"]]
+    branches = [prop_schema, *(b for b in prop_schema.get("anyOf", []) if isinstance(b, dict))]
+    for branch in branches:
+        if element:
+            branch = branch.get("items")  # noqa: PLW2901 — descend to the element schema
+            if not isinstance(branch, dict):
+                continue
+        enum = branch.get("enum")
+        if isinstance(enum, list):
+            return [str(v) for v in enum]
     return None
 
 
@@ -389,12 +403,17 @@ def _invalid_arguments_envelope(
     total = len(errors)
     items: list[InvalidArgument] = []
     for err in errors[:_MAX_INVALID_ARGS]:
-        loc = err.get("loc") or ()
-        field = _format_loc(tuple(loc))
+        loc: tuple[Any, ...] = tuple(err.get("loc") or ())
+        field = _format_loc(loc)
         # The rejected value is never echoed (see InvalidArgument): a string/Literal param
         # accepts arbitrary input that could be a secret, and best-effort redaction can't
         # reliably catch a plain one. reason + allowed_values guide the fix (#136).
-        allowed = _enum_for_property(property_schemas.get(str(loc[0]))) if loc else None
+        # An indexed loc (`("include_schemas", 0)`) blames one element, so resolve the
+        # element's domain rather than the container's (#373).
+        indexed = len(loc) > 1 and isinstance(loc[1], int)
+        allowed = (
+            _enum_for_property(property_schemas.get(str(loc[0])), element=indexed) if loc else None
+        )
         items.append(
             InvalidArgument(
                 field=field,
