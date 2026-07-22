@@ -1588,7 +1588,8 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
 def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
     """List this server's tools, tiers, and the result fingerprint. Free — no
     model call. Clients can cache by the fingerprint. Pass include_schemas to also embed
-    the full error-envelope / result-meta schemas (a tool-reachable fallback to the
+    the full error-envelope, result-meta, capabilities-result, and/or status-result
+    schema, and/or the parameter-contracts document (a tool-reachable fallback to the
     codex:// resources for resource-blind clients)."""
     caps = CapabilitiesResult(
         name="codex-in-claude",

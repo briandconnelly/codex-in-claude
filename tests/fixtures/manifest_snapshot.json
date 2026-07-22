@@ -866,7 +866,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-55",
+            "default": "codex-in-claude/0.1/schema-56",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1389,7 +1389,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-55",
+                "default": "codex-in-claude/0.1/schema-56",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2451,7 +2451,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-55",
+            "default": "codex-in-claude/0.1/schema-56",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3110,7 +3110,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-55",
+            "default": "codex-in-claude/0.1/schema-56",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3206,7 +3206,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint. Pass include_schemas to also embed\nthe full error-envelope / result-meta schemas (a tool-reachable fallback to the\ncodex:// resources for resource-blind clients).",
+      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint. Pass include_schemas to also embed\nthe full error-envelope, result-meta, capabilities-result, and/or status-result\nschema, and/or the parameter-contracts document (a tool-reachable fallback to the\ncodex:// resources for resource-blind clients).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

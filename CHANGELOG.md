@@ -7,6 +7,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_capabilities`' tool description now lists all five `include_schemas` tokens** (#372). The
+  docstring reaching `tools/list` advertised only the `error-envelope` and `result-meta` schemas,
+  omitting `capabilities-result`, `status-result`, and `parameter-contracts` — so an agent reading
+  the tool description (rather than the parameter schema, whose `Field(description=...)` already
+  listed all five) could conclude the resource-blind fallback reached only two of the five
+  contracts; `parameter-contracts`, the resource-blind route to the full `codex://params`
+  semantics, was invisible. The description is agent-visible surface, so this **bumps the result
+  `fingerprint`** (a wording correction that widens what is documented — no guarantee weakened, not
+  breaking). A co-located internal source comment carrying the same stale two-token list was
+  corrected alongside it.
+
 - **`invalid_arguments` now advertises `allowed_values` for a rejected list element** (#373). The
   resolver that reads a parameter's domain from the tool input schema — authoritatively, rather
   than by parsing validator prose — handled a required `Literal` (a top-level `enum`) and an
