@@ -61,33 +61,70 @@ the global install. Retrieve both versions into scratch prefixes and drive them 
 a difference you observe is attributable to the version and not to which binary happened to be first
 on `PATH`:
 
+**`$NEW` is the installed binary**, not a second npm copy — it is the one the contract check and the
+integration suite verify, so it must be the one you draw conclusions about. Only `$OLD` comes from
+npm:
+
 ```sh
 SCRATCH=$(mktemp -d)
 npm install --prefix "$SCRATCH/old" @openai/codex@<old-version> >/dev/null
-npm install --prefix "$SCRATCH/new" @openai/codex@<new-version> >/dev/null
-OLD="$SCRATCH/old/node_modules/.bin/codex"; NEW="$SCRATCH/new/node_modules/.bin/codex"
-"$OLD" --version && "$NEW" --version   # confirm each path is the version you think it is
+OLD="$SCRATCH/old/node_modules/.bin/codex"
+NEW=$(command -v codex)                # the installed, authenticated binary from step 0
+"$OLD" --version; "$NEW" --version     # confirm each path is the version you think it is
 ```
 
 Keep that shell for the rest of step 2A — everything below uses `$SCRATCH`, `$OLD`, and `$NEW`.
 
-**Authenticate the retrieved old binary before trusting it.** Regenerate every capture listed in
-[`docs/codex-help/`](codex-help/)'s README from the retrieved binary and diff each against that
-version's directory. **All of them must match**; a single mismatch stops the A/B until you have
-reconciled it. Authentication is binary-level — a clean diff licenses the surfaces the snapshots
-*don't* cover, which is what makes the schema and behavior A/Bs below meaningful. (Why it is needed:
-the binary actually verified last time is gone, and those captures are the only surviving evidence
-of it.) If no prior snapshot exists — the first time through this practice — you have no
-authenticator: review the new surface in absolute terms and do not claim an A/B.
+That leaves one uncontrolled variable: `$OLD` and `$NEW` come from different distribution channels,
+so a difference could in principle be packaging rather than version. To rule it out, install the
+**new** version from npm too and confirm it matches the installed one:
+
+```sh
+npm install --prefix "$SCRATCH/new" @openai/codex@<new-version> >/dev/null
+diff <("$SCRATCH/new/node_modules/.bin/codex" --help) <("$NEW" --help)
+```
+
+A clean diff retires the concern for this pair. (It was clean for `0.145.0` on macOS, observed
+2026-07-21.) If it is *not* clean, the channels differ and every cross-channel comparison below is
+suspect — investigate before continuing.
+
+**Sanity-check the retrieved old binary before trusting it.** Every capture it produces must match
+the committed ones for that version; **a single mismatch stops the A/B** until you have reconciled
+it. Capture from both binaries and check `$OLD` against the snapshot in one pass:
+
+```sh
+capture() {  # $1 = binary, $2 = output dir
+  mkdir -p "$2"
+  "$1" --help              > "$2/codex.txt"          2>&1
+  "$1" exec --help         > "$2/exec.txt"           2>&1
+  "$1" review --help       > "$2/review.txt"         2>&1
+  "$1" exec review --help  > "$2/exec-review.txt"    2>&1
+  "$1" features list       > "$2/features-list.txt"  2>&1
+  "$1" app-server --help   > "$2/app-server.txt"     2>&1   # not snapshotted; A/B only
+}
+capture "$OLD" "$SCRATCH/help-old"
+capture "$NEW" "$SCRATCH/help-new"
+
+diff -r docs/codex-help/<old-version> "$SCRATCH/help-old"   # authenticate: must be clean
+diff -r "$SCRATCH/help-old" "$SCRATCH/help-new"             # the actual A/B
+```
+
+(The first `diff -r` reports `app-server.txt` as `Only in` — expected, no version carries a snapshot
+of it. Everything else must match.)
+
+**What that check does and does not establish.** It is a sanity check on identity, not a proof of
+it: matching help text says the retrieved build presents the same CLI surface as the one verified
+last time, which is good evidence it is the same build and no evidence about its generated schemas
+or its behavior. Treat a difference found below as *associated with the version*, and reconcile it
+against the release's changelog before recording it as one. (Why the check is needed at all: the
+binary actually verified last time is gone, and these captures are the only surviving evidence of
+it.) If no prior snapshot exists — the first time through this practice — you have no authenticator:
+review the new surface in absolute terms and do not claim an A/B.
 
 If npm is unreachable, fall back to reading the committed snapshots directly — a real, if narrower,
 diff source. Every other surface below needs the old binary and has no offline substitute.
 
-Then capture each surface from **both** binaries and compare:
-
-- **Help text and feature flags.** The captures listed in [`docs/codex-help/`](codex-help/)'s README,
-  plus `codex app-server --help`, which no snapshot covers today. Compare with a plain `diff`; help
-  text needs no canonicalization.
+Then compare the surfaces the snapshots don't cover:
 - **App-server protocol schemas.** `codex app-server generate-json-schema --out <dir>` emits the
   entire app-server protocol — the surface `codex_transfer` and the live rate-limit read depend on.
   Generate one directory per binary, continuing from the block above:
@@ -104,33 +141,66 @@ Then capture each surface from **both** binaries and compare:
     diff -rq "$SCRATCH/schema-old" "$SCRATCH/schema-new" | grep '^Only in'
     ```
 
-    Keep the `grep`. Unfiltered, `diff -rq` also lists every *differing* file, and those are mostly
-    noise: each generated file inlines shared definitions, so one real change reverberates across
-    dozens of files (0.144.1 → 0.145.0 listed 64 differing entries for what was, on the consumed
-    surface, a single added field — observed 2026-07-21). Do not work through that list; the next
-    pass is what reads content.
-  - *Content* — diff only the schemas this plugin consumes; `cli_contract.py`'s app-server block
-    lists them by path. That is the comparison that decides whether anything we depend on moved.
-    Canonicalize both sides first — the generator is **not** byte-deterministic (two runs of the
-    *same* binary emit `codex_app_server_protocol.v2.schemas.json` with different key order), so a
-    raw diff reports drift that isn't there:
+    No output means nothing was added or removed — `grep` exits 1 on a clean inventory, so don't
+    read that status as failure. Keep the `grep`: unfiltered, `diff -rq` also lists every *differing*
+    file, and those are mostly noise, because each generated file inlines shared definitions and one
+    real change reverberates across dozens of them (0.144.1 → 0.145.0 listed 64 differing entries for
+    what was, on the consumed surface, a single added field — observed 2026-07-21). Do not work
+    through that list; the next pass is what reads content.
+  - *Content* — diff only the schemas this plugin consumes. That is the comparison that decides
+    whether anything we depend on moved. The list below must match `cli_contract.py`'s app-server
+    block, which is authoritative — re-copy it from there rather than trusting this snippet to have
+    aged well. Canonicalize both sides first: the generator is **not** byte-deterministic (two runs
+    of the *same* binary emit `codex_app_server_protocol.v2.schemas.json` with different key order),
+    so a raw diff reports drift that isn't there.
 
     ```sh
-    for f in <the paths listed in cli_contract.py>; do
-      printf '%s: ' "$f"
-      diff <(jq -S . "$SCRATCH/schema-old/$f") <(jq -S . "$SCRATCH/schema-new/$f") || true
+    for f in \
+      v1/InitializeParams.json \
+      v1/InitializeResponse.json \
+      v2/ExternalAgentConfigImportParams.json \
+      v2/ExternalAgentConfigImportResponse.json \
+      v2/ExternalAgentConfigImportProgressNotification.json \
+      v2/ExternalAgentConfigImportCompletedNotification.json \
+      v2/GetAccountRateLimitsResponse.json
+    do
+      o="$SCRATCH/schema-old/$f"; n="$SCRATCH/schema-new/$f"
+      if [ ! -f "$o" ] || [ ! -f "$n" ]; then echo "MISSING: $f"; continue; fi
+      jq -S . "$o" > "$SCRATCH/a.json" && jq -S . "$n" > "$SCRATCH/b.json" \
+        || { echo "UNREADABLE: $f"; continue; }
+      if diff -q "$SCRATCH/a.json" "$SCRATCH/b.json" >/dev/null; then
+        echo "same:    $f"
+      else
+        echo "CHANGED: $f"; diff "$SCRATCH/a.json" "$SCRATCH/b.json"
+      fi
     done
     ```
 
-    A path missing from either side is a finding, not a skip — `jq` will fail on it, so do not
-    silence that error.
+    `MISSING` and `UNREADABLE` are findings, not skips: a consumed schema that vanished or stopped
+    parsing is exactly the drift this pass exists to catch. Read the printed lines — do not infer the
+    outcome from the loop's exit status.
 - **Behavior with no CLI surface at all.** Some upstream changes have no flag and no subcommand —
   what auto-loads into context, and the feature flags that govern it. Run
   [`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Implicit Codex context" → "Re-verifying on a Codex
   upgrade" against **both** binaries and compare the two presence matrices it produces. This A/B is
   what separates "new in this release" from "always true and we never looked" — an absolute-terms run
   cannot tell those apart. That section owns the fixture, the recording rules, and how to read a
-  difference; two things are specific to running it twice:
+  difference; three things are specific to running it twice:
+  - **Drive the raw CLI, not this plugin's tools.** `cli_contract.py`'s `CODEX_BIN` is the bare name
+    `codex`, so every plugin tool resolves it from `PATH` — a plugin consult cannot be pointed at
+    `$OLD`, and two "different" runs would silently invoke the same binary. Invoke each explicitly
+    and echo which one you used, so the run records its own provenance:
+
+    ```sh
+    for bin in "$OLD" "$NEW"; do
+      echo "=== $bin ($("$bin" --version))"
+      "$bin" exec --cd "$FIXTURE" --ignore-user-config --sandbox read-only \
+        -c model=<the same slug for both runs> - <<< "$PROBE_PROMPT"
+    done
+    ```
+
+    `--ignore-user-config` is required, not incidental — COMPATIBILITY.md explains which table row
+    depends on it. `$FIXTURE` and `$PROBE_PROMPT` come from that section.
   - Both binaries read the same `$CODEX_HOME`, so keep the temporary global-skill marker in place for
     **both** runs, and remove it only after the last one.
   - Hold everything else constant across the two runs — model, account, fixture, prompt, and flags.

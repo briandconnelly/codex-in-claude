@@ -12,9 +12,11 @@ free local probes:
 version — and that binary is gone after an in-place upgrade. A prior `codex` is still retrievable
 from npm ([`UPGRADING-CODEX.md`](../UPGRADING-CODEX.md) step 2A), but a retrieved build is a
 stand-in, and nothing surviving locally can vouch for it except these files. So their job is to
-**authenticate** it: diff the retrieved binary's help against the matching directory here, and a
-clean diff establishes the stand-in is faithful before you draw any conclusion from an A/B. They are
-also the fallback diff source when npm is unreachable.
+**sanity-check** it: diff the retrieved binary's help against the matching directory here before
+drawing any conclusion from an A/B. A clean diff says the retrieved build presents the same CLI
+surface as the one verified last time — good evidence it is the same build, though not proof, and no
+evidence at all about surfaces these files don't capture. A mismatch is disqualifying. They are also
+the fallback diff source when npm is unreachable.
 
 **What they do not cover:** only the five commands listed above, only as help text. They are not a
 record of the whole CLI surface — `codex app-server --help`, the generated app-server JSON schemas,
