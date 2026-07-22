@@ -866,11 +866,12 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-54",
+            "default": "codex-in-claude/0.1/schema-55",
             "title": "Fingerprint",
             "type": "string"
           },
           "fingerprint_covers": {
+            "description": "A contract-semantic change in any listed category changes the fingerprint; nothing outside them does. Release identity is excluded: serverInfo.version, version, server_version change every release WITHOUT moving the fingerprint.",
             "items": {
               "type": "string"
             },
@@ -1388,7 +1389,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-54",
+                "default": "codex-in-claude/0.1/schema-55",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2450,7 +2451,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-54",
+            "default": "codex-in-claude/0.1/schema-55",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3109,7 +3110,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-54",
+            "default": "codex-in-claude/0.1/schema-55",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3258,6 +3259,7 @@
                 "type": "string"
               },
               "fingerprint_covers": {
+                "description": "A contract-semantic change in any listed category changes the fingerprint; nothing outside them does. Release identity is excluded: serverInfo.version, version, server_version change every release WITHOUT moving the fingerprint.",
                 "items": {
                   "type": "string"
                 },

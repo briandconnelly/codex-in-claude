@@ -5,6 +5,36 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The advertised fingerprint coverage no longer overclaims** (#337). `fingerprint_covers` lists
+  `initialize_response` and `capabilities_payload` as covered categories, and the promise was that
+  any change within a covered category bumps `fingerprint`. But the guard deliberately excludes
+  release-identity fields — `serverInfo.version`, and `version`/`server_version` in the
+  capabilities payload — so an ordinary release changes them without moving the fingerprint. The
+  advertised guarantee was broader than the implemented one, and a caching client reading the
+  machine-readable coverage list had no way to tell.
+  - `fingerprint_covers` now carries a description stating both directions: the forward invariant
+    a caching client needs (a contract-semantic change in a listed category **does** change the
+    fingerprint, so an unchanged fingerprint means the cached contract is still valid) and the
+    carve-out (release identity is excluded). It is registered in `_KEPT_DESCRIPTIONS`, so it
+    survives schema-noise stripping and reaches the advertised `codex_capabilities` outputSchema —
+    not only the `codex://capabilities-result` resource.
+  - Deliberately **not** an exhaustive list of everything the guard normalizes away: the snapshot
+    also strips framework-owned `_meta` and sorts set-like arrays, both non-contractual. Promising
+    exhaustiveness would have recreated the same class of overclaim. The self-referential
+    `fingerprint` exclusion is likewise not disclosed as a carve-out — its value changes precisely
+    *because* a covered category changed.
+  - The carve-out is stated at the coverage tuple's own category comments, so every doc that
+    refers to `FINGERPRINT_COVERS` by name stays correct without restating it.
+  - New guards: the manifest's exclusions are asserted as set **equality** against the live
+    payload (the previous membership checks could not catch a silently *widened* exclusion), and a
+    lockstep test fails if the excluded fields and the disclosed carve-out drift apart.
+
+  Bumps `FINGERPRINT` (`schema-54` → `schema-55`) for the added description. Backward-compatible:
+  nothing was removed, retyped, or narrowed, and the promise is corrected rather than weakened —
+  it was never client-visible before.
+
 ### Added
 
 - **`codex_status` reports a backend spend control** (#359). codex 0.145 added

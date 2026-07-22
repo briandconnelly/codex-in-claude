@@ -16,8 +16,11 @@ from codex_in_claude._core.jobs import DEFAULT_POLL_AFTER_MS
 # identifiers. This tuple is the single source of truth: CapabilitiesResult.fingerprint_covers
 # derives from it (audit F6, #178), so a client can reason about the fingerprint's
 # cache-invalidation scope programmatically instead of reading this comment. Bump FINGERPRINT
-# whenever anything in one of these categories changes. Keep the tokens stable — they are
-# themselves part of the surface (a rename is a covered change under `capabilities_payload`).
+# whenever the CONTRACT within one of these categories changes. Keep the tokens stable — they
+# are themselves part of the surface (a rename is a covered change under `capabilities_payload`).
+#
+# Coverage is over contract semantics, NOT release identity: the per-category comments below
+# carry the carve-outs, and _FINGERPRINT_COVERS_DESC discloses them to clients (#337).
 FINGERPRINT_COVERS: tuple[str, ...] = (
     # Tool surface (manifest `tools` section)
     "tool_names",
@@ -32,14 +35,30 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     "resource_templates",  # resource-template wire shapes
     "prompts",  # prompt wire shapes (name/description/arguments)
     # Server-level surface
-    "initialize_response",  # serverInfo/protocolVersion/advertised capabilities/instructions
+    # serverInfo/protocolVersion/advertised capabilities/instructions — minus the
+    # release-variable `serverInfo.version` (#337).
+    "initialize_response",
     "error_envelope_schema",  # codex://error-envelope content
     "result_meta_schema",  # codex://result-meta content
     "capabilities_result_schema",  # codex://capabilities-result content (#242)
     "status_result_schema",  # codex://status-result content (#242)
     "parameter_contracts",  # codex://params content (#333) — compressed param summaries + full text
-    "capabilities_payload",  # the codex_capabilities result body
+    # the codex_capabilities result body — minus its release-identity fields
+    # `version`/`server_version` (#337)
+    "capabilities_payload",
     "capability_guarantees",  # the semantic promises within it (annotations/tiers/error contracts)
+)
+
+# The carve-out above, stated where a CLIENT can read it: without this the promise lived only
+# in the comments here, and the advertised guarantee was broader than the implemented one
+# (#337). Deliberately NOT an exhaustive list of everything the guard normalizes away — the
+# snapshot also strips framework-owned `_meta` and sorts set-like arrays, both non-contractual
+# — so it promises a scoped semantic (contract identity, not release identity) that stays true.
+# Registered in _KEPT_DESCRIPTIONS so it survives into the advertised outputSchema.
+_FINGERPRINT_COVERS_DESC = (
+    "A contract-semantic change in any listed category changes the fingerprint; nothing "
+    "outside them does. Release identity is excluded: serverInfo.version, version, "
+    "server_version change every release WITHOUT moving the fingerprint."
 )
 
 # Bump this whenever the agent-visible surface changes — see FINGERPRINT_COVERS above for the
@@ -49,7 +68,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-54"
+FINGERPRINT = "codex-in-claude/0.1/schema-55"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -947,10 +966,15 @@ class CapabilitiesResult(BaseModel):
     server_version: str | None = _server_version_field()
     # What a change to the fingerprint may signal, as granular machine-readable identifiers
     # (audit F6, #178). A client can key its cache-invalidation reasoning off these categories
-    # rather than treating every fingerprint change as opaque. Any change within one of these
-    # categories bumps `fingerprint`; nothing outside them affects it. Derived from the
-    # authoritative FINGERPRINT_COVERS tuple so the disclosure can't drift from the source of truth.
-    fingerprint_covers: list[str] = Field(default_factory=lambda: list(FINGERPRINT_COVERS))
+    # rather than treating every fingerprint change as opaque. A change to the CONTRACT within
+    # one of these categories bumps `fingerprint`; nothing outside them affects it, and the
+    # release-identity fields named in _FINGERPRINT_COVERS_DESC are carved out of the covered
+    # categories that contain them (#337). Derived from the authoritative FINGERPRINT_COVERS
+    # tuple so the disclosure can't drift from the source of truth.
+    fingerprint_covers: list[str] = Field(
+        default_factory=lambda: list(FINGERPRINT_COVERS),
+        description=_FINGERPRINT_COVERS_DESC,
+    )
     transport: str
     stability: str
     active_tools: list[str]
@@ -1287,8 +1311,9 @@ _OPAQUE_RAW_DEFAULTS = {"type": "object", "description": _RAW_DEFAULTS_POINTER_D
 _OPAQUE_RESOLVED_DEFAULTS = {"type": "object", "description": _RESOLVED_DEFAULTS_POINTER_DESC}
 
 # Descriptions that survive _strip_schema_noise: the intentional resource pointers,
-# plus the reasoning-effort field semantics (#309) whose null/[] distinctions an agent
-# cannot recover from the bare types.
+# the reasoning-effort field semantics (#309) whose null/[] distinctions an agent
+# cannot recover from the bare types, and the fingerprint coverage carve-out (#337),
+# which a client cannot recover from a bare array-of-string either.
 _KEPT_DESCRIPTIONS = frozenset(
     {
         _ERROR_POINTER_DESC,
@@ -1301,6 +1326,7 @@ _KEPT_DESCRIPTIONS = frozenset(
         _SUPPORTED_EFFORTS_DESC,
         _DRY_RUN_MODEL_DESC,
         _DRY_RUN_EFFORT_DESC,
+        _FINGERPRINT_COVERS_DESC,
     }
 )
 

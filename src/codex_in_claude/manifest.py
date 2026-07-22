@@ -1,9 +1,12 @@
 """Canonical manifest of the full agent-visible MCP surface (issue #140).
 
 Snapshotting this manifest guards ``FINGERPRINT``: any externally observable
-change to a category in ``FINGERPRINT_COVERS`` (``schemas.py``) moves the
-snapshot. That tuple is the authority — do not re-list its categories here or
-anywhere else, or the copy drifts as the tuple grows. This is an *acknowledgment*
+change to the CONTRACT within a category in ``FINGERPRINT_COVERS``
+(``schemas.py``) moves the snapshot. Release identity does not — the
+release-variable fields excluded below are absent from the snapshot by design,
+so an ordinary release leaves it byte-identical (#337). That tuple is the
+authority — do not re-list its categories here or anywhere else, or the copy
+drifts as the tuple grows. This is an *acknowledgment*
 guard: the snapshot test fails on any covered change so it cannot ship
 unreviewed, and its message directs the author to bump ``FINGERPRINT``; it does
 not mechanically force the integer bump (the snapshot and ``FINGERPRINT`` are
@@ -31,11 +34,19 @@ _FASTMCP_META_KEY = "fastmcp"
 # JSON-Schema arrays that are semantically sets — sorted for order-independence
 # (enum order is explicitly non-contractual; see tests/test_server.py).
 _SETLIKE_ARRAY_KEYS = frozenset({"enum", "required"})
-# capabilities fields excluded from the snapshot: ``version`` and ``server_version``
-# both carry the release-variable package version in the LIVE payload (they are equal
-# there), so snapshotting either would churn the golden on every release; ``fingerprint``
-# echoes FINGERPRINT itself, which would make the guard self-referential.
-_CAPABILITIES_EXCLUDE = frozenset({"version", "server_version", "fingerprint"})
+# Capabilities fields excluded from the snapshot, split by REASON because only the first
+# kind is a carve-out from the advertised coverage (#337).
+#
+# Release-variable: ``version`` and ``server_version`` both carry the release-variable
+# package version in the LIVE payload (they are equal there), so snapshotting either would
+# churn the golden on every release. These are disclosed to clients — they are the fields
+# ``schemas._FINGERPRINT_COVERS_DESC`` names, kept in lockstep by a test in test_manifest.py.
+_RELEASE_VARIABLE_EXCLUDE = frozenset({"version", "server_version"})
+# Self-referential: ``fingerprint`` echoes FINGERPRINT itself, which would make the guard
+# self-referential. NOT a coverage carve-out and deliberately undisclosed as one — its value
+# changes precisely BECAUSE a covered category changed, so listing it would mislead.
+_SELF_REFERENTIAL_EXCLUDE = frozenset({"fingerprint"})
+_CAPABILITIES_EXCLUDE = _RELEASE_VARIABLE_EXCLUDE | _SELF_REFERENTIAL_EXCLUDE
 
 
 def _sorted_by_json(items: list[Any]) -> list[Any]:

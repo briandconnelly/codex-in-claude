@@ -89,7 +89,10 @@ and reachable by any harness that reads this file.
     in the repo** (a re-listing drifting out of sync with the code is the exact bug this rule
     exists to prevent, and it has happened: #227 removed one such copy here, while copies in
     `CONTRIBUTING.md`, `docs/UPGRADING-CODEX.md`, and the PR template survived and went stale).
-    A refactor that leaves the discovered surface byte-identical does not bump it.
+    A refactor that leaves the discovered surface byte-identical does not bump it. Coverage is
+    over *contract* semantics, not *release* identity: the per-category carve-outs live on the
+    tuple itself and are disclosed to clients on `fingerprint_covers`, which is why an ordinary
+    release moves no fingerprint (see Release coordination).
   - **Breaking?** Flag it breaking (commit `!`/`BREAKING CHANGE:` footer + the `breaking-change` PR
     label) only when the change is *backward-incompatible* for a client: removing or renaming a
     field/tool/resource/prompt, retyping a field, adding a required input, narrowing an accepted
