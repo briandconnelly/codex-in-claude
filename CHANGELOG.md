@@ -19,7 +19,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   yields exactly one record per NUL-terminated path, so record-counting equals the NUL-counting it
   replaces), as is the error vocabulary and the timeout message, so **no `fingerprint` change**.
   Behavior differs only for a pathological producer: a git diagnostic larger than the 64 KiB stderr
-  cap is now retained head-and-tail rather than whole, so its message text can differ. Unlike the
+  cap is no longer retained whole, so its message text can differ — a multi-line diagnostic keeps a
+  head and tail window, while a single oversized *line* is truncated at its prefix and its tail is
+  dropped. A "not a git repository" signature surviving only in discarded stderr would therefore
+  surface as `RuntimeError` rather than `NotAGitRepoError`; git emits that diagnostic on its own
+  short line, so this is a pathological-producer case, not a real one. Unlike the
   untracked *gather*, this path deliberately counts a reader-truncated over-long path instead of
   rejecting it — nothing is read, hashed, or transmitted here, so counting keeps the disclosure
   honest where rejecting would fail a review over a path it never touches.
