@@ -1672,7 +1672,7 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) "
                 "extra_context to OpenAI; Codex may also read other repo files and "
                 "always auto-loads AGENTS.md and discovers skills in .agents/skills/ and "
-                "user-global $CODEX_HOME/skills/ (a selected body can reach the model). "
+                "user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model). "
                 "Recorded as "
                 "a terminal job (meta.job_id) recoverable via codex_job_result after a "
                 "dropped connection.",
@@ -1702,7 +1702,8 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
                 "Egress: same as codex_review_changes — sends the secret-redacted diff "
                 "plus your raw extra_context to OpenAI; Codex may also read other repo "
                 "files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ "
-                "and user-global $CODEX_HOME/skills/ (a selected body can reach the model).",
+                "and user-global $CODEX_HOME/skills/ (a selected skill's body can reach "
+                "the model).",
             ),
             ToolCapability(
                 name="codex_delegate",

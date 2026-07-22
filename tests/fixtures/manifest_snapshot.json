@@ -220,7 +220,7 @@
         ],
         "name": "codex_review_changes",
         "required_params": [],
-        "returns": "A result envelope with verdict, findings, and a context summary. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected body can reach the model). Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
+        "returns": "A result envelope with verdict, findings, and a context summary. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model). Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
         "use_when": "You want Codex to review your git changes (working_tree, branch, or commit) and return structured findings. Prefer codex_review_changes_async for a multi-file or whole-branch review that can exceed the synchronous deadline."
       },
       {
@@ -284,7 +284,7 @@
         ],
         "name": "codex_review_changes_async",
         "required_params": [],
-        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read the review envelope with codex_job_result. Egress: same as codex_review_changes — sends the secret-redacted diff plus your raw extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected body can reach the model).",
+        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read the review envelope with codex_job_result. Egress: same as codex_review_changes — sends the secret-redacted diff plus your raw extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model).",
         "stability": "experimental",
         "use_when": "You want Codex to review your git changes (working_tree, branch, or commit) for a multi-file or whole-branch review that can exceed the synchronous deadline, so you want a job_id immediately instead of blocking; async counterpart to codex_review_changes."
       },
