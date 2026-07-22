@@ -4821,7 +4821,12 @@ async def test_off_enum_include_schemas_token_is_rejected_at_the_boundary():
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
     assert err["details"]["field"] == "include_schemas[0]"
-    assert "'error-envelope'" in err["details"]["reason"]
+    # The offending element is identified positionally and the envelope agrees with
+    # itself. Deliberately not asserting the reason's wording: that text is Pydantic's,
+    # so pinning it would couple this guard to a dependency's prose rather than to the
+    # invariant — that the boundary rejects the token before the handler runs.
+    assert err["invalid_arguments"][0]["field"] == err["details"]["field"]
+    assert err["invalid_arguments"][0]["reason"] == err["details"]["reason"]
 
 
 # --------------------------------------------------------------------------- #
