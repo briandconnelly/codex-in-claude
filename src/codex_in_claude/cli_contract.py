@@ -42,6 +42,18 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # schema diff was additive only for the surface consumed here: optional `migrationSource` on the
 # import params, a `MEMORY` migration item type, an optional `memory` details array, and an optional
 # `subErrorType` on a failure entry — none of which change what we send or read.
+#
+# The generated schemas this plugin actually consumes — the files to diff on an upgrade, out of
+# the ~270 the generator emits (see docs/UPGRADING-CODEX.md step 2A; paths are relative to the
+# generator's --out directory). This list tracks the code below, not a codex version: adding or
+# dropping an app-server read changes it.
+#   v1/InitializeParams.json                                 (sent: clientInfo, capabilities)
+#   v1/InitializeResponse.json                               (read: codexHome)
+#   v2/ExternalAgentConfigImportParams.json                  (sent)
+#   v2/ExternalAgentConfigImportResponse.json                (read)
+#   v2/ExternalAgentConfigImportProgressNotification.json    (read)
+#   v2/ExternalAgentConfigImportCompletedNotification.json   (read)
+#   v2/GetAccountRateLimitsResponse.json                     (read; see the rate-limits block below)
 APP_SERVER_SUBCOMMAND = ("app-server",)
 # JSON-RPC handshake (v1) + the experimental import request/notifications (v2).
 APP_SERVER_INITIALIZE_METHOD = "initialize"

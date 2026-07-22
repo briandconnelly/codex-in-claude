@@ -7,6 +7,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`docs/UPGRADING-CODEX.md` now diffs against a retrievable previous `codex` build, not just the
+  committed help snapshots** (#360). The old procedure rested on a false premise — that an in-place
+  upgrade destroys the old binary, making those snapshots the only diff source. It doesn't: `codex`
+  ships on npm, so any prior version installs side-by-side. A new **step 2A** owns evidence
+  acquisition (step 2 keeps the judgment checklist) and extends the diffed surface beyond help text
+  to the generated app-server JSON schemas and to behavior with no CLI surface at all. The committed
+  snapshots keep a role, a truer one — they **authenticate** a retrieved stand-in binary, and remain
+  the offline fallback. `COMPATIBILITY.md`'s marker probe gains its recording rules (presence matrix,
+  failed-control handling), and `cli_contract.py` now names the seven generated schemas the plugin
+  consumes, next to the constants they cover. Docs and comments only — no `FINGERPRINT` change, no
+  behavior change.
+
 - **Every egress caveat now discloses that user-global Codex skills auto-load too**, not just the
   project's `AGENTS.md` and `.agents/skills/` (#358). Skills under `$CODEX_HOME/skills/` (default
   `~/.codex/skills/`) are discovered from **outside** the workspace and their bodies can reach
