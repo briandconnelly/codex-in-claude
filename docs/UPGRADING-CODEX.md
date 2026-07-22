@@ -21,7 +21,11 @@ if you want to refresh the `Verified against` line.)
 
 ## 0. Prerequisites
 
-- The new `codex` is installed and authenticated (`codex login`).
+- The new `codex` is installed and authenticated (`codex login`). Everything the steps below
+  *verify* runs against this installed binary; the scratch binaries in step 2A exist only to supply
+  a comparison baseline.
+- `npm` and `jq`, for step 2A's A/B against the previous version. Without `npm` that step falls back
+  to the committed snapshots, which cover less.
 - Start from a clean branch: `chore/codex-<major>-<minor>` (e.g. `chore/codex-0-142`).
 - Unset any `CODEX_IN_CLAUDE_SUPPORTED_VERSIONS` override so you test the built-in set, not your env.
 
@@ -43,16 +47,169 @@ reports against `cli_contract.py`:
 - **exit 2** — couldn't probe (binary missing / timed out / unparseable). Fix the environment first;
   nothing was verified.
 
-This is the mechanical half only. Steps 2–3 are the judgment half the script cannot do.
+This is the mechanical half only. Steps 2–3 are the judgment half the script cannot do — gather the
+evidence they read first, in step 2A.
+
+## 2A. Establish comparable old/new evidence (mechanics)
+
+Steps 2–3 are judgment calls, but they are only as good as what you diff against. This section owns
+**acquiring** the evidence; step 2 owns **reading** it.
+
+An in-place upgrade (Homebrew, `codex update`) replaces the old binary, but it does not destroy your
+access to it: `codex` ships on npm, so **any prior version installs side-by-side** without touching
+the global install. Retrieve both versions into scratch prefixes and drive them by absolute path, so
+a difference you observe is attributable to the version and not to which binary happened to be first
+on `PATH`:
+
+**`$NEW` is the installed binary**, not a second npm copy — it is the one the contract check and the
+integration suite verify, so it must be the one you draw conclusions about. Only `$OLD` comes from
+npm:
+
+```sh
+SCRATCH=$(mktemp -d)
+npm install --prefix "$SCRATCH/old" @openai/codex@<old-version> >/dev/null
+OLD="$SCRATCH/old/node_modules/.bin/codex"
+NEW=$(command -v codex)                # the installed, authenticated binary from step 0
+"$OLD" --version; "$NEW" --version     # confirm each path is the version you think it is
+```
+
+Keep that shell for the rest of step 2A — everything below uses `$SCRATCH`, `$OLD`, and `$NEW`.
+
+That leaves one uncontrolled variable: `$OLD` and `$NEW` come from different distribution channels,
+so a difference could in principle be packaging rather than version. To rule it out, install the
+**new** version from npm too and confirm it matches the installed one:
+
+```bash
+npm install --prefix "$SCRATCH/new" @openai/codex@<new-version> >/dev/null
+diff <("$SCRATCH/new/node_modules/.bin/codex" --help) <("$NEW" --help)
+```
+
+A clean diff retires the concern for this pair. (It was clean for `0.145.0` on macOS, observed
+2026-07-21.) If it is *not* clean, the channels differ and every cross-channel comparison below is
+suspect — investigate before continuing.
+
+**Sanity-check the retrieved old binary before trusting it.** Every capture it produces must match
+the committed ones for that version; **a single mismatch stops the A/B** until you have reconciled
+it. Capture from both binaries and check `$OLD` against the snapshot in one pass:
+
+```sh
+capture() {  # $1 = binary, $2 = output dir
+  mkdir -p "$2"
+  "$1" --help              > "$2/codex.txt"          2>&1
+  "$1" exec --help         > "$2/exec.txt"           2>&1
+  "$1" review --help       > "$2/review.txt"         2>&1
+  "$1" exec review --help  > "$2/exec-review.txt"    2>&1
+  "$1" features list       > "$2/features-list.txt"  2>&1
+  "$1" app-server --help   > "$2/app-server.txt"     2>&1   # not snapshotted; A/B only
+}
+capture "$OLD" "$SCRATCH/help-old"
+capture "$NEW" "$SCRATCH/help-new"
+
+diff -r docs/codex-help/<old-version> "$SCRATCH/help-old"   # authenticate: must be clean
+diff -r "$SCRATCH/help-old" "$SCRATCH/help-new"             # the actual A/B
+```
+
+(The first `diff -r` reports `app-server.txt` as `Only in` — expected, no version carries a snapshot
+of it. Everything else must match.)
+
+**What that check does and does not establish.** It is a sanity check on identity, not a proof of
+it: matching help text says the retrieved build presents the same CLI surface as the one verified
+last time, which is good evidence it is the same build and no evidence about its generated schemas
+or its behavior. Treat a difference found below as *associated with the version*, and reconcile it
+against the release's changelog before recording it as one. (Why the check is needed at all: the
+binary actually verified last time is gone, and these captures are the only surviving evidence of
+it.) If no prior snapshot exists — the first time through this practice — you have no authenticator:
+review the new surface in absolute terms and do not claim an A/B.
+
+If npm is unreachable, fall back to reading the committed snapshots directly — a real, if narrower,
+diff source. Every other surface below needs the old binary and has no offline substitute.
+
+Then compare the surfaces the snapshots don't cover:
+- **App-server protocol schemas.** `codex app-server generate-json-schema --out <dir>` emits the
+  entire app-server protocol — the surface `codex_transfer` and the live rate-limit read depend on.
+  Generate one directory per binary, continuing from the block above:
+
+  ```sh
+  "$OLD" app-server generate-json-schema --out "$SCRATCH/schema-old"
+  "$NEW" app-server generate-json-schema --out "$SCRATCH/schema-new"
+  ```
+
+  Read the result in two passes, and do not conflate them:
+  - *Inventory* — which messages appeared or vanished, i.e. new or dropped protocol methods:
+
+    ```sh
+    diff -rq "$SCRATCH/schema-old" "$SCRATCH/schema-new" | grep '^Only in'
+    ```
+
+    No output means nothing was added or removed — `grep` exits 1 on a clean inventory, so don't
+    read that status as failure. Keep the `grep`: unfiltered, `diff -rq` also lists every *differing*
+    file, and those are mostly noise, because each generated file inlines shared definitions and one
+    real change reverberates across dozens of them (0.144.1 → 0.145.0 listed 64 differing entries for
+    what was, on the consumed surface, a single added field — observed 2026-07-21). Do not work
+    through that list; the next pass is what reads content.
+  - *Content* — diff only the schemas this plugin consumes. That is the comparison that decides
+    whether anything we depend on moved. The list below must match `cli_contract.py`'s app-server
+    block, which is authoritative — re-copy it from there rather than trusting this snippet to have
+    aged well. Canonicalize both sides first: the generator is **not** byte-deterministic (two runs
+    of the *same* binary emit `codex_app_server_protocol.v2.schemas.json` with different key order),
+    so a raw diff reports drift that isn't there.
+
+    ```sh
+    for f in \
+      v1/InitializeParams.json \
+      v1/InitializeResponse.json \
+      v2/ExternalAgentConfigImportParams.json \
+      v2/ExternalAgentConfigImportResponse.json \
+      v2/ExternalAgentConfigImportProgressNotification.json \
+      v2/ExternalAgentConfigImportCompletedNotification.json \
+      v2/GetAccountRateLimitsResponse.json
+    do
+      o="$SCRATCH/schema-old/$f"; n="$SCRATCH/schema-new/$f"
+      if [ ! -f "$o" ] || [ ! -f "$n" ]; then echo "MISSING: $f"; continue; fi
+      jq -S . "$o" > "$SCRATCH/a.json" && jq -S . "$n" > "$SCRATCH/b.json" \
+        || { echo "UNREADABLE: $f"; continue; }
+      if diff -q "$SCRATCH/a.json" "$SCRATCH/b.json" >/dev/null; then
+        echo "same:    $f"
+      else
+        echo "CHANGED: $f"; diff "$SCRATCH/a.json" "$SCRATCH/b.json"
+      fi
+    done
+    ```
+
+    `MISSING` and `UNREADABLE` are findings, not skips: a consumed schema that vanished or stopped
+    parsing is exactly the drift this pass exists to catch. Read the printed lines — do not infer the
+    outcome from the loop's exit status.
+- **Behavior with no CLI surface at all.** Some upstream changes have no flag and no subcommand —
+  what auto-loads into context, and the feature flags that govern it. Run
+  [`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Implicit Codex context" → "Re-verifying on a Codex
+  upgrade" against **both** binaries and compare the two presence matrices it produces. This A/B is
+  what separates "new in this release" from "always true and we never looked" — an absolute-terms run
+  cannot tell those apart. That section owns the fixture, the recording rules, and how to read a
+  difference; three things are specific to running it twice:
+  - **Drive the raw CLI, not this plugin's tools.** `cli_contract.py`'s `CODEX_BIN` is the bare name
+    `codex`, so every plugin tool resolves it from `PATH` — a plugin consult cannot be pointed at
+    `$OLD`, and two "different" runs would silently invoke the same binary. Invoke each explicitly
+    and echo which one you used, so the run records its own provenance:
+
+    ```bash
+    for bin in "$OLD" "$NEW"; do
+      echo "=== $bin ($("$bin" --version))"
+      "$bin" exec --cd "$FIXTURE" --ignore-user-config --sandbox read-only \
+        -c model=<the same slug for both runs> - <<< "$PROBE_PROMPT"
+    done
+    ```
+
+    `--ignore-user-config` is required, not incidental — COMPATIBILITY.md explains which table row
+    depends on it. `$FIXTURE` and `$PROBE_PROMPT` come from that section.
+  - Both binaries read the same `$CODEX_HOME`, so keep the temporary global-skill marker in place for
+    **both** runs, and remove it only after the last one.
+  - Hold everything else constant across the two runs — model, account, fixture, prompt, and flags.
 
 ## 2. Manual semantic + surface review (judgment — not automatable)
 
-The script confirms shapes; you confirm meaning. Diff the new CLI's help against the **committed
-snapshot of the previously verified version** under [`docs/codex-help/`](codex-help/) — an in-place
-upgrade (Homebrew, `codex update`) destroys the old binary, so that snapshot is the only diff source
-once you've upgraded. The snapshot covers `codex --help`, `codex exec --help`, `codex review --help`,
-`codex exec review --help`, and `codex features list`. (If no prior snapshot exists — the first time
-through this practice — review the new help in absolute terms instead.) Then check:
+The script confirms shapes; you confirm meaning. Work from the old/new evidence gathered in step 2A
+— primarily an A/B against the previous version's binary, falling back to the committed snapshots
+under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
 
 - **Flag semantics unchanged.** A flag the script found may have changed behavior. Spot-check the
   guarantee-bearing ones: does `--sandbox read-only` still block writes? does `workspace-write` still
@@ -62,10 +219,10 @@ through this practice — review the new help in absolute terms instead.) Then c
 - **Sandbox values** (`read-only`, `workspace-write`, `danger-full-access`) still present and still
   mean the same boundary. Confirm the default paths still never emit `danger-full-access` or any
   `--dangerously-bypass-*`.
-- **Implicit context.** Re-run the marker probe in [`COMPATIBILITY.md`](../COMPATIBILITY.md) →
-  "Implicit Codex context" → "Re-verifying on a Codex upgrade", and refresh that section's
-  observations table. `--help` structurally cannot see this surface (no flag, no subcommand), so the
-  mechanical drift check above will not catch a change to what auto-loads or where it loads from.
+- **Implicit context.** Refresh the observations table in [`COMPATIBILITY.md`](../COMPATIBILITY.md) →
+  "Implicit Codex context" from the two-binary marker probe you ran in step 2A. `--help` structurally
+  cannot see this surface (no flag, no subcommand), so the mechanical drift check above will not
+  catch a change to what auto-loads or where it loads from.
 - **New capabilities worth adopting or explicitly avoiding.** Don't stop at the script's flag `INFO`
   list — it only sees `codex exec` flags. Also scan the `Commands:` section of `codex --help` for new
   **subcommands** and run `codex features list` for new **feature flags** (the `--enable`/`--disable`
@@ -133,7 +290,7 @@ the usual ones, but treat the grep as authoritative: a stale enumerated list *wi
 |------|--------------|
 | `src/codex_in_claude/cli_contract.py` | `SUPPORTED_VERSIONS`; the `Verified against …` / `0.x` comments; the `KNOWN_MODEL_SLUGS` provenance comment; any flag, sandbox, signature, or event-marker drift found in step 2 |
 | Test version literals | Bump the literals that represent **the supported/current version** — `test_config.py`, `test_coverage_extra.py`, `test_codex.py`, `test_server.py`, and `test_check_codex_contract.py`'s `VERSION`. **Leave deliberate logic fixtures alone:** `test_check_codex_release.py` exercises the watcher's "new vs. tracked" logic with arbitrary versions, and `test_codex_models.py` uses a synthetic cache fixture — neither is the supported-set, so flipping them is wrong. |
-| `docs/codex-help/<new-version>/` | Commit fresh `--help` + `features list` snapshots for the new version (the diff source for the *next* upgrade — see step 2) |
+| `docs/codex-help/<new-version>/` | Commit fresh `--help` + `features list` snapshots for the new version — captured from the binary you actually verified, so the *next* upgrade can authenticate its npm-retrieved stand-in against them (step 2A) |
 | `COMPATIBILITY.md` | the `Verified against` line; any changed policy |
 | `README.md` | only if user-facing compatibility text changes (it carries no pinned literal otherwise) |
 | `CHANGELOG.md` | an entry under `## [Unreleased]` |
@@ -184,6 +341,9 @@ locally as the final gate.
   pattern (`429`, `invalid value`) masks a more specific cause. Reconcile signatures in order.
 - JSONL moves error text to a different field, or token-usage keys change — degrades metadata
   silently under tolerant parsing.
+- A surface nobody thought to snapshot reads as "unchanged" because it was never looked at. The
+  committed captures cover only what we chose to capture; step 2A's A/B against the previous binary
+  is what lets you ask a question the snapshots don't already answer.
 - A long-lived MCP server caches `codex exec --help` for `HELP_CACHE_TTL_SECONDS`; after an in-place
   upgrade it re-probes only once the TTL lapses. Restart the server (or wait it out) when validating.
 - `codex login status` output may include account-identifying details — don't paste it into commits,

@@ -138,8 +138,9 @@ seeded, so scrubbing the worktree does not exclude them.
 
 ### Re-verifying on a Codex upgrade
 
-Marker probes are the only way to observe any of this. **Every row of the table below needs its own
-marker** — a row whose marker is absent produces a trivial negative that looks identical to a real
+Marker probes are the only way to observe any of this. Run them against **both** the new binary and
+the previous one; [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md) step 2A covers retrieving the
+old binary. **Every row of the table below needs its own marker** — a row whose marker is absent produces a trivial negative that looks identical to a real
 one, so the probe would report "unchanged" no matter what upstream did. Build the fixture as
 `<parent>/repo`, where `repo` is a scratch git repo (`git init` + one commit) and `<parent>` is
 **outside** it, with a distinct codeword in each of these five places:
@@ -173,6 +174,13 @@ Run both with **`isolation=ignore-config`** (or the raw CLI flag set including
 default-flags run cannot test the first row of the table — it would confirm the global skill loads
 while never exercising the isolation claim, and record a false positive on the exact point this
 section exists to hold. **Remove the temporary global skill afterwards.**
+
+**Record a run as a presence matrix, not as prose.** For each binary, write down its executable path,
+its `--version`, and one boolean per marker in the table above. Do **not** diff the raw answers —
+they are model output, so wording and ordering vary between runs that observed the same thing. If
+either positive control comes back false, record nothing from that run: fix the fixture and re-run.
+And read a difference conservatively — the backend model is an uncontrolled variable, so a change is
+*associated* with the binary, not proven caused by it. Reproduce it before concluding.
 
 Observed under codex-cli 0.145.0 with the flag set above (observations, not guarantees — re-run the
 probe rather than assuming they still hold):
