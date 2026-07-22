@@ -1006,11 +1006,12 @@ class CapabilitiesResult(BaseModel):
     )
     error_envelope_resource: str = "codex://error-envelope"
     result_meta_resource: str = "codex://result-meta"
-    # Opt-in tool-reachable fallback: the full error-envelope, result-meta,
-    # capabilities-result, and/or status-result schema, and/or the parameter-contracts
-    # document, returned only when codex_capabilities(include_schemas=[...]) requests them, so a
-    # resource-blind client can still reach the contracts from tools/list alone (#179,
-    # #173). Omitted (exclude_none) from the default payload to keep it small.
+    # Opt-in tool-reachable fallback: the full 'error-envelope', 'result-meta',
+    # 'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'
+    # document (a contract doc, not a JSON Schema), returned only when
+    # codex_capabilities(include_schemas=[...]) requests them, so a resource-blind client can
+    # still reach the contracts from tools/list alone (#179, #173). Omitted (exclude_none)
+    # from the default payload to keep it small.
     schemas: dict[str, Any] | None = None
 
 

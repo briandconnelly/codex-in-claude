@@ -3206,7 +3206,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint. Pass include_schemas to also embed\nthe full error-envelope, result-meta, capabilities-result, and/or status-result\nschema, and/or the parameter-contracts document (a tool-reachable fallback to the\ncodex:// resources for resource-blind clients).",
+      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint. Pass include_schemas to also embed\nthe full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result'\nschema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema) —\na tool-reachable fallback to the codex:// resources for resource-blind clients.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
