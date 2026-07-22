@@ -85,8 +85,9 @@ Facts to weigh before any active call:
 - Every supplied prompt and context field is sent to OpenAI raw.
 - During every active call — including consult — Codex may read other files in the resolved
   workspace.
-- Codex auto-loads the workspace's `AGENTS.md` and `.agents/skills/` skills even if the prompt never
-  mentions them; the isolation flags do not suppress this.
+- Codex auto-loads the workspace's `AGENTS.md` and `.agents/skills/` skills, and discovers your
+  user-global skills under `$CODEX_HOME/skills/` from outside the workspace, even if the prompt
+  never mentions them; the isolation flags do not suppress any of this.
 - Redaction is best-effort protection for gathered diffs and returned output only. It never protects
   supplied input, auto-loaded context, or files Codex reads.
 
@@ -101,9 +102,10 @@ Facts to weigh before any active call:
   references).
 - **Workspace:** Pass an absolute `workspace_root` for every repo-grounded call, including consult,
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
-- **Privacy:** Do not make an active call when the supplied prompt, the supplied context, or any
-  file Codex may inspect in the resolved workspace contains something you cannot disclose (see
-  Data exposure).
+- **Privacy:** Do not make an active call when the supplied prompt, the supplied context, any file
+  Codex may inspect in the resolved workspace, or your user-global skills under
+  `$CODEX_HOME/skills/` contain something you cannot disclose (see Data exposure). Changing the
+  workspace does not exclude those skills.
 - **Verification:** Treat findings, summaries, verdicts, and proposed changes as unverified claims.
   Run the applicable project checks yourself; read-only consult/review is not proof tests ran.
 - **Delegation:** Never apply a delegated diff before reviewing it. The plugin does not apply it to

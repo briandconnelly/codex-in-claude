@@ -24,12 +24,15 @@ This is **defense-in-depth, not a guarantee**:
 
 - It only covers the diff text the server gathers. During any active call — consult, review, or
   delegate — Codex may read files in the workspace itself, and it auto-loads the workspace's
-  `AGENTS.md` and `.agents/skills/` skills even if your prompt never mentions them; redaction does
-  not cover what Codex reads or auto-loads directly.
+  `AGENTS.md` and `.agents/skills/` skills **plus your user-global skills under
+  `$CODEX_HOME/skills/`** (default `~/.codex/skills/`) even if your prompt never mentions them;
+  redaction does not cover what Codex reads or auto-loads directly.
 - For workspaces that may contain live credentials, keep secrets out of the tree and review what
-  you delegate. `isolation=ignore-config`/`ignore-rules` still helps for `$CODEX_HOME` state
-  (`config.toml`, execpolicy `.rules`), but it does **not** suppress the project-level
-  `AGENTS.md`/`.agents/skills/` auto-loading (see `COMPATIBILITY.md`).
+  you delegate. `isolation=ignore-config`/`ignore-rules` helps only for the *specific* `$CODEX_HOME`
+  state it names (`config.toml`, execpolicy `.rules`); it does **not** suppress `AGENTS.md` or
+  `.agents/skills/` auto-loading, and — despite the flag's name — it does **not** suppress
+  `$CODEX_HOME/skills/` either (see `COMPATIBILITY.md`). Anything private in a user-global Codex
+  skill is eligible for egress on any active call, whatever workspace you target.
 
 ## Untrusted content
 

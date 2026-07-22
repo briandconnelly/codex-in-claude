@@ -186,34 +186,37 @@ VALID_SANDBOXES = (SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, SANDBOX_DANGER_FU
 DISABLE_FEATURE_FLAG = "--disable"  # `--disable <FEATURE>`; == `-c features.<FEATURE>=false`
 REMOTE_PLUGIN_FEATURE = "remote_plugin"
 
-# --- Auto-loaded workspace context (issue #300) ----------------------------------
+# --- Implicit Codex context (issues #300, #358) ----------------------------------
 # `codex exec` automatically loads the resolved workspace's `AGENTS.md` into model
-# context and auto-discovers skills under `.agents/skills/` (per upstream docs:
-# name/description metadata up front, a skill's body when it is selected). It needs no
-# tool-directed read, and every model-bearing call here runs `codex exec` — so that
-# content can reach OpenAI even when the caller's prompt never mentions those files.
-# Re-verified empirically against codex-cli 0.145.0 (2026-07-21) via marker probes — including an
-# A/B against 0.144.1, which behaved identically despite 0.145 shipping the new default-on
-# `skill_search` feature. Those probes ALSO showed a user-global skill under `$CODEX_HOME/skills/`
-# is auto-discovered and reaches the model despite `--ignore-user-config`; this comment and
-# COMPATIBILITY.md record it, but the prose sites named in the RULE below do not yet disclose it,
-# which is tracked as #358. Marker probes are the only way to see any of this;
+# context and auto-discovers skills from TWO roots (per upstream docs: name/description
+# metadata up front, a skill's body when it is selected):
+#   - the workspace's `.agents/skills/` (project-level), and
+#   - `$CODEX_HOME/skills/` (default `~/.codex/skills/`) — user-global, discovered from
+#     OUTSIDE the workspace, so no workspace choice excludes it (#358).
+# It needs no tool-directed read, and every model-bearing call here runs `codex exec` —
+# so that content can reach OpenAI even when the caller's prompt never mentions those
+# files. Verified empirically against codex-cli 0.145.0 (2026-07-21) via marker probes —
+# including an A/B against 0.144.1, which behaved identically despite 0.145 shipping the
+# new default-on `skill_search` feature; the global-skill discovery is pre-existing, not
+# a 0.145 regression. Marker probes are the only way to see any of this;
 # invisible in `codex exec --help` (no flag, no subcommand), so the mechanical
 # help-drift check CANNOT catch upstream changes to it. The isolation flags do NOT
 # suppress it: `--ignore-user-config` drops `$CODEX_HOME/config.toml` and
-# `--ignore-rules` drops execpolicy `.rules`; neither touches project-level `AGENTS.md`
-# or `.agents/skills/`. Upstream docs:
+# `--ignore-rules` drops execpolicy `.rules`; neither touches `AGENTS.md` or EITHER
+# skills root — a probe under `--ignore-user-config` still emitted a `$CODEX_HOME/skills/`
+# body. Upstream docs:
 # https://developers.openai.com/codex/concepts/customization#agents-guidance and
 # https://developers.openai.com/codex/concepts/customization#skills.
-# Reader-facing detail — the re-verification probe and the unverified edge cases
-# (`.claude/skills/`, parent-dir `AGENTS.md`, `project_doc_max_bytes=0`) — lives in
-# COMPATIBILITY.md, "Auto-loaded workspace context"; keep that section the single home
-# for both.
+# Reader-facing detail — the re-verification probe, the verified negatives, and what
+# remains unverified — lives in COMPATIBILITY.md, "Implicit Codex context"; keep that
+# section the single home for all of it. Do not re-list its probe results here: they are
+# expected to change on the next Codex upgrade.
 #
 # RULE: every egress-caveat prose site — the server instructions, the codex_status
-# caveat, the tool capability descriptions and docstrings, README.md, COMPATIBILITY.md,
-# SECURITY.md, and the collaborating-with-codex skill — must disclose this. No
-# feature-detection logic exists here by design.
+# caveat, the tool capability descriptions and docstrings, codex_capabilities'
+# negative_scope, README.md, COMPATIBILITY.md, SECURITY.md, and the
+# collaborating-with-codex skill — must disclose BOTH skills roots. No feature-detection
+# logic exists here by design.
 
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations

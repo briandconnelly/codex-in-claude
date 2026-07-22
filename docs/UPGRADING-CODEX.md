@@ -62,6 +62,10 @@ through this practice — review the new help in absolute terms instead.) Then c
 - **Sandbox values** (`read-only`, `workspace-write`, `danger-full-access`) still present and still
   mean the same boundary. Confirm the default paths still never emit `danger-full-access` or any
   `--dangerously-bypass-*`.
+- **Implicit context.** Re-run the marker probe in [`COMPATIBILITY.md`](../COMPATIBILITY.md) →
+  "Implicit Codex context" → "Re-verifying on a Codex upgrade", and refresh that section's
+  observations table. `--help` structurally cannot see this surface (no flag, no subcommand), so the
+  mechanical drift check above will not catch a change to what auto-loads or where it loads from.
 - **New capabilities worth adopting or explicitly avoiding.** Don't stop at the script's flag `INFO`
   list — it only sees `codex exec` flags. Also scan the `Commands:` section of `codex --help` for new
   **subcommands** and run `codex features list` for new **feature flags** (the `--enable`/`--disable`
