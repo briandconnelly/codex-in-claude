@@ -280,8 +280,10 @@ def _sum_numstat(records: Iterator[str]) -> tuple[int, int, int]:
       columns and both tabs precede the pathname. Counting it beats failing loudly (the
       arithmetic is recoverable) and beats sniffing the truncation marker (which would
       false-positive a real pathname containing that text).
-    * The trailing separator is stripped when present, so the final record of output that
-      does not end in a newline counts like any other.
+    * The trailing separator, when present, lands on the *pathname* field — never on a
+      numeric column — so the final record of output that does not end in a newline counts
+      like any other. It is stripped anyway, to keep the parsed pathname clean for any
+      future field this consumer grows.
     """
     files = added = removed = 0
     for record in records:

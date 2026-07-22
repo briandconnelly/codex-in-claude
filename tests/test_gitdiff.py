@@ -1822,14 +1822,28 @@ def test_tracked_summary_numstat_streams_through_run_lines(repo, monkeypatch):
 def test_tracked_summary_counts_multichunk_numstat_exactly(repo):
     """A numstat listing far larger than one read chunk must still be summed exactly by the
     streaming reader — the counts are the agent-visible contract, so streaming may not cost
-    accuracy (#350)."""
-    n = 1500
+    accuracy (#350). The sizing is asserted, not assumed: a listing that fits in one chunk
+    would exercise no boundary and the test would claim coverage it does not have."""
+    n = 3000
+    # `2\t1\tpkg_00000_module_padded_name.py\n` — sized so the whole listing clears the
+    # reader's default 65536-char chunk several times over.
     for i in range(n):
-        (repo / f"pkg_{i:05d}_module.py").write_text("x = 1\n")
+        (repo / f"pkg_{i:05d}_module_padded_name.py").write_text("x = 1\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "bulk")
     for i in range(n):
-        (repo / f"pkg_{i:05d}_module.py").write_text("x = 2\ny = 3\n")
+        (repo / f"pkg_{i:05d}_module_padded_name.py").write_text("x = 2\ny = 3\n")
+
+    numstat = subprocess.run(
+        ["git", "diff", "--numstat", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert len(numstat) > 65536, (
+        f"listing spans no chunk boundary ({len(numstat)} chars); the test proves nothing"
+    )
 
     res = gitdiff.gather_diff(str(repo), "working_tree", timeout=120, max_bytes=200_000)
     assert res.summary.files_changed == n
@@ -1861,12 +1875,25 @@ def test_sum_numstat_accepts_final_record_without_newline():
 
 def test_sum_numstat_counts_rename_record_once(repo):
     # A rename's numstat keeps the whole "old => new" pathname in the THIRD field, so the
-    # tab-split is still 3 fields and the record counts once. Exercised end-to-end so a
-    # future git format change surfaces here rather than in production counts.
-    (repo / "renamed.py").write_bytes((repo / "calc.py").read_bytes())
-    (repo / "calc.py").unlink()
+    # tab-split is still 3 fields and the record counts as ONE changed file. Exercised
+    # end-to-end so a future git format change surfaces here rather than in production
+    # counts. `git mv` stages the rename: an unstaged copy+delete leaves the new file
+    # untracked, which `git diff HEAD` never reports as a rename at all — the test would
+    # then pass while exercising nothing (Codex review of #350).
+    _git(repo, "mv", "calc.py", "renamed.py")
+    numstat = subprocess.run(
+        ["git", "diff", "--numstat", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "=>" in numstat, f"git did not emit a rename record; test proves nothing: {numstat!r}"
+
     res = gitdiff.gather_diff(str(repo), "working_tree", timeout=30, max_bytes=200_000)
-    assert res.summary.files_changed >= 1
+    assert res.summary.files_changed == 1  # ONE record, not a delete plus an add
+    assert res.summary.lines_added == 0  # content unchanged: a pure rename
+    assert res.summary.lines_removed == 0
 
 
 def test_sum_numstat_counts_reader_truncated_record_exactly():
