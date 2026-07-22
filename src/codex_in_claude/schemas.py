@@ -49,7 +49,7 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-53"
+FINGERPRINT = "codex-in-claude/0.1/schema-54"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -65,7 +65,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-53"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 5
+RESULT_FORMAT: int = 6
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -345,11 +345,16 @@ class RateLimitSnapshot(BaseModel):
     model_config = ConfigDict(extra="ignore")
     plan_type: str | None = None
     rate_limit_reached_type: str | None = None
+    # Backend-enforced spend control (codex 0.145+, #359). Tri-state: True/False are the
+    # backend's answer; None means it did not report one (a CLI that omits the key, or an
+    # explicit null — upstream documents both as "unavailable"). Sanitized at the wire boundary
+    # by appserver._valid_spend_control, so a non-bool never reaches this field.
+    spend_control_reached: bool | None = None
     primary: RateLimitWindowSnapshot | None = None  # shorter/rolling window (historically 5h)
     secondary: RateLimitWindowSnapshot | None = None  # longer window (historically weekly)
 
 
-RateLimitStatus = Literal["available", "limited", "exhausted", "unknown", "unavailable"]
+RateLimitStatus = Literal["available", "limited", "exhausted", "unknown", "unavailable", "blocked"]
 
 
 class RateLimitWindow(BaseModel):
@@ -387,7 +392,14 @@ class RateLimit(BaseModel):
     a lower bound on current usage). `unknown` means no fresh/usable reading yet (a transient
     read failure or a stale cache — retry may help), while `unavailable` means the live read
     definitively produced no quota (this codex exposes no such data, or the account has no
-    quota windows) — neither means anything is wrong."""
+    quota windows) — neither means anything is wrong.
+
+    `blocked` is the one verdict that does not come from a window at all: the backend reports a
+    SPEND control (`spend_control_reached`), which no quota reset clears. It outranks every
+    window-derived verdict, carries `limiting_window: null`, and still reports the windows for
+    transparency. The window verdicts stay window-scoped: `available` attests only that the
+    reported quota windows are healthy, NOT that spending is administratively permitted — when
+    `spend_control_reached` is null the backend did not report that state, and `note` says so."""
 
     model_config = ConfigDict(extra="forbid")
     status: RateLimitStatus
@@ -399,6 +411,10 @@ class RateLimit(BaseModel):
     is_stale: bool = False  # older than the configured warn threshold (advisory)
     plan_type: str | None = None  # captured metadata, NOT a verified current plan
     home_unverified: bool = False  # cached CODEX_HOME differs from the current environment
+    # Backend-reported SPEND control (#359). true -> status 'blocked' (waiting will not clear
+    # it); false -> the backend says spending is permitted; null -> it did not report the state
+    # (a CLI predating codex 0.145, or an explicit upstream null). null is NOT "false".
+    spend_control_reached: bool | None = None
     limiting_window: Literal["primary", "secondary"] | None = None
     primary: RateLimitWindow | None = None  # shorter/rolling window (historically 5-hour)
     secondary: RateLimitWindow | None = None  # longer window (historically weekly)

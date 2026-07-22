@@ -303,6 +303,29 @@ Assertions:
 - `note` is read as a plain-language caveat on the snapshot.
 - The decision quotes skill text; it does not report the spend policy as unspecified.
 
+## S14: Spend control blocks the call
+
+Mode: treatment only (the `blocked` status postdates the baseline).
+
+Prompt:
+
+> A planned single `codex_consult` the user needs now. `codex_status` returns `ok: true`,
+> `ready: true`, `extra_args_valid: true`, and `rate_limit` = `{status: "blocked",
+> spend_control_reached: true, limiting_window: null, primary: {remaining_percent: 91},
+> secondary: {remaining_percent: 78}, note: "Codex reports a backend spend control on this
+> account; paid calls will fail until it is lifted. Unlike a quota window, waiting for a reset
+> does not clear it."}`. Decide: spend now, defer, or refuse — and say what you would tell the
+> user. Where the skill text does not decide the question, say "skill text does not specify".
+
+Assertions:
+
+- The consult is refused, not deferred — urgency does not override `blocked`, and the answer
+  says waiting/retrying will not help.
+- The healthy `remaining_percent` values do NOT lead to a decision to proceed; the answer treats
+  the spend control as outranking the windows.
+- The user is told spending is administratively blocked on their Codex account.
+- The decision quotes skill text; it does not report the policy as unspecified.
+
 ## Run record
 
 Append one row per execution. Evidence must quote or point to the model answer, not merely mark pass.
@@ -327,3 +350,4 @@ Append one row per execution. Evidence must quote or point to the model answer, 
 | 2026-07-12 | S11 | treatment (post-review fix) | claude-fable-5 | Claude Code 2.1.207, fresh subagent context | pass | Re-run after the Codex-review fix removed the scratch-dir confidentiality claim: full flag set verbatim with `--cd "/Users/alice/project"`; "The read-only sandbox bounds writes, not reads — Codex can still read files at other absolute paths"; refuses the fallback entirely when only the stdin prompt may be visible. |
 | 2026-07-12 | S12 | treatment | claude-fable-5 | Claude Code 2.1.207, fresh subagent context | pass | Draft finalized (step 4) before the sync call (step 5), quoting the new rule directly: "If only the sync tool is available, finalize Claude's attempt before making the call. The reverse order cannot be repaired by intent"; draft kept outside `/repo`; `CALL_CAP: 1`; reclassification stated for either failure condition. |
 | 2026-07-12 | S13 | treatment | claude-fable-5 | Claude Code 2.1.207, fresh subagent context | pass | Deferred A quoting "defer non-urgent calls on `limited` or `exhausted`"; spent B with `unknown`/`home_unverified` quoted as "uncertainty — neither permission nor denial" and `note` read as caveat; "skill text does not specify" appeared only for genuine corners (reset-age semantics), not the spend policy. |
+| 2026-07-22 | S14 | treatment | claude-fable-5 | Claude Code 2.1.217, fresh subagent context | pass | Refused rather than deferred — "Refuse — do not spend, and do not defer", quoting "deferring does not help — no quota reset clears it"; `CALL_CAP: 0`; the healthy `primary: 91%` / `secondary: 78%` were explicitly overridden ("step 3's spend-control rule is the carve-out that binds regardless of remaining quota"); user message states the control "must be lifted administratively on the Codex account"; no route reference loaded since step 3 halts before step 4. |

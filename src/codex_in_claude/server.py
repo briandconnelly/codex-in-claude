@@ -167,9 +167,9 @@ CAPABILITY_SUMMARY = (
     "codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate "
     "records its run as a job (meta.job_id), so a dropped connection can be recovered the "
     "same way. codex_status also reports a rate_limit block (status "
-    "available|limited|exhausted|unknown|unavailable) showing how much Codex quota remains, "
-    "read live from the app-server with no model spend; unknown/unavailable mean no usable "
-    "reading, not a problem."
+    "available|limited|exhausted|blocked|unknown|unavailable) showing how much Codex quota "
+    "remains, read live from the app-server with no model spend; unknown/unavailable mean no "
+    "usable reading, not a problem, while blocked means a backend spend control no reset clears."
 )
 
 # Annotation presets. destructiveHint/idempotentHint have MCP-spec meaning only when
@@ -1053,6 +1053,10 @@ def codex_status() -> dict:
     proceed); `unknown` means the live read couldn't complete just now (retry) or only a stale
     cache was available; `unavailable` means this codex/account exposes no quota data — none
     of these means anything is wrong.
+    `blocked` is different: the backend reports a SPEND control (`spend_control_reached: true`),
+    so paid calls will fail and waiting for a quota reset will NOT clear it — don't defer, and
+    surface it to the user. `spend_control_reached` is null when this codex/backend didn't report
+    that state (then `available` covers the quota windows only, and `note` says so).
     `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
     CODEX_HOME."""
     d = config.defaults()

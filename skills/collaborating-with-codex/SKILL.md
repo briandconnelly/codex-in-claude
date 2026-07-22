@@ -22,16 +22,21 @@ and verification skills instead of replacing them.
 1. Call `codex_status` before a paid call. Proceed only when both `ready: true` and
    `extra_args_valid: true`. If either is false, stop and surface the corresponding readiness or
    operator-configuration detail.
-2. Treat `rate_limit` as advisory. `codex_status` reads it live from the Codex app-server (no model
-   spend), so it is current when `ready: true`. Decide spend from it: proceed on `available`; defer
-   non-urgent calls on `limited` or `exhausted`; treat `unknown` (the live read could not complete,
-   or only a stale snapshot was available — `is_stale`/`as_of`), `unavailable` (this codex/account
-   exposes no quota data), or `home_unverified: true` as uncertainty — neither permission nor denial.
+2. Treat `rate_limit` as advisory, with one exception. `codex_status` reads it live from the Codex
+   app-server (no model spend), so it is current when `ready: true`. Decide spend from it: proceed
+   on `available`; defer non-urgent calls on `limited` or `exhausted`; treat `unknown` (the live
+   read could not complete, or only a stale snapshot was available — `is_stale`/`as_of`),
+   `unavailable` (this codex/account exposes no quota data), or `home_unverified: true` as
+   uncertainty — neither permission nor denial.
    The account reports only the windows that currently bind it, so `primary` (shorter/rolling) or
    `secondary` (longer) may be null. Read `note` for plain-language caveats before relying on it.
-3. Select one route below and load only its needed reference. Use a free dry-run when one exists.
-4. Declare the paid-call cap before the first active call, then stay within it.
-5. Branch on `ok`, then on the concrete tool/result type. Verify claims before acting.
+3. Do not make a paid call when `rate_limit.status` is `blocked`. This is the exception to
+   advisory: the backend reports a spend control (`spend_control_reached: true`) and the call
+   will fail, so deferring does not help — no quota reset clears it. Stop and tell the user
+   spending is administratively blocked on their Codex account.
+4. Select one route below and load only its needed reference. Use a free dry-run when one exists.
+5. Declare the paid-call cap before the first active call, then stay within it.
+6. Branch on `ok`, then on the concrete tool/result type. Verify claims before acting.
 
 ## Route the request
 

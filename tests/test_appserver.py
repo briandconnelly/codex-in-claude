@@ -1252,6 +1252,28 @@ def test_rate_limits_no_windows_is_no_quota_not_drift(tmp_path, scenario):
     assert out.snapshot is None
 
 
+def test_rate_limits_spend_control_round_trips_from_the_wire(tmp_path):
+    # End-to-end over the real JSON-RPC path: the 0.145 field survives the handshake, the
+    # reader, and the parse (#359) — not just the unit-level _parse_rate_limits call.
+    out = read_rate_limits(
+        command=_command("rl_spend_control", tmp_path / "ch"), timeout_seconds=10
+    )
+    assert out.status is RateLimitReadStatus.OK
+    assert out.snapshot is not None
+    assert out.snapshot.spend_control_reached is True
+    assert out.snapshot.primary is not None  # the healthy window is still reported
+
+
+def test_rate_limits_spend_control_without_windows_is_not_no_quota(tmp_path):
+    out = read_rate_limits(
+        command=_command("rl_spend_control_no_windows", tmp_path / "ch"), timeout_seconds=10
+    )
+    assert out.status is RateLimitReadStatus.OK
+    assert out.snapshot is not None
+    assert out.snapshot.spend_control_reached is True
+    assert out.snapshot.primary is None and out.snapshot.secondary is None
+
+
 def test_rate_limits_unsupported_method(tmp_path):
     out = read_rate_limits(command=_command("rl_unsupported", tmp_path / "ch"), timeout_seconds=10)
     assert out.status is RateLimitReadStatus.UNSUPPORTED
@@ -1411,6 +1433,81 @@ def test_parse_oversized_plan_type_is_dropped():
     result = {"rateLimits": {"primary": _win(10, 300), "planType": "p" * 5000}}
     _, snap = appserver._parse_rate_limits(result)
     assert snap.plan_type is None
+
+
+# --- spendControlReached (0.145+, #359) -----------------------------------------
+# Tri-state: True/False are the backend's answer; None means UNAVAILABLE (upstream's own
+# wording), explicitly NOT "false" — collapsing it would invent a reassuring signal the
+# backend never sent.
+
+
+@pytest.mark.parametrize("wire", [True, False])
+def test_parse_spend_control_keeps_both_boolean_states(wire):
+    result = {"rateLimits": {"primary": _win(10, 300), "spendControlReached": wire}}
+    _, snap = appserver._parse_rate_limits(result)
+    assert snap.spend_control_reached is wire
+
+
+def test_parse_spend_control_absent_is_none():
+    # codex 0.144 omits the key entirely; that must degrade to None, never to False.
+    result = {"rateLimits": {"primary": _win(10, 300)}}
+    _, snap = appserver._parse_rate_limits(result)
+    assert snap.spend_control_reached is None
+
+
+@pytest.mark.parametrize("wire", [None, 1, 0, "true", "false", "", [], {}, [True], 1.0])
+def test_parse_spend_control_non_bool_is_dropped_to_none(wire):
+    # Strict: only a real bool is an answer. A truthy non-bool (1, "true") must never become a
+    # false administrative block, and a falsy non-bool (0, "") must never become a real False —
+    # both are "the backend did not say".
+    result = {"rateLimits": {"primary": _win(10, 300), "spendControlReached": wire}}
+    _, snap = appserver._parse_rate_limits(result)
+    assert snap.spend_control_reached is None
+
+
+def test_parse_spend_control_true_with_no_windows_is_ok_not_no_quota():
+    # A windowless response carrying spendControlReached=true must NOT collapse to NO_QUOTA:
+    # that would discard the exact signal (#359). The snapshot has no windows but is real.
+    result = {"rateLimits": {"primary": None, "secondary": None, "spendControlReached": True}}
+    status, snap = appserver._parse_rate_limits(result)
+    assert status is _OK
+    assert snap is not None
+    assert snap.spend_control_reached is True
+    assert snap.primary is None and snap.secondary is None
+
+
+@pytest.mark.parametrize("wire", [False, None, "yes"])
+def test_parse_no_windows_without_spend_control_stays_no_quota(wire):
+    # Only an explicit True rescues a windowless block; False/None/junk remain a legitimate
+    # no-quota account.
+    result = {"rateLimits": {"primary": None, "secondary": None, "spendControlReached": wire}}
+    assert appserver._parse_rate_limits(result) == (_NO_QUOTA, None)
+
+
+def test_parse_spend_control_true_with_window_keys_absent_matches_explicit_null():
+    # Upstream's RateLimitSnapshot declares NO required members, so an OMITTED window key is
+    # schema-valid and means exactly what an explicit null means. Pinning the equivalence keeps
+    # a future reader from "fixing" absence into drift (Codex review, declined with this
+    # evidence) — and note absence was already NO_QUOTA before #359, never PROTOCOL_ERROR.
+    absent = {"rateLimits": {"spendControlReached": True}}
+    explicit = {"rateLimits": {"primary": None, "secondary": None, "spendControlReached": True}}
+    status_a, snap_a = appserver._parse_rate_limits(absent)
+    status_e, snap_e = appserver._parse_rate_limits(explicit)
+    assert status_a is status_e is _OK
+    assert snap_a == snap_e
+
+
+def test_parse_no_windows_and_no_spend_control_keys_is_no_quota():
+    # The same absent-key shape WITHOUT the spend-control block stays a legitimate no-quota
+    # account — the pre-#359 behavior, unchanged.
+    assert appserver._parse_rate_limits({"rateLimits": {}}) == (_NO_QUOTA, None)
+
+
+def test_parse_malformed_window_still_drifts_even_with_spend_control():
+    # A PRESENT but malformed window is drift regardless of spend control — the new field must
+    # not turn protocol drift into a plausible OK.
+    result = {"rateLimits": {"primary": {"nope": 1}, "spendControlReached": True}}
+    assert appserver._parse_rate_limits(result)[0] is _DRIFT
 
 
 # --- liveness guards ------------------------------------------------------------

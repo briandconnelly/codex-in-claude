@@ -324,6 +324,26 @@ _RATE_LIMIT_SNAPSHOTS: dict[str, dict] = {
         "planType": "plus",
         "rateLimitReachedType": None,
     },
+    # 0.145+ spend control (#359). Healthy windows, but the backend reports spending blocked —
+    # the shape that must NOT read as 'available'.
+    "rl_spend_control": {
+        "limitId": "codex",
+        "primary": FIVE_HOUR_WINDOW,
+        "secondary": None,
+        "planType": "plus",
+        "rateLimitReachedType": None,
+        "spendControlReached": True,
+    },
+    # Spend control blocked with NO quota windows at all: must survive as an OK snapshot rather
+    # than collapsing to NO_QUOTA and discarding the signal.
+    "rl_spend_control_no_windows": {
+        "limitId": "codex",
+        "primary": None,
+        "secondary": None,
+        "planType": "plus",
+        "rateLimitReachedType": None,
+        "spendControlReached": True,
+    },
 }
 
 _RATE_LIMIT_ERRORS: dict[str, dict] = {

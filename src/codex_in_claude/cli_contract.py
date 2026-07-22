@@ -105,8 +105,7 @@ JSONRPC_RESERVED_ERROR_MAX = -32000
 # (params: null) is a READ-ONLY, no-model-spend request that returns the current quota
 # snapshot after the same initialize/initialized handshake codex_transfer uses. Verified
 # against codex-cli 0.145.0 on 2026-07-21 via `codex app-server` (live read) and the generated
-# schema. See #321, COMPATIBILITY.md. 0.145 adds one field we deliberately do not consume yet,
-# `spendControlReached` (#359); the parse is key-by-key, so an unread field is inert.
+# schema. See #321, COMPATIBILITY.md.
 APP_SERVER_RATE_LIMITS_READ_METHOD = "account/rateLimits/read"
 # read response → `result.rateLimits` is the single-bucket RateLimitSnapshot. Its windows
 # are `primary`/`secondary`, but — unlike the old exec-stream block, which fixed primary=5h
@@ -118,6 +117,11 @@ RATE_LIMIT_PRIMARY_KEY = "primary"
 RATE_LIMIT_SECONDARY_KEY = "secondary"
 RATE_LIMIT_PLAN_TYPE_KEY = "planType"
 RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"
+# Backend-enforced SPEND control (0.145+, #359) — distinct from a rate/usage window: waiting for
+# a window to reset does not clear it. Upstream types it `boolean | null` and documents null as
+# "unavailable, not a sparse-update recovery", so the tri-state is load-bearing: only an explicit
+# `true` is a block, and null/absent (every 0.144 response) means the backend did not say.
+RATE_LIMIT_SPEND_CONTROL_REACHED_KEY = "spendControlReached"
 # per-window fields (camelCase on the app-server protocol; snake_case in our schema).
 RATE_LIMIT_WINDOW_USED_PERCENT_KEY = "usedPercent"
 RATE_LIMIT_WINDOW_DURATION_MINS_KEY = "windowDurationMins"

@@ -160,6 +160,86 @@ def test_interpret_reached_reason_enum_escalates_to_exhausted():
     assert rl.note is not None and "usage limit was reached" in rl.note
 
 
+# --- spend control (#359) -------------------------------------------------------
+# Only an explicit True is a verdict. None means the backend did not report the signal —
+# absence of evidence, not evidence of a block — so it leaves the window-derived status
+# intact and only discloses itself in `note`.
+
+
+def test_interpret_spend_control_true_is_blocked_over_healthy_windows():
+    # An administrative spend block outranks perfectly healthy quota: paid calls fail even
+    # though every window says there is room.
+    snap = _both(10.0, 1_700_009_000, 5.0, 1_700_009_000)
+    snap.spend_control_reached = True
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "blocked"
+    assert rl.spend_control_reached is True
+    assert rl.limiting_window is None  # no window binds an administrative block
+    assert rl.note is not None and "spend control" in rl.note.lower()
+    # The windows stay visible for transparency — the block is orthogonal to quota.
+    assert rl.primary is not None and rl.secondary is not None
+
+
+def test_interpret_spend_control_true_outranks_reached_type():
+    # Both signals present: report the one whose remedy differs from waiting.
+    snap = _both(10.0, 1_700_009_000, 40.0, 1_700_009_000)
+    snap.rate_limit_reached_type = "workspace_owner_usage_limit_reached"
+    snap.spend_control_reached = True
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "blocked"
+
+
+def test_interpret_spend_control_true_with_no_windows_is_blocked():
+    # A windowless snapshot still yields 'blocked' — spend control is snapshot-level and needs
+    # no window to bind it (contrast the rateLimitReachedType branch, which does).
+    snap = RateLimitSnapshot(plan_type="plus", primary=None, secondary=None)
+    snap.spend_control_reached = True
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "blocked"
+    assert rl.limiting_window is None
+
+
+def test_interpret_spend_control_false_leaves_status_untouched():
+    snap = _both(10.0, 1_700_009_000, 40.0, 1_700_009_000)
+    snap.spend_control_reached = False
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "available"
+    assert rl.spend_control_reached is False
+    assert rl.note is None  # nothing to disclose: the backend answered
+
+
+def test_interpret_spend_control_none_keeps_available_but_discloses():
+    # A CLI that omits the field (0.144) must not lose its usable window reading — #321 fixed
+    # exactly this class of permanent 'unknown'. The gap is disclosed in `note` instead.
+    snap = _both(10.0, 1_700_009_000, 40.0, 1_700_009_000)
+    assert snap.spend_control_reached is None
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "available"
+    assert rl.spend_control_reached is None
+    assert rl.note is not None and "spend-control" in rl.note.lower()
+
+
+def test_interpret_spend_control_none_does_not_overwrite_a_risk_note():
+    # The disclosure is only for a would-be 'available'; a real risk verdict keeps its own
+    # reasoning (here: a reached-type note) rather than being papered over.
+    snap = _both(10.0, 1_700_009_000, 40.0, 1_700_009_000)
+    snap.rate_limit_reached_type = "workspace_owner_usage_limit_reached"
+    rl = rate_limit.interpret(snap, now_epoch=1_700_001_000, captured_at=1_700_000_900)
+    assert rl.status == "exhausted"
+    assert rl.note is not None and "usage limit was reached" in rl.note
+
+
+def test_interpret_home_unverified_still_wins_over_spend_control_disclosure():
+    # A cross-CODEX_HOME snapshot is already forced to 'unknown' with its own note; the
+    # disclosure must not clobber that more serious caveat.
+    snap = _both(10.0, 9_999_999_999, 40.0, 9_999_999_999)
+    rl = rate_limit.interpret(
+        snap, now_epoch=1000, captured_at=1000, cache_home="/a/.codex", current_home="/b/.codex"
+    )
+    assert rl.status == "unknown"
+    assert rl.note is not None and "CODEX_HOME" in rl.note
+
+
 def test_live_read_ok_interprets_ephemerally(monkeypatch):
     """live_read maps an OK app-server outcome to an interpreted, live-sourced RateLimit. It is
     EPHEMERAL — nothing is persisted (rate_limit has no save()), keeping codex_status read-only."""
