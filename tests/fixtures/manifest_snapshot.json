@@ -1527,6 +1527,23 @@
                 "title": "Request Id",
                 "type": "string"
               },
+              "roots_source": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "client",
+                      "not_negotiated",
+                      "probe_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Roots Source"
+              },
               "sandbox": {
                 "description": "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, no network egress), or danger-full-access. It tracks `tier` across the same cases — the call's own run, a retrieved job's originating run, or a dry-run's previewed run; lifecycle-generated errors report 'read-only'. Like tier, this describes Codex execution posture, not whether the call mutates this server's job state (see readOnlyHint).",
                 "enum": [
@@ -2592,6 +2609,23 @@
           "request_id": {
             "title": "Request Id",
             "type": "string"
+          },
+          "roots_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "client",
+                  "not_negotiated",
+                  "probe_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Roots Source"
           },
           "sandbox": {
             "description": "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, no network egress), or danger-full-access. It tracks `tier` across the same cases — the call's own run, a retrieved job's originating run, or a dry-run's previewed run; lifecycle-generated errors report 'read-only'. Like tier, this describes Codex execution posture, not whether the call mutates this server's job state (see readOnlyHint).",
@@ -4741,6 +4775,21 @@
                 ],
                 "description": "Reasoning-effort override the previewed paid call would send (per-call param or server default); null = Codex would resolve it itself. Unvalidated by the preview."
               },
+              "roots_source": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "client",
+                      "not_negotiated",
+                      "probe_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "sandbox": {
                 "enum": [
                   "danger-full-access",
@@ -5191,6 +5240,21 @@
               },
               "redacted_paths_count": {
                 "type": "integer"
+              },
+              "roots_source": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "client",
+                      "not_negotiated",
+                      "probe_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "sandbox": {
                 "enum": [

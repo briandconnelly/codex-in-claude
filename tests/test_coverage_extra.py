@@ -117,10 +117,25 @@ class _FakeRoot:
         self.uri = uri
 
 
+class _FakeCaps:
+    # Present (non-None) to mirror a client that DID advertise the roots
+    # capability — the F8 gate on ctx.session.client_params.capabilities.roots.
+    roots = object()
+
+
+class _FakeParams:
+    capabilities = _FakeCaps()
+
+
+class _FakeSession:
+    client_params = _FakeParams()
+
+
 class _FakeCtx:
     def __init__(self, uris, raise_exc=False):
         self._uris = uris
         self._raise = raise_exc
+        self.session = _FakeSession()
 
     async def list_roots(self):
         if self._raise:
@@ -130,17 +145,18 @@ class _FakeCtx:
 
 async def test_roots_from_ctx_file_uris():
     ctx = _FakeCtx(["file:///Users/me/repo", "https://not-a-file/x"])
-    paths = await server._roots_from_ctx(ctx)
+    paths, source = await server._roots_from_ctx(ctx)
     assert paths == ["/Users/me/repo"]
+    assert source == "client"
 
 
 async def test_roots_from_ctx_none():
-    assert await server._roots_from_ctx(None) == []
+    assert await server._roots_from_ctx(None) == ([], "not_negotiated")
 
 
 async def test_roots_from_ctx_unsupported_degrades():
     ctx = _FakeCtx([], raise_exc=True)
-    assert await server._roots_from_ctx(ctx) == []
+    assert await server._roots_from_ctx(ctx) == ([], "probe_failed")
 
 
 async def test_consult_uses_roots(monkeypatch, clean_env, tmp_path):

@@ -19,6 +19,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   returned jobs. When more jobs match than `limit`, the response sets `truncated: true` with
   a `truncation_hint` naming `limit`/`status` as the way to see the rest — the extra rows are
   dropped, not paged, so there is no cursor (audit F5).
+- `meta.roots_source` (and the matching field on `codex_dry_run`/`codex_delegate_dry_run`)
+  reports which of three states the MCP-roots resolution saw: `client` (the client advertised
+  roots and they were used, even if the list came back empty), `not_negotiated` (this client
+  never advertised the roots capability — pass `workspace_root` instead), or `probe_failed`
+  (roots were advertised but the call errored this turn — retrying may help). Previously all
+  three collapsed into a silent empty list and a fallback to the server's own cwd; `roots` stays
+  advisory either way, and `workspace_root` remains the durable path (audit F8). Bumps the
+  persisted result-format (`RESULT_FORMAT` `6` → `7`) for the new `Meta` field; not breaking.
 
 ### Changed
 

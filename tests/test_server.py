@@ -4282,7 +4282,7 @@ async def test_workspace_outside_roots_carries_candidate_roots(monkeypatch, clea
     outside.mkdir()
 
     async def fake_roots(ctx):
-        return [str(root)]
+        return [str(root)], "client"
 
     monkeypatch.setattr(server, "_roots_from_ctx", fake_roots)
     res = await server.codex_consult("q", workspace_root=str(outside))
@@ -4298,7 +4298,7 @@ async def test_invalid_workspace_root_omits_candidate_roots(monkeypatch, clean_e
     root.mkdir()
 
     async def fake_roots(ctx):
-        return [str(root)]
+        return [str(root)], "client"
 
     monkeypatch.setattr(server, "_roots_from_ctx", fake_roots)
     res = await server.codex_consult("q", workspace_root="relative/not/abs")
@@ -4314,7 +4314,18 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
         def __init__(self, uri):
             self.uri = uri
 
+    class _Caps:
+        roots = object()  # advertised: exercise the file-URI filtering, not the gate
+
+    class _Params:
+        capabilities = _Caps()
+
+    class _Session:
+        client_params = _Params()
+
     class _Ctx:
+        session = _Session()
+
         async def list_roots(self):
             return [
                 _Root(f"file://{tmp_path}"),  # valid absolute (empty authority) -> kept
@@ -4326,8 +4337,9 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
                 _Root("https://example.com"),  # non-file scheme -> dropped
             ]
 
-    paths = await server._roots_from_ctx(_Ctx())
+    paths, source = await server._roots_from_ctx(_Ctx())
     assert paths == [str(tmp_path), str(tmp_path)]
+    assert source == "client"
 
 
 # --- async job-lifecycle capability metadata (#94) ---------------------------
@@ -7122,3 +7134,68 @@ class TestJobListNarrowing:
                 assert r.structured_content["error"]["code"] == "invalid_arguments"
             r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 1})
             assert len(r.structured_content["jobs"]) == 1
+
+
+def _ctx_double(*, roots_advertised: bool, roots=(), list_roots_raises=None):
+    """Minimal stand-in exposing only what _roots_from_ctx reads."""
+
+    class _Root:
+        def __init__(self, uri):
+            self.uri = uri
+
+    class _Caps:
+        roots = object() if roots_advertised else None
+
+    class _Params:
+        capabilities = _Caps()
+
+    class _Session:
+        client_params = _Params()
+
+    class _Ctx:
+        session = _Session()
+
+        async def list_roots(self):
+            if list_roots_raises is not None:
+                raise list_roots_raises
+            return [_Root(u) for u in roots]
+
+    return _Ctx()
+
+
+class TestRootsCapabilityGating:
+    """F8: 'client has no roots' and 'the roots probe failed' stop being the same signal."""
+
+    @pytest.mark.anyio
+    async def test_client_without_roots_reports_not_negotiated(self, clean_env):
+        # The in-memory FastMCP client advertises capabilities.roots = None.
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_dry_run", {"scope": "working_tree"}, raise_on_error=False)
+        meta = r.structured_content.get("meta", r.structured_content)
+        assert meta["roots_source"] == "not_negotiated"
+
+    @pytest.mark.anyio
+    async def test_probe_failure_is_distinguishable(self, clean_env):
+        # A client that DID advertise roots but whose list_roots raises must not look
+        # identical to one that never advertised them.
+        ctx = _ctx_double(roots_advertised=True, list_roots_raises=RuntimeError("boom"))
+        paths, source = await server._roots_from_ctx(ctx)
+        assert paths == []
+        assert source == "probe_failed"
+
+    @pytest.mark.anyio
+    async def test_advertised_roots_are_still_used(self, clean_env, tmp_path):
+        ctx = _ctx_double(roots_advertised=True, roots=[f"file://{tmp_path}"])
+        paths, source = await server._roots_from_ctx(ctx)
+        assert paths == [str(tmp_path)]
+        assert source == "client"
+
+    @pytest.mark.anyio
+    async def test_advertised_but_empty_roots_report_client_not_not_negotiated(self, clean_env):
+        # A client that DID advertise roots and answered with none is a different fact
+        # from a client that never advertised the capability at all — collapsing them
+        # would defeat the whole point of gating on the negotiated capability.
+        ctx = _ctx_double(roots_advertised=True, roots=[])
+        paths, source = await server._roots_from_ctx(ctx)
+        assert paths == []
+        assert source == "client"

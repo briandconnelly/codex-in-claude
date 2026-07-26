@@ -92,7 +92,15 @@ FINGERPRINT = "codex-in-claude/0.1/schema-60"
 # (`server.py`'s replay check treats any other value as `job_result_incompatible`) for zero
 # compatibility gain. Regenerate the fixture to acknowledge the schema-view drift; only bump
 # the integer when the `serialized` view itself would actually move.
-RESULT_FORMAT: int = 6
+# F8 (#roots_source): bumped 6->7. Meta.roots_source is new, extra="forbid", and dump_success
+# has no exclude_none, so every already-persisted success envelope's replay would need to
+# tolerate an unknown key an older reader's closed schema would reject — the exact case this
+# field exists to catch. Verified (not assumed): the `serialized` view's consult/review/delegate
+# success entries each gained "roots_source": null; the `error` entry did not move (serialize_error
+# uses exclude_none, and this field is never populated before a Codex-run-prepared error, so it
+# always serializes absent there) — the same asymmetry #185's ErrorInfo fields relied on to NOT
+# bump, except here the success side (which DOES retain nulls) moved, so this one must bump.
+RESULT_FORMAT: int = 7
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -167,6 +175,13 @@ ReviewScope = Literal["working_tree", "branch", "commit"]
 # includes them. Inert for branch/commit scopes.
 Untracked = Literal["explicit_only", "include", "exclude"]
 Detail = Literal["summary", "full"]
+# Which of three states the MCP-roots probe saw (F8, #contract-checklist §1/§2):
+# "client" — the client advertised roots and list_roots() returned (possibly empty);
+# "not_negotiated" — this client never advertised the roots capability (pass
+# workspace_root instead); "probe_failed" — roots were advertised but the call
+# errored this turn (transient; retrying may help). Defined once here and imported
+# into server.py so the two modules cannot drift on the value set.
+RootsSource = Literal["client", "not_negotiated", "probe_failed"]
 # Lifecycle states for a background job. Terminal: done|failed|cancelled|timeout.
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
 JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
@@ -508,6 +523,12 @@ class Meta(BaseModel):
     cwd: str
     workspace_source: str | None = None  # how cwd was resolved: param|roots|cwd
     workspace_warning: str | None = None  # set when cwd was resolved from server cwd
+    # F8: which of the three roots states the workspace resolution saw — "client" (roots
+    # were advertised and used), "not_negotiated" (this client has none; pass
+    # workspace_root), or "probe_failed" (roots were advertised but the call errored;
+    # retrying may help). Distinguishes a client limitation from a transient failure, which
+    # a bare empty list could not.
+    roots_source: RootsSource | None = None
     tier: Tier = Field(
         description=(
             "Codex intent tier of the run this envelope describes — consult (read-only, no "
@@ -1206,6 +1227,7 @@ class DryRunResult(BaseModel):
     cwd: str
     workspace_source: str | None = None
     workspace_warning: str | None = None
+    roots_source: RootsSource | None = None  # F8: see Meta.roots_source
     tier: Tier
     sandbox: Sandbox
     isolation: Isolation
@@ -1260,6 +1282,7 @@ class DelegateDryRunResult(BaseModel):
     cwd: str
     workspace_source: str | None = None
     workspace_warning: str | None = None
+    roots_source: RootsSource | None = None  # F8: see Meta.roots_source
     tier: Tier = "propose"
     sandbox: Sandbox = "workspace-write"
     isolation: Isolation

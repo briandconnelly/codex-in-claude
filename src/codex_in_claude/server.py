@@ -101,6 +101,7 @@ from codex_in_claude.schemas import (
     ResolvedDefaults,
     ReviewResult,
     ReviewScope,
+    RootsSource,
     Sandbox,
     StatusResult,
     Tier,
@@ -829,14 +830,24 @@ ReasoningEffortDryRunParam = Annotated[
 # --------------------------------------------------------------------------- #
 # Shared helpers
 # --------------------------------------------------------------------------- #
-async def _roots_from_ctx(ctx: Context | None) -> list[str]:
-    """Absolute filesystem paths from the client's MCP roots (file:// only)."""
+async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
+    """Absolute filesystem paths from the client's MCP roots (file:// only), plus which of
+    three states produced them.
+
+    Gating on the negotiated capability (contract-checklist §1/§2) is what separates "this
+    client never advertised roots" from "the roots call failed this turn" — previously both
+    degraded to an empty list and a silent fallback to the server's own cwd, on a call that
+    spends money. Roots stay advisory either way: `workspace_root` is the durable path, and
+    the 2026-07-28 RC deprecates roots entirely."""
     if ctx is None:
-        return []
+        return [], "not_negotiated"
+    params = getattr(ctx.session, "client_params", None)
+    if params is None or getattr(params.capabilities, "roots", None) is None:
+        return [], "not_negotiated"
     try:
         roots = await ctx.list_roots()
     except Exception:
-        return []
+        return [], "probe_failed"
     paths: list[str] = []
     for root in roots:
         uri = str(root.uri)
@@ -851,7 +862,7 @@ async def _roots_from_ctx(ctx: Context | None) -> list[str]:
             # "absolute filesystem paths" contract candidate_roots advertises (#95).
             if path and Path(path).is_absolute():
                 paths.append(path)
-    return paths
+    return paths, "client"
 
 
 def _dry_run_effective_model(requested: str | None) -> str | None:
@@ -1365,7 +1376,7 @@ async def codex_transfer(
     def _elapsed() -> int:
         return int((time.monotonic() - start) * 1000)
 
-    def _meta(cwd: str, source: str | None) -> Meta:
+    def _meta(cwd: str, source: str | None, roots_source: RootsSource | None = None) -> Meta:
         meta = _base_meta(
             cwd,
             source,
@@ -1376,6 +1387,7 @@ async def codex_transfer(
             model=None,
             reasoning_effort=None,
             timeout_seconds=_TRANSFER_TIMEOUT_SECONDS,
+            roots_source=roots_source,
         )
         meta.elapsed_ms = _elapsed()
         return meta
@@ -1416,12 +1428,12 @@ async def codex_transfer(
         )
         return serialize_error(ErrorResult(error=error, meta=_meta(cwd_guess, None)))
     # 3. Resolve the workspace (labels the imported thread's origin cwd).
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
         return _workspace_error_result(
-            wres.error_code, wres.error_detail, roots, _meta(cwd_guess, None)
+            wres.error_code, wres.error_detail, roots, _meta(cwd_guess, None, roots_source)
         )
     # 4. Run the import off the event loop (blocking subprocess I/O). abandon_on_cancel
     #    lets an MCP cancellation return promptly; the stop_event tells the abandoned
@@ -1445,7 +1457,7 @@ async def codex_transfer(
     return _transfer_outcome_envelope(
         outcome,
         source_path=validation.realpath,
-        meta_for=lambda: _meta(cwd, wres.source),
+        meta_for=lambda: _meta(cwd, wres.source, roots_source),
         elapsed_ms=_elapsed,
     )
 
@@ -2271,7 +2283,7 @@ async def _prepare_consult(
             return serialize_error(ErrorResult(error=detail_err, meta=meta))
         assert detail_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     # On a resolve error `wres.path`/`wres.source` are None, so `cwd_guess`/None — the
     # same meta the sync twin used to build separately for its error path.
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
@@ -2285,6 +2297,7 @@ async def _prepare_consult(
         model=model or d.model,
         reasoning_effort=effort,
         timeout_seconds=timeout_seconds,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -2395,7 +2408,7 @@ async def _prepare_review(
             return serialize_error(ErrorResult(error=detail_err, meta=meta))
         assert detail_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     meta = _base_meta(
@@ -2411,6 +2424,7 @@ async def _prepare_review(
         base=base,
         commit=commit,
         paths=paths,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -2490,7 +2504,7 @@ async def _prepare_delegate(
         return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     meta = _base_meta(
@@ -2502,6 +2516,7 @@ async def _prepare_delegate(
         model=model or d.model,
         reasoning_effort=effort,
         timeout_seconds=timeout_seconds,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -3616,7 +3631,7 @@ async def codex_dry_run(
         )
         return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None  # narrowed: iso_err was None
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
@@ -3629,6 +3644,7 @@ async def codex_dry_run(
             model=model or d.model,
             reasoning_effort=effort,
             timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            roots_source=roots_source,
         )
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
@@ -3647,6 +3663,7 @@ async def codex_dry_run(
         base=base,
         commit=commit,
         paths=paths,
+        roots_source=roots_source,
     )
     placeholder = _placeholder_error(dry_meta)
     if placeholder is not None:
@@ -3677,6 +3694,7 @@ async def codex_dry_run(
             scope=scope,
             base=base,
             commit=commit,
+            roots_source=roots_source,
         )
         return serialize_error(
             ErrorResult(
@@ -3717,6 +3735,7 @@ async def codex_dry_run(
             scope=scope,
             base=base,
             commit=commit,
+            roots_source=roots_source,
         )
         return orchestration.gitdiff_error(exc, meta)
 
@@ -3731,6 +3750,7 @@ async def codex_dry_run(
         cwd=cwd,
         workspace_source=wres.source,
         workspace_warning=workspace_warning_for(wres.source, cwd),
+        roots_source=roots_source,
         tier="consult",
         sandbox="read-only",
         isolation=cast("Isolation", isolation_v),
@@ -3812,7 +3832,7 @@ async def codex_delegate_dry_run(
         return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     meta = _base_meta(
@@ -3824,6 +3844,7 @@ async def codex_delegate_dry_run(
         model=model or d.model,
         reasoning_effort=effort,
         timeout_seconds=timeout,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -3890,6 +3911,7 @@ async def codex_delegate_dry_run(
         cwd=cwd,
         workspace_source=wres.source,
         workspace_warning=workspace_warning_for(wres.source, cwd),
+        roots_source=roots_source,
         isolation=cast("Isolation", isolation_v),
         model=_dry_run_effective_model(model or d.model),
         reasoning_effort=effort,
@@ -3922,7 +3944,12 @@ _STATE_TO_ERROR: dict[str, tuple[str, str]] = {
 }
 
 
-def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
+def _job_meta(
+    cwd: str,
+    source: str | None,
+    kind: str | None = None,
+    roots_source: RootsSource | None = None,
+) -> Meta:
     """Meta for a lifecycle-GENERATED error envelope (deadline as timeout). A codex_job_*
     call never runs Codex and never writes the caller's workspace, so tier/sandbox report
     the operation's own read-only posture — consistent with readOnlyHint — rather than the
@@ -3940,6 +3967,7 @@ def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
         reasoning_effort=d.reasoning_effort,
         timeout_seconds=config.job_max_seconds(),
         job_kind=kind,
+        roots_source=roots_source,
     )
 
 
@@ -3976,11 +4004,11 @@ async def _resolve_job_workspace(
 ) -> tuple[str, str | None, dict | None]:
     """Resolve the workspace for a lifecycle call. Returns (cwd, source, error)."""
     cwd_guess = workspace.server_cwd()
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
-        meta = _job_meta(cwd, wres.source)
+        meta = _job_meta(cwd, wres.source, roots_source=roots_source)
         err = _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
         return cwd, wres.source, err
     return cwd, wres.source, None
