@@ -18,8 +18,14 @@ from codex_in_claude.server import mcp
 # finding #2, replacing the shared DetailParam's inaccurate "omits the raw model text" wording
 # for this no-model-call tool): 77,561 bytes — ~120 bytes for a materially more useful
 # description on the tool that most needs it. Raising this number is a reviewed decision — say
-# why in the PR body.
-TOOLS_LIST_BYTE_BUDGET = 78_000
+# why in the PR body. Measured at schema-58 (N1: a PAID/spend or Free — no model call. marker
+# added to every tool description, closing the 7-tool gap a keyword sweep found): 78,072 bytes —
+# 511 bytes for a consistent, single-token cost signal readable from tools/list alone, budget
+# raised accordingly. Measured once more, still at schema-58, after correcting the PAID block's
+# dry-run pointer (codex_delegate now names codex_delegate_dry_run instead of codex_dry_run;
+# codex_consult's now states no preview tool exists instead of naming the wrong one): 78,111
+# bytes — still within budget, no further change.
+TOOLS_LIST_BYTE_BUDGET = 78_500
 
 
 @pytest.mark.anyio

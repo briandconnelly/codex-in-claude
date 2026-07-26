@@ -2518,6 +2518,10 @@ async def codex_consult(
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
+    PAID — this spends Codex quota on every call; there is no dry-run preview for a
+    consult, so run codex_status (free) first to confirm the CLI is installed and
+    authenticated.
+
     Runs `codex exec` in a read-only sandbox — Codex never edits files. A STATIC
     review, not a verify mode: the read-only sandbox blocks the writes a
     test/build/lint run needs, so Codex can't run your checks to confirm its claims —
@@ -2601,6 +2605,9 @@ async def codex_review_changes(
 ) -> dict:
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
+
+    PAID — this spends Codex quota on every call; use codex_dry_run or codex_status
+    (both free) first if you only need to check scope or readiness.
 
     scope: `working_tree` (tracked changes vs HEAD — untracked files follow the
     `untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews
@@ -2688,6 +2695,9 @@ async def codex_delegate(
 ) -> dict:
     """Delegate a coding task to Codex (a different model) in an isolated git
     worktree, and get back a **reviewable diff that is NOT applied** to your tree.
+
+    PAID — this spends Codex quota on every call; use codex_delegate_dry_run or
+    codex_status (both free) first if you only need to check scope or readiness.
 
     Codex edits files with `workspace-write`, but only inside a throwaway worktree
     seeded from your current tracked state. The returned `diff` is Codex's changes;
@@ -3448,7 +3458,7 @@ async def codex_dry_run(
     isolation: IsolationParam = None,
 ) -> dict:
     """Preview what a `codex_review_changes` call would send — scope, diff size,
-    redactions, truncation — with NO model call and no spend. Use it before a
+    redactions, truncation. Free — no model call, no spend. Use it before a
     review to inspect the scope and the reported redactions; redaction is
     best-effort, so treat the preview as a check on scope, not as confirmation
     that no secret remains. Pass the same `extra_context` and `untracked` policy
@@ -3640,7 +3650,7 @@ async def codex_delegate_dry_run(
     """Preview what a `codex_delegate`/`codex_delegate_async` call would do — the
     baseline it seeds from (HEAD commit, tracked file count/size, uncommitted and
     untracked counts), the prompt size that would be sent, and the resolved
-    workspace/isolation — with NO model call, NO spend, and no worktree created.
+    workspace/isolation. Free — no model call, no spend, no worktree created.
 
     Use it before delegating to confirm scope and repo before committing to cost,
     exactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real
@@ -4155,7 +4165,7 @@ async def codex_job_result(
     kind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-
     out/failed job returns an error envelope — as does a done job whose stored result
     this release cannot read (job_result_incompatible). To fetch and delete, use
-    codex_job_consume_result.
+    codex_job_consume_result. Free — no model call.
 
     `detail="summary"` (default) omits the raw model text; pass `detail="full"` for
     the complete raw output and metadata (#56)."""
@@ -4180,7 +4190,9 @@ async def codex_job_consume_result(
     the response, so a response lost in transit does not restore the record; a failed
     removal retains the record until its TTL (codex_job_status still shows it). Use
     only when you no longer need to poll or re-read the job. Non-done jobs are not
-    deleted. `detail` works as in codex_job_result (#56)."""
+    deleted. Free — no model call.
+
+    `detail` works as in codex_job_result (#56)."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 
 

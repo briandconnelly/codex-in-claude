@@ -2219,7 +2219,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-57"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-58"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5930,7 +5930,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-57")
+    assert result["fingerprint"].endswith("schema-58")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6863,3 +6863,61 @@ class TestCapabilitiesDetail:
         async with Client(server.mcp) as c:
             r = await c.call_tool("codex_capabilities", {"include_schemas": ["error-envelope"]})
         assert "error_envelope" in json.dumps(r.structured_content)
+
+
+class TestSpendMarkers:
+    """N1: cost is readable from tools/list alone, not only from codex_capabilities."""
+
+    @pytest.mark.anyio
+    async def test_every_tool_declares_its_cost_in_its_description(self):
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+            caps = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        cost = {t["name"]: t["cost"] for t in caps["tool_details"]}
+        missing = []
+        for name, desc in tools.items():
+            lowered = desc.lower()
+            if cost[name] == "active":
+                if "paid" not in lowered and "spend" not in lowered:
+                    missing.append(f"{name} (active, no paid/spend marker)")
+            elif "free" not in lowered:
+                missing.append(f"{name} (free, no free marker)")
+        assert not missing, "tools with no cost marker: " + ", ".join(missing)
+
+    @pytest.mark.anyio
+    async def test_tool_mentions_in_descriptions_are_registered_tools(self):
+        """A `codex_x` tool name quoted in any description must actually exist — a marker
+        that points at the wrong (but real) tool wouldn't be caught here; this only catches a
+        typo or a stale reference to a renamed/removed tool. See the two tests below for the
+        stronger per-tool checks."""
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+        names = set(tools)
+        bad = []
+        for name, desc in tools.items():
+            for mentioned in re.findall(r"`(codex_[a-z_]+)`", desc):
+                if mentioned not in names:
+                    bad.append(f"{name} mentions unregistered tool {mentioned!r}")
+        assert not bad, "; ".join(bad)
+
+    @pytest.mark.anyio
+    async def test_codex_delegate_points_at_its_own_dry_run(self):
+        """codex_delegate's PAID block must send an agent to codex_delegate_dry_run — the only
+        tool that can preview a delegate call — not to codex_dry_run, which previews
+        codex_review_changes and cannot preview a delegate at all."""
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+        desc = tools["codex_delegate"]
+        assert "codex_delegate_dry_run" in desc
+        assert "codex_dry_run" not in desc
+
+    @pytest.mark.anyio
+    async def test_codex_consult_does_not_claim_a_preview_tool(self):
+        """codex_consult has no dry-run/preview counterpart at all, so its PAID block must not
+        point at either codex_dry_run (previews codex_review_changes) or
+        codex_delegate_dry_run (previews codex_delegate)."""
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+        desc = tools["codex_consult"]
+        assert "codex_dry_run" not in desc
+        assert "codex_delegate_dry_run" not in desc
