@@ -1796,7 +1796,13 @@ class _FakeStore:
     """In-memory stand-in for JobStore used by the async/lifecycle tool tests."""
 
     def __init__(
-        self, *, status_dict="__unset__", record=None, result_json=None, status_sequence=None
+        self,
+        *,
+        status_dict="__unset__",
+        record=None,
+        result_json=None,
+        status_sequence=None,
+        records=None,
     ):
         self._status = status_dict
         self._record = record
@@ -1806,6 +1812,9 @@ class _FakeStore:
         # status_dict/record when set.
         self._status_sequence = status_sequence
         self._status_sequence_idx = 0
+        # Multi-row backing for list_jobs (F5 narrowing tests); appendable via
+        # `_seed_jobs`. None keeps the single-`record` behavior every other caller uses.
+        self._records = records
         self.poll_after_ms = JOB_POLL_AFTER_MS  # base for the job_running backoff hint
         self.started = []
         self.cancelled = []
@@ -1839,6 +1848,8 @@ class _FakeStore:
         return self._record
 
     def list_jobs(self, cwd):
+        if self._records is not None:
+            return list(self._records)
         return [self._record] if self._record else []
 
 
@@ -2219,7 +2230,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-59"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-60"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5969,7 +5980,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-59")
+    assert result["fingerprint"].endswith("schema-60")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -7029,3 +7040,85 @@ class TestAsyncFollowUp:
             )
         assert r.structured_content["ok"] is True
         assert r.structured_content["job_id"] == env["job_id"]
+
+
+# F5: seed stores for codex_job_list narrowing tests, keyed by tmp_path so repeated
+# calls within one test (mixed statuses) accumulate onto the same in-memory store
+# instead of clobbering it. tmp_path is unique per test, so keys never collide
+# across the suite.
+_SEED_STORES: dict[str, _FakeStore] = {}
+
+
+async def _seed_jobs(monkeypatch, tmp_path, *, count: int, status: str = "done") -> None:
+    """Seed `count` job records (no real codex spend) for a workspace, via the same
+    _FakeStore pattern used elsewhere in this file (see test_delegate_async_returns_job_id).
+    Repeated calls for the same tmp_path append to one shared fake store, so a test can
+    mix statuses (e.g. 3 done + 1 running) before listing."""
+    key = str(tmp_path)
+    store = _SEED_STORES.get(key)
+    if store is None:
+        store = _FakeStore(records=[])
+        _SEED_STORES[key] = store
+        monkeypatch.setattr(server.config, "job_store", lambda: store)
+    base = len(store._records)
+    for i in range(count):
+        idx = base + i
+        rec = _ok_record(status)
+        rec = {
+            **rec,
+            "job_id": f"seed-job-{idx}",
+            "started_at": f"2026-06-17T00:{idx:02d}:00+00:00",
+            "started_epoch": 2000.0 - idx,  # lower idx == "newer"
+        }
+        store._records.append(rec)
+
+
+class TestJobListNarrowing:
+    """F5: the job list can be narrowed and discloses when it was cut."""
+
+    @pytest.mark.anyio
+    async def test_limit_caps_the_returned_rows_and_sets_truncated(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        await _seed_jobs(monkeypatch, tmp_path, count=5)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 2})
+        body = r.structured_content
+        assert len(body["jobs"]) == 2
+        assert body["truncated"] is True
+        assert "limit" in body["truncation_hint"]
+
+    @pytest.mark.anyio
+    async def test_untruncated_list_reports_truncated_false(self, monkeypatch, clean_env, tmp_path):
+        await _seed_jobs(monkeypatch, tmp_path, count=2)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 20})
+        assert r.structured_content["truncated"] is False
+        assert "truncation_hint" not in r.structured_content
+
+    @pytest.mark.anyio
+    async def test_status_filter_narrows_by_lifecycle_state(self, monkeypatch, clean_env, tmp_path):
+        await _seed_jobs(monkeypatch, tmp_path, count=3, status="done")
+        await _seed_jobs(monkeypatch, tmp_path, count=1, status="running")
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_list", {"workspace_root": str(tmp_path), "status": "running"}
+            )
+        rows = r.structured_content["jobs"]
+        assert len(rows) == 1 and rows[0]["status"] == "running"
+
+    @pytest.mark.anyio
+    async def test_limit_boundaries(self, monkeypatch, clean_env, tmp_path):
+        # A new parameter is new API surface: test the domain, not just the happy value.
+        await _seed_jobs(monkeypatch, tmp_path, count=3)
+        async with Client(server.mcp) as c:
+            for bad in (0, -1, 1001):
+                r = await c.call_tool(
+                    "codex_job_list",
+                    {"workspace_root": str(tmp_path), "limit": bad},
+                    raise_on_error=False,
+                )
+                assert r.is_error, f"limit={bad} should be rejected"
+                assert r.structured_content["error"]["code"] == "invalid_arguments"
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 1})
+            assert len(r.structured_content["jobs"]) == 1

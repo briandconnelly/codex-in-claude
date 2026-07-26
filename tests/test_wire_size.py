@@ -30,8 +30,11 @@ from codex_in_claude.server import mcp
 # budget raised to the next 500 above the measured value. Measured again 2026-07-26 (F7:
 # JobStarted gained a required `follow_up: Repair` field, so the three `*_async` tools'
 # outputSchema each grew the nested Repair shape): 81,739 bytes — budget raised to the next
-# 500 above the measured value.
-TOOLS_LIST_BYTE_BUDGET = 82_000
+# 500 above the measured value. Measured again 2026-07-26 (F5: codex_job_list gained
+# `limit`/`status` input params plus `truncated`/`truncation_hint` output fields, so its
+# outputSchema and parameter list both grew): 82,537 bytes — budget raised to the next 500
+# above the measured value.
+TOOLS_LIST_BYTE_BUDGET = 83_000
 
 
 @pytest.mark.anyio

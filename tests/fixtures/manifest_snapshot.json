@@ -867,7 +867,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-59",
+            "default": "codex-in-claude/0.1/schema-60",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1414,7 +1414,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-59",
+                "default": "codex-in-claude/0.1/schema-60",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2480,7 +2480,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-59",
+            "default": "codex-in-claude/0.1/schema-60",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3139,7 +3139,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-59",
+            "default": "codex-in-claude/0.1/schema-60",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -5665,11 +5665,37 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List the background jobs known for this workspace, newest first.\n\nUse to recover job_ids lost across context compaction or interruption. Returns\neach job's id, kind, status, start time, result_available, `result_ok` (a done\njob's outcome — true/false/null; see codex_job_status), and expiry, so a stored\nfailure is triageable without fetching each result. Free — no model call.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so the list can transiently exceed the cap. Includes\nsync-originated records (any sync consult/review/delegate call); the cap/TTL eviction\ncovers both.",
+      "description": "List the background jobs known for this workspace, newest first.\n\nFree — no model call. Use to recover job_ids lost across context compaction or\ninterruption. Returns each job's id, kind, status, start time, result_available,\n`result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,\nso a stored failure is triageable without fetching each result.\n\nReturns the 20 newest by default; pass `limit` (1-1000) or `status` to narrow. When more\njobs match than `limit`, the response sets `truncated: true` with a `truncation_hint` —\nthe extra rows are dropped, not paged, so raise `limit` or filter rather than looking for\na cursor.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nIncludes sync-originated records (any sync consult/review/delegate call); the cap/TTL\neviction covers both.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "limit": {
+            "default": 20,
+            "description": "Maximum jobs to return, newest first (1-1000, default 20). When more match, the response sets truncated=true; narrow with `status` or raise `limit`.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cancelled",
+                  "done",
+                  "failed",
+                  "running",
+                  "timeout"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Return only jobs in this lifecycle state ('running', 'done', 'failed', 'cancelled', 'timeout'); omit for all states."
+          },
           "workspace_root": {
             "anyOf": [
               {
@@ -5762,6 +5788,19 @@
                 "type": "boolean"
               },
               "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "truncation_hint": {
                 "anyOf": [
                   {
                     "type": "string"

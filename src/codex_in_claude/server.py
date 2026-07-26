@@ -746,6 +746,22 @@ JobIdParam = Annotated[
         "lost ids with codex_job_list."
     ),
 ]
+JobLimitParam = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=1000,
+        description="Maximum jobs to return, newest first (1-1000, default 20). When more "
+        "match, the response sets truncated=true; narrow with `status` or raise `limit`.",
+    ),
+]
+JobStatusFilterParam = Annotated[
+    JobState | None,
+    Field(
+        description="Return only jobs in this lifecycle state ('running', 'done', 'failed', "
+        "'cancelled', 'timeout'); omit for all states."
+    ),
+]
 IdempotencyKeyParam = Annotated[
     str | None,
     Field(
@@ -4363,27 +4379,38 @@ async def codex_job_cancel(
 )
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_list(
-    ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
+    ctx: Context | None = None,
+    workspace_root: WorkspaceRootParam = None,
+    limit: JobLimitParam = 20,
+    status: JobStatusFilterParam = None,
 ) -> dict:
     """List the background jobs known for this workspace, newest first.
 
-    Use to recover job_ids lost across context compaction or interruption. Returns
-    each job's id, kind, status, start time, result_available, `result_ok` (a done
-    job's outcome — true/false/null; see codex_job_status), and expiry, so a stored
-    failure is triageable without fetching each result. Free — no model call.
+    Free — no model call. Use to recover job_ids lost across context compaction or
+    interruption. Returns each job's id, kind, status, start time, result_available,
+    `result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,
+    so a stored failure is triageable without fetching each result.
+
+    Returns the 20 newest by default; pass `limit` (1-1000) or `status` to narrow. When more
+    jobs match than `limit`, the response sets `truncated: true` with a `truncation_hint` —
+    the extra rows are dropped, not paged, so raise `limit` or filter rather than looking for
+    a cursor.
 
     Read a job's result promptly — a finished record can silently drop off. This list is
     not permanent storage: terminal records expire after the TTL (default 24h), and a
     per-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records
     as new jobs start, so a finished job can disappear even before its `expires_at`.
-    Running jobs are never evicted, so the list can transiently exceed the cap. Includes
-    sync-originated records (any sync consult/review/delegate call); the cap/TTL eviction
-    covers both."""
+    Includes sync-originated records (any sync consult/review/delegate call); the cap/TTL
+    eviction covers both."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     store = config.job_store()
     rows = await asyncio.to_thread(store.list_jobs, cwd)
+    if status is not None:
+        rows = [r for r in rows if r["status"] == status]
+    truncated = len(rows) > limit
+    rows = rows[:limit]
     jobs = [
         JobSummary(
             job_id=r["job_id"],
@@ -4397,7 +4424,23 @@ async def codex_job_list(
         )
         for r in rows
     ]
-    return JobListResult(jobs=jobs, workspace=_job_workspace(cwd, source)).model_dump(mode="json")
+    result = JobListResult(
+        jobs=jobs,
+        workspace=_job_workspace(cwd, source),
+        truncated=truncated,
+        truncation_hint=(
+            f"showing the {limit} newest of more matching jobs; raise `limit` (max 1000) "
+            "or narrow with `status`"
+            if truncated
+            else None
+        ),
+    ).model_dump(mode="json")
+    # exclude_none=True at the model level would also strip nested nullable-but-required
+    # fields (e.g. JobSummary.result_ok, legitimately None for a running job) — so omit
+    # just truncation_hint by hand rather than reaching for the blanket dump flag.
+    if result["truncation_hint"] is None:
+        del result["truncation_hint"]
+    return result
 
 
 def _make_signal_handler(log: logging.Logger, previous: Any) -> Callable[[int, object], None]:

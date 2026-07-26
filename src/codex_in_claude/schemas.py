@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-59"
+FINGERPRINT = "codex-in-claude/0.1/schema-60"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -1295,6 +1295,11 @@ class JobListResult(BaseModel):
     ok: Literal[True] = True
     jobs: list[JobSummary] = Field(default_factory=list)
     workspace: Workspace  # the resolved workspace these jobs were listed from (#54)
+    # §8 explicit truncation: `truncated` says rows beyond `limit` exist and were dropped —
+    # this is a cap, not a page, so there is no cursor to continue with. Always present;
+    # the hint is omitted when nothing was cut.
+    truncated: bool = False
+    truncation_hint: str | None = None
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 

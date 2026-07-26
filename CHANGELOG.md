@@ -15,6 +15,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - Every tool now carries a `title` for human-facing pickers and a namespaced
   `_meta` stability tier, so a client reading only `tools/list` can see which tools are
   experimental.
+- `codex_job_list` gained `limit` (1-1000, default 20) and `status` filters to narrow the
+  returned jobs. When more jobs match than `limit`, the response sets `truncated: true` with
+  a `truncation_hint` naming `limit`/`status` as the way to see the rest — the extra rows are
+  dropped, not paged, so there is no cursor (audit F5).
 
 ### Changed
 
