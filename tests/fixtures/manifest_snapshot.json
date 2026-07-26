@@ -866,7 +866,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-56",
+            "default": "codex-in-claude/0.1/schema-57",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1389,7 +1389,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-56",
+                "default": "codex-in-claude/0.1/schema-57",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2029,9 +2029,13 @@
       "text": {
         "description": "Full semantics for parameters whose tools/list description is a compressed summary (issue #333). Each entry's `summary` is what ships inline on the wire; `full` is the authoritative contract.",
         "params": {
+          "extra_context": {
+            "full": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field. It is bounded like the gathered diff and counts against the same input budget, so an oversized value fails as input_too_large before any spend.",
+            "summary": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
+          },
           "idempotency_key": {
             "full": "Optional client-supplied dedup key, scoped to THIS concrete tool on the same workspace. Reusing it on the same tool with the same arguments replays the existing run instead of starting — and paying for — a duplicate Codex call (a sync call reattaches to the in-flight run and returns its result; an _async call returns the same job_id). The sync and _async variants are DIFFERENT tools and never share a key's run. Reuse with different arguments — including a different timeout_seconds — is refused (idempotency_conflict); a key whose prior result was already consumed/evicted is idempotency_result_unavailable; a still-publishing reservation is idempotency_in_progress (retry). Omit it for the prior no-dedup behavior. A completed result stays replayable while its job record lives (its TTL), subject to consumption or count-eviction; the fail-closed conflict/in-progress window can last longer — up to the job's max runtime + termination grace + TTL. meta.idempotency_replayed=true marks a replayed (unpaid) response.",
-            "summary": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "summary": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "reasoning_effort": {
             "full": "Override the Codex reasoning effort for this call (sent as a `model_reasoning_effort` config override); omit (or pass null) for the server default (CODEX_IN_CLAUDE_REASONING_EFFORT) or Codex's own resolution. An open per-model string the Codex backend validates at run time — commonly minimal|low|medium|high|xhigh; codex_models lists each model's advertised set (advisory). A backend-rejected value fails as invalid_reasoning_effort (repair steers to codex_models); an explicit empty string is sent as-is (and rejected by the backend), never treated as unset. Control characters, surrogates, and values over 128 chars in this per-call argument are rejected at the MCP boundary as invalid_arguments; the same hostile shape in the resolved CODEX_IN_CLAUDE_REASONING_EFFORT default — which never crosses that boundary — is instead refused pre-spend as invalid_reasoning_effort (repair: correct the config; zero spend, the value never reaches codex).",
@@ -2451,7 +2455,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-56",
+            "default": "codex-in-claude/0.1/schema-57",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3110,7 +3114,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-56",
+            "default": "codex-in-claude/0.1/schema-57",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3431,7 +3435,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+            "description": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
           },
           "idempotency_key": {
             "anyOf": [
@@ -3445,7 +3449,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "description": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -3729,7 +3733,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+            "description": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
           },
           "idempotency_key": {
             "anyOf": [
@@ -3743,7 +3747,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "description": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -3952,7 +3956,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "description": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -4248,7 +4252,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "description": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -4736,7 +4740,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+            "description": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -6182,7 +6186,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+            "description": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
           },
           "idempotency_key": {
             "anyOf": [
@@ -6196,7 +6200,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "description": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "isolation": {
             "anyOf": [
@@ -6616,7 +6620,7 @@
               }
             ],
             "default": null,
-            "description": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex can read files it's pointed at, and redaction does not cover this field."
+            "description": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
           },
           "idempotency_key": {
             "anyOf": [
@@ -6630,7 +6634,7 @@
               }
             ],
             "default": null,
-            "description": "Optional client dedup key, scoped to THIS tool + workspace. Same key with identical arguments replays the prior run's result WITHOUT paying for a new Codex call; different arguments (including a different timeout_seconds) are refused with idempotency_conflict. The sync and _async forms are separate tools and never share a key. Omit for no dedup; retention is bounded, not indefinite. Full lifecycle (replay window, idempotency_in_progress / idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed marker): codex://params."
+            "description": "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays the prior result with no new spend; different args are refused (idempotency_conflict). Sync and _async are separate tools and never share a key. Omit for none; retention is bounded. Lifecycle: codex://params."
           },
           "isolation": {
             "anyOf": [

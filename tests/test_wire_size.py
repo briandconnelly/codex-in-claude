@@ -11,9 +11,10 @@ from fastmcp import Client
 
 from codex_in_claude.server import mcp
 
-# Measured 2026-07-26 at schema-56: 79,242 bytes. Lowered by the compaction tasks below.
-# Raising this number is a reviewed decision — say why in the PR body.
-TOOLS_LIST_BYTE_BUDGET = 79_500
+# Measured 2026-07-26 at schema-56: 79,242 bytes. Measured at schema-57 (idempotency_key and
+# extra_context compressed into the registry): 76,911 bytes. Raising this number is a reviewed
+# decision — say why in the PR body.
+TOOLS_LIST_BYTE_BUDGET = 77_000
 
 
 @pytest.mark.anyio

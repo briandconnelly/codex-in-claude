@@ -628,13 +628,8 @@ TranscriptPathParam = Annotated[
 ]
 ExtraContextParam = Annotated[
     str | None,
-    Field(
-        description="Optional author intent / background context, added to the prompt "
-        "as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded "
-        "directives as data, not commands — best-effort prompt-injection mitigation, "
-        "not a guarantee. Don't include live secrets: Codex can read files it's "
-        "pointed at, and redaction does not cover this field."
-    ),
+    # Compressed inline (#333, audit-2 F2); full caveats and bounds at codex://params.
+    Field(description=param_contracts.PARAMETER_CONTRACTS["extra_context"].summary),
 ]
 ModelParam = Annotated[
     str | None,
