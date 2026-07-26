@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import json
 import os
 import shlex
 import signal
@@ -2117,6 +2118,21 @@ def _model_catalog_payload() -> dict:
     return read_model_catalog().model_dump(mode="json", exclude_none=True)
 
 
+_TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"
+
+
+def _static_triage(payload: dict) -> dict[str, dict]:
+    """Triage metadata for a resource whose body is a fixed, generated schema.
+
+    An agent deciding whether a resource body is worth the context wants `size` and
+    `lastModified` — codex://error-envelope reads back at ~18 KB with no advance signal.
+    Neither native field is reachable on fastmcp 3.4.4 (its Resource model has no `size`;
+    the installed SDK's Annotations has no `lastModified`), so the metadata rides the
+    namespaced `_meta` key instead. Computed from the payload at registration, so it
+    cannot go stale against the body."""
+    return {_TRIAGE_META_KEY: {"size_bytes": len(json.dumps(payload))}}
+
+
 @mcp.tool(
     annotations=_FREE_READ,
     output_schema=MODEL_CATALOG_SCHEMA,
@@ -2141,6 +2157,15 @@ def codex_models() -> dict:
     name="codex-models",
     title="Codex model catalog",
     mime_type="application/json",
+    meta={
+        _TRIAGE_META_KEY: {
+            # This body is a refreshed cache, not a fixed schema, so a declared size would
+            # go stale. The server advertises resources.subscribe=false, so there is no
+            # update notification — freshness is observable only in the body itself.
+            "volatile": True,
+            "freshness_via": "the payload's `fetched_at` field (also on codex_models)",
+        }
+    },
 )
 def codex_models_resource() -> dict:
     """Advisory Codex model catalog (same payload as the codex_models tool)."""
@@ -2152,6 +2177,7 @@ def codex_models_resource() -> dict:
     name="codex-error-envelope",
     title="Codex error envelope schema",
     mime_type="application/schema+json",
+    meta=_static_triage(ERROR_ENVELOPE_SCHEMA),
 )
 def error_envelope_resource() -> dict:
     """The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry
@@ -2164,6 +2190,7 @@ def error_envelope_resource() -> dict:
     name="codex-result-meta",
     title="Codex result metadata schema",
     mime_type="application/schema+json",
+    meta=_static_triage(RESULT_META_SCHEMA),
 )
 def result_meta_resource() -> dict:
     """The canonical full result-metadata schema (Meta). Every success envelope carries an
@@ -2176,6 +2203,7 @@ def result_meta_resource() -> dict:
     name="codex-capabilities-result",
     title="Codex capabilities result schema",
     mime_type="application/schema+json",
+    meta=_static_triage(CAPABILITIES_RESULT_SCHEMA),
 )
 def capabilities_result_resource() -> dict:
     """The canonical full codex_capabilities result schema. The tool's outputSchema opaques
@@ -2188,6 +2216,7 @@ def capabilities_result_resource() -> dict:
     name="codex-status-result",
     title="Codex status result schema",
     mime_type="application/schema+json",
+    meta=_static_triage(STATUS_RESULT_SCHEMA),
 )
 def status_result_resource() -> dict:
     """The canonical full codex_status result schema. The tool's outputSchema opaques
@@ -2200,6 +2229,7 @@ def status_result_resource() -> dict:
     name="codex-params",
     title="Codex tool parameter contracts",
     mime_type="application/json",
+    meta=_static_triage(param_contracts.resource_body()),
 )
 def params_resource() -> dict:
     """Full semantics for parameters whose tools/list description is a compressed summary

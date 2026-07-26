@@ -7199,3 +7199,48 @@ class TestRootsCapabilityGating:
         paths, source = await server._roots_from_ctx(ctx)
         assert paths == []
         assert source == "client"
+
+
+TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"
+
+
+class TestResourceTriageMetadata:
+    """F4: an agent can size a resource before spending context on its body."""
+
+    @pytest.mark.anyio
+    async def test_static_schema_resources_declare_their_size(self):
+        async with Client(server.mcp) as c:
+            resources = {str(r.uri): r for r in await c.list_resources()}
+        for uri in (
+            "codex://error-envelope",
+            "codex://result-meta",
+            "codex://capabilities-result",
+            "codex://status-result",
+            "codex://params",
+        ):
+            triage = (resources[uri].meta or {}).get(TRIAGE_META_KEY)
+            assert triage and isinstance(triage["size_bytes"], int)
+            assert triage["size_bytes"] > 0
+
+    @pytest.mark.anyio
+    async def test_declared_size_matches_the_actual_body(self):
+        # A stale size is worse than none — it would be trusted.
+        async with Client(server.mcp) as c:
+            resources = {str(r.uri): r for r in await c.list_resources()}
+            for uri, r in resources.items():
+                triage = (r.meta or {}).get(TRIAGE_META_KEY, {})
+                if "size_bytes" not in triage:
+                    continue
+                body = await c.read_resource(uri)
+                actual = len(body[0].text)
+                assert abs(actual - triage["size_bytes"]) <= actual * 0.02, (
+                    f"{uri}: declared {triage['size_bytes']}, actual {actual}"
+                )
+
+    @pytest.mark.anyio
+    async def test_the_mutable_resource_is_marked_volatile(self):
+        async with Client(server.mcp) as c:
+            resources = {str(r.uri): r for r in await c.list_resources()}
+        triage = (resources["codex://models"].meta or {}).get(TRIAGE_META_KEY)
+        assert triage["volatile"] is True
+        assert "fetched_at" in triage["freshness_via"]

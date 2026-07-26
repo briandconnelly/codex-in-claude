@@ -622,6 +622,11 @@
   },
   "capabilities_result": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 7766
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -1013,6 +1018,11 @@
   ],
   "error_envelope": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 18557
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -2067,6 +2077,11 @@
   },
   "params": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 3729
+        }
+      },
       "mimeType": "application/json",
       "text": {
         "description": "Full semantics for parameters whose tools/list description is a compressed summary (issue #333). Each entry's `summary` is what ships inline on the wire; `full` is the authoritative contract.",
@@ -2092,6 +2107,11 @@
   "resource_templates": [],
   "resources": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 7766
+        }
+      },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
       "mimeType": "application/schema+json",
       "name": "codex-capabilities-result",
@@ -2099,6 +2119,11 @@
       "uri": "codex://capabilities-result"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 18557
+        }
+      },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
       "mimeType": "application/schema+json",
       "name": "codex-error-envelope",
@@ -2106,6 +2131,12 @@
       "uri": "codex://error-envelope"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "freshness_via": "the payload's `fetched_at` field (also on codex_models)",
+          "volatile": true
+        }
+      },
       "description": "Advisory Codex model catalog (same payload as the codex_models tool).",
       "mimeType": "application/json",
       "name": "codex-models",
@@ -2113,6 +2144,11 @@
       "uri": "codex://models"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 3729
+        }
+      },
       "description": "Full semantics for parameters whose tools/list description is a compressed summary\n(#333). MCP inlines each parameter description into every tool's inputSchema, so the\nlengthy lifecycle/validation prose is shipped once here instead of repeated on the\nwire; the inline summary keeps the first-call selection, safety, and spend-critical\nfacts and points here for the complete lifecycle and recovery semantics.",
       "mimeType": "application/json",
       "name": "codex-params",
@@ -2120,6 +2156,11 @@
       "uri": "codex://params"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 12172
+        }
+      },
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
       "mimeType": "application/schema+json",
       "name": "codex-result-meta",
@@ -2127,6 +2168,11 @@
       "uri": "codex://result-meta"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 8096
+        }
+      },
       "description": "The canonical full codex_status result schema. The tool's outputSchema opaques\n`rate_limit`/`raw_defaults`/`resolved_defaults` and points here for the full shape (#242).",
       "mimeType": "application/schema+json",
       "name": "codex-status-result",
@@ -2136,6 +2182,11 @@
   ],
   "result_meta": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 12172
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -2763,6 +2814,11 @@
   ],
   "status_result": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 8096
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
