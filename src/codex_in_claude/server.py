@@ -842,7 +842,15 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
     the 2026-07-28 RC deprecates roots entirely."""
     if ctx is None:
         return [], "not_negotiated"
-    params = getattr(ctx.session, "client_params", None)
+    try:
+        # ctx.session is a property that raises RuntimeError when no session has been
+        # established yet (e.g. called outside a request context) — fold that into
+        # "not_negotiated" (the honest answer: we could not establish that roots were
+        # negotiated) rather than letting it escape uncaught, which the old blanket
+        # `except` below incidentally covered before this pre-check existed.
+        params = getattr(ctx.session, "client_params", None)
+    except RuntimeError:
+        return [], "not_negotiated"
     if params is None or getattr(params.capabilities, "roots", None) is None:
         return [], "not_negotiated"
     try:
@@ -2648,7 +2656,7 @@ async def codex_consult(
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
 
-    PAID — this spends Codex quota on every call; there is no dry-run preview for a
+    PAID — this spends Codex quota on every new call; there is no dry-run preview for a
     consult, so run codex_status (free) first to confirm the CLI is installed and
     authenticated.
 
@@ -2741,7 +2749,7 @@ async def codex_review_changes(
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
 
-    PAID — this spends Codex quota on every call; use codex_dry_run or codex_status
+    PAID — this spends Codex quota on every new call; use codex_dry_run or codex_status
     (both free) first if you only need to check scope or readiness.
 
     scope: `working_tree` (tracked changes vs HEAD — untracked files follow the
@@ -2836,7 +2844,7 @@ async def codex_delegate(
     """Delegate a coding task to Codex (a different model) in an isolated git
     worktree, and get back a **reviewable diff that is NOT applied** to your tree.
 
-    PAID — this spends Codex quota on every call; use codex_delegate_dry_run or
+    PAID — this spends Codex quota on every new call; use codex_delegate_dry_run or
     codex_status (both free) first if you only need to check scope or readiness.
 
     Codex edits files with `workspace-write`, but only inside a throwaway worktree

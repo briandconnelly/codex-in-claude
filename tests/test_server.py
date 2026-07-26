@@ -6951,13 +6951,17 @@ class TestSpendMarkers:
         """A `codex_x` tool name quoted in any description must actually exist — a marker
         that points at the wrong (but real) tool wouldn't be caught here; this only catches a
         typo or a stale reference to a renamed/removed tool. See the two tests below for the
-        stronger per-tool checks."""
+        stronger per-tool checks.
+
+        Backticks are optional in the match: the PAID blocks mention `codex_dry_run`,
+        `codex_delegate_dry_run`, and `codex_status` in plain prose (no backticks), and a
+        sweep that only saw backticked mentions would miss a rename of exactly those."""
         async with Client(server.mcp) as c:
             tools = {t.name: (t.description or "") for t in await c.list_tools()}
         names = set(tools)
         bad = []
         for name, desc in tools.items():
-            for mentioned in re.findall(r"`(codex_[a-z_]+)`", desc):
+            for mentioned in re.findall(r"`?(codex_[a-z_]+)`?", desc):
                 if mentioned not in names:
                     bad.append(f"{name} mentions unregistered tool {mentioned!r}")
         assert not bad, "; ".join(bad)
@@ -7118,6 +7122,38 @@ class TestJobListNarrowing:
             )
         rows = r.structured_content["jobs"]
         assert len(rows) == 1 and rows[0]["status"] == "running"
+        # JobSummary.result_ok is required-but-nullable and documented as "always present" —
+        # a running job's producer-declared outcome is genuinely unknown (None), not absent.
+        # Assert the key survives serialization explicitly: a recursive exclude_none (as in
+        # the JobListResult.model_dump(mode="json") call this tool used to make) would strip
+        # a None-valued key entirely, and that regression must fail here, not pass silently.
+        assert "result_ok" in rows[0]
+        assert rows[0]["result_ok"] is None
+
+    @pytest.mark.anyio
+    async def test_status_filter_applies_before_the_limit_slice(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        """Regression guard for a slice-before-filter bug: every other test in this class
+        uses few enough rows (<= 5) with limit=20 that the slice is a no-op, so a
+        slice-then-filter implementation would pass them all. Here 25 `done` rows outnumber
+        `limit`, so the slice bites first under the wrong order — it would keep only the 20
+        newest raw rows (all `done`, none `running`) and then filter to zero, or report
+        `truncated: true` on a result that is not actually cut once the status filter is
+        applied. Correct (filter-then-slice) behavior returns the single `running` row,
+        untruncated."""
+        await _seed_jobs(monkeypatch, tmp_path, count=25, status="done")
+        await _seed_jobs(monkeypatch, tmp_path, count=1, status="running")
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_list",
+                {"workspace_root": str(tmp_path), "status": "running", "limit": 20},
+            )
+        body = r.structured_content
+        rows = body["jobs"]
+        assert len(rows) == 1 and rows[0]["status"] == "running"
+        assert body["truncated"] is False
+        assert "truncation_hint" not in body
 
     @pytest.mark.anyio
     async def test_limit_boundaries(self, monkeypatch, clean_env, tmp_path):

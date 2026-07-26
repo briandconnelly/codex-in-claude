@@ -7,11 +7,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
-- Every tool now states its cost in its own description — the seven tools that previously
-  relied on `codex_capabilities` alone (`codex_consult`, `codex_review_changes`,
-  `codex_delegate`, `codex_dry_run`, `codex_delegate_dry_run`, `codex_job_result`,
-  `codex_job_consume_result`) now say `PAID` or `Free` explicitly, so a client reading only
-  `tools/list` can tell which calls spend Codex quota.
+- Every tool now states its cost in its own description — five tools that previously relied
+  on `codex_capabilities` alone (`codex_consult`, `codex_review_changes`, `codex_delegate`,
+  `codex_job_result`, `codex_job_consume_result`) now say `PAID` or `Free` explicitly, and two
+  more (`codex_dry_run`, `codex_delegate_dry_run`), which already stated `NO model call and no
+  spend` in prose, were normalized onto the same `Free` token — so a client reading only
+  `tools/list` gets one consistent cost marker across every tool.
 - Every tool now carries a `title` for human-facing pickers and a namespaced
   `_meta` stability tier, so a client reading only `tools/list` can see which tools are
   experimental.
@@ -40,7 +41,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`,
   `async_lifecycle`). Pass `detail="full"` for the previous payload. The `extra_context`
   parameter contract moved its full text to `codex://params` and `idempotency_key`'s inline
-  summary was compressed, shrinking the `tools/list` wire response by 2,331 bytes.
+  summary was compressed. The durable size win is `codex_capabilities`' own response —
+  21,391 → 11,109 bytes (−48%) — but that is paid only by clients that call the tool, not by
+  every client the way `tools/list` is.
+- Net effect on the preloaded discovery surface: this release's other additions (per-tool cost
+  markers, titles, stability tiers, `codex_job_list` filters, `roots_source` provenance,
+  resource triage metadata) outgrew the compression above for every client, not just
+  `codex_capabilities` callers. `tools/list` went from 79,242 to 82,771 bytes (+4.5%) and
+  cold-start tokens from 20,719 to 21,880 (+5.6%). That is a deliberate trade: a larger
+  preloaded surface in exchange for cost/stability/next-step metadata that was previously
+  missing or unreachable.
 
 ### Fixed
 

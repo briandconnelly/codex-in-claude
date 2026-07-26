@@ -154,9 +154,26 @@ async def test_roots_from_ctx_none():
     assert await server._roots_from_ctx(None) == ([], "not_negotiated")
 
 
-async def test_roots_from_ctx_unsupported_degrades():
+async def test_roots_from_ctx_probe_failure_degrades():
+    """Capability advertised, but the `list_roots()` probe itself raised — a
+    fact distinct from "unsupported"/not negotiated (see the RuntimeError-on-`ctx.session`
+    test below, which is the true not-negotiated-shaped failure)."""
     ctx = _FakeCtx([], raise_exc=True)
     assert await server._roots_from_ctx(ctx) == ([], "probe_failed")
+
+
+async def test_roots_from_ctx_no_session_reports_not_negotiated():
+    """`Context.session` is a property that raises RuntimeError when no session has been
+    established yet. That must map to `not_negotiated` (we could not establish that roots
+    were negotiated at all), not escape uncaught or be mistaken for `probe_failed` (which is
+    reserved for a `list_roots()` call that raised after capability negotiation succeeded)."""
+
+    class _NoSessionCtx:
+        @property
+        def session(self):
+            raise RuntimeError("session is not available")
+
+    assert await server._roots_from_ctx(_NoSessionCtx()) == ([], "not_negotiated")
 
 
 async def test_consult_uses_roots(monkeypatch, clean_env, tmp_path):
