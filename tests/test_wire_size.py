@@ -24,8 +24,11 @@ from codex_in_claude.server import mcp
 # raised accordingly. Measured once more, still at schema-58, after correcting the PAID block's
 # dry-run pointer (codex_delegate now names codex_delegate_dry_run instead of codex_dry_run;
 # codex_consult's now states no preview tool exists instead of naming the wrong one): 78,111
-# bytes — still within budget, no further change.
-TOOLS_LIST_BYTE_BUDGET = 78_500
+# bytes — still within budget, no further change. Measured 2026-07-26 (F3 + F9: every tool
+# gained a `title` and a namespaced `_meta` stability tier, so tools/list alone shows which
+# tools are experimental): 79,723 bytes — ~1,600 bytes for 17 titles plus 17 `_meta` blocks;
+# budget raised to the next 500 above the measured value.
+TOOLS_LIST_BYTE_BUDGET = 80_000
 
 
 @pytest.mark.anyio

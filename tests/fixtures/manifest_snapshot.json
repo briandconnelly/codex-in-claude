@@ -829,6 +829,7 @@
                   }
                 ],
                 "default": null,
+                "description": "This tool's per-tool maturity override, advisory only. null means it inherits the top-level `stability` (the server-wide tier); a value here flags a tool more experimental than that norm.",
                 "title": "Stability"
               },
               "use_when": {
@@ -3206,6 +3207,9 @@
   ],
   "tools": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -3244,7 +3248,7 @@
               }
             ],
             "default": null,
-            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema), in the response — the default payload omits them and points at the codex:// resources instead."
+            "description": "Opt-in tool-reachable fallback for resource-blind clients: also embed the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema, sourced from the codex://params resource body), in the response — the default payload omits them and points at the codex:// resources instead."
           }
         },
         "type": "object"
@@ -3411,9 +3415,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "List server capabilities (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -3718,9 +3726,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Consult Codex (paid)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -3930,9 +3942,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Consult Codex in background (paid)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -4235,9 +4251,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Delegate a coding task (paid)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -4435,9 +4455,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Delegate in background (paid)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -4703,9 +4727,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Preview a delegate (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -5137,9 +5165,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Preview a review (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,
@@ -5366,9 +5398,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Cancel a job (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -5466,9 +5502,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Fetch and delete job result (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -5647,9 +5687,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "List background jobs (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -5745,9 +5789,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Fetch job result (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -5972,9 +6020,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Check job status (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -6138,9 +6190,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "List Codex models (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -6581,9 +6637,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Review git changes (paid)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -6845,9 +6905,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Review git changes in background (paid)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "alpha"
+      },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
@@ -7016,9 +7080,13 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Check Codex readiness (free)"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/stability": "experimental"
+      },
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": false,
@@ -7165,7 +7233,8 @@
           "ok"
         ],
         "type": "object"
-      }
+      },
+      "title": "Transfer session to Codex (free)"
     }
   ]
 }

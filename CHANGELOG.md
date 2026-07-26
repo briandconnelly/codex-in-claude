@@ -5,6 +5,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- Every tool now states its cost in its own description — the seven tools that previously
+  relied on `codex_capabilities` alone (`codex_consult`, `codex_review_changes`,
+  `codex_delegate`, `codex_dry_run`, `codex_delegate_dry_run`, `codex_job_result`,
+  `codex_job_consume_result`) now say `PAID` or `Free` explicitly, so a client reading only
+  `tools/list` can tell which calls spend Codex quota.
+- Every tool now carries a `title` for human-facing pickers and a namespaced
+  `_meta` stability tier, so a client reading only `tools/list` can see which tools are
+  experimental.
+
 ### Changed
 
 - `codex_capabilities` now defaults to `detail="summary"`, returning only the per-tool facts

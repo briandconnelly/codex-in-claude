@@ -6921,3 +6921,35 @@ class TestSpendMarkers:
         desc = tools["codex_consult"]
         assert "codex_dry_run" not in desc
         assert "codex_delegate_dry_run" not in desc
+
+
+STABILITY_META_KEY = "dev.bconnelly.codex-in-claude/stability"
+
+
+class TestToolDisplayMetadata:
+    """F3 + F9: title and stability tier readable from tools/list alone."""
+
+    @pytest.mark.anyio
+    async def test_every_tool_has_a_title(self):
+        async with Client(server.mcp) as c:
+            tools = await c.list_tools()
+        assert not [t.name for t in tools if not t.title]
+
+    @pytest.mark.anyio
+    async def test_titles_are_short_and_distinct(self):
+        async with Client(server.mcp) as c:
+            tools = await c.list_tools()
+        titles = [t.title for t in tools]
+        assert len(set(titles)) == len(titles), "titles must be distinct"
+        assert all(len(t) <= 45 for t in titles), "titles are picker labels, not sentences"
+
+    @pytest.mark.anyio
+    async def test_stability_tier_matches_codex_capabilities(self):
+        async with Client(server.mcp) as c:
+            tools = await c.list_tools()
+            caps = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        expected = {t["name"]: t.get("stability") or "alpha" for t in caps["tool_details"]}
+        for t in tools:
+            assert (t.meta or {}).get(STABILITY_META_KEY) == expected[t.name], (
+                f"{t.name}: tools/list tier disagrees with codex_capabilities"
+            )

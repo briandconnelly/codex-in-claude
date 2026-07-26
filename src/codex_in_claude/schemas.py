@@ -167,6 +167,17 @@ JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
 # server-wide `stability` ("alpha"); a value flags a tool that differs from that norm.
 ToolStability = Literal["stable", "preview", "experimental"]
 
+# G1 (audit-2 gate follow-up): this inheritance rule previously lived only in
+# codex_capabilities' `returns` prose, which detail="full" now gates behind an extra
+# param — so a summary-only or resource-blind client couldn't reach it. Putting it on the
+# field itself fixes that at the source. Registered in _KEPT_DESCRIPTIONS so it survives
+# into the advertised outputSchema.
+_TOOL_STABILITY_DESC = (
+    "This tool's per-tool maturity override, advisory only. null means it inherits the "
+    "top-level `stability` (the server-wide tier); a value here flags a tool more "
+    "experimental than that norm."
+)
+
 
 def workspace_warning_for(source: str | None, cwd: str) -> str | None:
     """Warning when the workspace was resolved from the server's own cwd.
@@ -942,7 +953,7 @@ class ToolCapability(BaseModel):
     cost: Literal["free", "active"]
     # Per-tool maturity (advisory). None ⇒ inherits the server-wide `stability`; set
     # only when a tool is more experimental than that norm (e.g. the async/job surface).
-    stability: ToolStability | None = None
+    stability: ToolStability | None = Field(default=None, description=_TOOL_STABILITY_DESC)
     use_when: str
     required_params: list[str] = Field(default_factory=list)
     key_optional_params: list[str] = Field(default_factory=list)
@@ -1329,6 +1340,7 @@ _KEPT_DESCRIPTIONS = frozenset(
         _DRY_RUN_MODEL_DESC,
         _DRY_RUN_EFFORT_DESC,
         _FINGERPRINT_COVERS_DESC,
+        _TOOL_STABILITY_DESC,
     }
 )
 
