@@ -84,7 +84,15 @@ FINGERPRINT = "codex-in-claude/0.1/schema-59"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 7
+# ErrorInfo's `resource_uri`/`request_id` (F6, #185) moved the `schemas` view of the snapshot
+# but deliberately did NOT bump this: both fields are populated only by the resource-read
+# middleware, which never writes result.json, so every persisted path keeps serializing them
+# as absent (`exclude_none`) — the `serialized` view is byte-identical before/after. A bump
+# here would have made every already-stored job result unreadable
+# (`server.py`'s replay check treats any other value as `job_result_incompatible`) for zero
+# compatibility gain. Regenerate the fixture to acknowledge the schema-view drift; only bump
+# the integer when the `serialized` view itself would actually move.
+RESULT_FORMAT: int = 6
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:

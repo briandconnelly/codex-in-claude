@@ -1,5 +1,5 @@
 {
-  "result_format": 7,
+  "result_format": 6,
   "schemas": {
     "ConsultResult": {
       "$defs": {
