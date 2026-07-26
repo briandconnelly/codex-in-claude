@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
@@ -561,20 +562,34 @@ class _ResourceErrorMiddleware(Middleware):
       generic (no URI or exception text echoed — matching the redaction posture of #189)."""
 
     async def on_read_resource(self, context, call_next):  # type: ignore[no-untyped-def]
+        # `context.message` is a `ReadResourceRequestParams` on a real request (verified
+        # 2026-07-26: reading codex://models yielded uri: codex://models); the unit tests
+        # that drive this middleware directly pass a bare stand-in context with no
+        # `.message` at all, so both attribute hops are defensive, not just the inner one.
+        request_message = getattr(context, "message", None)
+        uri = str(getattr(request_message, "uri", "") or "") or None
         try:
             return await call_next(context)
         except (NotFoundError, DisabledError) as exc:
             raise self._envelope_error(
-                "resource_not_found", _MCP_RESOURCE_NOT_FOUND, "Resource not found."
+                "resource_not_found", _MCP_RESOURCE_NOT_FOUND, "Resource not found.", uri
             ) from exc
         except ResourceError as exc:
             raise self._envelope_error(
-                "internal_error", INTERNAL_ERROR, "Resource read failed."
+                "internal_error", INTERNAL_ERROR, "Resource read failed.", uri
             ) from exc
 
     @staticmethod
-    def _envelope_error(code: ErrorCode, mcp_code: int, message: str) -> McpError:
-        data = serialize_error_info(make_error(code, message))
+    def _envelope_error(
+        code: ErrorCode, mcp_code: int, message: str, resource_uri: str | None
+    ) -> McpError:
+        info = make_error(code, message)
+        # The requested URI is client-supplied. It is echoed only after FastMCP has already
+        # parsed it as a URI, and the human-readable `message` stays generic (no URI, no
+        # exception text) — matching the redaction posture of #189.
+        info.resource_uri = resource_uri
+        info.request_id = uuid4().hex
+        data = serialize_error_info(info)
         return McpError(ErrorData(code=mcp_code, message=message, data=data))
 
 

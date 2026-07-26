@@ -24,6 +24,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   parameter contract moved its full text to `codex://params` and `idempotency_key`'s inline
   summary was compressed, shrinking the `tools/list` wire response by 2,331 bytes.
 
+### Fixed
+
+- A `resources/read` failure's `error.data` now carries `resource_uri` (the URI that was
+  requested) and `request_id`, matching the correlation fields the tool-error carrier already
+  has via `meta.request_id`. Both are optional and populated only on the JSON-RPC (resource)
+  carrier — the tool carrier is unaffected, since duplicating `request_id` there would be two
+  homes for one fact (audit F6, #185). `resource_error_carrier` in `codex_capabilities` is
+  updated to name both fields and to disclose, as a deliberate divergence, that this server
+  keeps `code`/`message` rather than the `machine_code`/`human_message` spelling some §6
+  profiles use.
+
 ## [0.15.0] - 2026-07-22
 
 A status-signal and diff-gather-hardening release. `codex_status` learns to report an

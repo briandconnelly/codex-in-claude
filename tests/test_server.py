@@ -2219,7 +2219,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-58"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-59"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4752,6 +4752,45 @@ def test_capabilities_advertises_resource_error_carrier(clean_env):
     assert "-32002" in carrier
 
 
+class TestResourceErrorCorrelation:
+    """F6: a resource-read failure names the URI it was about and carries a request_id."""
+
+    async def test_not_found_carries_the_requested_uri_and_a_request_id(self):
+        from fastmcp import Client
+        from mcp import McpError
+
+        with pytest.raises(McpError) as excinfo:
+            async with Client(server.mcp) as client:
+                await client.read_resource("codex://does-not-exist")
+        data = excinfo.value.error.data
+        assert data["resource_uri"] == "codex://does-not-exist"
+        assert isinstance(data["request_id"], str) and data["request_id"]
+
+    async def test_envelope_fields_are_unchanged(self):
+        # The addition must not disturb the existing §6 contract.
+        from fastmcp import Client
+        from mcp import McpError
+
+        with pytest.raises(McpError) as excinfo:
+            async with Client(server.mcp) as client:
+                await client.read_resource("codex://does-not-exist")
+        data = excinfo.value.error.data
+        assert data["code"] == "resource_not_found"
+        assert data["temporary"] is False
+        assert data["retry_after_ms"] is None
+        assert data["repair"]["next_step"] == "list_resources"
+
+    async def test_tool_errors_do_not_gain_the_new_keys(self):
+        # meta.request_id already carries correlation on the tool path; duplicating it
+        # would be two contracts for one fact.
+        from fastmcp import Client
+
+        async with Client(server.mcp) as client:
+            r = await client.call_tool("codex_job_status", {"job_id": "nope"}, raise_on_error=False)
+        assert "resource_uri" not in r.structured_content["error"]
+        assert "request_id" not in r.structured_content["error"]
+
+
 # --------------------------------------------------------------------------- #
 # codex://result-meta resource + capabilities pointer + opt-in fallback (F1/#179)
 # --------------------------------------------------------------------------- #
@@ -5930,7 +5969,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-58")
+    assert result["fingerprint"].endswith("schema-59")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
