@@ -27,8 +27,11 @@ from codex_in_claude.server import mcp
 # bytes — still within budget, no further change. Measured 2026-07-26 (F3 + F9: every tool
 # gained a `title` and a namespaced `_meta` stability tier, so tools/list alone shows which
 # tools are experimental): 79,723 bytes — ~1,600 bytes for 17 titles plus 17 `_meta` blocks;
-# budget raised to the next 500 above the measured value.
-TOOLS_LIST_BYTE_BUDGET = 80_000
+# budget raised to the next 500 above the measured value. Measured again 2026-07-26 (F7:
+# JobStarted gained a required `follow_up: Repair` field, so the three `*_async` tools'
+# outputSchema each grew the nested Repair shape): 81,739 bytes — budget raised to the next
+# 500 above the measured value.
+TOOLS_LIST_BYTE_BUDGET = 82_000
 
 
 @pytest.mark.anyio

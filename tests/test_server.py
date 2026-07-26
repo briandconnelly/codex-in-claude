@@ -6992,3 +6992,40 @@ class TestToolDisplayMetadata:
             assert (t.meta or {}).get(STABILITY_META_KEY) == expected[t.name], (
                 f"{t.name}: tools/list tier disagrees with codex_capabilities"
             )
+
+
+async def _start_async_job_envelope(monkeypatch, tmp_path) -> dict:
+    """Start a stubbed async job (no real codex spend — same fake-store pattern as
+    test_consult_async_returns_job_id) and return its JobStarted envelope. The record
+    also backs a follow-up codex_job_status call, so the round-trip test below can
+    actually resolve it instead of 404ing."""
+    store = _FakeStore(record=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    return await server.codex_consult_async("why?", workspace_root=str(tmp_path))
+
+
+class TestAsyncFollowUp:
+    """F7: a started job names its poll surface in the structured result, not just prose."""
+
+    @pytest.mark.anyio
+    async def test_job_started_carries_a_callable_follow_up(self, monkeypatch, clean_env, tmp_path):
+        env = await _start_async_job_envelope(monkeypatch, tmp_path)
+        fu = env["follow_up"]
+        assert fu["next_step"] == "poll_job_status"
+        assert fu["tool"] == "codex_job_status"
+        assert fu["arguments"]["job_id"] == env["job_id"]
+        assert "alternative" in fu
+
+    @pytest.mark.anyio
+    async def test_follow_up_arguments_are_actually_callable(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        # §6 rule: repair arguments hold real callable values, never placeholders — prove
+        # it by actually calling codex_job_status with exactly the returned arguments.
+        env = await _start_async_job_envelope(monkeypatch, tmp_path)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_status", env["follow_up"]["arguments"], raise_on_error=False
+            )
+        assert r.structured_content["ok"] is True
+        assert r.structured_content["job_id"] == env["job_id"]

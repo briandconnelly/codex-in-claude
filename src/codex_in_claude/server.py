@@ -97,6 +97,7 @@ from codex_in_claude.schemas import (
     JobSummary,
     Meta,
     RawDefaults,
+    Repair,
     ResolvedDefaults,
     ReviewResult,
     ReviewScope,
@@ -3027,6 +3028,9 @@ def _job_started_handle(
     meta: Meta,
 ) -> dict:
     meta.job_id = job_id
+    poll_arguments: dict[str, Any] = {"job_id": job_id}
+    if meta.cwd:
+        poll_arguments["workspace_root"] = meta.cwd
     return JobStarted(
         job_id=job_id,
         kind=kind,
@@ -3036,6 +3040,16 @@ def _job_started_handle(
         ttl_seconds=config.job_ttl_seconds(),
         expires_at=expires_at,
         meta=meta,
+        follow_up=Repair(
+            next_step="poll_job_status",
+            tool="codex_job_status",
+            arguments=poll_arguments,
+            alternative=(
+                "Poll codex_job_status with these arguments, honoring poll_after_ms between "
+                "polls; read the result with codex_job_result once result_available is true. "
+                "Recover a lost job_id with codex_job_list."
+            ),
+        ),
     ).model_dump(mode="json")
 
 

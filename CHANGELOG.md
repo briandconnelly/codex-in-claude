@@ -34,6 +34,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   updated to name both fields and to disclose, as a deliberate divergence, that this server
   keeps `code`/`message` rather than the `machine_code`/`human_message` spelling some §6
   profiles use.
+- The `*_async` tools' `JobStarted` result now carries a `follow_up` object
+  (`{next_step, tool, arguments, alternative}`, the same shape as `error.repair`) naming
+  `codex_job_status` with literally callable arguments (audit F7).
 
 ## [0.15.0] - 2026-07-22
 

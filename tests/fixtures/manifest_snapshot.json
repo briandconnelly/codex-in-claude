@@ -3882,6 +3882,69 @@
               "fingerprint": {
                 "type": "string"
               },
+              "follow_up": {
+                "additionalProperties": false,
+                "properties": {
+                  "alternative": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "arguments": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "next_step": {
+                    "enum": [
+                      "authenticate",
+                      "correct_arguments",
+                      "correct_config",
+                      "init_git_repo",
+                      "inspect_and_retry",
+                      "install_codex",
+                      "install_git",
+                      "list_jobs",
+                      "list_resources",
+                      "poll_job_status",
+                      "reduce_input",
+                      "retry_after_delay",
+                      "retry_then_report",
+                      "start_new_job",
+                      "update_plugin",
+                      "use_allowed_value",
+                      "use_new_idempotency_key",
+                      "use_workspace_in_roots"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "next_step"
+                ],
+                "type": "object"
+              },
               "job_id": {
                 "type": "string"
               },
@@ -3928,6 +3991,7 @@
             },
             "required": [
               "deadline_seconds",
+              "follow_up",
               "job_id",
               "kind",
               "meta",
@@ -4395,6 +4459,69 @@
               "fingerprint": {
                 "type": "string"
               },
+              "follow_up": {
+                "additionalProperties": false,
+                "properties": {
+                  "alternative": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "arguments": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "next_step": {
+                    "enum": [
+                      "authenticate",
+                      "correct_arguments",
+                      "correct_config",
+                      "init_git_repo",
+                      "inspect_and_retry",
+                      "install_codex",
+                      "install_git",
+                      "list_jobs",
+                      "list_resources",
+                      "poll_job_status",
+                      "reduce_input",
+                      "retry_after_delay",
+                      "retry_then_report",
+                      "start_new_job",
+                      "update_plugin",
+                      "use_allowed_value",
+                      "use_new_idempotency_key",
+                      "use_workspace_in_roots"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "next_step"
+                ],
+                "type": "object"
+              },
               "job_id": {
                 "type": "string"
               },
@@ -4441,6 +4568,7 @@
             },
             "required": [
               "deadline_seconds",
+              "follow_up",
               "job_id",
               "kind",
               "meta",
@@ -6845,6 +6973,69 @@
               "fingerprint": {
                 "type": "string"
               },
+              "follow_up": {
+                "additionalProperties": false,
+                "properties": {
+                  "alternative": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "arguments": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "next_step": {
+                    "enum": [
+                      "authenticate",
+                      "correct_arguments",
+                      "correct_config",
+                      "init_git_repo",
+                      "inspect_and_retry",
+                      "install_codex",
+                      "install_git",
+                      "list_jobs",
+                      "list_resources",
+                      "poll_job_status",
+                      "reduce_input",
+                      "retry_after_delay",
+                      "retry_then_report",
+                      "start_new_job",
+                      "update_plugin",
+                      "use_allowed_value",
+                      "use_new_idempotency_key",
+                      "use_workspace_in_roots"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "next_step"
+                ],
+                "type": "object"
+              },
               "job_id": {
                 "type": "string"
               },
@@ -6891,6 +7082,7 @@
             },
             "required": [
               "deadline_seconds",
+              "follow_up",
               "job_id",
               "kind",
               "meta",

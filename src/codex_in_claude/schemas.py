@@ -1145,6 +1145,10 @@ class JobStarted(BaseModel):
     ttl_seconds: int
     expires_at: str | None = None
     meta: Meta
+    # §3 dispatched-vs-applied: the job is dispatched but its outcome is unconfirmed, so the
+    # success carrier names the verification surface with literally callable arguments. Reuses
+    # the `Repair` shape verbatim — one next-step vocabulary, not two (§6).
+    follow_up: Repair
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 
