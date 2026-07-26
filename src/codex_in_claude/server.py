@@ -710,6 +710,18 @@ DetailParam = Annotated[
         "'full' includes it."
     ),
 ]
+# codex_capabilities-only override of DetailParam: same underlying `Detail` Literal (no
+# second value set), but its own accurate description. DetailParam's shared "omits the raw
+# model text" wording is wrong here — this tool makes no model call and has no raw model
+# text to omit (F1 review finding). The other five DetailParam users keep the shared alias.
+CapabilitiesDetailParam = Annotated[
+    Detail,
+    Field(
+        description="Response verbosity: 'summary' (default) returns each tool's name, cost, "
+        "stability, error_codes, and async_lifecycle; 'full' adds use_when, returns, "
+        "and the parameter lists (which tools/list already carries)."
+    ),
+]
 JobIdParam = Annotated[
     str,
     Field(
@@ -1588,7 +1600,7 @@ _CAPABILITY_SUMMARY_FIELDS = ("name", "cost", "stability", "error_codes", "async
 @mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
 def codex_capabilities(
     include_schemas: IncludeSchemasParam = None,
-    detail: DetailParam = "summary",
+    detail: CapabilitiesDetailParam = "summary",
 ) -> dict:
     """List this server's tools, tiers, and the result fingerprint. Free — no
     model call. Clients can cache by the fingerprint.

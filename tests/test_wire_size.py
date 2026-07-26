@@ -13,10 +13,13 @@ from codex_in_claude.server import mcp
 
 # Measured 2026-07-26 at schema-56: 79,242 bytes. Measured at schema-57 (idempotency_key and
 # extra_context compressed into the registry): 76,911 bytes. Measured again at schema-57 after
-# adding codex_capabilities' `detail` parameter (F1): 77,439 bytes — the new parameter's
-# inputSchema entry grows the wire size a little further. Raising this number is a reviewed
-# decision — say why in the PR body.
-TOOLS_LIST_BYTE_BUDGET = 77_500
+# adding codex_capabilities' `detail` parameter (F1): 77,439 bytes. Measured once more after
+# giving codex_capabilities its own accurate CapabilitiesDetailParam description (F1 review
+# finding #2, replacing the shared DetailParam's inaccurate "omits the raw model text" wording
+# for this no-model-call tool): 77,561 bytes — ~120 bytes for a materially more useful
+# description on the tool that most needs it. Raising this number is a reviewed decision — say
+# why in the PR body.
+TOOLS_LIST_BYTE_BUDGET = 78_000
 
 
 @pytest.mark.anyio
