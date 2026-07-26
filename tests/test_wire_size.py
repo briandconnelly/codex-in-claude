@@ -12,9 +12,11 @@ from fastmcp import Client
 from codex_in_claude.server import mcp
 
 # Measured 2026-07-26 at schema-56: 79,242 bytes. Measured at schema-57 (idempotency_key and
-# extra_context compressed into the registry): 76,911 bytes. Raising this number is a reviewed
+# extra_context compressed into the registry): 76,911 bytes. Measured again at schema-57 after
+# adding codex_capabilities' `detail` parameter (F1): 77,439 bytes — the new parameter's
+# inputSchema entry grows the wire size a little further. Raising this number is a reviewed
 # decision — say why in the PR body.
-TOOLS_LIST_BYTE_BUDGET = 77_000
+TOOLS_LIST_BYTE_BUDGET = 77_500
 
 
 @pytest.mark.anyio

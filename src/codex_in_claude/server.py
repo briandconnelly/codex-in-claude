@@ -1577,15 +1577,31 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
     last_event_field="last_event_at",
     event_age_field="event_age_ms",
 )
+# F1: the tool_details fields with no `tools/list` equivalent. Everything else in a
+# ToolCapability restates the preloaded catalog (use_when ~= description, returns ~=
+# outputSchema, *_params ~= inputSchema), so detail="summary" drops it. `stability` is
+# serialized even when None — it is null for default-tier tools, and stripping it would
+# re-create the gap F9 closes.
+_CAPABILITY_SUMMARY_FIELDS = ("name", "cost", "stability", "error_codes", "async_lifecycle")
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
-def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
+def codex_capabilities(
+    include_schemas: IncludeSchemasParam = None,
+    detail: DetailParam = "summary",
+) -> dict:
     """List this server's tools, tiers, and the result fingerprint. Free — no
-    model call. Clients can cache by the fingerprint. Pass include_schemas to also embed
-    the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result'
-    schema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema) —
-    a tool-reachable fallback to the codex:// resources for resource-blind clients."""
+    model call. Clients can cache by the fingerprint.
+
+    `detail="summary"` (default) returns each tool's name, cost, stability, error_codes,
+    and async_lifecycle — the facts `tools/list` does not already carry. Pass
+    `detail="full"` for use_when/returns/required_params/key_optional_params too; those
+    restate the tool descriptions and schemas you already hold.
+
+    Pass include_schemas to also embed the full 'error-envelope', 'result-meta',
+    'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'
+    document (a contract doc, not a JSON Schema) — a tool-reachable fallback to the
+    codex:// resources for resource-blind clients. It works in either detail mode."""
     caps = CapabilitiesResult(
         name="codex-in-claude",
         version=__version__,
@@ -1986,7 +2002,15 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
     # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
     # it, and only the *_async tools carry `async_lifecycle`.
-    return caps.model_dump(mode="json", exclude_none=True)
+    payload = caps.model_dump(mode="json", exclude_none=True)
+    if detail == "summary":
+        payload["tool_details"] = [
+            # `.get` for stability: exclude_none drops it for default-tier tools, and the
+            # summary contract promises the key is always present.
+            {k: entry.get(k) for k in _CAPABILITY_SUMMARY_FIELDS if k in entry or k == "stability"}
+            for entry in payload["tool_details"]
+        ]
+    return payload
 
 
 def _model_catalog_payload() -> dict:

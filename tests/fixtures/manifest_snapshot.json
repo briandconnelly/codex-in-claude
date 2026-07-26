@@ -101,21 +101,8 @@
           "job_result_incompatible",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root",
-          "extra_context",
-          "model",
-          "reasoning_effort",
-          "isolation",
-          "detail",
-          "idempotency_key"
-        ],
         "name": "codex_consult",
-        "required_params": [
-          "question"
-        ],
-        "returns": "A result envelope with summary, optional findings, and meta. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex always runs with a resolved working dir (workspace_root, your MCP roots, or the server cwd) and may read and send files from it; it always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model). Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
-        "use_when": "You want a read-only second opinion or answer from Codex (a different model) on a question, design, or an ad-hoc diff you paste inline; use codex_review_changes when the diff comes from git. Prefer codex_consult_async for a high-reasoning-effort or broad repo-grounded consult that can exceed the synchronous deadline."
+        "stability": null
       },
       {
         "async_lifecycle": {
@@ -158,22 +145,9 @@
           "idempotency_result_unavailable",
           "idempotency_in_progress",
           "invalid_arguments"
-        ],
-        "key_optional_params": [
-          "workspace_root",
-          "extra_context",
-          "model",
-          "reasoning_effort",
-          "isolation",
-          "idempotency_key"
         ],
         "name": "codex_consult_async",
-        "required_params": [
-          "question"
-        ],
-        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read the consult envelope with codex_job_result. Egress: same as codex_consult — sends question+extra_context (raw) to OpenAI, plus files Codex reads from its resolved working dir (workspace_root, your MCP roots, or the server cwd); it always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model).",
-        "stability": "experimental",
-        "use_when": "You want a read-only second opinion from Codex for a high-reasoning-effort or broad repo-grounded consult that can exceed the synchronous deadline, so you want a job_id immediately instead of blocking; async counterpart to codex_consult."
+        "stability": "experimental"
       },
       {
         "cost": "active",
@@ -204,24 +178,9 @@
           "idempotency_in_progress",
           "job_result_incompatible",
           "invalid_arguments"
-        ],
-        "key_optional_params": [
-          "scope",
-          "base",
-          "commit",
-          "paths",
-          "workspace_root",
-          "extra_context",
-          "model",
-          "reasoning_effort",
-          "isolation",
-          "detail",
-          "idempotency_key"
         ],
         "name": "codex_review_changes",
-        "required_params": [],
-        "returns": "A result envelope with verdict, findings, and a context summary. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model). Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
-        "use_when": "You want Codex to review your git changes (working_tree, branch, or commit) and return structured findings. Prefer codex_review_changes_async for a multi-file or whole-branch review that can exceed the synchronous deadline."
+        "stability": null
       },
       {
         "async_lifecycle": {
@@ -270,23 +229,8 @@
           "idempotency_in_progress",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "scope",
-          "base",
-          "commit",
-          "paths",
-          "workspace_root",
-          "extra_context",
-          "model",
-          "reasoning_effort",
-          "isolation",
-          "idempotency_key"
-        ],
         "name": "codex_review_changes_async",
-        "required_params": [],
-        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read the review envelope with codex_job_result. Egress: same as codex_review_changes — sends the secret-redacted diff plus your raw extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model).",
-        "stability": "experimental",
-        "use_when": "You want Codex to review your git changes (working_tree, branch, or commit) for a multi-file or whole-branch review that can exceed the synchronous deadline, so you want a job_id immediately instead of blocking; async counterpart to codex_review_changes."
+        "stability": "experimental"
       },
       {
         "cost": "active",
@@ -314,20 +258,8 @@
           "job_result_incompatible",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root",
-          "model",
-          "reasoning_effort",
-          "isolation",
-          "detail",
-          "idempotency_key"
-        ],
         "name": "codex_delegate",
-        "required_params": [
-          "task"
-        ],
-        "returns": "A result envelope whose `diff` holds Codex's proposed, unapplied changes plus a summary. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends your task (raw) to OpenAI and lets Codex read tracked files in the throwaway worktree and send their content, including the tracked AGENTS.md and .agents/skills/ context it auto-loads — plus your user-global $CODEX_HOME/skills/ skills, which load from outside the worktree and so are neither tracked nor seeded. Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
-        "use_when": "You want Codex to implement a coding task and return a reviewable diff WITHOUT touching your working tree (it works in a throwaway git worktree). Prefer codex_delegate_async for a substantial or multi-file task that can exceed the synchronous deadline."
+        "stability": null
       },
       {
         "async_lifecycle": {
@@ -372,20 +304,8 @@
           "idempotency_in_progress",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root",
-          "model",
-          "reasoning_effort",
-          "isolation",
-          "idempotency_key"
-        ],
         "name": "codex_delegate_async",
-        "required_params": [
-          "task"
-        ],
-        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read with codex_job_result. Egress: same as codex_delegate — sends your task (raw) to OpenAI plus the worktree files Codex reads, including the tracked AGENTS.md and .agents/skills/ context it auto-loads, plus user-global $CODEX_HOME/skills/ skills loaded from outside the worktree.",
-        "stability": "experimental",
-        "use_when": "You want Codex to implement a coding task as a reviewable diff (NOT applied to your working tree) for a substantial or multi-file task that can exceed the synchronous deadline, so you want a job_id immediately instead of blocking; async counterpart to codex_delegate."
+        "stability": "experimental"
       },
       {
         "cost": "free",
@@ -395,17 +315,9 @@
           "job_not_found",
           "internal_error",
           "invalid_arguments"
-        ],
-        "key_optional_params": [
-          "workspace_root"
         ],
         "name": "codex_job_status",
-        "required_params": [
-          "job_id"
-        ],
-        "returns": "Status, elapsed time, expiry, result_available, and result_ok (a done job's outcome: true=success, false=stored error, null=not-yet-known/unclassifiable — triage a failure without a fetch).",
-        "stability": "experimental",
-        "use_when": "To poll a background job's state without fetching the result. Jobs may originate from an async call or a sync consult/review/delegate's meta.job_id."
+        "stability": "experimental"
       },
       {
         "cost": "free",
@@ -420,18 +332,9 @@
           "job_failed",
           "job_result_incompatible",
           "invalid_arguments"
-        ],
-        "key_optional_params": [
-          "workspace_root",
-          "detail"
         ],
         "name": "codex_job_result",
-        "required_params": [
-          "job_id"
-        ],
-        "returns": "The finished job's envelope (delegate diff, consult answer, or review verdict — branch on `tool`), with meta.job_id set. detail='summary' (default) omits raw_response.text; detail='full' includes it.",
-        "stability": "experimental",
-        "use_when": "When codex_job_status reports result_available=true. Works for async and sync-originated jobs alike."
+        "stability": "experimental"
       },
       {
         "cost": "free",
@@ -447,17 +350,8 @@
           "job_result_incompatible",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root",
-          "detail"
-        ],
         "name": "codex_job_consume_result",
-        "required_params": [
-          "job_id"
-        ],
-        "returns": "The same envelope as codex_job_result; removes completed state only once the stored result has been read back intact and validated (an unreadable stored result is kept for codex_job_result).",
-        "stability": "experimental",
-        "use_when": "To fetch a finished job's result and delete the stored record. Works for async and sync-originated jobs alike."
+        "stability": "experimental"
       },
       {
         "cost": "free",
@@ -468,16 +362,8 @@
           "internal_error",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root"
-        ],
         "name": "codex_job_cancel",
-        "required_params": [
-          "job_id"
-        ],
-        "returns": "The job's status after cancellation.",
-        "stability": "experimental",
-        "use_when": "To stop a running background job."
+        "stability": "experimental"
       },
       {
         "cost": "free",
@@ -487,25 +373,16 @@
           "internal_error",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root"
-        ],
         "name": "codex_job_list",
-        "required_params": [],
-        "returns": "Compact job summaries, newest first, each with result_ok (true=success, false=stored error, null=running/unclassifiable) so a stored failure is triageable without a per-job fetch. Not permanent storage: terminal records expire after the TTL, and a per-workspace soft cap (default 50) evicts the oldest terminal records as new jobs start. Running jobs are never evicted, so the list can transiently exceed the cap; older finished jobs drop off. Includes sync-originated records; the cap/TTL eviction covers both.",
-        "stability": "experimental",
-        "use_when": "To recover job_ids or inspect known jobs for a workspace, including sync-originated ones."
+        "stability": "experimental"
       },
       {
         "cost": "free",
         "error_codes": [
           "invalid_arguments"
         ],
-        "key_optional_params": [],
         "name": "codex_status",
-        "required_params": [],
-        "returns": "Readiness, version, auth, and resolved defaults.",
-        "use_when": "Before active calls, to confirm codex is installed and authenticated."
+        "stability": null
       },
       {
         "cost": "free",
@@ -523,16 +400,8 @@
           "cli_contract_changed",
           "internal_error"
         ],
-        "key_optional_params": [
-          "workspace_root"
-        ],
         "name": "codex_transfer",
-        "required_params": [
-          "transcript_path"
-        ],
-        "returns": "thread_id and resume_command (`codex resume <thread_id>`) for the imported thread. Not idempotent for a live session (a new thread per call).",
-        "stability": "experimental",
-        "use_when": "To continue the current Claude Code session inside Codex — hand off the session transcript to a resumable Codex thread. No model call/token spend (a local file conversion), but it does create a thread in $CODEX_HOME."
+        "stability": "experimental"
       },
       {
         "cost": "free",
@@ -551,21 +420,8 @@
           "internal_error",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "scope",
-          "base",
-          "commit",
-          "paths",
-          "workspace_root",
-          "extra_context",
-          "model",
-          "reasoning_effort",
-          "isolation"
-        ],
         "name": "codex_dry_run",
-        "required_params": [],
-        "returns": "Scope, context summary, prompt size, redactions, and the effective model/reasoning_effort overrides the paid call would send (unvalidated).",
-        "use_when": "Before codex_review_changes, to preview scope/diff size/redactions without spending."
+        "stability": null
       },
       {
         "cost": "free",
@@ -581,40 +437,24 @@
           "internal_error",
           "invalid_arguments"
         ],
-        "key_optional_params": [
-          "workspace_root",
-          "model",
-          "reasoning_effort",
-          "isolation"
-        ],
         "name": "codex_delegate_dry_run",
-        "required_params": [
-          "task"
-        ],
-        "returns": "The HEAD baseline (commit, tracked/uncommitted/untracked counts and size), prompt size, the effective model/reasoning_effort overrides the paid call would send (unvalidated), and the resolved workspace — no worktree created.",
-        "use_when": "Before codex_delegate/codex_delegate_async, to preview the seeded baseline, prompt size, and workspace without spending."
+        "stability": null
       },
       {
         "cost": "free",
         "error_codes": [
           "invalid_arguments"
         ],
-        "key_optional_params": [],
         "name": "codex_capabilities",
-        "required_params": [],
-        "returns": "This inventory: tools, tiers, sandboxes, scope, negative_scope, prerequisites, deprecation_policy, per-tool error_codes, async_lifecycle (on the *_async tools), and fingerprint. A top-level `stability` names the server lifecycle stage; a per-tool `stability` is an advisory maturity override and, when omitted, inherits the server-wide value.",
-        "use_when": "To discover the tool inventory, tiers, and result fingerprint (cache by it)."
+        "stability": null
       },
       {
         "cost": "free",
         "error_codes": [
           "invalid_arguments"
         ],
-        "key_optional_params": [],
         "name": "codex_models",
-        "required_params": [],
-        "returns": "An advisory model catalog: source (cache|static|none), models (slug + display_name + default_reasoning_effort/supported_reasoning_efforts when the cache advertises them), and the cache's fetched_at/client_version when read from Codex's on-disk cache. Not fingerprint-stable — do not cache it by the capabilities fingerprint.",
-        "use_when": "To discover valid `model` slugs — and each model's advertised reasoning-effort set — before passing `model` or `reasoning_effort` to a Codex call; also available at the codex://models resource. Advisory — codex/the backend validate the real values at run time."
+        "stability": null
       }
     ],
     "tool_error_carrier": "tool result with isError: true; the error envelope is in structuredContent, and content[0].text mirrors it as JSON",
@@ -3210,11 +3050,20 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint. Pass include_schemas to also embed\nthe full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result'\nschema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema) —\na tool-reachable fallback to the codex:// resources for resource-blind clients.",
+      "description": "List this server's tools, tiers, and the result fingerprint. Free — no\nmodel call. Clients can cache by the fingerprint.\n\n`detail=\"summary\"` (default) returns each tool's name, cost, stability, error_codes,\nand async_lifecycle — the facts `tools/list` does not already carry. Pass\n`detail=\"full\"` for use_when/returns/required_params/key_optional_params too; those\nrestate the tool descriptions and schemas you already hold.\n\nPass include_schemas to also embed the full 'error-envelope', 'result-meta',\n'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'\ndocument (a contract doc, not a JSON Schema) — a tool-reachable fallback to the\ncodex:// resources for resource-blind clients. It works in either detail mode.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "detail": {
+            "default": "summary",
+            "description": "Response verbosity: 'summary' (default) omits the raw model text; 'full' includes it.",
+            "enum": [
+              "full",
+              "summary"
+            ],
+            "type": "string"
+          },
           "include_schemas": {
             "anyOf": [
               {

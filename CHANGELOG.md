@@ -5,6 +5,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- `codex_capabilities` now defaults to `detail="summary"`, returning only the per-tool facts
+  `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`,
+  `async_lifecycle`). Pass `detail="full"` for the previous payload. The `extra_context`
+  parameter contract moved its full text to `codex://params` and `idempotency_key`'s inline
+  summary was compressed, shrinking the `tools/list` wire response by 2,331 bytes.
+
 ## [0.15.0] - 2026-07-22
 
 A status-signal and diff-gather-hardening release. `codex_status` learns to report an
