@@ -90,5 +90,34 @@ do not. The rule is published on `codex://result-meta` so it is discoverable rat
 diffable, and `docs/REFERENCE.md` documents it beside the matching error-envelope convention.
 
 The non-envelope result surfaces (`StatusResult`, the dry-run results, `TransferResult`,
-`JobListResult`, job status) still send their nulls. They have different semantics — several
-deliberately preserve required nullable members — and are left to a separate audit.
+`JobListResult`, job status) still send their nulls.
+That was audited in #389 and the answer is **no further surface slims** — the rule stops where this
+ADR left it.
+Recorded here so the ground is not re-derived (byte figures measured against live calls at
+`schema-61`; they will drift, the reasoning will not):
+
+- **Three surfaces cannot slim without breaking a published statement.** `JobStatus`/`JobSummary`
+  document `result_ok` as "Always present (null-meaningful), never omitted", and `codex_job_status`'s
+  tool description separately promises `expires_at` "is null while running" — so preserving
+  `result_ok` alone is not sufficient. A *recursive* exclusion on `StatusResult` reaches `RateLimit`,
+  where `docs/REFERENCE.md` § Rate-limit reporting publishes both "reports `limiting_window: null`
+  while still showing the windows" and "tri-state, and null is *not* false" for
+  `spend_control_reached`. Weakening any of these is breaking under AGENTS.md § Versioning.
+- **Three more are no-ops.** `JobListResult` already hand-omits its only eligible key
+  (`truncation_hint`); `TransferResult` has no production-reachable top-level null on the success
+  path; `JobStarted` is published as explicitly not-slimmed on `codex://result-meta`.
+- **The two dry-run previews were the only real candidates, and lose on cost.** Measured against
+  live calls, top-level omission saves 111 B (14.1%) on `codex_dry_run` and 62 B (6.9%) on
+  `codex_delegate_dry_run` — roughly 30 and 17 tokens on free, typically one-shot previews. The
+  price is a `FINGERPRINT` bump, which `docs/REFERENCE.md` documents as a **client cache key**, plus
+  a third serialization convention (envelope-`meta` slimming, hand-omission, and a per-preview
+  allowlist) for every future contributor to hold. Not worth it.
+
+#389's own headline — `StatusResult` at "33.2%" — does not reproduce on any constructible payload:
+it was measured without `caveat`, which is required, has no default, and is ~828 B, i.e. **40.6% of
+a live `codex_status` response**. The real top-level saving there is **44 B (2.2%)**, making the
+most semantically hazardous surface also the least valuable one.
+
+One trap for anyone revisiting this: the `_job_status_model(...).model_dump(...)` call at the second
+job-status site serves `codex_job_cancel`, not a second read path, so a change there moves two tools'
+responses.
