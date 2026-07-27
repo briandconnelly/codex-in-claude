@@ -305,7 +305,7 @@ def make_error(
     retry_after_ms: int | None = None,
     temporary: bool | None = None,
     repair_next_step: RepairStep | None = None,
-    repair_tool: str | None | _KeepTableTool = _KEEP_TABLE_TOOL,
+    repair_tool: str | _KeepTableTool | None = _KEEP_TABLE_TOOL,
     repair_arguments: dict[str, Any] | None = None,
     repair_alternative: str | None = None,
     details: ErrorDetail | None = None,
