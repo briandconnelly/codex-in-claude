@@ -397,7 +397,7 @@ def test_sync_use_when_points_at_async_for_its_shape(sync_name, async_name, shap
     """#338: the codex_capabilities use_when for each SYNC tool carries the steer too —
     naming its async variant and this pair's shape — so a capabilities-driven agent reading
     the sync entry is not left with an unqualified 'always use sync' recommendation."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     use_when = by_name[sync_name]["use_when"]
     assert async_name in use_when, sync_name
     assert shape in use_when, sync_name
@@ -408,7 +408,7 @@ def test_async_use_when_names_shape_not_may_run_long(async_name, shape):
     """#338: the codex_capabilities use_when for each async tool names THIS pair's selection
     shape rather than a vague duration hint, so a capabilities-driven client gets the same
     pre-spend steer as a tools/list-driven one."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     use_when = by_name[async_name]["use_when"]
     assert "can exceed the synchronous deadline" in use_when, async_name
     assert shape in use_when, async_name
@@ -662,7 +662,7 @@ def test_capability_returns_disclose_global_skills(name):
     """Each active tool's capability `returns` discloses it — asserted per entry.
 
     A joined blob would pass while five of six entries dropped the disclosure."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     returns = by_name[name]["returns"].lower()
     assert _GUARANTEE_MATCHERS["autoload_global_skills"](returns), name
 
@@ -709,7 +709,7 @@ def test_egress_disclosed_in_capabilities(name):
 
     AC1: capabilities OR the tool descriptions must suffice; this asserts the
     capabilities path independently of the docstrings."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     assert name in by_name, f"capabilities omitted active tool {name}"
     detail = by_name[name]
     assert "OpenAI" in (detail["use_when"] + detail["returns"]), name
@@ -1000,7 +1000,7 @@ def test_isolation_accepting_tools_do_not_advertise_unsupported_isolation():
     # input validation before the handler's _resolve_isolation guard runs — the
     # unsupported_isolation envelope is MCP-unreachable and must not be advertised (#92).
     # The param is still advertised; only the unreachable error code is dropped.
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     for name in (
         "codex_consult",
@@ -1015,7 +1015,7 @@ def test_isolation_accepting_tools_do_not_advertise_unsupported_isolation():
 
 
 async def test_review_extra_context_advertised_in_capabilities():
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     review = next(t for t in caps["tool_details"] if t["name"] == "codex_review_changes")
     assert "extra_context" in review["key_optional_params"]
 
@@ -2219,7 +2219,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-56"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-57"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2234,7 +2234,7 @@ def test_capabilities_payload_discloses_fingerprint_covers():
 def test_capabilities_mark_m4_surface_experimental():
     """The newer async + background-job lifecycle tools advertise stability=experimental;
     the sync core inherits the server-wide alpha (field omitted via exclude_none) (#71)."""
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     experimental = {
         "codex_consult_async",
@@ -2652,7 +2652,7 @@ def test_capabilities_lists_async_readonly_tools():
 def test_review_tools_advertise_isolation_param_not_unreachable_error():
     # Both review tools accept `isolation`, so the param is advertised — but
     # unsupported_isolation is MCP-unreachable (Literal param) and must not be (#92).
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     for name in ("codex_review_changes", "codex_review_changes_async"):
         assert "isolation" in by_name[name]["key_optional_params"], name
@@ -5875,7 +5875,7 @@ async def test_keyed_sync_created_sets_meta_job_id_before_await(monkeypatch, cle
 
 
 def test_capabilities_advertise_idempotency_on_spend_committing_tools(clean_env):
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     for name in (
         "codex_consult",
         "codex_review_changes",
@@ -5930,7 +5930,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-56")
+    assert result["fingerprint"].endswith("schema-57")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6592,7 +6592,7 @@ async def test_delegate_dry_run_echoes_model_and_reasoning_effort(monkeypatch, c
 
 
 async def test_capabilities_advertise_reasoning_effort(clean_env):
-    res = server.codex_capabilities()
+    res = server.codex_capabilities(detail="full")
     details = {t["name"]: t for t in res["tool_details"]}
     effort_tools = (
         "codex_consult",
@@ -6800,3 +6800,66 @@ async def test_valid_env_reasoning_effort_still_runs(monkeypatch, clean_env, tmp
     res = await server.codex_consult("q", workspace_root=str(tmp_path))
     assert res.get("_captured") is True
     assert calls["spec"]["reasoning_effort"] == "xhigh"
+
+
+class TestCapabilitiesDetail:
+    """F1: codex_capabilities defaults to a concise payload."""
+
+    @pytest.mark.anyio
+    async def test_summary_is_the_default_and_is_smaller(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+            full = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        s = len(json.dumps(summary, separators=(",", ":")))
+        f = len(json.dumps(full, separators=(",", ":")))
+        assert s < f, f"summary ({s}) must be smaller than full ({f})"
+        # The point of the finding: the default must be materially cheaper, not marginally.
+        assert s < f * 0.55
+
+    @pytest.mark.anyio
+    async def test_summary_keys_are_a_strict_subset_of_full_keys(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+            full = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        assert set(summary) <= set(full)
+        by_name = {t["name"]: t for t in full["tool_details"]}
+        for entry in summary["tool_details"]:
+            assert set(entry) <= set(by_name[entry["name"]]) | {"stability"}
+
+    @pytest.mark.anyio
+    async def test_summary_keeps_the_fields_with_no_tools_list_equivalent(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+        for entry in summary["tool_details"]:
+            assert "cost" in entry  # spend tier — not in tools/list
+            assert "error_codes" in entry  # branch keys — not in tools/list
+            assert "stability" in entry  # F9: explicit even when the tier is default
+        async_entries = [e for e in summary["tool_details"] if e["name"].endswith("_async")]
+        assert async_entries and all("async_lifecycle" in e for e in async_entries)
+
+    @pytest.mark.anyio
+    async def test_summary_drops_the_fields_tools_list_already_carries(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+        for entry in summary["tool_details"]:
+            assert "use_when" not in entry  # ~= description
+            assert "returns" not in entry  # ~= outputSchema
+            assert "key_optional_params" not in entry  # ~= inputSchema
+            assert "required_params" not in entry  # ~= inputSchema.required
+
+    @pytest.mark.anyio
+    async def test_include_schemas_still_works_in_summary_mode(self):
+        # The resource-blind fallback must not depend on detail="full".
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_capabilities", {"include_schemas": ["error-envelope"]})
+        assert "error_envelope" in json.dumps(r.structured_content)

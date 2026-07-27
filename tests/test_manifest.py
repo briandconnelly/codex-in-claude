@@ -10,7 +10,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "23e64d6ea75bae0174f584c906c01303d58200af2dbb7fd1146a767b496d2963"
+EXPECTED_MANIFEST_HASH = "b3f25d54293586a0bceb95d514d292b7d90cb4eac74571d82652e4bb546b0b42"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -145,6 +145,21 @@ async def test_manifest_drops_exactly_the_declared_capability_fields():
     # Positive control: the live payload really does carry the excluded keys, so the
     # difference above is a genuine drop and not an empty-set comparison.
     assert set(server.codex_capabilities()) >= manifest._RELEASE_VARIABLE_EXCLUDE
+
+
+async def test_manifest_captures_full_tool_details_not_the_live_default():
+    """Regression guard (#F1 review finding): use_when/returns/required_params/
+    key_optional_params live ONLY inside codex_capabilities' own output — tools/list
+    carries no equivalent — so build_manifest must call codex_capabilities(detail="full")
+    explicitly rather than relying on the live tool's default. The live default is now
+    "summary" (perf: concise codex_capabilities default); if build_manifest's call is ever
+    "simplified" back to the bare no-arg form, these fields silently drop out of the
+    snapshot's coverage without moving the tool/field list this guard otherwise checks."""
+    m = await manifest.build_manifest()
+    by_name = {t["name"]: t for t in m["capabilities"]["tool_details"]}
+    consult = by_name["codex_consult"]
+    for field in ("use_when", "returns", "required_params", "key_optional_params"):
+        assert field in consult, f"manifest capabilities lost {field!r} — detail narrowed?"
 
 
 async def test_manifest_drops_exactly_the_declared_server_info_fields():

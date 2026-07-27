@@ -464,6 +464,45 @@ def test_loosened_schemas_accept_real_payloads():
     jsonschema.validate(codex_status(), s.STATUS_SCHEMA)
 
 
+def test_capabilities_result_schema_accepts_both_detail_modes():
+    """A client that fetches CAPABILITIES_RESULT_SCHEMA and validates the very same
+    response against it must not fail in either detail mode.
+
+    `detail="summary"` (the default) strips `use_when`/`returns` from every
+    `tool_details` entry before the response ships; only `detail="full"` carries them.
+    The published schema has to model BOTH shapes rather than only the fuller one —
+    a schema that requires fields the default response never sends is a bug in the
+    schema, not in the response (the wire bytes are unchanged either way)."""
+    import jsonschema
+
+    from codex_in_claude.server import codex_capabilities
+
+    summary = codex_capabilities(include_schemas=["capabilities-result"])
+    full = codex_capabilities(detail="full", include_schemas=["capabilities-result"])
+    schema = summary["schemas"]["capabilities-result"]
+    assert schema == full["schemas"]["capabilities-result"], (
+        "the published schema itself must not vary by detail mode"
+    )
+
+    # Genuine JSON Schema validation (jsonschema is already resolved into this project's
+    # environment — see the other jsonschema.validate calls in this file — so this is the
+    # real contract check, not a field-presence proxy).
+    validator = jsonschema.Draft202012Validator(schema)
+    validator.validate(summary)
+    validator.validate(full)
+
+    # And pin the specific shape that made this a bug: the schema's required list must
+    # not demand a field the default response omits.
+    tool_capability = schema["$defs"]["ToolCapability"]
+    assert set(tool_capability["required"]) == {"name", "cost"}
+    for entry in summary["tool_details"]:
+        assert "use_when" not in entry
+        assert "returns" not in entry
+    for entry in full["tool_details"]:
+        assert isinstance(entry["use_when"], str)
+        assert isinstance(entry["returns"], str)
+
+
 def test_loosened_schemas_stay_under_byte_budget():
     """A future change must not silently reintroduce the $defs bloat (was 3864/3429 B)."""
     for name, (sch, _) in _OPAQUE_FIELD_SCHEMAS.items():
@@ -887,7 +926,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-56"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-57"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

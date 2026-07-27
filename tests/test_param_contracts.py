@@ -11,6 +11,9 @@ needs on a first call.
 
 from __future__ import annotations
 
+import re
+from typing import ClassVar
+
 import pytest
 
 from codex_in_claude import param_contracts, server
@@ -56,6 +59,7 @@ def test_inline_summary_points_at_the_resource(name):
 _ALIAS_FOR = {
     "idempotency_key": "IdempotencyKeyParam",
     "reasoning_effort": "ReasoningEffortParam",
+    "extra_context": "ExtraContextParam",
 }
 
 
@@ -86,3 +90,54 @@ def test_idempotency_full_keeps_moved_lifecycle_detail():
     assert "idempotency_result_unavailable" in full
     assert "ttl" in full
     assert "idempotency_replayed" in full
+
+
+class TestAuditTwoCompaction:
+    """F2: the two parameters whose inline text is long enough to be worth compressing.
+
+    `workspace_root`, `model`, and `isolation` are deliberately NOT registered: their current
+    inline descriptions are already shorter than any summary carrying the required
+    `codex://params` pointer, so registering them would grow `tools/list` (measured
+    2026-07-26: +70, +248, +88 bytes respectively)."""
+
+    # The inline description each summary replaces, measured on the wire at schema-56.
+    PREVIOUS_INLINE: ClassVar[dict[str, int]] = {"idempotency_key": 545, "extra_context": 342}
+
+    def test_extra_context_is_registered(self):
+        assert "extra_context" in param_contracts.PARAMETER_CONTRACTS
+
+    @pytest.mark.parametrize("name", ["workspace_root", "model", "isolation"])
+    def test_terse_parameters_stay_out_of_the_registry(self, name):
+        # Guard the measurement that drove this decision: registering these grows the wire.
+        assert name not in param_contracts.PARAMETER_CONTRACTS
+
+    @pytest.mark.parametrize("name", ["idempotency_key", "extra_context"])
+    def test_summary_is_materially_shorter_than_what_it_replaced(self, name):
+        summary = param_contracts.PARAMETER_CONTRACTS[name].summary
+        previous = self.PREVIOUS_INLINE[name]
+        assert len(summary) <= previous * 0.75, (
+            f"{name}: summary is {len(summary)} chars vs {previous} before — "
+            "under a 25% reduction this registration costs more than it saves"
+        )
+
+    @pytest.mark.parametrize("name", ["idempotency_key", "extra_context"])
+    def test_summary_is_shorter_than_its_full_text(self, name):
+        c = param_contracts.PARAMETER_CONTRACTS[name]
+        assert len(c.summary) < len(c.full)
+
+    def test_extra_context_summary_keeps_the_safety_facts(self):
+        # UNTRUSTED framing and the redaction gap are safety-critical (contract-checklist §3)
+        # and must survive compression.
+        summary = param_contracts.PARAMETER_CONTRACTS["extra_context"].summary
+        assert "UNTRUSTED" in summary
+        # Whole-word, case-insensitive: a bare substring like "edaction" would also match
+        # a mangled/misspelled word that merely happens to end the same way.
+        assert re.search(r"\bredaction\b", summary, re.IGNORECASE)
+
+    def test_idempotency_summary_keeps_the_spend_guarantee(self):
+        summary = param_contracts.PARAMETER_CONTRACTS["idempotency_key"].summary
+        # Whole-word matches only — a bare substring would also match unrelated words
+        # like "suspend" or "expend" that contain "spend" but don't carry the guarantee.
+        assert re.search(r"\bspend\b", summary, re.IGNORECASE) or re.search(
+            r"\bunpaid\b", summary, re.IGNORECASE
+        )

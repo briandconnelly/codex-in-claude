@@ -628,13 +628,8 @@ TranscriptPathParam = Annotated[
 ]
 ExtraContextParam = Annotated[
     str | None,
-    Field(
-        description="Optional author intent / background context, added to the prompt "
-        "as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded "
-        "directives as data, not commands — best-effort prompt-injection mitigation, "
-        "not a guarantee. Don't include live secrets: Codex can read files it's "
-        "pointed at, and redaction does not cover this field."
-    ),
+    # Compressed inline (#333, audit-2 F2); full caveats and bounds at codex://params.
+    Field(description=param_contracts.PARAMETER_CONTRACTS["extra_context"].summary),
 ]
 ModelParam = Annotated[
     str | None,
@@ -713,6 +708,18 @@ DetailParam = Annotated[
     Field(
         description="Response verbosity: 'summary' (default) omits the raw model text; "
         "'full' includes it."
+    ),
+]
+# codex_capabilities-only override of DetailParam: same underlying `Detail` Literal (no
+# second value set), but its own accurate description. DetailParam's shared "omits the raw
+# model text" wording is wrong here — this tool makes no model call and has no raw model
+# text to omit (F1 review finding). The other five DetailParam users keep the shared alias.
+CapabilitiesDetailParam = Annotated[
+    Detail,
+    Field(
+        description="Response verbosity: 'summary' (default) returns each tool's name, cost, "
+        "stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds "
+        "use_when, returns, and the parameter lists (which tools/list already carries)."
     ),
 ]
 JobIdParam = Annotated[
@@ -1582,15 +1589,32 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
     last_event_field="last_event_at",
     event_age_field="event_age_ms",
 )
+# F1: the tool_details fields with no `tools/list` equivalent. Everything else in a
+# ToolCapability restates the preloaded catalog (use_when ~= description, returns ~=
+# outputSchema, *_params ~= inputSchema), so detail="summary" drops it. `stability` is
+# serialized even when None — it is null for default-tier tools, and stripping it would
+# re-create the gap F9 closes.
+_CAPABILITY_SUMMARY_FIELDS = ("name", "cost", "stability", "error_codes", "async_lifecycle")
 
 
 @mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
-def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
+def codex_capabilities(
+    include_schemas: IncludeSchemasParam = None,
+    detail: CapabilitiesDetailParam = "summary",
+) -> dict:
     """List this server's tools, tiers, and the result fingerprint. Free — no
-    model call. Clients can cache by the fingerprint. Pass include_schemas to also embed
-    the full 'error-envelope', 'result-meta', 'capabilities-result', and/or 'status-result'
-    schema, and/or the 'parameter-contracts' document (a contract doc, not a JSON Schema) —
-    a tool-reachable fallback to the codex:// resources for resource-blind clients."""
+    model call. Clients can cache by the fingerprint.
+
+    `detail="summary"` (default) returns each tool's name, cost, stability, and
+    error_codes — the facts `tools/list` does not already carry — plus async_lifecycle,
+    but only for the `*_async` tools. Pass `detail="full"` for
+    use_when/returns/required_params/key_optional_params too; those restate the tool
+    descriptions and schemas you already hold.
+
+    Pass include_schemas to also embed the full 'error-envelope', 'result-meta',
+    'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'
+    document (a contract doc, not a JSON Schema) — a tool-reachable fallback to the
+    codex:// resources for resource-blind clients. It works in either detail mode."""
     caps = CapabilitiesResult(
         name="codex-in-claude",
         version=__version__,
@@ -1991,7 +2015,15 @@ def codex_capabilities(include_schemas: IncludeSchemasParam = None) -> dict:
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
     # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
     # it, and only the *_async tools carry `async_lifecycle`.
-    return caps.model_dump(mode="json", exclude_none=True)
+    payload = caps.model_dump(mode="json", exclude_none=True)
+    if detail == "summary":
+        payload["tool_details"] = [
+            # `.get` for stability: exclude_none drops it for default-tier tools, and the
+            # summary contract promises the key is always present.
+            {k: entry.get(k) for k in _CAPABILITY_SUMMARY_FIELDS if k in entry or k == "stability"}
+            for entry in payload["tool_details"]
+        ]
+    return payload
 
 
 def _model_catalog_payload() -> dict:
