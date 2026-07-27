@@ -70,6 +70,7 @@ src = ["src", "tests"]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "PIE", "RUF", "PL", "PT", "TID", "TC", "ARG", "PTH"]
 ignore = [
     "PLR0913",  # too-many-args: tool handlers legitimately take many params
+    "PLR0917",  # too-many-positional-args: same handlers — MCP params arrive by name
     "PLR0911",  # too-many-returns: dispatch/classify handlers branch per error case
     "PLR0912",  # too-many-branches: same — error-path-heavy handlers
     "PLR2004",  # magic-value: noisy for literals
