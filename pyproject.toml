@@ -48,6 +48,10 @@ packages = ["src/codex_in_claude"]
 [dependency-groups]
 dev = [
     "prek>=0.4.5",
+    # Used directly by tests/test_schemas.py to validate published JSON Schemas.
+    # Reaches the environment transitively via fastmcp today; declared explicitly so
+    # the tests do not break if that dependency tree changes.
+    "jsonschema>=4.26",
     "pyyaml>=6",
     "pytest>=8",
     "pytest-asyncio>=0.23",
