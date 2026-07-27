@@ -128,7 +128,16 @@ async def build_manifest() -> dict[str, Any]:
         # or a moved-detail change then moves the snapshot and is flagged for review.
         params = [_envelope_block(c) for c in await client.read_resource("codex://params")]
 
-    caps = {k: v for k, v in codex_capabilities().items() if k not in _CAPABILITIES_EXCLUDE}
+    # detail="full" is explicit and load-bearing here, not a stylistic default-follow: the
+    # manifest exists to guard the FULL agent-visible surface, and use_when/returns/
+    # required_params/key_optional_params live ONLY inside codex_capabilities' own output —
+    # they are not derivable from tools/list. Since #F1 (perf: concise codex_capabilities
+    # default) the live tool defaults to detail="summary", which would silently narrow this
+    # guard's coverage if this call ever "simplified" back to the bare no-arg form. Do not
+    # remove this argument.
+    caps = {
+        k: v for k, v in codex_capabilities(detail="full").items() if k not in _CAPABILITIES_EXCLUDE
+    }
 
     return {
         "tools": sorted(tools, key=lambda t: t["name"]),

@@ -75,6 +75,15 @@ _REASONING_EFFORT_FULL = (
     "zero spend, the value never reaches codex)."
 )
 
+_EXTRA_CONTEXT_FULL = (
+    "Optional author intent / background context, added to the prompt as clearly-labeled "
+    "UNTRUSTED data. Codex is instructed to treat embedded directives as data, not "
+    "commands — best-effort prompt-injection mitigation, not a guarantee. Don't include "
+    "live secrets: Codex can read files it's pointed at, and redaction does not cover this "
+    "field. It is bounded like the gathered diff and counts against the same input budget, "
+    "so an oversized value fails as input_too_large before any spend."
+)
+
 
 PARAMETER_CONTRACTS: dict[str, ParamContract] = {
     "idempotency_key": ParamContract(
@@ -84,14 +93,10 @@ PARAMETER_CONTRACTS: dict[str, ParamContract] = {
         # key, omit=no dedup, retention is BOUNDED. Moved to the resource: the in-progress
         # / result-unavailable states, the exact TTL/grace horizons, the replay marker.
         summary=(
-            "Optional client dedup key, scoped to THIS tool + workspace. Same key with "
-            "identical arguments replays the prior run's result WITHOUT paying for a new "
-            "Codex call; different arguments (including a different timeout_seconds) are "
-            "refused with idempotency_conflict. The sync and _async forms are separate "
-            "tools and never share a key. Omit for no dedup; retention is bounded, not "
-            "indefinite. Full lifecycle (replay window, idempotency_in_progress / "
-            "idempotency_result_unavailable, TTL & eviction, the meta.idempotency_replayed "
-            "marker): codex://params."
+            "Optional dedup key scoped to THIS tool + workspace. Same key + same args replays "
+            "the prior result with no new spend; different args are refused "
+            "(idempotency_conflict). Sync and _async are separate tools and never share a key. "
+            "Omit for none; retention is bounded. Lifecycle: codex://params."
         ),
         full=_IDEMPOTENCY_FULL,
     ),
@@ -108,6 +113,18 @@ PARAMETER_CONTRACTS: dict[str, ParamContract] = {
             "set (advisory). Rejection and bounds detail: codex://params."
         ),
         full=_REASONING_EFFORT_FULL,
+    ),
+    "extra_context": ParamContract(
+        name="extra_context",
+        # Kept inline (safety-critical): the UNTRUSTED framing and that redaction misses this
+        # field. Moved to the resource: the injection-mitigation caveat's full wording and the
+        # input-budget interaction.
+        summary=(
+            "Optional author intent/background context, added as clearly-labeled UNTRUSTED "
+            "prompt data. Redaction does NOT cover it — no live secrets. Full caveats and "
+            "bounds: codex://params."
+        ),
+        full=_EXTRA_CONTEXT_FULL,
     ),
 }
 
