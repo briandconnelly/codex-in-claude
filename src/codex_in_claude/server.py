@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
@@ -96,6 +97,7 @@ from codex_in_claude.schemas import (
     JobSummary,
     Meta,
     RawDefaults,
+    Repair,
     ResolvedDefaults,
     ReviewResult,
     ReviewScope,
@@ -561,20 +563,34 @@ class _ResourceErrorMiddleware(Middleware):
       generic (no URI or exception text echoed — matching the redaction posture of #189)."""
 
     async def on_read_resource(self, context, call_next):  # type: ignore[no-untyped-def]
+        # `context.message` is a `ReadResourceRequestParams` on a real request (verified
+        # 2026-07-26: reading codex://models yielded uri: codex://models); the unit tests
+        # that drive this middleware directly pass a bare stand-in context with no
+        # `.message` at all, so both attribute hops are defensive, not just the inner one.
+        request_message = getattr(context, "message", None)
+        uri = str(getattr(request_message, "uri", "") or "") or None
         try:
             return await call_next(context)
         except (NotFoundError, DisabledError) as exc:
             raise self._envelope_error(
-                "resource_not_found", _MCP_RESOURCE_NOT_FOUND, "Resource not found."
+                "resource_not_found", _MCP_RESOURCE_NOT_FOUND, "Resource not found.", uri
             ) from exc
         except ResourceError as exc:
             raise self._envelope_error(
-                "internal_error", INTERNAL_ERROR, "Resource read failed."
+                "internal_error", INTERNAL_ERROR, "Resource read failed.", uri
             ) from exc
 
     @staticmethod
-    def _envelope_error(code: ErrorCode, mcp_code: int, message: str) -> McpError:
-        data = serialize_error_info(make_error(code, message))
+    def _envelope_error(
+        code: ErrorCode, mcp_code: int, message: str, resource_uri: str | None
+    ) -> McpError:
+        info = make_error(code, message)
+        # The requested URI is client-supplied. It is echoed only after FastMCP has already
+        # parsed it as a URI, and the human-readable `message` stays generic (no URI, no
+        # exception text) — matching the redaction posture of #189.
+        info.resource_uri = resource_uri
+        info.request_id = uuid4().hex
+        data = serialize_error_info(info)
         return McpError(ErrorData(code=mcp_code, message=message, data=data))
 
 
@@ -3016,6 +3032,9 @@ def _job_started_handle(
     meta: Meta,
 ) -> dict:
     meta.job_id = job_id
+    poll_arguments: dict[str, Any] = {"job_id": job_id}
+    if meta.cwd:
+        poll_arguments["workspace_root"] = meta.cwd
     return JobStarted(
         job_id=job_id,
         kind=kind,
@@ -3025,6 +3044,16 @@ def _job_started_handle(
         ttl_seconds=config.job_ttl_seconds(),
         expires_at=expires_at,
         meta=meta,
+        follow_up=Repair(
+            next_step="poll_job_status",
+            tool="codex_job_status",
+            arguments=poll_arguments,
+            alternative=(
+                "Poll codex_job_status with these arguments, honoring poll_after_ms between "
+                "polls; read the result with codex_job_result once result_available is true. "
+                "Recover a lost job_id with codex_job_list."
+            ),
+        ),
     ).model_dump(mode="json")
 
 

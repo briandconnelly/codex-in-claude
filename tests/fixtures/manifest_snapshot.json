@@ -56,7 +56,7 @@
       "codex CLI on PATH",
       "authenticated via `codex login`"
     ],
-    "resource_error_carrier": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure)",
+    "resource_error_carrier": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this server keeps `code`/`message` rather than the machine_code/human_message spelling some §6 profiles use — nesting inside `data` already avoids shadowing the native JSON-RPC keys.",
     "result_meta_resource": "codex://result-meta",
     "sandboxes": [
       "read-only",
@@ -881,7 +881,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-58",
+            "default": "codex-in-claude/0.1/schema-59",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -925,7 +925,7 @@
             "type": "array"
           },
           "resource_error_carrier": {
-            "default": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure)",
+            "default": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this server keeps `code`/`message` rather than the machine_code/human_message spelling some §6 profiles use — nesting inside `data` already avoids shadowing the native JSON-RPC keys.",
             "title": "Resource Error Carrier",
             "type": "string"
           },
@@ -1270,6 +1270,30 @@
                 ],
                 "default": null
               },
+              "request_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Request Id"
+              },
+              "resource_uri": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Resource Uri"
+              },
               "retry_after_ms": {
                 "anyOf": [
                   {
@@ -1404,7 +1428,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-58",
+                "default": "codex-in-claude/0.1/schema-59",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2470,7 +2494,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-58",
+            "default": "codex-in-claude/0.1/schema-59",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3129,7 +3153,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-58",
+            "default": "codex-in-claude/0.1/schema-59",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3872,6 +3896,69 @@
               "fingerprint": {
                 "type": "string"
               },
+              "follow_up": {
+                "additionalProperties": false,
+                "properties": {
+                  "alternative": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "arguments": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "next_step": {
+                    "enum": [
+                      "authenticate",
+                      "correct_arguments",
+                      "correct_config",
+                      "init_git_repo",
+                      "inspect_and_retry",
+                      "install_codex",
+                      "install_git",
+                      "list_jobs",
+                      "list_resources",
+                      "poll_job_status",
+                      "reduce_input",
+                      "retry_after_delay",
+                      "retry_then_report",
+                      "start_new_job",
+                      "update_plugin",
+                      "use_allowed_value",
+                      "use_new_idempotency_key",
+                      "use_workspace_in_roots"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "next_step"
+                ],
+                "type": "object"
+              },
               "job_id": {
                 "type": "string"
               },
@@ -3918,6 +4005,7 @@
             },
             "required": [
               "deadline_seconds",
+              "follow_up",
               "job_id",
               "kind",
               "meta",
@@ -4385,6 +4473,69 @@
               "fingerprint": {
                 "type": "string"
               },
+              "follow_up": {
+                "additionalProperties": false,
+                "properties": {
+                  "alternative": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "arguments": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "next_step": {
+                    "enum": [
+                      "authenticate",
+                      "correct_arguments",
+                      "correct_config",
+                      "init_git_repo",
+                      "inspect_and_retry",
+                      "install_codex",
+                      "install_git",
+                      "list_jobs",
+                      "list_resources",
+                      "poll_job_status",
+                      "reduce_input",
+                      "retry_after_delay",
+                      "retry_then_report",
+                      "start_new_job",
+                      "update_plugin",
+                      "use_allowed_value",
+                      "use_new_idempotency_key",
+                      "use_workspace_in_roots"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "next_step"
+                ],
+                "type": "object"
+              },
               "job_id": {
                 "type": "string"
               },
@@ -4431,6 +4582,7 @@
             },
             "required": [
               "deadline_seconds",
+              "follow_up",
               "job_id",
               "kind",
               "meta",
@@ -6835,6 +6987,69 @@
               "fingerprint": {
                 "type": "string"
               },
+              "follow_up": {
+                "additionalProperties": false,
+                "properties": {
+                  "alternative": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "arguments": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "next_step": {
+                    "enum": [
+                      "authenticate",
+                      "correct_arguments",
+                      "correct_config",
+                      "init_git_repo",
+                      "inspect_and_retry",
+                      "install_codex",
+                      "install_git",
+                      "list_jobs",
+                      "list_resources",
+                      "poll_job_status",
+                      "reduce_input",
+                      "retry_after_delay",
+                      "retry_then_report",
+                      "start_new_job",
+                      "update_plugin",
+                      "use_allowed_value",
+                      "use_new_idempotency_key",
+                      "use_workspace_in_roots"
+                    ],
+                    "type": "string"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "next_step"
+                ],
+                "type": "object"
+              },
               "job_id": {
                 "type": "string"
               },
@@ -6881,6 +7096,7 @@
             },
             "required": [
               "deadline_seconds",
+              "follow_up",
               "job_id",
               "kind",
               "meta",

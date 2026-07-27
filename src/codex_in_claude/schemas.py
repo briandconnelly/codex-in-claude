@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-58"
+FINGERPRINT = "codex-in-claude/0.1/schema-59"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -84,6 +84,14 @@ FINGERPRINT = "codex-in-claude/0.1/schema-58"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
+# ErrorInfo's `resource_uri`/`request_id` (F6, #185) moved the `schemas` view of the snapshot
+# but deliberately did NOT bump this: both fields are populated only by the resource-read
+# middleware, which never writes result.json, so every persisted path keeps serializing them
+# as absent (`exclude_none`) — the `serialized` view is byte-identical before/after. A bump
+# here would have made every already-stored job result unreadable
+# (`server.py`'s replay check treats any other value as `job_result_incompatible`) for zero
+# compatibility gain. Regenerate the fixture to acknowledge the schema-view drift; only bump
+# the integer when the `serialized` view itself would actually move.
 RESULT_FORMAT: int = 6
 
 
@@ -828,6 +836,11 @@ class ErrorInfo(BaseModel):
     limit_bytes: int | None = None
     actual_bytes: int | None = None
     candidate_roots: list[str] | None = None
+    # §6 correlation, populated only on the JSON-RPC (resource) carrier: the tool carrier
+    # already carries request_id on `meta`, and duplicating it there would be two homes for
+    # one fact. exclude_none strips both on the tool path.
+    resource_uri: str | None = None
+    request_id: str | None = None
     # Present only on a codex_transfer failure where the child `codex app-server`'s stderr
     # is the primary diagnostic (cli_contract_changed / timeout / transfer_incomplete);
     # omitted otherwise (#275).
@@ -1017,11 +1030,16 @@ class CapabilitiesResult(BaseModel):
     # §6 ErrorInfo shape (code/message/temporary/retry_after_ms/repair — the `error`
     # object of codex://error-envelope), no longer a bare null. `error.code` is the MCP
     # numeric -32002 (resource not found) or -32603 (read failure); the symbolic string
-    # code lives in `error.data.code` (e.g. resource_not_found).
+    # code lives in `error.data.code` (e.g. resource_not_found). resource_uri/request_id
+    # (audit F6, #185) add correlation: the tool carrier already has request_id on
+    # `meta`, so those two are populated only here, never on the tool path.
     resource_error_carrier: str = (
         "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/"
-        "retry_after_ms/repair) is in error.data, and error.code is the MCP numeric "
-        "-32002 (not found) or -32603 (read failure)"
+        "retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code "
+        "is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this "
+        "server keeps `code`/`message` rather than the machine_code/human_message "
+        "spelling some §6 profiles use — nesting inside `data` already avoids shadowing "
+        "the native JSON-RPC keys."
     )
     error_envelope_resource: str = "codex://error-envelope"
     result_meta_resource: str = "codex://result-meta"
@@ -1132,6 +1150,10 @@ class JobStarted(BaseModel):
     ttl_seconds: int
     expires_at: str | None = None
     meta: Meta
+    # §3 dispatched-vs-applied: the job is dispatched but its outcome is unconfirmed, so the
+    # success carrier names the verification surface with literally callable arguments. Reuses
+    # the `Repair` shape verbatim — one next-step vocabulary, not two (§6).
+    follow_up: Repair
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 

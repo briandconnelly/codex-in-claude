@@ -27,18 +27,20 @@ from codex_in_claude.server import mcp
 # bytes — still within budget, no further change. Measured 2026-07-26 (F3 + F9: every tool
 # gained a `title` and a namespaced `_meta` stability tier, so tools/list alone shows which
 # tools are experimental): 79,723 bytes — ~1,600 bytes for 17 titles plus 17 `_meta` blocks;
-# budget raised to the next 500 above the measured value. Measured again 2026-07-26 (Copilot
-# review of #383: normalized every cost marker to the literal canonical token —
+# budget raised to the next 500 above the measured value. Measured again 2026-07-26 (F7:
+# JobStarted gained a required `follow_up: Repair` field, so the three `*_async` tools'
+# outputSchema each grew the nested Repair shape): 81,739 bytes — budget raised to the next
+# 500 above the measured value. Measured again 2026-07-26 (Copilot review of #383, merged
+# forward onto this branch: normalized every cost marker to the literal canonical token —
 # `codex_transfer`'s `FREE —` and `codex_capabilities`'s line-wrapped `Free —` corrected, the
 # three async active tools gained their own `PAID —` block naming the right preview tool, and
 # all six active tools now say "every new call" so the marker doesn't contradict
-# `idempotency_key`'s no-new-spend replay semantics): 80,245 bytes — 522 bytes for the marker
-# actually being one consistent token everywhere it appears; budget raised to the next 500
-# above the measured value. Measured once more after merging forward a Copilot review fix on
+# `idempotency_key`'s no-new-spend replay semantics): 82,261 bytes — budget raised to the next
+# 500 above the measured value. Measured once more after merging forward a Copilot review fix on
 # #382 clarifying that async_lifecycle appears only on the `*_async` tools, in both
-# CapabilitiesDetailParam's description and the codex_capabilities docstring: 80,318 bytes —
+# CapabilitiesDetailParam's description and the codex_capabilities docstring: 82,334 bytes —
 # still within budget, no further change.
-TOOLS_LIST_BYTE_BUDGET = 80_500
+TOOLS_LIST_BYTE_BUDGET = 82_500
 
 
 @pytest.mark.anyio

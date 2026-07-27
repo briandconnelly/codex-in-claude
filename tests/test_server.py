@@ -2219,7 +2219,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-58"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-59"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4752,6 +4752,45 @@ def test_capabilities_advertises_resource_error_carrier(clean_env):
     assert "-32002" in carrier
 
 
+class TestResourceErrorCorrelation:
+    """F6: a resource-read failure names the URI it was about and carries a request_id."""
+
+    async def test_not_found_carries_the_requested_uri_and_a_request_id(self):
+        from fastmcp import Client
+        from mcp import McpError
+
+        with pytest.raises(McpError) as excinfo:
+            async with Client(server.mcp) as client:
+                await client.read_resource("codex://does-not-exist")
+        data = excinfo.value.error.data
+        assert data["resource_uri"] == "codex://does-not-exist"
+        assert isinstance(data["request_id"], str) and data["request_id"]
+
+    async def test_envelope_fields_are_unchanged(self):
+        # The addition must not disturb the existing §6 contract.
+        from fastmcp import Client
+        from mcp import McpError
+
+        with pytest.raises(McpError) as excinfo:
+            async with Client(server.mcp) as client:
+                await client.read_resource("codex://does-not-exist")
+        data = excinfo.value.error.data
+        assert data["code"] == "resource_not_found"
+        assert data["temporary"] is False
+        assert data["retry_after_ms"] is None
+        assert data["repair"]["next_step"] == "list_resources"
+
+    async def test_tool_errors_do_not_gain_the_new_keys(self):
+        # meta.request_id already carries correlation on the tool path; duplicating it
+        # would be two contracts for one fact.
+        from fastmcp import Client
+
+        async with Client(server.mcp) as client:
+            r = await client.call_tool("codex_job_status", {"job_id": "nope"}, raise_on_error=False)
+        assert "resource_uri" not in r.structured_content["error"]
+        assert "request_id" not in r.structured_content["error"]
+
+
 # --------------------------------------------------------------------------- #
 # codex://result-meta resource + capabilities pointer + opt-in fallback (F1/#179)
 # --------------------------------------------------------------------------- #
@@ -5930,7 +5969,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-58")
+    assert result["fingerprint"].endswith("schema-59")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6954,3 +6993,40 @@ class TestToolDisplayMetadata:
             assert (t.meta or {}).get(STABILITY_META_KEY) == expected[t.name], (
                 f"{t.name}: tools/list tier disagrees with codex_capabilities"
             )
+
+
+async def _start_async_job_envelope(monkeypatch, tmp_path) -> dict:
+    """Start a stubbed async job (no real codex spend — same fake-store pattern as
+    test_consult_async_returns_job_id) and return its JobStarted envelope. The record
+    also backs a follow-up codex_job_status call, so the round-trip test below can
+    actually resolve it instead of 404ing."""
+    store = _FakeStore(record=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    return await server.codex_consult_async("why?", workspace_root=str(tmp_path))
+
+
+class TestAsyncFollowUp:
+    """F7: a started job names its poll surface in the structured result, not just prose."""
+
+    @pytest.mark.anyio
+    async def test_job_started_carries_a_callable_follow_up(self, monkeypatch, clean_env, tmp_path):
+        env = await _start_async_job_envelope(monkeypatch, tmp_path)
+        fu = env["follow_up"]
+        assert fu["next_step"] == "poll_job_status"
+        assert fu["tool"] == "codex_job_status"
+        assert fu["arguments"]["job_id"] == env["job_id"]
+        assert "alternative" in fu
+
+    @pytest.mark.anyio
+    async def test_follow_up_arguments_are_actually_callable(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        # §6 rule: repair arguments hold real callable values, never placeholders — prove
+        # it by actually calling codex_job_status with exactly the returned arguments.
+        env = await _start_async_job_envelope(monkeypatch, tmp_path)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_status", env["follow_up"]["arguments"], raise_on_error=False
+            )
+        assert r.structured_content["ok"] is True
+        assert r.structured_content["job_id"] == env["job_id"]
