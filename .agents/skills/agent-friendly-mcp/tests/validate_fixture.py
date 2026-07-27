@@ -57,7 +57,8 @@ def _content_fallback_issue(result: dict, where: str) -> Issue | None:
     content = result.get("content")
     if not isinstance(content, list) or not content:
         return Issue(
-            where, "result must carry a non-empty 'content' array (§3 human/compatibility fallback)"
+            where,
+            "result must carry a non-empty 'content' array (§3 human/compatibility fallback)",
         )
     has_text = any(
         isinstance(block, dict)
@@ -68,7 +69,8 @@ def _content_fallback_issue(result: dict, where: str) -> Issue | None:
     )
     if not has_text:
         return Issue(
-            where, "result 'content' must include a non-empty text block (§3 textual fallback)"
+            where,
+            "result 'content' must include a non-empty text block (§3 textual fallback)",
         )
     return None
 
@@ -92,17 +94,20 @@ def _envelope_invariant_issues(envelope: object, where: str) -> list[Issue]:
     return issues
 
 
-def _success_issues(wire: dict, success: object) -> list[Issue]:
-    issues: list[Issue] = []
-    output_schema = wire.get("output_schema")
+def _success_issues(wire: dict) -> list[Issue]:
+    """§3 success path: structuredContent conforms to outputSchema."""
+    success = wire.get("success_result")
     if not isinstance(success, dict):
         return [Issue("success_result", "missing success_result")]
+
+    issues: list[Issue] = []
     if success.get("isError") is True:
         issues.append(Issue("success_result", "success_result must not set isError: true"))
     content_issue = _content_fallback_issue(success, "success_result.content")
     if content_issue:
         issues.append(content_issue)
     sc = success.get("structuredContent")
+    output_schema = wire.get("output_schema")
     if sc is None:
         issues.append(Issue("success_result", "success_result missing structuredContent"))
     elif isinstance(output_schema, dict):
@@ -114,12 +119,51 @@ def _success_issues(wire: dict, success: object) -> list[Issue]:
     return issues
 
 
-def _error_issues(wire: dict, error: object) -> list[Issue]:
-    issues: list[Issue] = []
-    error_schema = wire.get("error_schema")
+def _extract_envelope(error: dict, degraded: bool) -> tuple[object, list[Issue]]:
+    """Locate the §6 error envelope on its declared carrier."""
+    envelope = error.get("structuredContent")
+    if envelope is not None:
+        return envelope, []
+
+    if not degraded:
+        return None, [
+            Issue(
+                "error_result",
+                "error envelope must be in structuredContent (native carrier); "
+                "a content[0].text carrier is allowed only when "
+                "wire.degraded_text_carrier is declared",
+            )
+        ]
+
+    # disclosed degraded mode: envelope rides as JSON text in content[0].text
+    content = error.get("content")
+    first = content[0] if isinstance(content, list) and content else None
+    text = first.get("text") if isinstance(first, dict) else None
+    if text is None:
+        return None, [
+            Issue(
+                "error_result",
+                "degraded_text_carrier declared but content[0].text is missing",
+            )
+        ]
+    try:
+        return json.loads(text), []
+    except (ValueError, TypeError):
+        return None, [
+            Issue(
+                "error_result",
+                "degraded_text_carrier content[0].text is not valid envelope JSON",
+            )
+        ]
+
+
+def _error_issues(wire: dict) -> list[Issue]:
+    """§6 error path: isError + envelope in structuredContent vs error_schema."""
+    error = wire.get("error_result")
     if not isinstance(error, dict):
         return [Issue("error_result", "missing error_result")]
 
+    issues: list[Issue] = []
     if error.get("isError") is not True:
         issues.append(Issue("error_result", "error_result must set isError: true"))
 
@@ -128,41 +172,12 @@ def _error_issues(wire: dict, error: object) -> list[Issue]:
         issues.append(error_content_issue)
 
     degraded = bool(wire.get("degraded_text_carrier"))
-    envelope = error.get("structuredContent")
-
-    if envelope is None and not degraded:
-        issues.append(
-            Issue(
-                "error_result",
-                "error envelope must be in structuredContent (native carrier); a "
-                "content[0].text carrier is allowed only when wire.degraded_text_carrier "
-                "is declared",
-            )
-        )
-    if envelope is None and degraded:
-        # disclosed degraded mode: envelope rides as JSON text in content[0].text
-        content = error.get("content") or []
-        text = content[0].get("text") if content and isinstance(content[0], dict) else None
-        if text is None:
-            issues.append(
-                Issue(
-                    "error_result", "degraded_text_carrier declared but content[0].text is missing"
-                )
-            )
-        else:
-            try:
-                envelope = json.loads(text)
-            except (ValueError, TypeError):
-                issues.append(
-                    Issue(
-                        "error_result",
-                        "degraded_text_carrier content[0].text is not valid envelope JSON",
-                    )
-                )
-                envelope = None
+    envelope, carrier_issues = _extract_envelope(error, degraded)
+    issues += carrier_issues
 
     if envelope is not None:
         issues += _envelope_invariant_issues(envelope, "error_result envelope (§6 invariants)")
+        error_schema = wire.get("error_schema")
         if isinstance(error_schema, dict):
             issues += _schema_errors(
                 envelope, error_schema, "error_result envelope vs error_schema"
@@ -179,12 +194,7 @@ def validate(fixture: object) -> list[Issue]:
     wire = fixture.get("wire")
     if not isinstance(wire, dict):
         return [Issue("wire", "fixture has no 'wire' object")]
-
-    # success path: structuredContent conforms to outputSchema; error path:
-    # isError + envelope in structuredContent vs error_schema
-    return _success_issues(wire, wire.get("success_result")) + _error_issues(
-        wire, wire.get("error_result")
-    )
+    return _success_issues(wire) + _error_issues(wire)
 
 
 def main(argv: list[str]) -> int:

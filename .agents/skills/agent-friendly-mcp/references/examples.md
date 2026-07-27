@@ -31,7 +31,7 @@ Tool definition for `slack_send_message`. *Demonstrates §3 tool-shape rules.*
 ```json
 {
   "name": "slack_send_message",
-  "description": "Post a message to a Slack channel or DM.\n\nWhen to use: any time the agent has composed a message and a destination (channel id, user id, or thread ts) and wants to deliver it. Prefer this over `slack_create_channel` + post when the channel already exists.\n\nUsage notes:\n- DMs to users require a `user_id`, not a channel name; resolve via `slack_lookup_user` first.\n- Threaded replies require both `channel_id` and `thread_ts`; omitting `thread_ts` posts a new top-level message.\n- If a call times out, do not blind-retry: re-send with the same `idempotency_key`, or check delivery via `slack_list_messages` before retrying without one.\n\nFor the failure modes this tool can return (channel archived, not found, rate limited, etc.), see the error catalog under `_meta` (`com.slack-mcp/errors`) — do not infer error semantics from this description.\n\nExample: {\"channel_id\": \"C0123ABCD\", \"text\": \"Deploy finished.\"}",
+  "description": "Post a message to a Slack channel or DM.\n\nWhen to use: any time the agent has composed a message and a destination (channel id, DM id, or thread ts) and wants to deliver it. Prefer this over `slack_create_channel` + post when the channel already exists.\n\nUsage notes:\n- DMs to users take a D-prefixed `channel_id`, not a channel name and not a `U…` user id; call `slack_lookup_user` first to get one.\n- Threaded replies require both `channel_id` and `thread_ts`; omitting `thread_ts` posts a new top-level message.\n- If a call times out, do not blind-retry: re-send with the same `idempotency_key`, or check delivery via `slack_list_messages` before retrying without one.\n\nFor the failure modes this tool can return (channel archived, not found, rate limited, etc.), see the error catalog under `_meta` (`com.slack-mcp/errors`) — do not infer error semantics from this description.\n\nExample: {\"channel_id\": \"C0123ABCD\", \"text\": \"Deploy finished.\"}",
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -152,6 +152,21 @@ Detail (`detail: "full"`):
       "edited": null,
       "client_msg_id": "8f4c6e1a-7b22-4d6a-91a1-3aa72c4e9b07",
       "permalink": "https://slack.com/archives/C0123ABCD/p1714600000001200"
+    },
+    {
+      "ts": "1714600055.001300",
+      "channel_id": "C0123ABCD",
+      "channel": "#deploys",
+      "author_id": "U07DEPLOYBOT",
+      "author": "deploy-bot",
+      "preview": "All services green.",
+      "text": "All services green.",
+      "blocks": [{"type": "rich_text", "elements": []}],
+      "reactions": [{"name": "tada", "count": 3}],
+      "thread_ts": null,
+      "edited": null,
+      "client_msg_id": "b1d9f3c7-4e18-42aa-9f30-1c6e5d2a8f44",
+      "permalink": "https://slack.com/archives/C0123ABCD/p1714600055001300"
     }
   ],
   "has_more": true,
@@ -162,7 +177,8 @@ Detail (`detail: "full"`):
 }
 ```
 
-What to notice: the concise fields are a strict subset of the detailed fields — `preview` stays present in both modes, so one parser handles both, and detail adds the raw domain IDs (`channel_id`, `author_id`, `client_msg_id`), the full `text` and `blocks`, plus null-valued fields.
+What to notice: the concise fields are a strict subset of the detailed fields — `preview` stays present in both modes, so one parser handles both, and detail adds the raw domain IDs (`channel_id`, `author_id`, `client_msg_id`), the full `text` and `blocks`, `reactions`, `permalink`, plus null-valued fields.
+Both modes return the same two messages in the same order with the same cursor: the detail toggle changes field density, never row count (§8) — a mode that returned fewer rows would be a second contract, not a detail level.
 Pagination and truncation are distinct signals carried together: `has_more`/`next_cursor` continue the walk page by page, while `truncated: true` says the walk will stop at the 500-item cap even though ~3210 messages match — and the `truncation_hint` names the repair (`since=` or `query=`) so the agent doesn't have to guess.
 On clients that support it, deliver this payload as `structuredContent` paired with a published `outputSchema`; the same JSON shape goes in `content` as a textual fallback for clients that do not.
 
@@ -205,7 +221,7 @@ A single entry from a `slack://channels/C0123ABCD/messages` index listing. *Demo
 
 What to notice: every field here is a native `Resource` field (`uri`, `name`, `title`, `description`, `mimeType`, `size`, `annotations.lastModified`) — see the native-vs-convention rule in `SKILL.md`.
 `uri` is hierarchical and stable (channel id + message ts); `title` and `description` together let the agent decide whether to fetch the body without reading it; `size` lets the agent estimate token cost; `annotations.lastModified` lets the agent skip a re-fetch if it already cached this version; `mimeType` tells the agent which parser to use.
-Custom index metadata that has no native field goes under `_meta` (demonstrated in §4), not as a new top-level key.
+Custom index metadata that has no native field goes under `_meta` (demonstrated in ex§4), not as a new top-level key.
 
 ## 4. Resource body with chunking
 
@@ -279,8 +295,8 @@ A prompt that orchestrates posting a release announcement across multiple channe
   "arguments": [
     {"name": "version", "description": "Release version string, e.g. \"v2.4.1\".", "required": true},
     {"name": "summary", "description": "One- or two-sentence release summary for the announcement body.", "required": true},
-    {"name": "channels", "description": "Array of channel names. Omit to use the workspace default announcement channel.", "required": false},
-    {"name": "pin", "description": "Boolean. Omitted means false — the server skips pinning."}
+    {"name": "channels", "description": "Comma-separated channel names, e.g. \"eng,releases\". Omit to use the workspace default announcement channel.", "required": false},
+    {"name": "pin", "description": "\"true\" or \"false\" as a string. Omitted means false — the server skips pinning."}
   ],
   "_meta": {
     "com.slack-mcp/when-to-use": "The user has shipped a release (version, summary, optional changelog link) and wants to announce it. Skip if the user only wants to draft text without sending.",
@@ -293,9 +309,9 @@ A prompt that orchestrates posting a release announcement across multiple channe
       }
     },
     "com.slack-mcp/expected-followups": [
-      "Call `slack_lookup_channel` for each name in `channels` to resolve to channel ids.",
+      "Split `channels` on commas, then call `slack_lookup_channel` for each resulting name to resolve it to a channel id.",
       "Call `slack_send_message` per resolved channel id with the composed text.",
-      "If `pin` is true, call `slack_pin_message` with each returned message ts. (Default is false — skip pinning unless explicitly requested.)",
+      "If `pin` is the string \"true\", call `slack_pin_message` with each returned message ts. (Omitted or \"false\" means skip pinning.)",
       "Surface the resulting permalinks back to the user."
     ]
   }
@@ -305,6 +321,8 @@ A prompt that orchestrates posting a release announcement across multiple channe
 What to notice: `com.slack-mcp/when-to-use` distinguishes this from "draft a message"; `com.slack-mcp/prerequisites` lists the required permissions, tool names, resource URIs, and context assumptions in one place; `com.slack-mcp/expected-followups` names tools by their canonical schema name — the prompt references but does not redefine.
 The block is wire-valid as shown: `when-to-use`, `prerequisites`, and `expected-followups` are convention extensions, not native MCP `Prompt` fields (native is `name`, `title`, `description`, `arguments`, `_meta`), so they ride under namespaced `_meta` keys rather than at the top level (see the native-vs-convention rule in `SKILL.md`).
 Inside `arguments`, only native `PromptArgument` fields appear (`name`, `title`, `description`, `required`); value-shape guidance that would otherwise use `type`, `items`, or `default` is carried in each argument's `description` instead.
+`prompts/get` carries `arguments` as a map of string to string, so there is no array or boolean on the wire — which is why `channels` and `pin` declare their **encoding** ("comma-separated", `"true"`/`"false"`), not just their conceptual type.
+An argument whose description says "array" without saying how to serialize it leaves every client to invent its own convention.
 
 ## 5a. Resource template with completion
 
@@ -462,7 +480,7 @@ A more common first-call failure — an unknown channel name passed where an id 
 }
 ```
 
-What to notice: the channel-name-vs-id mistake is the predictable first-call failure for a tool whose `channel_id` is a hard-to-guess `C…` id (see §1), and MCP completion does not cover tool arguments — so the repair carries the agent across the gap by naming `slack_lookup_channel` and the exact argument to pass, with the resource index as a fallback.
+What to notice: the channel-name-vs-id mistake is the predictable first-call failure for a tool whose `channel_id` is a hard-to-guess `C…` id (see ex§1), and MCP completion does not cover tool arguments — so the repair carries the agent across the gap by naming `slack_lookup_channel` and the exact argument to pass, with the resource index as a fallback.
 
 A resource read failure (e.g., `resources/read` against a deleted thread) uses a JSON-RPC error instead of a tool-result error, but carries the **same error/repair envelope** in `error.data`, with one deliberate exception: `code`/`message` are renamed to `machine_code`/`human_message` so they do not shadow the native JSON-RPC `code`/`message` that wrap them.
 Every other field — `temporary`, `retry_after_ms`, and (where applicable) `details`, the single `repair` object, and the correlation fields — uses the same name, shape, and cardinality on both surfaces. `resource_uri` is one of those optional correlation fields, shared by both surfaces; it is populated here because this failure is tied to a specific resource (see the unified envelope table in `contract-checklist.md` §6).
@@ -1094,7 +1112,7 @@ A successful response:
 What to notice: this skill treats `readOnlyHint: true` as defensible here — the call doesn't mutate the warehouse, doesn't change shared state, and the CSV is response delivery (scoped to this call, declared TTL, no shared visibility), not persistent state that outlives the response contract.
 That is a deliberate reading of an ambiguous hint, not settled spec (see contract-checklist §3): a reviewer who reads `readOnlyHint` literally as "does not modify its environment" may count the local write as mutation, so where you can, prefer returning the result as a resource or resource link with TTL metadata rather than a local-file artifact.
 This pattern assumes co-located stdio — a remote or HTTP deployment of the same tool must switch to a fetchable resource, `resource_link`, or URL, because a returned filesystem path is dead weight to a remote client (§3).
-`destructiveHint` and `idempotentHint` are omitted because the spec makes them meaningful only when `readOnlyHint` is `false` — declaring them here would assert semantics the protocol does not assign (contrast `slack_send_message` in §1, where `readOnlyHint: false` makes `idempotentHint: false` meaningful: re-sending compounds — two messages posted, not a no-op).
+`destructiveHint` and `idempotentHint` are omitted because the spec makes them meaningful only when `readOnlyHint` is `false` — declaring them here would assert semantics the protocol does not assign (contrast `slack_send_message` in ex§1, where `readOnlyHint: false` makes `idempotentHint: false` meaningful: re-sending compounds — two messages posted, not a no-op).
 `openWorldHint: true` reflects that the tool reaches an external warehouse.
 The artifact is disclosed in the structured response — `result_artifact` (a convention field) with `path`, `mime_type`, `ttl_hours`, `expires_at` — and in the tool description, never by flipping the annotation.
 Its sub-fields use house `snake_case` (`mime_type`, not the native `Resource.mimeType`) because `result_artifact` is a convention object, not a native `Resource`; if a server instead returns a real native `resource_link`, it carries the native `mimeType` casing (see `contract-checklist.md` §3 and the native-vs-convention rule in `SKILL.md`).

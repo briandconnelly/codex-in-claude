@@ -129,7 +129,7 @@ For each operation that may outlive a normal request/response turn, decide how t
 - Declare expected duration, timeout behavior, and whether partial progress is observable.
 - Support `progressToken` and recover through native task operations where applicable — poll `tasks/get` (respect `pollInterval`), fetch with `tasks/result`, cancel with `tasks/cancel` — using the spec's task fields and statuses (`working`, `input_required`, `completed`, `failed`, `cancelled`).
 - For `input_required`, design around the native path — the requestor preemptively calls `tasks/result` and holds it open; the pending input request arrives as a separate receiver-to-requestor request while the call is pending, and the held call returns the terminal result once input is supplied — and say whether the input mechanism is elicitation, URL-mode elicitation, or a domain-specific status/repair tool (§7).
-- Enable tasks at both levels: declare the server `server.capabilities.tasks.requests.tools.call` and the tool's `execution.taskSupport` (`optional`, `required`, or `forbidden`).
+- Enable tasks at both levels: declare the server `server.capabilities.tasks.requests.tools.call` and the tool's `execution.taskSupport` (see §7 for its values and the omission default).
   Tasks are experimental, so add a domain-specific status/cancel fallback only as a labeled stand-in for clients without task support.
 
 Output: long-running behavior contract for each affected tool, including progress, cancellation, retrieval, and terminal-state semantics.
