@@ -6935,10 +6935,13 @@ class TestCapabilitiesContractsDetail:
     """#339: `detail="contracts"` drops the tool inventory so a resource-blind client can
     fetch a schema (or revalidate its fingerprint) without re-paying for `tool_details`.
 
-    Scoped to `tool_details` deliberately: it is the ONLY heavy field that is already
-    optional in both published schemas (it carries `default_factory=list`, so Pydantic
-    leaves it out of `required`). Every other top-level field is required there, so
-    dropping one would need a schema change — see the ADR-style reasoning in the PR."""
+    Scoped to `tool_details` deliberately: it is already optional in both published
+    schemas (it carries `default_factory=list`, so Pydantic leaves it out of `required`),
+    so omitting it needs no schema change. Several other fields are non-required too —
+    schema validation alone would NOT notice one vanishing — so the set-equality assertion
+    below, not the schema, is what pins that `tool_details` is the only field dropped.
+    Rationale for the mode-vs-new-tool shape:
+    docs/adr/0003-fetch-schemas-without-the-inventory.md."""
 
     @pytest.mark.anyio
     async def test_contracts_omits_tool_details_and_keeps_everything_else(self):
@@ -7019,6 +7022,20 @@ class TestCapabilitiesContractsDetail:
         async with Client(server.mcp) as c:
             tool = next(t for t in await c.list_tools() if t.name == "codex_capabilities")
         assert "contracts" in tool.inputSchema["properties"]["detail"]["enum"]
+
+    @pytest.mark.anyio
+    async def test_capabilities_detail_description_explains_the_contracts_mode(self):
+        # Per-surface guard. The SHARED `_DESCRIBED_PARAMS` check only asserts the
+        # substring "summary", which a near-empty description would satisfy — so it
+        # cannot police this tool's three-value domain. Pin the two facts a client needs
+        # to pick the mode: its name, and the field it removes.
+        async with Client(server.mcp) as c:
+            tool = next(t for t in await c.list_tools() if t.name == "codex_capabilities")
+        desc = tool.inputSchema["properties"]["detail"]["description"]
+        assert "contracts" in desc
+        assert "tool_details" in desc
+        # The tool's own description must not contradict the enum it advertises.
+        assert "either detail mode" not in (tool.description or "")
 
     @pytest.mark.anyio
     async def test_contracts_did_not_widen_any_other_tools_detail_param(self):

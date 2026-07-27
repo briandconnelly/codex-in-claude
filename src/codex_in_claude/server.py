@@ -1708,14 +1708,14 @@ def codex_capabilities(
 
     `detail="summary"` (default) returns each tool's name, cost, stability, and
     error_codes — the facts `tools/list` does not already carry — plus async_lifecycle,
-    but only for the `*_async` tools. Pass `detail="full"` for
-    use_when/returns/required_params/key_optional_params too; those restate the tool
-    descriptions and schemas you already hold.
+    but only for the `*_async` tools. `detail="full"` adds
+    use_when/returns/required_params/key_optional_params, restating what you already hold.
+    `detail="contracts"` omits tool_details.
 
     Pass include_schemas to also embed the full 'error-envelope', 'result-meta',
     'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'
     document (a contract doc, not a JSON Schema) — a tool-reachable fallback to the
-    codex:// resources for resource-blind clients. It works in either detail mode."""
+    codex:// resources for resource-blind clients. It works in any detail mode."""
     caps = CapabilitiesResult(
         name="codex-in-claude",
         version=__version__,
@@ -2118,11 +2118,13 @@ def codex_capabilities(
     # it, and only the *_async tools carry `async_lifecycle`.
     payload = caps.model_dump(mode="json", exclude_none=True)
     if detail == "contracts":
-        # #339: shed the inventory and return. `tool_details` is the ONLY heavy field that
-        # is already non-required in both published schemas (default_factory=list keeps it
-        # out of `required`), so dropping it needs no schema change and no new success
-        # branch — verified by a test that validates this payload against both. Every other
-        # top-level field IS required there, which is why the rule stops at this one key.
+        # #339: shed the inventory and return. `tool_details` is already non-required in
+        # both published schemas (default_factory=list keeps it out of `required`), so
+        # dropping it needs no schema change and no new success branch — verified by a test
+        # that validates this payload against both. Several other fields are non-required
+        # too, so schema validation alone would NOT catch one going missing; the rule stops
+        # at this key because it is the heavy one (~66% of the bare payload), and a
+        # set-equality test — not the schema — is what pins that nothing else disappears.
         del payload["tool_details"]
         return payload
     if detail == "summary":

@@ -80,6 +80,8 @@ figures that move with the tool inventory, not a promised bound.
 
 `detail` is a single knob: `contracts` is an alternative to `summary`/`full`, not a modifier of
 them, so it carries no inventory to be verbose about.
+See [ADR 0003](adr/0003-fetch-schemas-without-the-inventory.md) for why this is a `detail` mode
+rather than a separate tool or a `schemas_only` flag.
 
 Every result envelope also carries `server_version` beside `fingerprint`. The two answer different
 questions and are not interchangeable:
