@@ -1362,7 +1362,7 @@ async def codex_transfer(
 
     Imports a Claude session transcript (.jsonl) into a persistent Codex thread via
     `codex app-server` and returns `resume_command` (`codex resume <thread_id>`) to
-    continue that exact conversation in Codex (TUI or App). FREE — no model call and no
+    continue that exact conversation in Codex (TUI or App). Free — no model call and no
     token spend; it is a local file conversion, typically seconds. It does create a
     thread in $CODEX_HOME (so it is not read-only) but never edits your working tree.
 
@@ -1698,8 +1698,8 @@ def codex_capabilities(
     include_schemas: IncludeSchemasParam = None,
     detail: CapabilitiesDetailParam = "summary",
 ) -> dict:
-    """List this server's tools, tiers, and the result fingerprint. Free — no
-    model call. Clients can cache by the fingerprint.
+    """List this server's tools, tiers, and the result fingerprint.
+    Free — no model call. Clients can cache by the fingerprint.
 
     `detail="summary"` (default) returns each tool's name, cost, stability, error_codes,
     and async_lifecycle — the facts `tools/list` does not already carry. Pass
@@ -2925,6 +2925,9 @@ async def codex_delegate_async(
     """Delegate a coding task to Codex in the background and get a `job_id` back
     immediately (does not block on the run).
 
+    PAID — this spends Codex quota on every new call; use codex_delegate_dry_run or
+    codex_status (both free) first if you only need to check scope or readiness.
+
     Same propose-tier behavior as `codex_delegate` — Codex works in a throwaway git
     worktree and the result carries a **reviewable diff that is NOT applied** — but
     detached; prefer it for a substantial or multi-file implementation task that can exceed the
@@ -3508,6 +3511,10 @@ async def codex_consult_async(
     """Ask Codex for a read-only second opinion in the background; get a `job_id`
     back immediately instead of blocking.
 
+    PAID — this spends Codex quota on every new call; there is no dry-run preview for a
+    consult, so run codex_status (free) first to confirm the CLI is installed and
+    authenticated.
+
     Same read-only behavior as `codex_consult` (Codex never edits files), but detached —
     prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the
     synchronous deadline (built-in default 300s), since a sync run whose deadline expires loses
@@ -3570,6 +3577,9 @@ async def codex_review_changes_async(
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Review your git changes in the background; get a `job_id` back immediately.
+
+    PAID — this spends Codex quota on every new call; use codex_dry_run or codex_status
+    (both free) first if you only need to check scope or readiness.
 
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
     redacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file

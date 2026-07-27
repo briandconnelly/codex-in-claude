@@ -38,8 +38,13 @@ from codex_in_claude.server import mcp
 # undocumented at the time): 82,759 bytes. Measured once more the same day (final-review fix
 # wave: the three PAID-block descriptions changed "spends Codex quota on every call" to
 # "...every new call", resolving a contradiction with idempotency_key's "no new spend" replay
-# wording): 82,771 bytes — still within budget, no further change.
-TOOLS_LIST_BYTE_BUDGET = 83_000
+# wording): 82,771 bytes — still within budget, no further change. Measured once more the same
+# day (Copilot review of #383, merged forward onto this branch: normalized every cost marker
+# to the literal canonical token — `codex_transfer`'s `FREE —` and `codex_capabilities`'s
+# line-wrapped `Free —` corrected, and the three async active tools gained their own `PAID —`
+# block naming the right preview tool): 83,281 bytes — budget raised to the next 500 above the
+# measured value.
+TOOLS_LIST_BYTE_BUDGET = 83_500
 
 
 @pytest.mark.anyio

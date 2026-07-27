@@ -13,6 +13,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   more (`codex_dry_run`, `codex_delegate_dry_run`), which already stated `NO model call and no
   spend` in prose, were normalized onto the same `Free` token — so a client reading only
   `tools/list` gets one consistent cost marker across every tool.
+- Every cost marker now uses one canonical token — `PAID —` for active tools, `Free — no
+  model call` for free ones — instead of near-miss variants (`FREE —`, a line-wrapped
+  `Free —`, or bare mentions of "spend"). `codex_transfer`, `codex_capabilities`,
+  `codex_consult_async`, `codex_review_changes_async`, and `codex_delegate_async` gain the
+  literal marker; the three async `PAID —` blocks each point at the correct preview tool
+  (`codex_status` only for `codex_consult_async`, `codex_dry_run` for
+  `codex_review_changes_async`, `codex_delegate_dry_run` for `codex_delegate_async`), and all
+  six active tools now say "every new call" rather than "every call" so the marker doesn't
+  contradict `idempotency_key`'s no-new-spend replay semantics.
 - Every tool now carries a `title` for human-facing pickers and a namespaced
   `_meta` stability tier, so a client reading only `tools/list` can see which tools are
   experimental.

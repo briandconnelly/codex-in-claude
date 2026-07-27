@@ -6938,12 +6938,13 @@ class TestSpendMarkers:
         cost = {t["name"]: t["cost"] for t in caps["tool_details"]}
         missing = []
         for name, desc in tools.items():
-            lowered = desc.lower()
             if cost[name] == "active":
-                if "paid" not in lowered and "spend" not in lowered:
-                    missing.append(f"{name} (active, no paid/spend marker)")
-            elif "free" not in lowered:
-                missing.append(f"{name} (free, no free marker)")
+                if "PAID —" not in desc:
+                    missing.append(f"{name} (active, missing the canonical 'PAID —' marker)")
+            elif "Free — no model call" not in desc:
+                missing.append(
+                    f"{name} (free, missing the canonical 'Free — no model call' marker)"
+                )
         assert not missing, "tools with no cost marker: " + ", ".join(missing)
 
     @pytest.mark.anyio
