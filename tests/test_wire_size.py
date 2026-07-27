@@ -30,8 +30,14 @@ from codex_in_claude.server import mcp
 # budget raised to the next 500 above the measured value. Measured again 2026-07-26 (F7:
 # JobStarted gained a required `follow_up: Repair` field, so the three `*_async` tools'
 # outputSchema each grew the nested Repair shape): 81,739 bytes — budget raised to the next
+# 500 above the measured value. Measured again 2026-07-26 (Copilot review of #383, merged
+# forward onto this branch: normalized every cost marker to the literal canonical token —
+# `codex_transfer`'s `FREE —` and `codex_capabilities`'s line-wrapped `Free —` corrected, the
+# three async active tools gained their own `PAID —` block naming the right preview tool, and
+# all six active tools now say "every new call" so the marker doesn't contradict
+# `idempotency_key`'s no-new-spend replay semantics): 82,261 bytes — budget raised to the next
 # 500 above the measured value.
-TOOLS_LIST_BYTE_BUDGET = 82_000
+TOOLS_LIST_BYTE_BUDGET = 82_500
 
 
 @pytest.mark.anyio
