@@ -17,8 +17,10 @@ from codex_in_claude.server import mcp
 # giving codex_capabilities its own accurate CapabilitiesDetailParam description (F1 review
 # finding #2, replacing the shared DetailParam's inaccurate "omits the raw model text" wording
 # for this no-model-call tool): 77,561 bytes — ~120 bytes for a materially more useful
-# description on the tool that most needs it. Raising this number is a reviewed decision — say
-# why in the PR body.
+# description on the tool that most needs it. Measured once more at schema-57 after a Copilot
+# review fix clarifying that async_lifecycle appears only on the `*_async` tools, in both
+# CapabilitiesDetailParam's description and the codex_capabilities docstring: 77,634 bytes.
+# Raising this number is a reviewed decision — say why in the PR body.
 TOOLS_LIST_BYTE_BUDGET = 78_000
 
 

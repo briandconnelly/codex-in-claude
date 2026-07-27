@@ -943,10 +943,15 @@ class ToolCapability(BaseModel):
     # Per-tool maturity (advisory). None ⇒ inherits the server-wide `stability`; set
     # only when a tool is more experimental than that norm (e.g. the async/job surface).
     stability: ToolStability | None = None
-    use_when: str
+    # Optional in the schema (not just at the Python default): `codex_capabilities`'
+    # `detail="summary"` (the default) strips use_when/returns from every entry before
+    # the response ships, so the published schema must accept an entry without them —
+    # only `detail="full"` carries them. Always populated wherever this model is
+    # constructed; the None branch exists for the wire, not for a real omission here.
+    use_when: str | None = None
     required_params: list[str] = Field(default_factory=list)
     key_optional_params: list[str] = Field(default_factory=list)
-    returns: str
+    returns: str | None = None
     # Error codes this tool may return. Advisory, not exhaustive: a guide for
     # branching/recovery, not a closed contract. Typed as ErrorCode so the schema
     # advertises the valid code set and entries are checked statically.
