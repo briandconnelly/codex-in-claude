@@ -90,5 +90,42 @@ do not. The rule is published on `codex://result-meta` so it is discoverable rat
 diffable, and `docs/REFERENCE.md` documents it beside the matching error-envelope convention.
 
 The non-envelope result surfaces (`StatusResult`, the dry-run results, `TransferResult`,
-`JobListResult`, job status) still send their nulls. They have different semantics — several
-deliberately preserve required nullable members — and are left to a separate audit.
+`JobListResult`, job status) still send their nulls.
+That was audited in #389 and the answer is **no further surface slims** — the rule stops where this
+ADR left it.
+Recorded here so the ground is not re-derived (byte figures measured against live calls at
+`schema-61`; they will drift, the reasoning will not):
+
+- **`JobStatus`/`JobSummary` cannot slim at all without breaking a published statement.** They
+  document `result_ok` as "Always present (null-meaningful), never omitted", and
+  `codex_job_status`'s tool description separately promises `expires_at` "is null while running" —
+  so preserving `result_ok` alone is not sufficient. Weakening either is breaking under AGENTS.md
+  § Versioning.
+- **Three are no-ops.** `JobListResult` already hand-omits its only eligible key
+  (`truncation_hint`); `TransferResult` has no production-reachable top-level null on the success
+  path; `JobStarted` is published as explicitly not-slimmed on `codex://result-meta`.
+- **The rest are contract-safe and lose on cost, not on semantics.** Measured against live calls,
+  top-level omission saves 111 B (14.1%) on `codex_dry_run`, 62 B (6.9%) on
+  `codex_delegate_dry_run`, and 44 B (2.2%) on `codex_status` — roughly 30, 17, and 12 tokens per
+  call, all of them free. Frequency does not rescue the case: `codex_status` is the most repeated
+  of the three (the bundled skill calls it before each paid call) and it is also the smallest
+  saving. The price is a `FINGERPRINT` bump, which
+  `docs/REFERENCE.md` documents as a **client cache key**, plus a third serialization convention
+  (envelope-`meta` slimming, hand-omission, and a per-model allowlist) for every future contributor
+  to hold. Not worth it.
+
+Be precise about *which* mechanism is unsafe, because the two are easy to conflate. **Top-level**
+omission on `StatusResult` is contract-compatible — it leaves `rate_limit` byte-identical. A
+**recursive** exclusion is not: it reaches into `RateLimit`, where `docs/REFERENCE.md` § Rate-limit
+reporting publishes both "reports `limiting_window: null` while still showing the windows" and
+"tri-state, and null is *not* false" for `spend_control_reached`. So `StatusResult` was declined on
+value, not on safety; recursive exclusion is what is ruled out, and it is ruled out everywhere.
+
+#389's own headline — `StatusResult` at "33.2%" — does not reproduce on any constructible payload:
+it was measured without `caveat`, which is required, has no default, and is ~828 B, i.e. **40.6% of
+a live `codex_status` response**. That figure also came from recursive exclusion. The real
+top-level saving is **44 B (2.2%)**.
+
+One trap for anyone revisiting this: the `_job_status_model(...).model_dump(...)` call at the second
+job-status site serves `codex_job_cancel`, not a second read path, so a change there moves two tools'
+responses.
