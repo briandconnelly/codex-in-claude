@@ -103,6 +103,7 @@ from codex_in_claude.schemas import (
     StatusResult,
     Tier,
     ToolCapability,
+    ToolStability,
     TransferMeta,
     TransferResult,
     Untracked,
@@ -754,8 +755,9 @@ IncludeSchemasParam = Annotated[
         description="Opt-in tool-reachable fallback for resource-blind clients: also embed "
         "the full 'error-envelope', 'result-meta', 'capabilities-result', and/or "
         "'status-result' schema, and/or the 'parameter-contracts' document (a contract "
-        "doc, not a JSON Schema), in the response — the default payload omits them and "
-        "points at the codex:// resources instead.",
+        "doc, not a JSON Schema, sourced from the codex://params resource body), in the "
+        "response — the default payload omits them and points at the codex:// resources "
+        "instead.",
     ),
 ]
 # codex_delegate_dry_run reuses these params but never calls Codex or returns a diff, so
@@ -1062,10 +1064,41 @@ def _guard(
     return decorator
 
 
+# F9: per-tool stability, in one place. Previously this lived as nine inline
+# `stability="experimental"` literals inside the codex_capabilities body, which meant the
+# tier could not be mirrored anywhere else without hand-copying the list. Both surfaces —
+# ToolCapability.stability and each tool's namespaced _meta — now read this map, and a test
+# asserts they agree.
+_STABILITY_META_KEY = "dev.bconnelly.codex-in-claude/stability"
+_SERVER_STABILITY = "alpha"
+
+# Tools more experimental than the server-wide tier. Anything absent inherits _SERVER_STABILITY.
+_TOOL_STABILITY: dict[str, ToolStability] = {
+    "codex_transfer": "experimental",
+    "codex_consult_async": "experimental",
+    "codex_review_changes_async": "experimental",
+    "codex_delegate_async": "experimental",
+    "codex_job_status": "experimental",
+    "codex_job_result": "experimental",
+    "codex_job_consume_result": "experimental",
+    "codex_job_cancel": "experimental",
+    "codex_job_list": "experimental",
+}
+
+
+def _tool_meta(name: str) -> dict[str, str]:
+    return {_STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY)}
+
+
 # --------------------------------------------------------------------------- #
 # Free tools
 # --------------------------------------------------------------------------- #
-@mcp.tool(annotations=_FREE_READ, output_schema=STATUS_SCHEMA)
+@mcp.tool(
+    annotations=_FREE_READ,
+    output_schema=STATUS_SCHEMA,
+    title="Check Codex readiness (free)",
+    meta=_tool_meta("codex_status"),
+)
 def codex_status() -> dict:
     """Check that the `codex` CLI is installed, authenticated, and a supported
     version, and report the resolved defaults. Free — no model call. Run it before
@@ -1261,7 +1294,12 @@ def _transfer_outcome_envelope(
     )
 
 
-@mcp.tool(annotations=_FREE_WRITE, output_schema=TRANSFER_SCHEMA)
+@mcp.tool(
+    annotations=_FREE_WRITE,
+    output_schema=TRANSFER_SCHEMA,
+    title="Transfer session to Codex (free)",
+    meta=_tool_meta("codex_transfer"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_transfer(
     transcript_path: TranscriptPathParam,
@@ -1272,7 +1310,7 @@ async def codex_transfer(
 
     Imports a Claude session transcript (.jsonl) into a persistent Codex thread via
     `codex app-server` and returns `resume_command` (`codex resume <thread_id>`) to
-    continue that exact conversation in Codex (TUI or App). FREE — no model call and no
+    continue that exact conversation in Codex (TUI or App). Free — no model call and no
     token spend; it is a local file conversion, typically seconds. It does create a
     thread in $CODEX_HOME (so it is not read-only) but never edits your working tree.
 
@@ -1597,13 +1635,18 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
 _CAPABILITY_SUMMARY_FIELDS = ("name", "cost", "stability", "error_codes", "async_lifecycle")
 
 
-@mcp.tool(annotations=_FREE_READ, output_schema=CAPABILITIES_SCHEMA)
+@mcp.tool(
+    annotations=_FREE_READ,
+    output_schema=CAPABILITIES_SCHEMA,
+    title="List server capabilities (free)",
+    meta=_tool_meta("codex_capabilities"),
+)
 def codex_capabilities(
     include_schemas: IncludeSchemasParam = None,
     detail: CapabilitiesDetailParam = "summary",
 ) -> dict:
-    """List this server's tools, tiers, and the result fingerprint. Free — no
-    model call. Clients can cache by the fingerprint.
+    """List this server's tools, tiers, and the result fingerprint.
+    Free — no model call. Clients can cache by the fingerprint.
 
     `detail="summary"` (default) returns each tool's name, cost, stability, and
     error_codes — the facts `tools/list` does not already carry — plus async_lifecycle,
@@ -1619,7 +1662,7 @@ def codex_capabilities(
         name="codex-in-claude",
         version=__version__,
         transport="stdio",
-        stability="alpha",
+        stability=_SERVER_STABILITY,
         active_tools=[
             "codex_consult",
             "codex_consult_async",
@@ -1674,7 +1717,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_consult_async",
                 cost="active",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_consult_async"),
                 use_when="You want a read-only second opinion from Codex for a "
                 "high-reasoning-effort or broad repo-grounded consult that can exceed the "
                 "synchronous deadline, so you want a job_id immediately instead of blocking; "
@@ -1729,7 +1772,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_review_changes_async",
                 cost="active",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_review_changes_async"),
                 use_when="You want Codex to review your git changes (working_tree, branch, "
                 "or commit) for a multi-file or whole-branch review that can exceed the "
                 "synchronous deadline, so you want a job_id immediately instead of blocking; "
@@ -1785,7 +1828,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_delegate_async",
                 cost="active",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_delegate_async"),
                 use_when="You want Codex to implement a coding task as a reviewable diff "
                 "(NOT applied to your working tree) for a substantial or multi-file task that "
                 "can exceed the synchronous deadline, so you want a job_id immediately instead "
@@ -1808,7 +1851,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_job_status",
                 cost="free",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_job_status"),
                 use_when="To poll a background job's state without fetching the result. "
                 "Jobs may originate from an async call or a sync consult/review/delegate's "
                 "meta.job_id.",
@@ -1821,7 +1864,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_job_result",
                 cost="free",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_job_result"),
                 use_when="When codex_job_status reports result_available=true. Works for "
                 "async and sync-originated jobs alike.",
                 required_params=["job_id"],
@@ -1833,7 +1876,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_job_consume_result",
                 cost="free",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_job_consume_result"),
                 use_when="To fetch a finished job's result and delete the stored record. "
                 "Works for async and sync-originated jobs alike.",
                 required_params=["job_id"],
@@ -1845,7 +1888,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_job_cancel",
                 cost="free",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_job_cancel"),
                 use_when="To stop a running background job.",
                 required_params=["job_id"],
                 key_optional_params=["workspace_root"],
@@ -1854,7 +1897,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_job_list",
                 cost="free",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_job_list"),
                 use_when="To recover job_ids or inspect known jobs for a workspace, "
                 "including sync-originated ones.",
                 key_optional_params=["workspace_root"],
@@ -1877,7 +1920,7 @@ def codex_capabilities(
             ToolCapability(
                 name="codex_transfer",
                 cost="free",
-                stability="experimental",
+                stability=_TOOL_STABILITY.get("codex_transfer"),
                 use_when="To continue the current Claude Code session inside Codex — hand off "
                 "the session transcript to a resumable Codex thread. No model call/token spend "
                 "(a local file conversion), but it does create a thread in $CODEX_HOME.",
@@ -2031,7 +2074,12 @@ def _model_catalog_payload() -> dict:
     return read_model_catalog().model_dump(mode="json", exclude_none=True)
 
 
-@mcp.tool(annotations=_FREE_READ, output_schema=MODEL_CATALOG_SCHEMA)
+@mcp.tool(
+    annotations=_FREE_READ,
+    output_schema=MODEL_CATALOG_SCHEMA,
+    title="List Codex models (free)",
+    meta=_tool_meta("codex_models"),
+)
 def codex_models() -> dict:
     """List Codex model slugs you can pass as `model`, with each model's advertised
     reasoning-effort set for `reasoning_effort`. Free — no model call.
@@ -2503,7 +2551,12 @@ async def _prepare_delegate(
 
 # _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
 # via the detached worker, so it can't advertise readOnlyHint (issue #138).
-@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=CONSULT_RESULT_SCHEMA)
+@mcp.tool(
+    annotations=_ACTIVE_ASYNC,
+    output_schema=CONSULT_RESULT_SCHEMA,
+    title="Consult Codex (paid)",
+    meta=_tool_meta("codex_consult"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult(
     question: QuestionParam,
@@ -2518,6 +2571,10 @@ async def codex_consult(
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Ask Codex (a different model) for a read-only second opinion or answer.
+
+    PAID — this spends Codex quota on every new call; there is no dry-run preview for a
+    consult, so run codex_status (free) first to confirm the CLI is installed and
+    authenticated.
 
     Runs `codex exec` in a read-only sandbox — Codex never edits files. A STATIC
     review, not a verify mode: the read-only sandbox blocks the writes a
@@ -2582,7 +2639,12 @@ async def codex_consult(
 
 # _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
 # via the detached worker, so it can't advertise readOnlyHint (issue #138).
-@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=REVIEW_RESULT_SCHEMA)
+@mcp.tool(
+    annotations=_ACTIVE_ASYNC,
+    output_schema=REVIEW_RESULT_SCHEMA,
+    title="Review git changes (paid)",
+    meta=_tool_meta("codex_review_changes"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes(
     scope: ScopeParam = "working_tree",
@@ -2602,6 +2664,9 @@ async def codex_review_changes(
 ) -> dict:
     """Ask Codex (a different model) to review your git changes for an independent
     second opinion.
+
+    PAID — this spends Codex quota on every new call; use codex_dry_run or codex_status
+    (both free) first if you only need to check scope or readiness.
 
     scope: `working_tree` (tracked changes vs HEAD — untracked files follow the
     `untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews
@@ -2674,7 +2739,12 @@ async def codex_review_changes(
     )
 
 
-@mcp.tool(annotations=_ACTIVE_PROPOSE, output_schema=DELEGATE_RESULT_SCHEMA)
+@mcp.tool(
+    annotations=_ACTIVE_PROPOSE,
+    output_schema=DELEGATE_RESULT_SCHEMA,
+    title="Delegate a coding task (paid)",
+    meta=_tool_meta("codex_delegate"),
+)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate(
     task: TaskParam,
@@ -2689,6 +2759,9 @@ async def codex_delegate(
 ) -> dict:
     """Delegate a coding task to Codex (a different model) in an isolated git
     worktree, and get back a **reviewable diff that is NOT applied** to your tree.
+
+    PAID — this spends Codex quota on every new call; use codex_delegate_dry_run or
+    codex_status (both free) first if you only need to check scope or readiness.
 
     Codex edits files with `workspace-write`, but only inside a throwaway worktree
     seeded from your current tracked state. The returned `diff` is Codex's changes;
@@ -2749,7 +2822,12 @@ async def codex_delegate(
     )
 
 
-@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
+@mcp.tool(
+    annotations=_ACTIVE_ASYNC,
+    output_schema=JOB_STARTED_SCHEMA,
+    title="Delegate in background (paid)",
+    meta=_tool_meta("codex_delegate_async"),
+)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_async(
     task: TaskParam,
@@ -2762,6 +2840,9 @@ async def codex_delegate_async(
 ) -> dict:
     """Delegate a coding task to Codex in the background and get a `job_id` back
     immediately (does not block on the run).
+
+    PAID — this spends Codex quota on every new call; use codex_delegate_dry_run or
+    codex_status (both free) first if you only need to check scope or readiness.
 
     Same propose-tier behavior as `codex_delegate` — Codex works in a throwaway git
     worktree and the result carries a **reviewable diff that is NOT applied** — but
@@ -3313,7 +3394,12 @@ async def _run_sync(
         await asyncio.sleep(_IDEM_SYNC_INPROGRESS_POLL_S)
 
 
-@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
+@mcp.tool(
+    annotations=_ACTIVE_ASYNC,
+    output_schema=JOB_STARTED_SCHEMA,
+    title="Consult Codex in background (paid)",
+    meta=_tool_meta("codex_consult_async"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult_async(
     question: QuestionParam,
@@ -3327,6 +3413,10 @@ async def codex_consult_async(
 ) -> dict:
     """Ask Codex for a read-only second opinion in the background; get a `job_id`
     back immediately instead of blocking.
+
+    PAID — this spends Codex quota on every new call; there is no dry-run preview for a
+    consult, so run codex_status (free) first to confirm the CLI is installed and
+    authenticated.
 
     Same read-only behavior as `codex_consult` (Codex never edits files), but detached —
     prefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the
@@ -3368,7 +3458,12 @@ async def codex_consult_async(
     )
 
 
-@mcp.tool(annotations=_ACTIVE_ASYNC, output_schema=JOB_STARTED_SCHEMA)
+@mcp.tool(
+    annotations=_ACTIVE_ASYNC,
+    output_schema=JOB_STARTED_SCHEMA,
+    title="Review git changes in background (paid)",
+    meta=_tool_meta("codex_review_changes_async"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes_async(
     scope: ScopeParam = "working_tree",
@@ -3385,6 +3480,9 @@ async def codex_review_changes_async(
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
     """Review your git changes in the background; get a `job_id` back immediately.
+
+    PAID — this spends Codex quota on every new call; use codex_dry_run or codex_status
+    (both free) first if you only need to check scope or readiness.
 
     Same read-only behavior as `codex_review_changes` (the diff is gathered, secret-
     redacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file
@@ -3433,7 +3531,12 @@ async def codex_review_changes_async(
     )
 
 
-@mcp.tool(annotations=_FREE_READ, output_schema=DRY_RUN_SCHEMA)
+@mcp.tool(
+    annotations=_FREE_READ,
+    output_schema=DRY_RUN_SCHEMA,
+    title="Preview a review (free)",
+    meta=_tool_meta("codex_dry_run"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_dry_run(
     scope: ScopeParam = "working_tree",
@@ -3449,7 +3552,7 @@ async def codex_dry_run(
     isolation: IsolationParam = None,
 ) -> dict:
     """Preview what a `codex_review_changes` call would send — scope, diff size,
-    redactions, truncation — with NO model call and no spend. Use it before a
+    redactions, truncation. Free — no model call, no spend. Use it before a
     review to inspect the scope and the reported redactions; redaction is
     best-effort, so treat the preview as a check on scope, not as confirmation
     that no secret remains. Pass the same `extra_context` and `untracked` policy
@@ -3628,7 +3731,12 @@ _DELEGATE_PLAN_NOTE = (
 )
 
 
-@mcp.tool(annotations=_FREE_READ, output_schema=DELEGATE_DRY_RUN_SCHEMA)
+@mcp.tool(
+    annotations=_FREE_READ,
+    output_schema=DELEGATE_DRY_RUN_SCHEMA,
+    title="Preview a delegate (free)",
+    meta=_tool_meta("codex_delegate_dry_run"),
+)
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_dry_run(
     task: TaskDryRunParam,
@@ -3641,7 +3749,7 @@ async def codex_delegate_dry_run(
     """Preview what a `codex_delegate`/`codex_delegate_async` call would do — the
     baseline it seeds from (HEAD commit, tracked file count/size, uncommitted and
     untracked counts), the prompt size that would be sent, and the resolved
-    workspace/isolation — with NO model call, NO spend, and no worktree created.
+    workspace/isolation. Free — no model call, no spend, no worktree created.
 
     Use it before delegating to confirm scope and repo before committing to cost,
     exactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real
@@ -3872,7 +3980,12 @@ def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
     )
 
 
-@mcp.tool(annotations=_JOB_READ, output_schema=JOB_STATUS_SCHEMA)
+@mcp.tool(
+    annotations=_JOB_READ,
+    output_schema=JOB_STATUS_SCHEMA,
+    title="Check job status (free)",
+    meta=_tool_meta("codex_job_status"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_status(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
@@ -4139,7 +4252,12 @@ def _finished_job_envelope(
     )
 
 
-@mcp.tool(annotations=_JOB_READ, output_schema=JOB_RESULT_SCHEMA)
+@mcp.tool(
+    annotations=_JOB_READ,
+    output_schema=JOB_RESULT_SCHEMA,
+    title="Fetch job result (free)",
+    meta=_tool_meta("codex_job_result"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_result(
     job_id: JobIdParam,
@@ -4156,14 +4274,19 @@ async def codex_job_result(
     kind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-
     out/failed job returns an error envelope — as does a done job whose stored result
     this release cannot read (job_result_incompatible). To fetch and delete, use
-    codex_job_consume_result.
+    codex_job_consume_result. Free — no model call.
 
     `detail="summary"` (default) omits the raw model text; pass `detail="full"` for
     the complete raw output and metadata (#56)."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=False, detail=detail)
 
 
-@mcp.tool(annotations=_JOB_MUTATE, output_schema=JOB_RESULT_SCHEMA)
+@mcp.tool(
+    annotations=_JOB_MUTATE,
+    output_schema=JOB_RESULT_SCHEMA,
+    title="Fetch and delete job result (free)",
+    meta=_tool_meta("codex_job_consume_result"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_consume_result(
     job_id: JobIdParam,
@@ -4181,11 +4304,18 @@ async def codex_job_consume_result(
     the response, so a response lost in transit does not restore the record; a failed
     removal retains the record until its TTL (codex_job_status still shows it). Use
     only when you no longer need to poll or re-read the job. Non-done jobs are not
-    deleted. `detail` works as in codex_job_result (#56)."""
+    deleted. Free — no model call.
+
+    `detail` works as in codex_job_result (#56)."""
     return await _job_result_impl(job_id, ctx, workspace_root, consume=True, detail=detail)
 
 
-@mcp.tool(annotations=_JOB_CANCEL, output_schema=JOB_STATUS_SCHEMA)
+@mcp.tool(
+    annotations=_JOB_CANCEL,
+    output_schema=JOB_STATUS_SCHEMA,
+    title="Cancel a job (free)",
+    meta=_tool_meta("codex_job_cancel"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_cancel(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
@@ -4207,7 +4337,12 @@ async def codex_job_cancel(
     return _job_status_model(data, _job_workspace(cwd, source)).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_JOB_READ, output_schema=JOB_LIST_SCHEMA)
+@mcp.tool(
+    annotations=_JOB_READ,
+    output_schema=JOB_LIST_SCHEMA,
+    title="List background jobs (free)",
+    meta=_tool_meta("codex_job_list"),
+)
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_list(
     ctx: Context | None = None, workspace_root: WorkspaceRootParam = None

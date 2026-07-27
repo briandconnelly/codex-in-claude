@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-57"
+FINGERPRINT = "codex-in-claude/0.1/schema-58"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -166,6 +166,20 @@ JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
 # consult/propose/apply intent `Tier`. Omitted (None) means the tool inherits the
 # server-wide `stability` ("alpha"); a value flags a tool that differs from that norm.
 ToolStability = Literal["stable", "preview", "experimental"]
+
+# G1 (audit-2 gate follow-up): this inheritance rule previously lived only in
+# codex_capabilities' `returns` prose, which detail="full" now gates behind an extra
+# param — so a summary-only or resource-blind client couldn't reach it. Putting it on the
+# field itself fixes that at the source. Its only wire route is CAPABILITIES_RESULT_SCHEMA
+# (codex://capabilities-result / include_schemas=["capabilities-result"]) — a raw
+# TypeAdapter(...).json_schema() that is never passed through _strip_schema_noise, so it
+# reaches the wire regardless of _KEPT_DESCRIPTIONS. It is registered there anyway; see
+# that registration for why.
+_TOOL_STABILITY_DESC = (
+    "This tool's per-tool maturity override, advisory only. null means it inherits the "
+    "top-level `stability` (the server-wide tier); a value here flags a tool more "
+    "experimental than that norm."
+)
 
 
 def workspace_warning_for(source: str | None, cwd: str) -> str | None:
@@ -942,7 +956,7 @@ class ToolCapability(BaseModel):
     cost: Literal["free", "active"]
     # Per-tool maturity (advisory). None ⇒ inherits the server-wide `stability`; set
     # only when a tool is more experimental than that norm (e.g. the async/job surface).
-    stability: ToolStability | None = None
+    stability: ToolStability | None = Field(default=None, description=_TOOL_STABILITY_DESC)
     # Optional in the schema (not just at the Python default): `codex_capabilities`'
     # `detail="summary"` (the default) strips use_when/returns from every entry before
     # the response ships, so the published schema must accept an entry without them —
@@ -1334,6 +1348,17 @@ _KEPT_DESCRIPTIONS = frozenset(
         _DRY_RUN_MODEL_DESC,
         _DRY_RUN_EFFORT_DESC,
         _FINGERPRINT_COVERS_DESC,
+        # _TOOL_STABILITY_DESC: verified empirically (removing this entry leaves the full
+        # suite green) that no current test needs this registration — its only wire route,
+        # CAPABILITIES_RESULT_SCHEMA, is a raw TypeAdapter(...).json_schema() that
+        # `published_schema()` never runs through `_strip_schema_noise` (see the comment at
+        # the field definition above). `ToolCapability` never appears in the tool's actual
+        # outputSchema (CAPABILITIES_SCHEMA) either — `_prune_defs` drops its $def, orphaned
+        # by the `tool_details` opaquing, *before* `_strip_schema_noise` would run, so that
+        # route can't exercise this set. Kept here anyway for consistency with every other
+        # `Field(description=...)` in this module, and as a safety net if a future change
+        # ever routes this field through a schema that IS stripped.
+        _TOOL_STABILITY_DESC,
     }
 )
 
