@@ -2138,7 +2138,13 @@ def _static_triage(payload: dict) -> dict[str, dict]:
     the installed SDK's Annotations has no `lastModified`), so the metadata rides the
     namespaced `_meta` key instead. Computed from the payload at registration, so it
     cannot go stale against the body."""
-    return {_TRIAGE_META_KEY: {"size_bytes": len(json.dumps(payload))}}
+    # .encode() makes this a true byte count rather than a character count that happens
+    # to agree with it: json.dumps defaults to ensure_ascii=True, which escapes every
+    # non-ASCII character to \uXXXX, so today len(str) == len(str.encode()) for every
+    # payload here. That equality is a property of the current dump settings, not of the
+    # field's name — encoding explicitly keeps size_bytes true by construction if a dump
+    # ever used ensure_ascii=False or the body picked up non-ASCII content.
+    return {_TRIAGE_META_KEY: {"size_bytes": len(json.dumps(payload).encode())}}
 
 
 @mcp.tool(

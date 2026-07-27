@@ -42,7 +42,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   schema resources declare `size_bytes` (computed from the payload at registration, so it cannot
   drift from the body); `codex://models`, whose body is a refreshed cache, declares `volatile:
   true` with a `freshness_via` pointer to the payload's `fetched_at` field instead of a size that
-  would go stale (audit F4).
+  would go stale (audit F4). `size_bytes` now counts the UTF-8-encoded bytes rather than
+  `len()` of the JSON string (Copilot review of #385): today's payloads are pure ASCII under
+  `json.dumps`'s default `ensure_ascii=True`, so the count is unchanged for all five resources,
+  but the name is now true by construction instead of by coincidence of that default.
 
 ### Changed
 
