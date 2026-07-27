@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-61"
+FINGERPRINT = "codex-in-claude/0.1/schema-62"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -175,6 +175,14 @@ ReviewScope = Literal["working_tree", "branch", "commit"]
 # includes them. Inert for branch/commit scopes.
 Untracked = Literal["explicit_only", "include", "exclude"]
 Detail = Literal["summary", "full"]
+# codex_capabilities-ONLY detail domain (#339). Deliberately a separate Literal rather than
+# a third member of `Detail`: that type is shared by consult/review/delegate and the two job
+# result-readers, where "contracts" has no meaning, so extending it would widen five
+# unrelated tools' accepted input. `contracts` drops `tool_details` — the one heavy field
+# already absent from both published schemas' `required` (it carries a default_factory), so
+# omitting it needs no schema change — letting a resource-blind client fetch a schema, or
+# just revalidate `fingerprint`, without re-paying for the inventory.
+CapabilitiesDetail = Literal["summary", "full", "contracts"]
 # Which of three states the MCP-roots probe saw (F8, #contract-checklist §1/§2):
 # "client" — the client advertised roots and list_roots() returned (possibly empty);
 # "not_negotiated" — this client never advertised the roots capability (pass

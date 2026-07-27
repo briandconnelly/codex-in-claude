@@ -886,7 +886,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-61",
+            "default": "codex-in-claude/0.1/schema-62",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1438,7 +1438,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-61",
+                "default": "codex-in-claude/0.1/schema-62",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2563,7 +2563,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-61",
+            "default": "codex-in-claude/0.1/schema-62",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3244,7 +3244,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-61",
+            "default": "codex-in-claude/0.1/schema-62",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3343,15 +3343,16 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List this server's tools, tiers, and the result fingerprint.\nFree — no model call. Clients can cache by the fingerprint.\n\n`detail=\"summary\"` (default) returns each tool's name, cost, stability, and\nerror_codes — the facts `tools/list` does not already carry — plus async_lifecycle,\nbut only for the `*_async` tools. Pass `detail=\"full\"` for\nuse_when/returns/required_params/key_optional_params too; those restate the tool\ndescriptions and schemas you already hold.\n\nPass include_schemas to also embed the full 'error-envelope', 'result-meta',\n'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'\ndocument (a contract doc, not a JSON Schema) — a tool-reachable fallback to the\ncodex:// resources for resource-blind clients. It works in either detail mode.",
+      "description": "List this server's tools, tiers, and the result fingerprint.\nFree — no model call. Clients can cache by the fingerprint.\n\n`detail=\"summary\"` (default) returns each tool's name, cost, stability, and\nerror_codes — the facts `tools/list` does not already carry — plus async_lifecycle,\nbut only for the `*_async` tools. `detail=\"full\"` adds\nuse_when/returns/required_params/key_optional_params, restating what you already hold.\n`detail=\"contracts\"` omits tool_details.\n\nPass include_schemas to also embed the full 'error-envelope', 'result-meta',\n'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'\ndocument (a contract doc, not a JSON Schema) — a tool-reachable fallback to the\ncodex:// resources for resource-blind clients. It works in any detail mode.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "detail": {
             "default": "summary",
-            "description": "Response verbosity: 'summary' (default) returns each tool's name, cost, stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries).",
+            "description": "What to return: 'summary' (default) returns each tool's name, cost, stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries). 'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without re-paying for the inventory.",
             "enum": [
+              "contracts",
               "full",
               "summary"
             ],

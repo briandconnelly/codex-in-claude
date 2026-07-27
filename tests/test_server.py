@@ -2230,7 +2230,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-61"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-62"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4533,7 +4533,11 @@ _DESCRIBED_PARAMS = {
     "extra_context": "context",
     "job_id": "job",
     "scope": "review",
-    "detail": "verbosity",
+    # Anchored on the default's NAME rather than "verbosity" (#339): codex_capabilities'
+    # `detail` gained a third value, `contracts`, which is a projection rather than a
+    # verbosity level, so describing that param as verbosity became inaccurate. "summary"
+    # keeps the guard non-vacuous — a description that never names the default still fails.
+    "detail": "summary",
     "isolation": "isolation",
 }
 
@@ -5992,7 +5996,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-61")
+    assert result["fingerprint"].endswith("schema-62")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6925,6 +6929,167 @@ class TestCapabilitiesDetail:
         async with Client(server.mcp) as c:
             r = await c.call_tool("codex_capabilities", {"include_schemas": ["error-envelope"]})
         assert "error_envelope" in json.dumps(r.structured_content)
+
+
+class TestCapabilitiesContractsDetail:
+    """#339: `detail="contracts"` drops the tool inventory so a resource-blind client can
+    fetch a schema (or revalidate its fingerprint) without re-paying for `tool_details`.
+
+    Scoped to `tool_details` deliberately: it is already optional in both published
+    schemas (it carries `default_factory=list`, so Pydantic leaves it out of `required`),
+    so omitting it needs no schema change. Several other fields are non-required too —
+    schema validation alone would NOT notice one vanishing — so the set-equality assertion
+    below, not the schema, is what pins that `tool_details` is the only field dropped.
+    Rationale for the mode-vs-new-tool shape:
+    docs/adr/0003-fetch-schemas-without-the-inventory.md."""
+
+    @pytest.mark.anyio
+    async def test_contracts_omits_tool_details_and_keeps_everything_else(self):
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+            contracts = (
+                await c.call_tool("codex_capabilities", {"detail": "contracts"})
+            ).structured_content
+        assert "tool_details" not in contracts
+        # Nothing ELSE may vanish: the saving must come from the inventory alone.
+        assert set(contracts) == set(summary) - {"tool_details"}
+        for key in set(contracts):
+            assert contracts[key] == summary[key], f"{key} changed in contracts mode"
+
+    @pytest.mark.anyio
+    async def test_contracts_still_embeds_requested_schemas(self):
+        # The whole point: this is the resource-blind fallback's cheap form.
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_capabilities",
+                {"detail": "contracts", "include_schemas": ["error-envelope"]},
+            )
+        assert "ErrorInfo" in r.structured_content["schemas"]["error-envelope"]["$defs"]
+
+    @pytest.mark.anyio
+    async def test_contracts_is_materially_cheaper_than_summary(self):
+        async with Client(server.mcp) as c:
+            summary = (
+                await c.call_tool("codex_capabilities", {"include_schemas": ["error-envelope"]})
+            ).structured_content
+            contracts = (
+                await c.call_tool(
+                    "codex_capabilities",
+                    {"detail": "contracts", "include_schemas": ["error-envelope"]},
+                )
+            ).structured_content
+        size = lambda o: len(json.dumps(o, separators=(",", ":")))  # noqa: E731
+        # Tie the expected saving to the real inventory rather than a magic threshold, so
+        # this stays correct if `tool_details` is later slimmed or grows. The contracts
+        # payload must weigh exactly what summary weighs minus that one field — which also
+        # proves the saving comes from the inventory and not from something else going
+        # missing. `del` on the same dict preserves key order, so the sizes are comparable.
+        expected = size({k: v for k, v in summary.items() if k != "tool_details"})
+        assert size(contracts) == expected, (
+            f"contracts is {size(contracts)} B; summary minus tool_details is {expected} B"
+        )
+        # Still assert the win is real: a no-op mode would satisfy the equality above only
+        # if the inventory itself were empty, which for this server it never is.
+        assert summary["tool_details"], "no inventory to shed — this guard would be vacuous"
+        assert size(summary) - size(contracts) == size(summary) - expected > 0
+
+    @pytest.mark.anyio
+    async def test_contracts_without_schemas_is_a_valid_fingerprint_ping(self):
+        # Cache revalidation is a legitimate call, not an error: a client that already
+        # holds the inventory should be able to recheck `fingerprint` cheaply.
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_capabilities", {"detail": "contracts"})
+        payload = r.structured_content
+        assert payload["ok"] is True
+        assert payload["fingerprint"] and payload["fingerprint_covers"]
+        assert "schemas" not in payload
+
+    @pytest.mark.anyio
+    async def test_contracts_accepts_an_empty_include_schemas_list(self):
+        # `[]` is accepted today and behaves like omission; contracts mode must not
+        # narrow that (narrowing an accepted value set is breaking per AGENTS.md).
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_capabilities", {"detail": "contracts", "include_schemas": []}
+            )
+        assert r.structured_content["ok"] is True
+        assert "schemas" not in r.structured_content
+
+    @pytest.mark.anyio
+    async def test_summary_and_full_still_carry_the_inventory(self):
+        # Regression: the new token must not leak into the pre-existing modes.
+        async with Client(server.mcp) as c:
+            for detail in ("summary", "full"):
+                payload = (
+                    await c.call_tool("codex_capabilities", {"detail": detail})
+                ).structured_content
+                assert payload["tool_details"], f"{detail} lost its inventory"
+
+    @pytest.mark.anyio
+    async def test_contracts_is_advertised_in_the_tool_input_schema(self):
+        # A mode a client cannot discover from tools/list is a mode that does not exist.
+        async with Client(server.mcp) as c:
+            tool = next(t for t in await c.list_tools() if t.name == "codex_capabilities")
+        assert "contracts" in tool.inputSchema["properties"]["detail"]["enum"]
+
+    @pytest.mark.anyio
+    async def test_capabilities_detail_description_explains_the_contracts_mode(self):
+        # Per-surface guard. The SHARED `_DESCRIBED_PARAMS` check only asserts the
+        # substring "summary", which a near-empty description would satisfy — so it
+        # cannot police this tool's three-value domain. Pin the two facts a client needs
+        # to pick the mode: its name, and the field it removes.
+        async with Client(server.mcp) as c:
+            tool = next(t for t in await c.list_tools() if t.name == "codex_capabilities")
+        desc = tool.inputSchema["properties"]["detail"]["description"]
+        assert "contracts" in desc
+        assert "tool_details" in desc
+        # The tool's own description must not contradict the enum it advertises.
+        assert "either detail mode" not in (tool.description or "")
+
+    @pytest.mark.anyio
+    async def test_contracts_did_not_widen_any_other_tools_detail_param(self):
+        # The capabilities Literal is deliberately LOCAL: the shared `Detail` feeds
+        # consult/review/delegate/job_result/job_consume_result, where "contracts" is
+        # meaningless. Widening it there would be an unintended input-domain change.
+        async with Client(server.mcp) as c:
+            tools = {t.name: t for t in await c.list_tools()}
+        others = [
+            n
+            for n, t in tools.items()
+            if n != "codex_capabilities" and "detail" in t.inputSchema.get("properties", {})
+        ]
+        assert others, "no other detail-taking tool found — this guard would be vacuous"
+        for name in others:
+            enum = tools[name].inputSchema["properties"]["detail"]["enum"]
+            assert "contracts" not in enum, f"{name} wrongly accepts detail=contracts"
+
+    @pytest.mark.anyio
+    async def test_contracts_payload_validates_against_both_published_schemas(self):
+        # The response must satisfy the contracts a client actually fetches, not merely
+        # the Pydantic model. No schema change was needed because `tool_details` is
+        # already non-required in both — this test is what pins that.
+        import jsonschema
+
+        from codex_in_claude import schemas as s
+
+        async with Client(server.mcp) as c:
+            payload = (
+                await c.call_tool(
+                    "codex_capabilities",
+                    {"detail": "contracts", "include_schemas": ["capabilities-result"]},
+                )
+            ).structured_content
+        for name, schema in (
+            ("CAPABILITIES_SCHEMA", s.CAPABILITIES_SCHEMA),
+            ("capabilities-result", payload["schemas"]["capabilities-result"]),
+        ):
+            validator = jsonschema.Draft202012Validator(schema)
+            errors = [e.message for e in validator.iter_errors(payload)]
+            assert errors == [], f"{name}: {errors}"
+            # The negative above is only evidence if the validator can still reject.
+            bad = dict(payload)
+            bad.pop("transport")
+            assert not validator.is_valid(bad), f"{name} validator is blind"
 
 
 class TestSpendMarkers:
