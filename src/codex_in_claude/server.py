@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import json
 import os
 import shlex
 import signal
@@ -101,6 +102,7 @@ from codex_in_claude.schemas import (
     ResolvedDefaults,
     ReviewResult,
     ReviewScope,
+    RootsSource,
     Sandbox,
     StatusResult,
     Tier,
@@ -746,6 +748,22 @@ JobIdParam = Annotated[
         "lost ids with codex_job_list."
     ),
 ]
+JobLimitParam = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=1000,
+        description="Maximum jobs to return, newest first (1-1000, default 20). When more "
+        "match, the response sets truncated=true; narrow with `status` or raise `limit`.",
+    ),
+]
+JobStatusFilterParam = Annotated[
+    JobState | None,
+    Field(
+        description="Return only jobs in this lifecycle state ('running', 'done', 'failed', "
+        "'cancelled', 'timeout'); omit for all states."
+    ),
+]
 IdempotencyKeyParam = Annotated[
     str | None,
     Field(
@@ -813,14 +831,32 @@ ReasoningEffortDryRunParam = Annotated[
 # --------------------------------------------------------------------------- #
 # Shared helpers
 # --------------------------------------------------------------------------- #
-async def _roots_from_ctx(ctx: Context | None) -> list[str]:
-    """Absolute filesystem paths from the client's MCP roots (file:// only)."""
+async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
+    """Absolute filesystem paths from the client's MCP roots (file:// only), plus which of
+    three states produced them.
+
+    Gating on the negotiated capability (contract-checklist §1/§2) is what separates "this
+    client never advertised roots" from "the roots call failed this turn" — previously both
+    degraded to an empty list and a silent fallback to the server's own cwd, on a call that
+    spends money. Roots stay advisory either way: `workspace_root` is the durable path, and
+    the 2026-07-28 RC deprecates roots entirely."""
     if ctx is None:
-        return []
+        return [], "not_negotiated"
+    try:
+        # ctx.session is a property that raises RuntimeError when no session has been
+        # established yet (e.g. called outside a request context) — fold that into
+        # "not_negotiated" (the honest answer: we could not establish that roots were
+        # negotiated) rather than letting it escape uncaught, which the old blanket
+        # `except` below incidentally covered before this pre-check existed.
+        params = getattr(ctx.session, "client_params", None)
+    except RuntimeError:
+        return [], "not_negotiated"
+    if params is None or getattr(params.capabilities, "roots", None) is None:
+        return [], "not_negotiated"
     try:
         roots = await ctx.list_roots()
     except Exception:
-        return []
+        return [], "probe_failed"
     paths: list[str] = []
     for root in roots:
         uri = str(root.uri)
@@ -835,7 +871,7 @@ async def _roots_from_ctx(ctx: Context | None) -> list[str]:
             # "absolute filesystem paths" contract candidate_roots advertises (#95).
             if path and Path(path).is_absolute():
                 paths.append(path)
-    return paths
+    return paths, "client"
 
 
 def _dry_run_effective_model(requested: str | None) -> str | None:
@@ -1349,7 +1385,7 @@ async def codex_transfer(
     def _elapsed() -> int:
         return int((time.monotonic() - start) * 1000)
 
-    def _meta(cwd: str, source: str | None) -> Meta:
+    def _meta(cwd: str, source: str | None, roots_source: RootsSource | None = None) -> Meta:
         meta = _base_meta(
             cwd,
             source,
@@ -1360,6 +1396,7 @@ async def codex_transfer(
             model=None,
             reasoning_effort=None,
             timeout_seconds=_TRANSFER_TIMEOUT_SECONDS,
+            roots_source=roots_source,
         )
         meta.elapsed_ms = _elapsed()
         return meta
@@ -1400,12 +1437,12 @@ async def codex_transfer(
         )
         return serialize_error(ErrorResult(error=error, meta=_meta(cwd_guess, None)))
     # 3. Resolve the workspace (labels the imported thread's origin cwd).
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
         return _workspace_error_result(
-            wres.error_code, wres.error_detail, roots, _meta(cwd_guess, None)
+            wres.error_code, wres.error_detail, roots, _meta(cwd_guess, None, roots_source)
         )
     # 4. Run the import off the event loop (blocking subprocess I/O). abandon_on_cancel
     #    lets an MCP cancellation return promptly; the stop_event tells the abandoned
@@ -1429,7 +1466,7 @@ async def codex_transfer(
     return _transfer_outcome_envelope(
         outcome,
         source_path=validation.realpath,
-        meta_for=lambda: _meta(cwd, wres.source),
+        meta_for=lambda: _meta(cwd, wres.source, roots_source),
         elapsed_ms=_elapsed,
     )
 
@@ -2090,6 +2127,27 @@ def _model_catalog_payload() -> dict:
     return read_model_catalog().model_dump(mode="json", exclude_none=True)
 
 
+_TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"
+
+
+def _static_triage(payload: dict) -> dict[str, dict]:
+    """Triage metadata for a resource whose body is a fixed, generated schema.
+
+    An agent deciding whether a resource body is worth the context wants `size` and
+    `lastModified` — codex://error-envelope reads back at ~18 KB with no advance signal.
+    Neither native field is reachable on fastmcp 3.4.4 (its Resource model has no `size`;
+    the installed SDK's Annotations has no `lastModified`), so the metadata rides the
+    namespaced `_meta` key instead. Computed from the payload at registration, so it
+    cannot go stale against the body."""
+    # .encode() makes this a true byte count rather than a character count that happens
+    # to agree with it: json.dumps defaults to ensure_ascii=True, which escapes every
+    # non-ASCII character to \uXXXX, so today len(str) == len(str.encode()) for every
+    # payload here. That equality is a property of the current dump settings, not of the
+    # field's name — encoding explicitly keeps size_bytes true by construction if a dump
+    # ever used ensure_ascii=False or the body picked up non-ASCII content.
+    return {_TRIAGE_META_KEY: {"size_bytes": len(json.dumps(payload).encode())}}
+
+
 @mcp.tool(
     annotations=_FREE_READ,
     output_schema=MODEL_CATALOG_SCHEMA,
@@ -2114,6 +2172,15 @@ def codex_models() -> dict:
     name="codex-models",
     title="Codex model catalog",
     mime_type="application/json",
+    meta={
+        _TRIAGE_META_KEY: {
+            # This body is a refreshed cache, not a fixed schema, so a declared size would
+            # go stale. The server advertises resources.subscribe=false, so there is no
+            # update notification — freshness is observable only in the body itself.
+            "volatile": True,
+            "freshness_via": "the payload's `fetched_at` field (also on codex_models)",
+        }
+    },
 )
 def codex_models_resource() -> dict:
     """Advisory Codex model catalog (same payload as the codex_models tool)."""
@@ -2125,6 +2192,7 @@ def codex_models_resource() -> dict:
     name="codex-error-envelope",
     title="Codex error envelope schema",
     mime_type="application/schema+json",
+    meta=_static_triage(ERROR_ENVELOPE_SCHEMA),
 )
 def error_envelope_resource() -> dict:
     """The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry
@@ -2137,6 +2205,7 @@ def error_envelope_resource() -> dict:
     name="codex-result-meta",
     title="Codex result metadata schema",
     mime_type="application/schema+json",
+    meta=_static_triage(RESULT_META_SCHEMA),
 )
 def result_meta_resource() -> dict:
     """The canonical full result-metadata schema (Meta). Every success envelope carries an
@@ -2149,6 +2218,7 @@ def result_meta_resource() -> dict:
     name="codex-capabilities-result",
     title="Codex capabilities result schema",
     mime_type="application/schema+json",
+    meta=_static_triage(CAPABILITIES_RESULT_SCHEMA),
 )
 def capabilities_result_resource() -> dict:
     """The canonical full codex_capabilities result schema. The tool's outputSchema opaques
@@ -2161,6 +2231,7 @@ def capabilities_result_resource() -> dict:
     name="codex-status-result",
     title="Codex status result schema",
     mime_type="application/schema+json",
+    meta=_static_triage(STATUS_RESULT_SCHEMA),
 )
 def status_result_resource() -> dict:
     """The canonical full codex_status result schema. The tool's outputSchema opaques
@@ -2173,6 +2244,7 @@ def status_result_resource() -> dict:
     name="codex-params",
     title="Codex tool parameter contracts",
     mime_type="application/json",
+    meta=_static_triage(param_contracts.resource_body()),
 )
 def params_resource() -> dict:
     """Full semantics for parameters whose tools/list description is a compressed summary
@@ -2256,7 +2328,7 @@ async def _prepare_consult(
             return serialize_error(ErrorResult(error=detail_err, meta=meta))
         assert detail_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     # On a resolve error `wres.path`/`wres.source` are None, so `cwd_guess`/None — the
     # same meta the sync twin used to build separately for its error path.
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
@@ -2270,6 +2342,7 @@ async def _prepare_consult(
         model=model or d.model,
         reasoning_effort=effort,
         timeout_seconds=timeout_seconds,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -2380,7 +2453,7 @@ async def _prepare_review(
             return serialize_error(ErrorResult(error=detail_err, meta=meta))
         assert detail_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     meta = _base_meta(
@@ -2396,6 +2469,7 @@ async def _prepare_review(
         base=base,
         commit=commit,
         paths=paths,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -2475,7 +2549,7 @@ async def _prepare_delegate(
         return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     meta = _base_meta(
@@ -2487,6 +2561,7 @@ async def _prepare_delegate(
         model=model or d.model,
         reasoning_effort=effort,
         timeout_seconds=timeout_seconds,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -3611,7 +3686,7 @@ async def codex_dry_run(
         )
         return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None  # narrowed: iso_err was None
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
@@ -3624,6 +3699,7 @@ async def codex_dry_run(
             model=model or d.model,
             reasoning_effort=effort,
             timeout_seconds=config.clamp_timeout(d.timeout_seconds),
+            roots_source=roots_source,
         )
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
 
@@ -3642,6 +3718,7 @@ async def codex_dry_run(
         base=base,
         commit=commit,
         paths=paths,
+        roots_source=roots_source,
     )
     placeholder = _placeholder_error(dry_meta)
     if placeholder is not None:
@@ -3672,6 +3749,7 @@ async def codex_dry_run(
             scope=scope,
             base=base,
             commit=commit,
+            roots_source=roots_source,
         )
         return serialize_error(
             ErrorResult(
@@ -3712,6 +3790,7 @@ async def codex_dry_run(
             scope=scope,
             base=base,
             commit=commit,
+            roots_source=roots_source,
         )
         return orchestration.gitdiff_error(exc, meta)
 
@@ -3726,6 +3805,7 @@ async def codex_dry_run(
         cwd=cwd,
         workspace_source=wres.source,
         workspace_warning=workspace_warning_for(wres.source, cwd),
+        roots_source=roots_source,
         tier="consult",
         sandbox="read-only",
         isolation=cast("Isolation", isolation_v),
@@ -3807,7 +3887,7 @@ async def codex_delegate_dry_run(
         return serialize_error(ErrorResult(error=iso_err, meta=meta))
     assert isolation_v is not None
 
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     meta = _base_meta(
@@ -3819,6 +3899,7 @@ async def codex_delegate_dry_run(
         model=model or d.model,
         reasoning_effort=effort,
         timeout_seconds=timeout,
+        roots_source=roots_source,
     )
     if wres.error_code is not None:
         return _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
@@ -3885,6 +3966,7 @@ async def codex_delegate_dry_run(
         cwd=cwd,
         workspace_source=wres.source,
         workspace_warning=workspace_warning_for(wres.source, cwd),
+        roots_source=roots_source,
         isolation=cast("Isolation", isolation_v),
         model=_dry_run_effective_model(model or d.model),
         reasoning_effort=effort,
@@ -3917,7 +3999,12 @@ _STATE_TO_ERROR: dict[str, tuple[str, str]] = {
 }
 
 
-def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
+def _job_meta(
+    cwd: str,
+    source: str | None,
+    kind: str | None = None,
+    roots_source: RootsSource | None = None,
+) -> Meta:
     """Meta for a lifecycle-GENERATED error envelope (deadline as timeout). A codex_job_*
     call never runs Codex and never writes the caller's workspace, so tier/sandbox report
     the operation's own read-only posture — consistent with readOnlyHint — rather than the
@@ -3935,6 +4022,7 @@ def _job_meta(cwd: str, source: str | None, kind: str | None = None) -> Meta:
         reasoning_effort=d.reasoning_effort,
         timeout_seconds=config.job_max_seconds(),
         job_kind=kind,
+        roots_source=roots_source,
     )
 
 
@@ -3971,11 +4059,11 @@ async def _resolve_job_workspace(
 ) -> tuple[str, str | None, dict | None]:
     """Resolve the workspace for a lifecycle call. Returns (cwd, source, error)."""
     cwd_guess = workspace.server_cwd()
-    roots = await _roots_from_ctx(ctx)
+    roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
     cwd = wres.path or cwd_guess
     if wres.error_code is not None:
-        meta = _job_meta(cwd, wres.source)
+        meta = _job_meta(cwd, wres.source, roots_source=roots_source)
         err = _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
         return cwd, wres.source, err
     return cwd, wres.source, None
@@ -4374,27 +4462,38 @@ async def codex_job_cancel(
 )
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_list(
-    ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
+    ctx: Context | None = None,
+    workspace_root: WorkspaceRootParam = None,
+    limit: JobLimitParam = 20,
+    status: JobStatusFilterParam = None,
 ) -> dict:
     """List the background jobs known for this workspace, newest first.
 
-    Use to recover job_ids lost across context compaction or interruption. Returns
-    each job's id, kind, status, start time, result_available, `result_ok` (a done
-    job's outcome — true/false/null; see codex_job_status), and expiry, so a stored
-    failure is triageable without fetching each result. Free — no model call.
+    Free — no model call. Use to recover job_ids lost across context compaction or
+    interruption. Returns each job's id, kind, status, start time, result_available,
+    `result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,
+    so a stored failure is triageable without fetching each result.
+
+    Returns the 20 newest by default; pass `limit` (1-1000) or `status` to narrow. When more
+    jobs match than `limit`, the response sets `truncated: true` with a `truncation_hint` —
+    the extra rows are dropped, not paged, so raise `limit` or filter rather than looking for
+    a cursor.
 
     Read a job's result promptly — a finished record can silently drop off. This list is
     not permanent storage: terminal records expire after the TTL (default 24h), and a
     per-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records
     as new jobs start, so a finished job can disappear even before its `expires_at`.
-    Running jobs are never evicted, so the list can transiently exceed the cap. Includes
-    sync-originated records (any sync consult/review/delegate call); the cap/TTL eviction
-    covers both."""
+    Includes sync-originated records (any sync consult/review/delegate call); the cap/TTL
+    eviction covers both."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     store = config.job_store()
     rows = await asyncio.to_thread(store.list_jobs, cwd)
+    if status is not None:
+        rows = [r for r in rows if r["status"] == status]
+    truncated = len(rows) > limit
+    rows = rows[:limit]
     jobs = [
         JobSummary(
             job_id=r["job_id"],
@@ -4408,7 +4507,23 @@ async def codex_job_list(
         )
         for r in rows
     ]
-    return JobListResult(jobs=jobs, workspace=_job_workspace(cwd, source)).model_dump(mode="json")
+    result = JobListResult(
+        jobs=jobs,
+        workspace=_job_workspace(cwd, source),
+        truncated=truncated,
+        truncation_hint=(
+            f"showing the {limit} newest of more matching jobs; raise `limit` (max 1000) "
+            "or narrow with `status`"
+            if truncated
+            else None
+        ),
+    ).model_dump(mode="json")
+    # exclude_none=True at the model level would also strip nested nullable-but-required
+    # fields (e.g. JobSummary.result_ok, legitimately None for a running job) — so omit
+    # just truncation_hint by hand rather than reaching for the blanket dump flag.
+    if result["truncation_hint"] is None:
+        del result["truncation_hint"]
+    return result
 
 
 def _make_signal_handler(log: logging.Logger, previous: Any) -> Callable[[int, object], None]:

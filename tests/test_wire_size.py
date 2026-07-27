@@ -30,17 +30,24 @@ from codex_in_claude.server import mcp
 # budget raised to the next 500 above the measured value. Measured again 2026-07-26 (F7:
 # JobStarted gained a required `follow_up: Repair` field, so the three `*_async` tools'
 # outputSchema each grew the nested Repair shape): 81,739 bytes — budget raised to the next
-# 500 above the measured value. Measured again 2026-07-26 (Copilot review of #383, merged
-# forward onto this branch: normalized every cost marker to the literal canonical token —
-# `codex_transfer`'s `FREE —` and `codex_capabilities`'s line-wrapped `Free —` corrected, the
-# three async active tools gained their own `PAID —` block naming the right preview tool, and
-# all six active tools now say "every new call" so the marker doesn't contradict
-# `idempotency_key`'s no-new-spend replay semantics): 82,261 bytes — budget raised to the next
-# 500 above the measured value. Measured once more after merging forward a Copilot review fix on
-# #382 clarifying that async_lifecycle appears only on the `*_async` tools, in both
-# CapabilitiesDetailParam's description and the codex_capabilities docstring: 82,334 bytes —
+# 500 above the measured value. Measured again 2026-07-26 (F5: codex_job_list gained
+# `limit`/`status` input params plus `truncated`/`truncation_hint` output fields, so its
+# outputSchema and parameter list both grew): 82,537 bytes — budget raised to the next 500
+# above the measured value. Measured again 2026-07-26 (F8 follow-on: `roots_source` was
+# added to the flat `codex_dry_run`/`codex_delegate_dry_run` output schemas, ~222 bytes
+# undocumented at the time): 82,759 bytes. Measured once more the same day (final-review fix
+# wave: the three PAID-block descriptions changed "spends Codex quota on every call" to
+# "...every new call", resolving a contradiction with idempotency_key's "no new spend" replay
+# wording): 82,771 bytes — still within budget, no further change. Measured once more the same
+# day (Copilot review of #383, merged forward onto this branch: normalized every cost marker
+# to the literal canonical token — `codex_transfer`'s `FREE —` and `codex_capabilities`'s
+# line-wrapped `Free —` corrected, and the three async active tools gained their own `PAID —`
+# block naming the right preview tool): 83,281 bytes — budget raised to the next 500 above the
+# measured value. Measured once more after merging forward a Copilot review fix on #382
+# clarifying that async_lifecycle appears only on the `*_async` tools, in both
+# CapabilitiesDetailParam's description and the codex_capabilities docstring: 83,354 bytes —
 # still within budget, no further change.
-TOOLS_LIST_BYTE_BUDGET = 82_500
+TOOLS_LIST_BYTE_BUDGET = 83_500
 
 
 @pytest.mark.anyio

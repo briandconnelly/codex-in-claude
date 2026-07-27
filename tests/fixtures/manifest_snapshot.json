@@ -622,6 +622,11 @@
   },
   "capabilities_result": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 7839
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -881,7 +886,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-59",
+            "default": "codex-in-claude/0.1/schema-60",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1027,6 +1032,11 @@
   ],
   "error_envelope": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 18557
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -1428,7 +1438,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-59",
+                "default": "codex-in-claude/0.1/schema-60",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1540,6 +1550,23 @@
               "request_id": {
                 "title": "Request Id",
                 "type": "string"
+              },
+              "roots_source": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "client",
+                      "not_negotiated",
+                      "probe_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Roots Source"
               },
               "sandbox": {
                 "description": "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, no network egress), or danger-full-access. It tracks `tier` across the same cases — the call's own run, a retrieved job's originating run, or a dry-run's previewed run; lifecycle-generated errors report 'read-only'. Like tier, this describes Codex execution posture, not whether the call mutates this server's job state (see readOnlyHint).",
@@ -2064,6 +2091,11 @@
   },
   "params": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 3729
+        }
+      },
       "mimeType": "application/json",
       "text": {
         "description": "Full semantics for parameters whose tools/list description is a compressed summary (issue #333). Each entry's `summary` is what ships inline on the wire; `full` is the authoritative contract.",
@@ -2089,6 +2121,11 @@
   "resource_templates": [],
   "resources": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 7839
+        }
+      },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
       "mimeType": "application/schema+json",
       "name": "codex-capabilities-result",
@@ -2096,6 +2133,11 @@
       "uri": "codex://capabilities-result"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 18557
+        }
+      },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
       "mimeType": "application/schema+json",
       "name": "codex-error-envelope",
@@ -2103,6 +2145,12 @@
       "uri": "codex://error-envelope"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "freshness_via": "the payload's `fetched_at` field (also on codex_models)",
+          "volatile": true
+        }
+      },
       "description": "Advisory Codex model catalog (same payload as the codex_models tool).",
       "mimeType": "application/json",
       "name": "codex-models",
@@ -2110,6 +2158,11 @@
       "uri": "codex://models"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 3729
+        }
+      },
       "description": "Full semantics for parameters whose tools/list description is a compressed summary\n(#333). MCP inlines each parameter description into every tool's inputSchema, so the\nlengthy lifecycle/validation prose is shipped once here instead of repeated on the\nwire; the inline summary keeps the first-call selection, safety, and spend-critical\nfacts and points here for the complete lifecycle and recovery semantics.",
       "mimeType": "application/json",
       "name": "codex-params",
@@ -2117,6 +2170,11 @@
       "uri": "codex://params"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 12172
+        }
+      },
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
       "mimeType": "application/schema+json",
       "name": "codex-result-meta",
@@ -2124,6 +2182,11 @@
       "uri": "codex://result-meta"
     },
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 8096
+        }
+      },
       "description": "The canonical full codex_status result schema. The tool's outputSchema opaques\n`rate_limit`/`raw_defaults`/`resolved_defaults` and points here for the full shape (#242).",
       "mimeType": "application/schema+json",
       "name": "codex-status-result",
@@ -2133,6 +2196,11 @@
   ],
   "result_meta": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 12172
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -2494,7 +2562,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-59",
+            "default": "codex-in-claude/0.1/schema-60",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2606,6 +2674,23 @@
           "request_id": {
             "title": "Request Id",
             "type": "string"
+          },
+          "roots_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "client",
+                  "not_negotiated",
+                  "probe_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Roots Source"
           },
           "sandbox": {
             "description": "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, no network egress), or danger-full-access. It tracks `tier` across the same cases — the call's own run, a retrieved job's originating run, or a dry-run's previewed run; lifecycle-generated errors report 'read-only'. Like tier, this describes Codex execution posture, not whether the call mutates this server's job state (see readOnlyHint).",
@@ -2743,6 +2828,11 @@
   ],
   "status_result": [
     {
+      "_meta": {
+        "dev.bconnelly.codex-in-claude/triage": {
+          "size_bytes": 8096
+        }
+      },
       "mimeType": "application/schema+json",
       "text": {
         "$defs": {
@@ -3153,7 +3243,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-59",
+            "default": "codex-in-claude/0.1/schema-60",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -4755,6 +4845,21 @@
                 ],
                 "description": "Reasoning-effort override the previewed paid call would send (per-call param or server default); null = Codex would resolve it itself. Unvalidated by the preview."
               },
+              "roots_source": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "client",
+                      "not_negotiated",
+                      "probe_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "sandbox": {
                 "enum": [
                   "danger-full-access",
@@ -5205,6 +5310,21 @@
               },
               "redacted_paths_count": {
                 "type": "integer"
+              },
+              "roots_source": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "client",
+                      "not_negotiated",
+                      "probe_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "sandbox": {
                 "enum": [
@@ -5679,11 +5799,37 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List the background jobs known for this workspace, newest first.\n\nUse to recover job_ids lost across context compaction or interruption. Returns\neach job's id, kind, status, start time, result_available, `result_ok` (a done\njob's outcome — true/false/null; see codex_job_status), and expiry, so a stored\nfailure is triageable without fetching each result. Free — no model call.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so the list can transiently exceed the cap. Includes\nsync-originated records (any sync consult/review/delegate call); the cap/TTL eviction\ncovers both.",
+      "description": "List the background jobs known for this workspace, newest first.\n\nFree — no model call. Use to recover job_ids lost across context compaction or\ninterruption. Returns each job's id, kind, status, start time, result_available,\n`result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,\nso a stored failure is triageable without fetching each result.\n\nReturns the 20 newest by default; pass `limit` (1-1000) or `status` to narrow. When more\njobs match than `limit`, the response sets `truncated: true` with a `truncation_hint` —\nthe extra rows are dropped, not paged, so raise `limit` or filter rather than looking for\na cursor.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nIncludes sync-originated records (any sync consult/review/delegate call); the cap/TTL\neviction covers both.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "limit": {
+            "default": 20,
+            "description": "Maximum jobs to return, newest first (1-1000, default 20). When more match, the response sets truncated=true; narrow with `status` or raise `limit`.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cancelled",
+                  "done",
+                  "failed",
+                  "running",
+                  "timeout"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Return only jobs in this lifecycle state ('running', 'done', 'failed', 'cancelled', 'timeout'); omit for all states."
+          },
           "workspace_root": {
             "anyOf": [
               {
@@ -5776,6 +5922,19 @@
                 "type": "boolean"
               },
               "server_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "truncation_hint": {
                 "anyOf": [
                   {
                     "type": "string"

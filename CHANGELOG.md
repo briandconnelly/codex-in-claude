@@ -7,11 +7,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
-- Every tool now states its cost in its own description — the seven tools that previously
-  relied on `codex_capabilities` alone (`codex_consult`, `codex_review_changes`,
-  `codex_delegate`, `codex_dry_run`, `codex_delegate_dry_run`, `codex_job_result`,
-  `codex_job_consume_result`) now say `PAID` or `Free` explicitly, so a client reading only
-  `tools/list` can tell which calls spend Codex quota.
+- Every tool now states its cost in its own description — five tools that previously relied
+  on `codex_capabilities` alone (`codex_consult`, `codex_review_changes`, `codex_delegate`,
+  `codex_job_result`, `codex_job_consume_result`) now say `PAID` or `Free` explicitly, and two
+  more (`codex_dry_run`, `codex_delegate_dry_run`), which already stated `NO model call and no
+  spend` in prose, were normalized onto the same `Free` token — so a client reading only
+  `tools/list` gets one consistent cost marker across every tool.
 - Every cost marker now uses one canonical token — `PAID —` for active tools, `Free — no
   model call` for free ones — instead of near-miss variants (`FREE —`, a line-wrapped
   `Free —`, or bare mentions of "spend"). `codex_transfer`, `codex_capabilities`,
@@ -24,6 +25,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - Every tool now carries a `title` for human-facing pickers and a namespaced
   `_meta` stability tier, so a client reading only `tools/list` can see which tools are
   experimental.
+- `codex_job_list` gained `limit` (1-1000, default 20) and `status` filters to narrow the
+  returned jobs. When more jobs match than `limit`, the response sets `truncated: true` with
+  a `truncation_hint` naming `limit`/`status` as the way to see the rest — the extra rows are
+  dropped, not paged, so there is no cursor (audit F5).
+- `meta.roots_source` (and the matching field on `codex_dry_run`/`codex_delegate_dry_run`)
+  reports which of three states the MCP-roots resolution saw: `client` (the client advertised
+  roots and they were used, even if the list came back empty), `not_negotiated` (this client
+  never advertised the roots capability — pass `workspace_root` instead), or `probe_failed`
+  (roots were advertised but the call errored this turn — retrying may help). Previously all
+  three collapsed into a silent empty list and a fallback to the server's own cwd; `roots` stays
+  advisory either way, and `workspace_root` remains the durable path (audit F8). Bumps the
+  persisted result-format (`RESULT_FORMAT` `6` → `7`) for the new `Meta` field; not breaking.
+- Each `codex://` resource now carries a namespaced `_meta["dev.bconnelly.codex-in-claude/triage"]`
+  so an agent can decide whether a body is worth the context before reading it: the five static
+  schema resources declare `size_bytes` (computed from the payload at registration, so it cannot
+  drift from the body); `codex://models`, whose body is a refreshed cache, declares `volatile:
+  true` with a `freshness_via` pointer to the payload's `fetched_at` field instead of a size that
+  would go stale (audit F4). `size_bytes` now counts the UTF-8-encoded bytes rather than
+  `len()` of the JSON string (Copilot review of #385): today's payloads are pure ASCII under
+  `json.dumps`'s default `ensure_ascii=True`, so the count is unchanged for all five resources,
+  but the name is now true by construction instead of by coincidence of that default.
 
 ### Changed
 
@@ -31,8 +53,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`, and, for the
   `*_async` tools only, `async_lifecycle`). Pass `detail="full"` for the previous payload. The
   `extra_context` parameter contract moved its full text to `codex://params` and
-  `idempotency_key`'s inline summary was compressed, shrinking the `tools/list` wire response by
-  2,331 bytes.
+  `idempotency_key`'s inline summary was compressed. The durable size win is `codex_capabilities`'
+  own response — 21,391 → 11,109 bytes (−48%) — but that is paid only by clients that call the
+  tool, not by every client the way `tools/list` is.
+- Net effect on the preloaded discovery surface: this release's other additions (per-tool cost
+  markers, titles, stability tiers, `codex_job_list` filters, `roots_source` provenance,
+  resource triage metadata) outgrew the compression above for every client, not just
+  `codex_capabilities` callers. `tools/list` went from 79,242 to 83,354 bytes (+5.2%). That is a
+  deliberate trade: a larger preloaded surface in exchange for cost/stability/next-step metadata
+  that was previously missing or unreachable.
 
 ### Fixed
 
@@ -46,9 +75,6 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - `CapabilitiesDetailParam`'s description and the `codex_capabilities` docstring described
   `async_lifecycle` as part of every summary entry; it is only present for the `*_async` tools
   (3 of 17), which both now say explicitly.
-
-### Fixed
-
 - A `resources/read` failure's `error.data` now carries `resource_uri` (the URI that was
   requested) and `request_id`, matching the correlation fields the tool-error carrier already
   has via `meta.request_id`. Both are optional and populated only on the JSON-RPC (resource)
