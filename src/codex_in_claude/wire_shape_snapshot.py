@@ -12,24 +12,30 @@ Both detail levels are rendered because they are separate wire shapes: ``summary
 ``raw_response.text`` before slimming runs, and that null is retained (only ``meta``
 sheds keys), so the fixture also pins ``apply_detail``'s guarantee against a future
 broadening of the omission rule.
+
+Rendered by driving the REAL chokepoint, ``server._finished_job_envelope``, rather than
+by re-applying its steps here. Re-implementing them looked equivalent and was not: the
+chokepoint stamps ``meta.job_id`` before trimming, so a hand-rolled pipeline reported
+``job_id`` as an omitted key when delivery never omits it, and — worse — a snapshot that
+calls the shaping helpers itself stays green when the *wiring* is removed, leaving the
+fixture blind to the one regression it exists to catch (Codex review of #334).
 """
 
 from __future__ import annotations
 
-import copy
 import json
 
 from codex_in_claude.schemas import (
+    RESULT_FORMAT,
     ConsultResult,
     Coverage,
     DelegateResult,
     Meta,
     RawResponse,
     ReviewResult,
-    apply_detail,
     dump_success,
-    slim_meta,
 )
+from codex_in_claude.server import _finished_job_envelope
 
 _FINGERPRINT_SENTINEL = "<fingerprint>"
 _VERSION_SENTINEL = "0.0.0"
@@ -83,9 +89,35 @@ def _stored_envelopes() -> dict[str, dict]:
     }
 
 
-def _deliver(stored: dict, detail: str) -> dict:
-    """Reproduce the delivery chokepoint: detail trimming, then meta slimming."""
-    return slim_meta(apply_detail(copy.deepcopy(stored), detail))
+_JOB_ID_SENTINEL = "0" * 32
+_KIND_BY_NAME = {
+    "consult": "codex_consult",
+    "review": "codex_review_changes",
+    "delegate_no_changes": "codex_delegate",
+}
+
+
+def _deliver(stored: dict, name: str, detail: str) -> dict:
+    """Render one envelope through the PRODUCTION delivery path."""
+    # The terminal record the chokepoint reads: `status` selects the stored-payload
+    # branch and `extra.result_format` must match RESULT_FORMAT, or the payload is
+    # classified as a cross-release incompatibility instead of being delivered.
+    rec = {"status": "done", "extra": {"result_format": RESULT_FORMAT}}
+    envelope, delivered = _finished_job_envelope(
+        rec,
+        json.loads(json.dumps(stored)),  # a fresh dict, as a real disk read produces
+        _JOB_ID_SENTINEL,
+        _KIND_BY_NAME[name],
+        _representative_meta(),
+        detail,
+        None,
+    )
+    if not delivered:
+        raise AssertionError(f"{name}: the chokepoint refused to deliver the payload")
+    # job_id/fingerprint are stamped by the chokepoint from live values; pin them so the
+    # fixture does not churn on every release or FINGERPRINT bump.
+    envelope["meta"]["fingerprint"] = _FINGERPRINT_SENTINEL
+    return envelope
 
 
 def build_snapshot() -> dict:
@@ -93,12 +125,14 @@ def build_snapshot() -> dict:
     stored = _stored_envelopes()
     return {
         "delivered": {
-            detail: {name: _deliver(env, detail) for name, env in stored.items()}
+            detail: {name: _deliver(env, name, detail) for name, env in stored.items()}
             for detail in ("summary", "full")
         },
-        # The key names slimming removed, per envelope — the reviewable "what changed".
+        # The key names delivery removed, per envelope — the reviewable "what changed".
+        # Computed against the delivered envelope, so a key the chokepoint STAMPS (job_id)
+        # correctly never appears here.
         "omitted_meta_keys": {
-            name: sorted(set(env["meta"]) - set(_deliver(env, "summary")["meta"]))
+            name: sorted(set(env["meta"]) - set(_deliver(env, name, "summary")["meta"]))
             for name, env in stored.items()
         },
     }
