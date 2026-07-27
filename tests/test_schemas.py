@@ -926,7 +926,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-60"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-61"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
@@ -1038,3 +1038,99 @@ class TestJobResultSchemaSlim:
 
     def test_serialized_size_ceiling(self):
         assert len(json.dumps(s.JOB_RESULT_SCHEMA)) < 2000  # was ~14,576 bytes
+
+
+class TestSlimMeta:
+    """`slim_meta` — the delivered-envelope contract (#334).
+
+    Only `meta` sheds its null-valued keys, and only on a completed
+    consult/review/delegate success. Every top-level field (including `diff`) and all
+    of `raw_response` are delivered verbatim, so no payload-bearing key can vanish."""
+
+    @staticmethod
+    def _envelope(**over):
+        env = {
+            "ok": True,
+            "tool": "codex_consult",
+            "summary": "s",
+            "findings": [],
+            "raw_response": {"text": None, "session_id": None, "model": None},
+            "meta": {
+                "cwd": "/repo",
+                "tier": "consult",
+                "sandbox": "read-only",
+                "isolation": "inherit",
+                "timeout_seconds": 1,
+                "elapsed_ms": 1,
+                "truncated": False,
+                "session_id": None,
+                "usage": None,
+                "compat_warnings": [],
+            },
+        }
+        env.update(over)
+        return env
+
+    def test_drops_null_meta_keys(self):
+        out = s.slim_meta(self._envelope())
+        assert "session_id" not in out["meta"]
+        assert "usage" not in out["meta"]
+
+    def test_keeps_required_meta_values(self):
+        out = s.slim_meta(self._envelope())
+        assert out["meta"]["cwd"] == "/repo"
+        assert out["meta"]["elapsed_ms"] == 1
+
+    def test_strips_on_none_not_falsiness(self):
+        # truncated=False and elapsed_ms=0 are meaningful values, not absences. A
+        # falsiness-based filter would silently delete both.
+        env = self._envelope()
+        env["meta"]["elapsed_ms"] = 0
+        out = s.slim_meta(env)
+        assert out["meta"]["truncated"] is False
+        assert out["meta"]["elapsed_ms"] == 0
+
+    def test_retains_empty_collections_in_meta(self):
+        out = s.slim_meta(self._envelope())
+        assert out["meta"]["compat_warnings"] == []
+
+    def test_raw_response_is_delivered_verbatim(self):
+        # The apply_detail guarantee: raw_response stays present, text stays nulled,
+        # session_id/model are still echoed there.
+        out = s.slim_meta(self._envelope())
+        assert out["raw_response"] == {"text": None, "session_id": None, "model": None}
+
+    def test_delegate_diff_survives_even_when_null(self):
+        # `result["diff"]` is the delegate access pattern and next_steps tells the
+        # caller to review it; the key must never vanish.
+        env = self._envelope(tool="codex_delegate", diff=None)
+        out = s.slim_meta(env)
+        assert "diff" in out and out["diff"] is None
+
+    def test_top_level_nulls_are_never_dropped(self):
+        env = self._envelope(some_future_field=None)
+        out = s.slim_meta(env)
+        assert "some_future_field" in out
+
+    def test_error_envelopes_pass_through_untouched(self):
+        err = {"ok": False, "error": {"code": "internal_error"}, "meta": {"session_id": None}}
+        assert s.slim_meta(err) == err
+
+    def test_non_result_ok_true_payloads_pass_through_untouched(self):
+        # JobStarted is ok:Literal[True] with a full null-laden Meta and must NOT slim
+        # — the rule is scoped to the three result envelopes structurally, not by prose.
+        started = {"ok": True, "job_id": "j", "kind": "codex_consult", "meta": {"model": None}}
+        assert s.slim_meta(started) == started
+
+    @pytest.mark.parametrize("tool", ["codex_consult", "codex_review_changes", "codex_delegate"])
+    def test_applies_to_each_result_tool(self, tool):
+        out = s.slim_meta(self._envelope(tool=tool))
+        assert "session_id" not in out["meta"]
+
+    def test_missing_or_non_dict_meta_is_tolerated(self):
+        assert s.slim_meta({"ok": True, "tool": "codex_consult"}) == {
+            "ok": True,
+            "tool": "codex_consult",
+        }
+        odd = {"ok": True, "tool": "codex_consult", "meta": "not-a-dict"}
+        assert s.slim_meta(odd) == odd

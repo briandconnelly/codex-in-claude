@@ -2230,7 +2230,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-60"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-61"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -5992,7 +5992,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-60")
+    assert result["fingerprint"].endswith("schema-61")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -7281,3 +7281,127 @@ class TestResourceTriageMetadata:
         triage = (resources["codex://models"].meta or {}).get(TRIAGE_META_KEY)
         assert triage["volatile"] is True
         assert "fetched_at" in triage["freshness_via"]
+
+
+# --- #334: the delivered-envelope contract (wire-only null-meta omission) -----------
+
+
+async def test_delivered_success_envelope_omits_null_meta_keys(clean_env, tmp_path, monkeypatch):
+    # The stored envelope retains its null meta keys; the DELIVERED one must not.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    assert envelope["meta"]["session_id"] is None  # premise: the writer emits the null
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+    meta = res.structured_content["meta"]
+    assert [k for k, v in meta.items() if v is None] == []
+    assert "session_id" not in meta and "usage" not in meta
+
+
+async def test_delivered_envelope_keeps_required_and_falsy_meta_values(
+    clean_env, tmp_path, monkeypatch
+):
+    # A falsiness-based filter would eat truncated=False; the required members must
+    # all survive so the payload still validates against codex://result-meta.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+    meta = res.structured_content["meta"]
+    assert meta["truncated"] is False
+    for required in ("cwd", "tier", "sandbox", "isolation", "timeout_seconds", "elapsed_ms"):
+        assert required in meta
+
+
+async def test_delivered_envelope_preserves_payload_keys_and_empty_lists(
+    clean_env, tmp_path, monkeypatch
+):
+    # Only meta slims: raw_response stays verbatim (apply_detail's guarantee) and the
+    # top-level arrays stay iterable.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+    sc = res.structured_content
+    assert sc["raw_response"] == {"text": None, "session_id": None, "model": None}
+    assert sc["findings"] == [] and sc["questions"] == []
+
+
+async def test_sync_and_replayed_envelopes_agree_on_meta_keys(clean_env, tmp_path, monkeypatch):
+    # Sync delivery and a later codex_job_result read share _finished_job_envelope, so
+    # their meta key sets must match — the property that lets the persisted shape stay
+    # full while the wire shape is slim.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        sync = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+        job_id = sync.structured_content["meta"]["job_id"]
+        replay = await client.call_tool(
+            "codex_job_result", {"job_id": job_id, "workspace_root": str(tmp_path)}
+        )
+    assert set(sync.structured_content["meta"]) == set(replay.structured_content["meta"])
+
+
+async def test_stored_result_json_still_retains_null_meta_keys(clean_env, tmp_path, monkeypatch):
+    # The persisted format is deliberately unchanged (no RESULT_FORMAT bump): slimming
+    # is wire-only, so an older stored payload stays readable and result.json keeps its
+    # forensic detail. If this fails, the change leaked into the writer.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+        job_id = res.structured_content["meta"]["job_id"]
+    store = server.config.job_store()
+    stored = json.loads((store._job_dir(str(tmp_path), job_id) / "result.json").read_text())
+    assert "session_id" in stored["meta"] and stored["meta"]["session_id"] is None
+
+
+async def test_delegate_diff_key_survives_delivery_when_null(clean_env, tmp_path, monkeypatch):
+    # delegate.py emits `diff=diff or None`, so a no-changes run stores diff: null.
+    # next_steps tells the caller to review the diff, so the key must reach them.
+    import copy
+
+    meta = server._base_meta(
+        "/repo",
+        "param",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        model=None,
+        reasoning_effort=None,
+        timeout_seconds=1800,
+    ).model_dump(mode="json")
+    stored = {
+        "ok": True,
+        "tool": "codex_delegate",
+        "summary": "no changes needed",
+        "diff": None,
+        "raw_response": {"text": "t", "session_id": None, "model": None},
+        "next_steps": ["Review the returned diff; apply it to your tree only if correct."],
+        "meta": meta,
+    }
+    store = _FakeStore(record=_ok_record("done"), result_json=copy.deepcopy(stored))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert "diff" in res and res["diff"] is None
+    assert [k for k, v in res["meta"].items() if v is None] == []
