@@ -886,7 +886,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-61",
+            "default": "codex-in-claude/0.1/schema-62",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1438,7 +1438,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-61",
+                "default": "codex-in-claude/0.1/schema-62",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2563,7 +2563,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-61",
+            "default": "codex-in-claude/0.1/schema-62",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3244,7 +3244,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-61",
+            "default": "codex-in-claude/0.1/schema-62",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3350,8 +3350,9 @@
         "properties": {
           "detail": {
             "default": "summary",
-            "description": "Response verbosity: 'summary' (default) returns each tool's name, cost, stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries).",
+            "description": "What to return: 'summary' (default) returns each tool's name, cost, stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries). 'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without re-paying for the inventory.",
             "enum": [
+              "contracts",
               "full",
               "summary"
             ],

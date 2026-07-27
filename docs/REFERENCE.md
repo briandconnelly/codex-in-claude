@@ -57,6 +57,30 @@ on delivery, which is why a replayed job result and a fresh synchronous one look
 — useful for planning recovery, but not a closed contract. The envelope shape is versioned by
 `fingerprint`; clients can cache by it.
 
+### Fetching schemas without the inventory
+
+Prefer the `codex://` resources for the full contracts.
+A **resource-blind** client that cannot read them can pass `include_schemas` to `codex_capabilities`
+instead, which embeds the requested contracts in the response.
+
+That fallback returns the whole tool inventory alongside the schema, which a client that already
+cached the inventory pays for again on every fetch.
+Pass **`detail="contracts"`** to omit `tool_details` and get everything else unchanged — the
+schemas, `fingerprint`, `fingerprint_covers`, and the server identity fields:
+
+- `detail="contracts"` **with** `include_schemas` — fetch a contract without re-paying for the
+  inventory.
+- `detail="contracts"` **alone** — a cheap `fingerprint` recheck for cache revalidation.
+
+`tool_details` is the only field this drops; it is optional in the published schemas, so a
+`contracts` response still validates against both the tool's `outputSchema` and
+`codex://capabilities-result`. Measured at `schema-62` on a representative payload, a schema
+fetch falls from 28,778 to 21,456 bytes and a bare call from 11,109 to 3,787 — indicative
+figures that move with the tool inventory, not a promised bound.
+
+`detail` is a single knob: `contracts` is an alternative to `summary`/`full`, not a modifier of
+them, so it carries no inventory to be verbose about.
+
 Every result envelope also carries `server_version` beside `fingerprint`. The two answer different
 questions and are not interchangeable:
 
