@@ -51,7 +51,7 @@ null — including `codex_delegate`'s `diff`, which is null on a run that propos
 so does `raw_response`. The `*_async` job handle and `codex_job_status` are **not** slimmed and
 still send their nulls. The stored `result.json` also keeps the full shape; this trimming happens
 on delivery, which is why a replayed job result and a fresh synchronous one look identical (see
-ADR 0002 for why the rule stops at `meta`).
+[ADR 0002](adr/0002-omit-null-meta-on-the-wire.md) for why the rule stops at `meta`).
 
 `codex_capabilities` lists the error codes each tool may return (`error_codes`) as an advisory guide
 — useful for planning recovery, but not a closed contract. The envelope shape is versioned by

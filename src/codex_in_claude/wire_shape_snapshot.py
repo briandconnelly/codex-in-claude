@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 
 from codex_in_claude.schemas import (
+    FINGERPRINT,
     RESULT_FORMAT,
     ConsultResult,
     Coverage,
@@ -114,8 +115,14 @@ def _deliver(stored: dict, name: str, detail: str) -> dict:
     )
     if not delivered:
         raise AssertionError(f"{name}: the chokepoint refused to deliver the payload")
-    # job_id/fingerprint are stamped by the chokepoint from live values; pin them so the
-    # fixture does not churn on every release or FINGERPRINT bump.
+    # The chokepoint stamps meta.fingerprint from the live FINGERPRINT, which would churn
+    # the fixture on every bump — so pin it to a sentinel. ASSERT FIRST: overwriting
+    # unconditionally would render an identical fixture whether or not the chokepoint
+    # still stamps at all, silently un-pinning the very step this module claims to cover.
+    # (meta.job_id needs no such check: it is pinned by the sentinel passed IN, so dropping
+    # the stamping leaves the key absent and moves the fixture.)
+    if envelope["meta"].get("fingerprint") != FINGERPRINT:
+        raise AssertionError(f"{name}: the chokepoint did not stamp meta.fingerprint")
     envelope["meta"]["fingerprint"] = _FINGERPRINT_SENTINEL
     return envelope
 
