@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-60"
+FINGERPRINT = "codex-in-claude/0.1/schema-61"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -235,6 +235,45 @@ def apply_detail(envelope: dict, detail: str) -> dict:
     raw = envelope.get("raw_response")
     if isinstance(raw, dict):
         raw["text"] = None
+    return envelope
+
+
+# The result envelopes `slim_meta` applies to, keyed by their `tool` discriminator.
+# Scoping STRUCTURALLY (not by prose) keeps every other ok:true payload out: JobStarted
+# is `ok: Literal[True]` and carries a full null-laden Meta, and JobStatus/JobSummary
+# carry `result_ok`, a required nullable documented "always present, never omitted".
+_SLIMMED_TOOLS = frozenset({"codex_consult", "codex_review_changes", "codex_delegate"})
+
+
+def slim_meta(envelope: dict) -> dict:
+    """Drop `meta`'s null-valued keys from a DELIVERED success envelope (#334).
+
+    On the wire, ~40% of a success envelope was null `meta` fields. Absence here means
+    exactly what null meant — "not applicable / not reported" — so a client reads the
+    same fact from a missing key. Only `meta` sheds keys: every top-level field
+    (notably `diff`, whose null a no-changes delegate emits and whose key the
+    `next_steps` prose tells the caller to read) and all of `raw_response` are
+    delivered verbatim, so no payload-bearing key can vanish and `apply_detail`'s
+    guarantee holds unchanged.
+
+    Deliberately keyed on `is None`, never falsiness: `truncated=False` and
+    `elapsed_ms=0` are meaningful values. Empty collections stay too — an empty
+    `Coverage.omission_reasons` is the machine-checkable half of that model's
+    `status == "partial" iff omission_reasons` invariant, and `findings: []` must stay
+    iterable.
+
+    WIRE-ONLY. `dump_success` still persists the full envelope, so RESULT_FORMAT does
+    not move and stored results stay readable; this runs at the single delivery
+    chokepoint, which both the sync and replay paths share. Call it AFTER
+    `apply_detail` — before it, `apply_detail`'s `raw["text"] = None` would run last
+    anyway, but `meta` would be re-read from an already-slimmed dict for no reason and
+    the ordering would stop being obvious. Mutates and returns the same dict."""
+    if envelope.get("ok") is not True or envelope.get("tool") not in _SLIMMED_TOOLS:
+        return envelope
+    meta = envelope.get("meta")
+    if isinstance(meta, dict):
+        for key in [k for k, v in meta.items() if v is None]:
+            del meta[key]
     return envelope
 
 
@@ -560,16 +599,16 @@ class Meta(BaseModel):
             "The model slug requested through the plugin's first-class controls for the Codex "
             "run this envelope describes — the per-call `model` parameter or the server's "
             "CODEX_IN_CLAUDE_MODEL default. On success envelopes it is also mirrored to "
-            "raw_response.model. It is override provenance, not backend attestation: null "
-            "means model selection happened outside those controls (Codex's own default, the "
-            "operator's config.toml, or an opaque --profile), and the plugin cannot know which "
-            "model that resolved to. The generic `-c model=…` extra-args spelling is refused "
-            "at parse time so a passthrough cannot contradict this field (#310). A retrieved "
-            "background-job result carries the ORIGINATING run's value. An error envelope "
-            "GENERATED before a Codex run was prepared — argument validation, job-lifecycle "
-            "(codex_job_*) calls — does not attest to the rejected call's model: it reports "
-            "the server-default resolution, or null when no default is set (see meta.job_kind "
-            "for an inspected background job's kind)."
+            "raw_response.model. It is override provenance, not backend attestation: ABSENT "
+            "OR null means model selection happened outside those controls (Codex's own "
+            "default, the operator's config.toml, or an opaque --profile), and the plugin "
+            "cannot know which model that resolved to. The generic `-c model=…` extra-args "
+            "spelling is refused at parse time so a passthrough cannot contradict this field "
+            "(#310). A retrieved background-job result carries the ORIGINATING run's value. An "
+            "error envelope GENERATED before a Codex run was prepared — argument validation, "
+            "job-lifecycle (codex_job_*) calls — does not attest to the rejected call's model: "
+            "it reports the server-default resolution, or absent/null when no default is set "
+            "(see meta.job_kind for an inspected background job's kind)."
         ),
     )
     reasoning_effort: str | None = Field(
@@ -579,14 +618,14 @@ class Meta(BaseModel):
             "the Codex run this envelope describes — the per-call `reasoning_effort` "
             "parameter or the server's CODEX_IN_CLAUDE_REASONING_EFFORT default, sent to "
             "codex as a `model_reasoning_effort` config override. Like meta.model it is "
-            "override provenance, not backend attestation: null means effort resolution "
-            "happened outside those controls (Codex's own default, the operator's "
+            "override provenance, not backend attestation: ABSENT OR null means effort "
+            "resolution happened outside those controls (Codex's own default, the operator's "
             "config.toml, or an opaque --profile), and the plugin cannot know what it "
             "resolved to. The generic `-c model_reasoning_effort=…` extra-args spelling is "
             "refused at parse time so a passthrough cannot contradict this field (#309). A "
             "retrieved background-job result carries the ORIGINATING run's value; an error "
             "envelope GENERATED before a Codex run was prepared reports the server-default "
-            "resolution, or null when no default is set — the same cases meta.model "
+            "resolution, or absent/null when no default is set — the same cases meta.model "
             "documents."
         ),
     )
@@ -1668,6 +1707,26 @@ ERROR_ENVELOPE_SCHEMA = _harden_error_envelope_schema(
 # object per tool; this is the canonical, discoverable full shape (audit F1, #173).
 RESULT_META_SCHEMA = TypeAdapter(Meta).json_schema(ref_template="#/$defs/{model}")
 RESULT_META_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
+# The delivered-shape rule, stated where a CLIENT reads the meta contract (#334). Without
+# it the omission is only observable by diffing two responses, and the FINGERPRINT bump
+# has nothing discoverable to point at. Scoped deliberately to the three RESULT envelopes:
+# JobStarted and JobStatus also carry meta/nullable fields and do NOT slim, so an
+# unscoped promise would contradict the first async handle an agent sees.
+RESULT_META_SCHEMA["description"] = (
+    # Rules-then-context (agent-friendly-mcp §3/§4): the binding constraint is its own
+    # sentence up front, phrased against observable behavior; mechanics and scope follow.
+    "Result metadata for one Codex run. "
+    "Read every optional member with a null-safe accessor; never test for key presence. "
+    "An absent key and an explicit null mean the same thing here: not applicable, or not "
+    "reported for this run. "
+    "Context: on a delivered codex_consult / codex_review_changes / codex_delegate success "
+    "envelope, optional members whose value is null are omitted entirely. The six required "
+    "members (cwd, tier, sandbox, isolation, timeout_seconds, elapsed_ms) are always "
+    "present, and empty arrays stay empty arrays rather than being dropped. Everything "
+    "outside meta is delivered verbatim, so top-level fields (including codex_delegate's "
+    "`diff`) and `raw_response` keep their keys even when null. The *_async tools' job "
+    "handle and codex_job_status are not slimmed and still send their nulls."
+)
 
 # The full capabilities/status result schemas, published once at codex://capabilities-result
 # and codex://status-result. The wire outputSchemas opaque tool_details / rate_limit /

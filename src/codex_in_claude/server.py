@@ -114,6 +114,7 @@ from codex_in_claude.schemas import (
     Workspace,
     WorktreePlan,
     apply_detail,
+    slim_meta,
     workspace_warning_for,
 )
 
@@ -4313,7 +4314,11 @@ def _finished_job_envelope(
             if delivered and isinstance(validated_payload.get("meta"), dict):
                 validated_payload["meta"]["job_id"] = job_id
                 validated_payload["meta"]["fingerprint"] = FINGERPRINT
-            return apply_detail(validated_payload, detail_v), delivered
+            # slim_meta AFTER apply_detail, and after the job_id/fingerprint stamping
+            # above — both write non-null values, so neither reintroduces a null key.
+            # This is the single delivery chokepoint the sync and replay paths share,
+            # which is what keeps their wire shapes identical (#334).
+            return slim_meta(apply_detail(validated_payload, detail_v)), delivered
         # An error payload (ok: false) should be an ErrorResult; validate it too, since
         # a disk-backed result.json could be partially written or corrupted.
         try:

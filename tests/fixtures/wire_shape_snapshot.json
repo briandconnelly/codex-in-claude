@@ -1,0 +1,269 @@
+{
+  "delivered": {
+    "full": {
+      "consult": {
+        "assumptions": [],
+        "findings": [],
+        "meta": {
+          "compat_warnings": [],
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "sandbox": "read-only",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": false
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": "RAW MODEL TEXT"
+        },
+        "summary": "s",
+        "tool": "codex_consult"
+      },
+      "delegate_no_changes": {
+        "assumptions": [],
+        "diff": null,
+        "findings": [],
+        "meta": {
+          "compat_warnings": [],
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "sandbox": "read-only",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": false
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": "RAW MODEL TEXT"
+        },
+        "summary": "s",
+        "tool": "codex_delegate"
+      },
+      "review": {
+        "assumptions": [],
+        "confidence": "medium",
+        "coverage": {
+          "omission_reasons": [],
+          "status": "complete",
+          "untracked_files_detected": 0,
+          "untracked_files_included": 0,
+          "untracked_files_omitted": 0
+        },
+        "findings": [],
+        "meta": {
+          "compat_warnings": [],
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "sandbox": "read-only",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": false
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": "RAW MODEL TEXT"
+        },
+        "review_status": "completed",
+        "summary": "s",
+        "tool": "codex_review_changes",
+        "verdict": "unknown"
+      }
+    },
+    "summary": {
+      "consult": {
+        "assumptions": [],
+        "findings": [],
+        "meta": {
+          "compat_warnings": [],
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "sandbox": "read-only",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": false
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": null
+        },
+        "summary": "s",
+        "tool": "codex_consult"
+      },
+      "delegate_no_changes": {
+        "assumptions": [],
+        "diff": null,
+        "findings": [],
+        "meta": {
+          "compat_warnings": [],
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "sandbox": "read-only",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": false
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": null
+        },
+        "summary": "s",
+        "tool": "codex_delegate"
+      },
+      "review": {
+        "assumptions": [],
+        "confidence": "medium",
+        "coverage": {
+          "omission_reasons": [],
+          "status": "complete",
+          "untracked_files_detected": 0,
+          "untracked_files_included": 0,
+          "untracked_files_omitted": 0
+        },
+        "findings": [],
+        "meta": {
+          "compat_warnings": [],
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "sandbox": "read-only",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": false
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": null
+        },
+        "review_status": "completed",
+        "summary": "s",
+        "tool": "codex_review_changes",
+        "verdict": "unknown"
+      }
+    }
+  },
+  "omitted_meta_keys": {
+    "consult": [
+      "base",
+      "command_exit_code",
+      "commit",
+      "context_summary",
+      "idempotency_replayed",
+      "job_kind",
+      "model",
+      "paths",
+      "rate_limit",
+      "reasoning_effort",
+      "roots_source",
+      "scope",
+      "session_id",
+      "truncation_hint",
+      "usage",
+      "workspace_source",
+      "workspace_warning"
+    ],
+    "delegate_no_changes": [
+      "base",
+      "command_exit_code",
+      "commit",
+      "context_summary",
+      "idempotency_replayed",
+      "job_kind",
+      "model",
+      "paths",
+      "rate_limit",
+      "reasoning_effort",
+      "roots_source",
+      "scope",
+      "session_id",
+      "truncation_hint",
+      "usage",
+      "workspace_source",
+      "workspace_warning"
+    ],
+    "review": [
+      "base",
+      "command_exit_code",
+      "commit",
+      "context_summary",
+      "idempotency_replayed",
+      "job_kind",
+      "model",
+      "paths",
+      "rate_limit",
+      "reasoning_effort",
+      "roots_source",
+      "scope",
+      "session_id",
+      "truncation_hint",
+      "usage",
+      "workspace_source",
+      "workspace_warning"
+    ]
+  }
+}

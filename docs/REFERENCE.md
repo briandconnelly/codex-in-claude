@@ -38,6 +38,21 @@ fields). Failure is uniform: an `error` object built for machine-driven recovery
 Absent optional fields are omitted from the payload (no placeholder nulls), except
 `retry_after_ms`. The full schema is published at the `codex://error-envelope` resource.
 
+Success envelopes follow the same convention inside `meta`. On a delivered
+`codex_consult`/`codex_review_changes`/`codex_delegate` success, optional `meta` members whose
+value is null are omitted entirely — a key's **absence** means exactly what an explicit null
+meant (not applicable, or not reported for this run). Read them with a null-safe accessor
+(`.get`), never by testing key presence. The six required members (`cwd`, `tier`, `sandbox`,
+`isolation`, `timeout_seconds`, `elapsed_ms`) are always present, and empty arrays stay empty
+arrays rather than disappearing.
+
+Everything *outside* `meta` is delivered verbatim: top-level fields keep their keys even when
+null — including `codex_delegate`'s `diff`, which is null on a run that proposed no changes — and
+so does `raw_response`. The `*_async` job handle and `codex_job_status` are **not** slimmed and
+still send their nulls. The stored `result.json` also keeps the full shape; this trimming happens
+on delivery, which is why a replayed job result and a fresh synchronous one look identical (see
+[ADR 0002](adr/0002-omit-null-meta-on-the-wire.md) for why the rule stops at `meta`).
+
 `codex_capabilities` lists the error codes each tool may return (`error_codes`) as an advisory guide
 — useful for planning recovery, but not a closed contract. The envelope shape is versioned by
 `fingerprint`; clients can cache by it.
@@ -144,7 +159,8 @@ window, `secondary` the longer one; the account reports only the windows that cu
 either may be null. `status` is `available`/`limited`/`exhausted`/`unknown` (the live read could not
 complete, or codex is not ready — retry) / `unavailable` (this codex/account exposes no quota data).
 On codex 0.144+ the quota block no longer rides the `codex exec` stream, so a run's `meta.rate_limit`
-is `null`. The block is advisory.
+is absent (see [Result envelopes](#result-envelopes) — null optionals are omitted from a delivered
+success `meta`). The block is advisory.
 
 `status` is also `blocked` when the backend reports a **spend** control — codex 0.145+ carries
 `spendControlReached`, surfaced as `spend_control_reached`. It is not a quota window: no reset

@@ -49,6 +49,20 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- Delivered `codex_consult`/`codex_review_changes`/`codex_delegate` success envelopes now omit
+  `meta` members whose value is null, instead of sending ~18 explicit null keys on every call.
+  A key's absence means exactly what the null meant — not applicable, or not reported for this
+  run — so read `meta` with a null-safe accessor rather than by testing key presence. Measured
+  against the representative envelopes: 33–42% smaller. The six required `meta` members are
+  always present and empty arrays stay empty arrays; everything outside `meta` is delivered
+  verbatim, so top-level fields (including `codex_delegate`'s `diff`, which is null when a run
+  proposes no changes) and all of `raw_response` keep their keys. The `*_async` job handle and
+  `codex_job_status` are unaffected. Trimming happens on delivery, so the stored `result.json`
+  is byte-for-byte unchanged (`RESULT_FORMAT` stays `7` and already-stored job results stay
+  readable) and a replayed result still matches a fresh synchronous one. Not breaking: the
+  published output schemas and `codex://result-meta` already accept absence for every affected
+  field. Bumps `FINGERPRINT` (`schema-60` → `schema-61`); the rule is published on
+  `codex://result-meta` (#334).
 - `codex_capabilities` now defaults to `detail="summary"`, returning only the per-tool facts
   `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`, and, for the
   `*_async` tools only, `async_lifecycle`). Pass `detail="full"` for the previous payload. The
