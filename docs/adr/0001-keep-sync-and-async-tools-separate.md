@@ -18,7 +18,7 @@ Keep them separate.
 ## Rationale
 
 The separate tool *name* is the selection signal.
-#338 exists precisely because agents were choosing the synchronous tool for work that exceeded its deadline and losing the partial run; the
+Issue #338 exists precisely because agents were choosing the synchronous tool for work that exceeded its deadline and losing the partial run; the
 fix was to make `_async` visible at selection time, in the tool list, before any argument is
 chosen.
 A `mode` parameter moves that decision from tool selection into argument selection, where

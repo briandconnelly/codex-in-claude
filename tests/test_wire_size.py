@@ -43,7 +43,10 @@ from codex_in_claude.server import mcp
 # to the literal canonical token — `codex_transfer`'s `FREE —` and `codex_capabilities`'s
 # line-wrapped `Free —` corrected, and the three async active tools gained their own `PAID —`
 # block naming the right preview tool): 83,281 bytes — budget raised to the next 500 above the
-# measured value.
+# measured value. Measured once more after merging forward a Copilot review fix on #382
+# clarifying that async_lifecycle appears only on the `*_async` tools, in both
+# CapabilitiesDetailParam's description and the codex_capabilities docstring: 83,354 bytes —
+# still within budget, no further change.
 TOOLS_LIST_BYTE_BUDGET = 83_500
 
 

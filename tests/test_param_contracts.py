@@ -11,6 +11,7 @@ needs on a first call.
 
 from __future__ import annotations
 
+import re
 from typing import ClassVar
 
 import pytest
@@ -129,8 +130,14 @@ class TestAuditTwoCompaction:
         # and must survive compression.
         summary = param_contracts.PARAMETER_CONTRACTS["extra_context"].summary
         assert "UNTRUSTED" in summary
-        assert "edaction" in summary
+        # Whole-word, case-insensitive: a bare substring like "edaction" would also match
+        # a mangled/misspelled word that merely happens to end the same way.
+        assert re.search(r"\bredaction\b", summary, re.IGNORECASE)
 
     def test_idempotency_summary_keeps_the_spend_guarantee(self):
         summary = param_contracts.PARAMETER_CONTRACTS["idempotency_key"].summary
-        assert "spend" in summary.lower() or "unpaid" in summary.lower()
+        # Whole-word matches only — a bare substring would also match unrelated words
+        # like "suspend" or "expend" that contain "spend" but don't carry the guarantee.
+        assert re.search(r"\bspend\b", summary, re.IGNORECASE) or re.search(
+            r"\bunpaid\b", summary, re.IGNORECASE
+        )

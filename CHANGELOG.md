@@ -50,22 +50,31 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Changed
 
 - `codex_capabilities` now defaults to `detail="summary"`, returning only the per-tool facts
-  `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`,
-  `async_lifecycle`). Pass `detail="full"` for the previous payload. The `extra_context`
-  parameter contract moved its full text to `codex://params` and `idempotency_key`'s inline
-  summary was compressed. The durable size win is `codex_capabilities`' own response —
-  21,391 → 11,109 bytes (−48%) — but that is paid only by clients that call the tool, not by
-  every client the way `tools/list` is.
+  `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`, and, for the
+  `*_async` tools only, `async_lifecycle`). Pass `detail="full"` for the previous payload. The
+  `extra_context` parameter contract moved its full text to `codex://params` and
+  `idempotency_key`'s inline summary was compressed. The durable size win is `codex_capabilities`'
+  own response — 21,391 → 11,109 bytes (−48%) — but that is paid only by clients that call the
+  tool, not by every client the way `tools/list` is.
 - Net effect on the preloaded discovery surface: this release's other additions (per-tool cost
   markers, titles, stability tiers, `codex_job_list` filters, `roots_source` provenance,
   resource triage metadata) outgrew the compression above for every client, not just
-  `codex_capabilities` callers. `tools/list` went from 79,242 to 82,771 bytes (+4.5%) and
-  cold-start tokens from 20,719 to 21,880 (+5.6%). That is a deliberate trade: a larger
-  preloaded surface in exchange for cost/stability/next-step metadata that was previously
-  missing or unreachable.
+  `codex_capabilities` callers. `tools/list` went from 79,242 to 83,354 bytes (+5.2%). That is a
+  deliberate trade: a larger preloaded surface in exchange for cost/stability/next-step metadata
+  that was previously missing or unreachable.
 
 ### Fixed
 
+- **`capabilities-result` schema's `required` list contradicted the default response.**
+  `ToolCapability.use_when`/`.returns` were marked required in the published schema (reachable via
+  `codex_capabilities(include_schemas=["capabilities-result"])`), but `detail="summary"` — the
+  default — strips both from every `tool_details` entry, so a strict client validating the
+  default response against its own published schema failed. Both fields are now optional in the
+  schema, modeling both detail modes; the response bytes are unchanged in either mode. Non-breaking:
+  the schema is corrected to describe what was already being sent.
+- `CapabilitiesDetailParam`'s description and the `codex_capabilities` docstring described
+  `async_lifecycle` as part of every summary entry; it is only present for the `*_async` tools
+  (3 of 17), which both now say explicitly.
 - A `resources/read` failure's `error.data` now carries `resource_uri` (the URI that was
   requested) and `request_id`, matching the correlation fields the tool-error carrier already
   has via `meta.request_id`. Both are optional and populated only on the JSON-RPC (resource)
