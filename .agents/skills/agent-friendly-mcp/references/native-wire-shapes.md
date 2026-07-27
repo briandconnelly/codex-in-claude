@@ -81,6 +81,8 @@ Native casing throughout: `taskId`, `status`, `statusMessage` (optional), `creat
 | `notifications/tasks/status` | optional push of full task state; requestors MUST NOT rely on receiving it |
 
 `ttl` and `pollInterval` are milliseconds.
+`ttl` is required but nullable — `null` means unlimited retention, and receivers MUST report the actual value (not the requested one) in `tasks/get`.
+`pollInterval` is optional.
 Carry `io.modelcontextprotocol/related-task` in `_meta` only where the payload does not already name the task (required on `tasks/result`; `tasks/get`/`tasks/list`/`tasks/cancel` SHOULD NOT include it).
 `tasks/result` blocks until the task is terminal and always returns the underlying result; on `input_required` the requestor SHOULD call it preemptively and hold it open — the pending input request arrives as a separate receiver-to-requestor request (tagged with related-task `_meta`) while the call is pending, not as the `tasks/result` response.
 A `CreateTaskResult` MAY carry `io.modelcontextprotocol/model-immediate-response` (a string) in `_meta` for the host to hand the model while the task runs.

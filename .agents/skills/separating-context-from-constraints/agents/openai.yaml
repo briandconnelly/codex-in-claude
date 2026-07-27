@@ -1,0 +1,4 @@
+interface:
+  display_name: "Separate Context from Constraints"
+  short_description: "Audit agent instructions for ambiguous rules"
+  default_prompt: "Use $separating-context-from-constraints to audit this instruction document for clear separation of binding rules and context."

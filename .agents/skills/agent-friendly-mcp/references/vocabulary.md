@@ -16,4 +16,4 @@ Shared terms used across `SKILL.md`, the contract checklist, the workflows, and 
 - **Repair signal**: error fields that tell the agent specifically how to retry: stable code, offending field, allowed values, retryability, suggested next call.
 - **State handle**: an opaque reference to server-side state, such as a job, cursor, or session, with declared lifetime and expiry behavior.
 - **Long-running operation**: work that may need progress, cancellation, status polling, or result retrieval after the original request.
-- **Task-capable tool**: a tool that supports the task-augmented request pattern, declared via `execution.taskSupport: "optional" | "required" | "forbidden"`, so clients can recover status and results after the original call returns.
+- **Task-capable tool**: a tool that supports the task-augmented request pattern, declared via `execution.taskSupport` (contract-checklist §7 owns its values and omission default), so clients can recover status and results after the original call returns.

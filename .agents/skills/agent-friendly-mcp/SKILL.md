@@ -4,7 +4,7 @@ metadata:
     github-path: agent-friendly-mcp
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: b7ab8dde2dd1b3095e7e0d23f4fe64ed6da45f27
+    github-tree-sha: 943d7ded23d9fb78153bcb4794301b94296577e3
 name: agent-friendly-mcp
 ---
 # Agent-Friendly MCP
@@ -16,25 +16,30 @@ Use this skill to make MCP servers easy for agents to discover, invoke correctly
 This skill is written against the stable **MCP 2025-11-25** specification; the field names, capability paths, and task lifecycle it uses follow that revision.
 
 A **2026-07-28 release candidate** is in flight — not yet ratified, and still subject to change before it finalizes.
-It is expected to make the protocol stateless (removing the `initialize`/`initialized` handshake and per-session ids, with client info and capabilities traveling per request), move **tasks** from experimental core to a negotiated **extension** (server-directed task creation, `tasks/update` added, `tasks/list` removed), deprecate **roots**, **sampling**, and **logging** on long retention windows, formalize a reverse-DNS **extensions framework** that gives the convention metadata below an official home, and fold the resource-not-found JSON-RPC code `-32002` into the standard `-32602`.
+It is expected to make the protocol stateless (removing the `initialize`/`initialized` handshake and per-session ids, with client info and capabilities traveling per request), move **tasks** from experimental core to a negotiated **extension** (server-directed task creation, `tasks/update` added, `tasks/list` removed), deprecate **roots**, **sampling**, and **logging** on long retention windows, formalize a reverse-DNS **extensions framework**, and fold the resource-not-found JSON-RPC code `-32002` into the standard `-32602`.
+The extensions framework is a possible migration path for the convention metadata below, not a ratification of it: an extension needs a reverse-DNS identifier, its own maintained specification, and negotiation by both peers, so a namespaced `_meta` key remains a private convention until someone does that work.
 This section is the single home for RC expectations; forward-compat notes elsewhere in this skill point here rather than restating them.
 Treat init-time capability negotiation, native tasks, and roots as **likely migration points** — design against them today, and hedge concretely: branch on stable symbolic codes rather than numeric or transport-level details where you have the choice, keep workspace scope expressible as ordinary tool arguments (contract-checklist §1 forward-compat), and keep task status/result/cancel expressible as ordinary tools (§7 forward-compat).
 Revisit this skill when 2026-07-28 finalizes.
 
-## Core Standard
+## Where The Recurring Concerns Live
 
-- Tool and resource schemas are the operational contract; prompts are advisory scaffolding for orchestration.
-  Do not hide essential behavior in prompts.
-- Server-level `instructions` are advisory and may not be surfaced by every client.
-  Do not put essential selection, prerequisite, safety, or repair behavior only in `instructions`.
-- Optional MCP features only exist for an agent after protocol version and capability negotiation.
-  Gate roots, completions, resource subscriptions, elicitation, list-change notifications, and tasks on the initialized capabilities.
-- First-call and first-repair success from a cold start are first-class quality metrics: measure both per design-workflow Step 8, and treat a design change that regresses either as wrong.
-- Design around user/agent tasks, not the underlying API's endpoint surface.
-- Declare side effects and idempotency via tool annotations where MCP assigns them meaning (contract-checklist §3), surface rate limits in structured response fields (§3/§6), and declare agent-actionable prerequisites in the capability summary (§1).
-- Default to compact, deterministic, structured output; structured data is authoritative and text or markdown is supplemental rendering for human-facing clients.
-- Provide explicit discovery primitives, but keep every definition compact: the least-capable realistic client preloads the whole catalog from `tools/list`, so compact schemas and concise descriptions are the universal baseline, and selective on-demand loading is a client-dependent optimization layered on top.
-- Design for the least-capable realistic client: some preload tools, paginate discovery, ignore annotations, or expose resources poorly.
+A routing table, not a summary.
+Each row names a concern this skill keeps returning to and the rules that govern it; the rules themselves are stated only in [contract-checklist.md](references/contract-checklist.md).
+Read the cited ids — nothing here restates them, so a row is never a substitute for the rule.
+
+| Concern | Governing rules |
+| --- | --- |
+| What carries the contract, and what is only advisory | `[5.scaffolding-only]`, `[5.ap-contract-container]`, `[2.instructions-advisory]` |
+| Capability negotiation before optional features | `[1.negotiated-caps]` |
+| Tool granularity: tasks vs endpoints | `[3.task-completing]`, `[3.hide-steps]`, `[3.ap-endpoint-wrapping]` |
+| Side effects, idempotency, and rate limits | `[3.declare-effects]`, `[3.honest-annotations]`, `[3.annotation-defaults]` |
+| Prerequisites and implicit state an agent can act on | `[1.implicit-state]`, `[2.summary]` |
+| Structured vs rendered output | `[3.structured-default]`, `[3.output-schema]` |
+| Designing for the least-capable realistic client | `[2.compact-baseline]`, `[2.progressive-disclosure]`, `[2.client-variance]` |
+| Failure paths as contract | `[3.failure-contract]`, `[6.symbolic-codes]`, `[6.repair-object]` |
+
+Cold-start first-call and first-repair success are the outcome measures this skill is tuned against: [design-workflow.md](references/design-workflow.md) Step 8 builds the measurement and Step 9 owns the regression gate.
 
 ## Native Fields vs Convention Extensions
 
@@ -52,7 +57,7 @@ Keep them — but never let them masquerade as protocol.
 - Put convention metadata under a namespaced `_meta` key (e.g., `com.example/chunks`) — the spec-sanctioned extension point — so it cannot collide with future MCP fields.
 - Label every convention extension as such where it appears, so a reader can tell protocol from house style.
 - The primary example blocks in this skill are wire-valid: convention metadata rides under a namespaced `_meta` key, never as a top-level field on a native record.
-  See `examples.md` §1/§3/§4/§5 for the worked `_meta` pattern; the few deliberately abbreviated blocks (e.g. §10) carry an explicit non-wire label.
+  See `examples.md` ex§1/ex§4/ex§5 for the worked `_meta` pattern; the few deliberately abbreviated blocks (e.g. ex§10) carry an explicit non-wire label.
 - For the exact native request/response envelopes, field names, and casing of the methods most often confused with house conventions — list pagination, completion, the `tools/call` result, and the task lifecycle — see [native-wire-shapes.md](references/native-wire-shapes.md).
 
 ## When To Use
@@ -82,6 +87,8 @@ The normative standard lives in [contract-checklist.md](references/contract-chec
 This index orients and routes — it does not restate the rules.
 State-handle discipline and long-running-operation contracts are normative in §1/§8 and §7 respectively; consult them there rather than a second copy here.
 Notation: bare `§N` always means a contract-checklist section; `ex§N` means section N of [examples.md](references/examples.md).
+A single rule is cited by its stable id, `` `[section.slug]` `` — `[3.naming]`, `[6.repair-object]` — which resolves to exactly one bullet in contract-checklist.md and survives rewording of that bullet.
+Prefer a rule id over a section reference when you mean one specific rule; `tests/check_rule_ids.py` fails the build if a cited id does not resolve.
 
 | § | Section | One-line rule | Worked examples |
 | --- | --- | --- | --- |

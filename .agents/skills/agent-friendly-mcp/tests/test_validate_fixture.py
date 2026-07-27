@@ -1,5 +1,6 @@
 """Tests for validate_fixture.validate — run with:
-uv run --with pytest --with jsonschema pytest agent-friendly-mcp/tests/test_validate_fixture.py -v
+uv run --with pytest --with jsonschema pytest \
+    agent-friendly-mcp/tests/test_validate_fixture.py -v
 """
 
 from __future__ import annotations
@@ -56,6 +57,16 @@ def test_disclosed_degraded_text_carrier_is_accepted():
     err["content"] = [{"type": "text", "text": json.dumps(envelope)}]
     ok["wire"]["degraded_text_carrier"] = True
     assert validate(ok) == []
+
+
+def test_degraded_carrier_with_non_list_content_fails_closed():
+    bad = copy.deepcopy(FIXTURE)
+    err = bad["wire"]["error_result"]
+    del err["structuredContent"]
+    err["content"] = {"type": "text", "text": "{}"}  # dict, not a list of blocks
+    bad["wire"]["degraded_text_carrier"] = True
+    issues = validate(bad)  # must report issues, not raise
+    assert any("content[0].text is missing" in i.message for i in issues)
 
 
 def test_non_dict_fixture_root_fails_closed():
