@@ -6978,11 +6978,20 @@ class TestCapabilitiesContractsDetail:
                     {"detail": "contracts", "include_schemas": ["error-envelope"]},
                 )
             ).structured_content
-        s = len(json.dumps(summary, separators=(",", ":")))
-        c_ = len(json.dumps(contracts, separators=(",", ":")))
-        # Guards the point of the change, not an arbitrary ratio: the inventory is ~66%
-        # of the bare payload, so a contracts fetch must shed thousands of bytes.
-        assert s - c_ > 5000, f"contracts saved only {s - c_} B over summary"
+        size = lambda o: len(json.dumps(o, separators=(",", ":")))  # noqa: E731
+        # Tie the expected saving to the real inventory rather than a magic threshold, so
+        # this stays correct if `tool_details` is later slimmed or grows. The contracts
+        # payload must weigh exactly what summary weighs minus that one field — which also
+        # proves the saving comes from the inventory and not from something else going
+        # missing. `del` on the same dict preserves key order, so the sizes are comparable.
+        expected = size({k: v for k, v in summary.items() if k != "tool_details"})
+        assert size(contracts) == expected, (
+            f"contracts is {size(contracts)} B; summary minus tool_details is {expected} B"
+        )
+        # Still assert the win is real: a no-op mode would satisfy the equality above only
+        # if the inventory itself were empty, which for this server it never is.
+        assert summary["tool_details"], "no inventory to shed — this guard would be vacuous"
+        assert size(summary) - size(contracts) == size(summary) - expected > 0
 
     @pytest.mark.anyio
     async def test_contracts_without_schemas_is_a_valid_fingerprint_ping(self):

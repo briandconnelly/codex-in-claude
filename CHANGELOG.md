@@ -14,9 +14,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `fingerprint` recheck for cache revalidation (was 11,109). `tool_details` is the only field
   removed, and it is already optional in the published schemas, so a `contracts` response still
   validates against both the tool's `outputSchema` and `codex://capabilities-result` — no schema
-  change was needed. The new token lives on a `codex_capabilities`-local `Detail` value set, so
-  the five other tools taking `detail` are unaffected. Backward-compatible: `summary` remains the
-  default and both existing modes are unchanged.
+  change was needed. The new token lives on a separate `CapabilitiesDetail` Literal used only by
+  this tool; the shared `Detail` stays two-valued, so the five other tools taking `detail` are
+  unaffected. Backward-compatible: `summary` remains the default and both existing modes are
+  unchanged.
 
 - Every tool now states its cost in its own description — five tools that previously relied
   on `codex_capabilities` alone (`codex_consult`, `codex_review_changes`, `codex_delegate`,
