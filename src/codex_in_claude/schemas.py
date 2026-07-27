@@ -1713,16 +1713,19 @@ RESULT_META_SCHEMA["$schema"] = JSON_SCHEMA_DIALECT
 # JobStarted and JobStatus also carry meta/nullable fields and do NOT slim, so an
 # unscoped promise would contradict the first async handle an agent sees.
 RESULT_META_SCHEMA["description"] = (
-    "Result metadata. On a delivered codex_consult / codex_review_changes / codex_delegate "
-    "SUCCESS envelope, optional members whose value is null are omitted entirely: a key's "
-    "ABSENCE here means exactly what an explicit null meant — not applicable, or not "
-    "reported for this run. Read these fields with a null-safe accessor (`.get`), never by "
-    "testing key presence. The six required members (cwd, tier, sandbox, isolation, "
-    "timeout_seconds, elapsed_ms) are always present, and empty arrays are kept as empty "
-    "arrays rather than dropped. Everything OUTSIDE meta is delivered verbatim, so "
-    "top-level fields (including codex_delegate's `diff`) and `raw_response` keep their "
-    "keys even when null. Other payloads that carry this metadata — the *_async tools' "
-    "job handle and codex_job_status — are NOT slimmed and still send their nulls."
+    # Rules-then-context (agent-friendly-mcp §3/§4): the binding constraint is its own
+    # sentence up front, phrased against observable behavior; mechanics and scope follow.
+    "Result metadata for one Codex run. "
+    "Read every optional member with a null-safe accessor; never test for key presence. "
+    "An absent key and an explicit null mean the same thing here: not applicable, or not "
+    "reported for this run. "
+    "Context: on a delivered codex_consult / codex_review_changes / codex_delegate success "
+    "envelope, optional members whose value is null are omitted entirely. The six required "
+    "members (cwd, tier, sandbox, isolation, timeout_seconds, elapsed_ms) are always "
+    "present, and empty arrays stay empty arrays rather than being dropped. Everything "
+    "outside meta is delivered verbatim, so top-level fields (including codex_delegate's "
+    "`diff`) and `raw_response` keep their keys even when null. The *_async tools' job "
+    "handle and codex_job_status are not slimmed and still send their nulls."
 )
 
 # The full capabilities/status result schemas, published once at codex://capabilities-result
