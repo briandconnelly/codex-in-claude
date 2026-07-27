@@ -34,7 +34,10 @@ from codex_in_claude.server import mcp
 # all six active tools now say "every new call" so the marker doesn't contradict
 # `idempotency_key`'s no-new-spend replay semantics): 80,245 bytes — 522 bytes for the marker
 # actually being one consistent token everywhere it appears; budget raised to the next 500
-# above the measured value.
+# above the measured value. Measured once more after merging forward a Copilot review fix on
+# #382 clarifying that async_lifecycle appears only on the `*_async` tools, in both
+# CapabilitiesDetailParam's description and the codex_capabilities docstring: 80,318 bytes —
+# still within budget, no further change.
 TOOLS_LIST_BYTE_BUDGET = 80_500
 
 

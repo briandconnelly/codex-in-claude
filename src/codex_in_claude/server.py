@@ -719,8 +719,8 @@ CapabilitiesDetailParam = Annotated[
     Detail,
     Field(
         description="Response verbosity: 'summary' (default) returns each tool's name, cost, "
-        "stability, error_codes, and async_lifecycle; 'full' adds use_when, returns, "
-        "and the parameter lists (which tools/list already carries)."
+        "stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds "
+        "use_when, returns, and the parameter lists (which tools/list already carries)."
     ),
 ]
 JobIdParam = Annotated[
@@ -1648,10 +1648,11 @@ def codex_capabilities(
     """List this server's tools, tiers, and the result fingerprint.
     Free — no model call. Clients can cache by the fingerprint.
 
-    `detail="summary"` (default) returns each tool's name, cost, stability, error_codes,
-    and async_lifecycle — the facts `tools/list` does not already carry. Pass
-    `detail="full"` for use_when/returns/required_params/key_optional_params too; those
-    restate the tool descriptions and schemas you already hold.
+    `detail="summary"` (default) returns each tool's name, cost, stability, and
+    error_codes — the facts `tools/list` does not already carry — plus async_lifecycle,
+    but only for the `*_async` tools. Pass `detail="full"` for
+    use_when/returns/required_params/key_optional_params too; those restate the tool
+    descriptions and schemas you already hold.
 
     Pass include_schemas to also embed the full 'error-envelope', 'result-meta',
     'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'

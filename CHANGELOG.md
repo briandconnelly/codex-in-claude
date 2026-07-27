@@ -28,10 +28,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Changed
 
 - `codex_capabilities` now defaults to `detail="summary"`, returning only the per-tool facts
-  `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`,
-  `async_lifecycle`). Pass `detail="full"` for the previous payload. The `extra_context`
-  parameter contract moved its full text to `codex://params` and `idempotency_key`'s inline
-  summary was compressed, shrinking the `tools/list` wire response by 2,331 bytes.
+  `tools/list` does not already carry (`name`, `cost`, `stability`, `error_codes`, and, for the
+  `*_async` tools only, `async_lifecycle`). Pass `detail="full"` for the previous payload. The
+  `extra_context` parameter contract moved its full text to `codex://params` and
+  `idempotency_key`'s inline summary was compressed, shrinking the `tools/list` wire response by
+  2,331 bytes.
+
+### Fixed
+
+- **`capabilities-result` schema's `required` list contradicted the default response.**
+  `ToolCapability.use_when`/`.returns` were marked required in the published schema (reachable via
+  `codex_capabilities(include_schemas=["capabilities-result"])`), but `detail="summary"` — the
+  default — strips both from every `tool_details` entry, so a strict client validating the
+  default response against its own published schema failed. Both fields are now optional in the
+  schema, modeling both detail modes; the response bytes are unchanged in either mode. Non-breaking:
+  the schema is corrected to describe what was already being sent.
+- `CapabilitiesDetailParam`'s description and the `codex_capabilities` docstring described
+  `async_lifecycle` as part of every summary entry; it is only present for the `*_async` tools
+  (3 of 17), which both now say explicitly.
 
 ## [0.15.0] - 2026-07-22
 
