@@ -247,6 +247,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "prek" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -265,6 +266,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jsonschema", specifier = ">=4.26" },
     { name = "prek", specifier = ">=0.4.5" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },

@@ -397,7 +397,7 @@ def test_sync_use_when_points_at_async_for_its_shape(sync_name, async_name, shap
     """#338: the codex_capabilities use_when for each SYNC tool carries the steer too —
     naming its async variant and this pair's shape — so a capabilities-driven agent reading
     the sync entry is not left with an unqualified 'always use sync' recommendation."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     use_when = by_name[sync_name]["use_when"]
     assert async_name in use_when, sync_name
     assert shape in use_when, sync_name
@@ -408,7 +408,7 @@ def test_async_use_when_names_shape_not_may_run_long(async_name, shape):
     """#338: the codex_capabilities use_when for each async tool names THIS pair's selection
     shape rather than a vague duration hint, so a capabilities-driven client gets the same
     pre-spend steer as a tools/list-driven one."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     use_when = by_name[async_name]["use_when"]
     assert "can exceed the synchronous deadline" in use_when, async_name
     assert shape in use_when, async_name
@@ -662,7 +662,7 @@ def test_capability_returns_disclose_global_skills(name):
     """Each active tool's capability `returns` discloses it — asserted per entry.
 
     A joined blob would pass while five of six entries dropped the disclosure."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     returns = by_name[name]["returns"].lower()
     assert _GUARANTEE_MATCHERS["autoload_global_skills"](returns), name
 
@@ -709,7 +709,7 @@ def test_egress_disclosed_in_capabilities(name):
 
     AC1: capabilities OR the tool descriptions must suffice; this asserts the
     capabilities path independently of the docstrings."""
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     assert name in by_name, f"capabilities omitted active tool {name}"
     detail = by_name[name]
     assert "OpenAI" in (detail["use_when"] + detail["returns"]), name
@@ -1000,7 +1000,7 @@ def test_isolation_accepting_tools_do_not_advertise_unsupported_isolation():
     # input validation before the handler's _resolve_isolation guard runs — the
     # unsupported_isolation envelope is MCP-unreachable and must not be advertised (#92).
     # The param is still advertised; only the unreachable error code is dropped.
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     for name in (
         "codex_consult",
@@ -1015,7 +1015,7 @@ def test_isolation_accepting_tools_do_not_advertise_unsupported_isolation():
 
 
 async def test_review_extra_context_advertised_in_capabilities():
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     review = next(t for t in caps["tool_details"] if t["name"] == "codex_review_changes")
     assert "extra_context" in review["key_optional_params"]
 
@@ -1796,7 +1796,13 @@ class _FakeStore:
     """In-memory stand-in for JobStore used by the async/lifecycle tool tests."""
 
     def __init__(
-        self, *, status_dict="__unset__", record=None, result_json=None, status_sequence=None
+        self,
+        *,
+        status_dict="__unset__",
+        record=None,
+        result_json=None,
+        status_sequence=None,
+        records=None,
     ):
         self._status = status_dict
         self._record = record
@@ -1806,6 +1812,9 @@ class _FakeStore:
         # status_dict/record when set.
         self._status_sequence = status_sequence
         self._status_sequence_idx = 0
+        # Multi-row backing for list_jobs (F5 narrowing tests); appendable via
+        # `_seed_jobs`. None keeps the single-`record` behavior every other caller uses.
+        self._records = records
         self.poll_after_ms = JOB_POLL_AFTER_MS  # base for the job_running backoff hint
         self.started = []
         self.cancelled = []
@@ -1839,6 +1848,8 @@ class _FakeStore:
         return self._record
 
     def list_jobs(self, cwd):
+        if self._records is not None:
+            return list(self._records)
         return [self._record] if self._record else []
 
 
@@ -2219,7 +2230,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-56"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-60"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2234,7 +2245,7 @@ def test_capabilities_payload_discloses_fingerprint_covers():
 def test_capabilities_mark_m4_surface_experimental():
     """The newer async + background-job lifecycle tools advertise stability=experimental;
     the sync core inherits the server-wide alpha (field omitted via exclude_none) (#71)."""
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     experimental = {
         "codex_consult_async",
@@ -2652,7 +2663,7 @@ def test_capabilities_lists_async_readonly_tools():
 def test_review_tools_advertise_isolation_param_not_unreachable_error():
     # Both review tools accept `isolation`, so the param is advertised — but
     # unsupported_isolation is MCP-unreachable (Literal param) and must not be (#92).
-    caps = server.codex_capabilities()
+    caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     for name in ("codex_review_changes", "codex_review_changes_async"):
         assert "isolation" in by_name[name]["key_optional_params"], name
@@ -4271,7 +4282,7 @@ async def test_workspace_outside_roots_carries_candidate_roots(monkeypatch, clea
     outside.mkdir()
 
     async def fake_roots(ctx):
-        return [str(root)]
+        return [str(root)], "client"
 
     monkeypatch.setattr(server, "_roots_from_ctx", fake_roots)
     res = await server.codex_consult("q", workspace_root=str(outside))
@@ -4287,7 +4298,7 @@ async def test_invalid_workspace_root_omits_candidate_roots(monkeypatch, clean_e
     root.mkdir()
 
     async def fake_roots(ctx):
-        return [str(root)]
+        return [str(root)], "client"
 
     monkeypatch.setattr(server, "_roots_from_ctx", fake_roots)
     res = await server.codex_consult("q", workspace_root="relative/not/abs")
@@ -4303,7 +4314,18 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
         def __init__(self, uri):
             self.uri = uri
 
+    class _Caps:
+        roots = object()  # advertised: exercise the file-URI filtering, not the gate
+
+    class _Params:
+        capabilities = _Caps()
+
+    class _Session:
+        client_params = _Params()
+
     class _Ctx:
+        session = _Session()
+
         async def list_roots(self):
             return [
                 _Root(f"file://{tmp_path}"),  # valid absolute (empty authority) -> kept
@@ -4315,8 +4337,9 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
                 _Root("https://example.com"),  # non-file scheme -> dropped
             ]
 
-    paths = await server._roots_from_ctx(_Ctx())
+    paths, source = await server._roots_from_ctx(_Ctx())
     assert paths == [str(tmp_path), str(tmp_path)]
+    assert source == "client"
 
 
 # --- async job-lifecycle capability metadata (#94) ---------------------------
@@ -4750,6 +4773,45 @@ def test_capabilities_advertises_resource_error_carrier(clean_env):
     carrier = codex_capabilities()["resource_error_carrier"]
     assert "error.data" in carrier
     assert "-32002" in carrier
+
+
+class TestResourceErrorCorrelation:
+    """F6: a resource-read failure names the URI it was about and carries a request_id."""
+
+    async def test_not_found_carries_the_requested_uri_and_a_request_id(self):
+        from fastmcp import Client
+        from mcp import McpError
+
+        with pytest.raises(McpError) as excinfo:
+            async with Client(server.mcp) as client:
+                await client.read_resource("codex://does-not-exist")
+        data = excinfo.value.error.data
+        assert data["resource_uri"] == "codex://does-not-exist"
+        assert isinstance(data["request_id"], str) and data["request_id"]
+
+    async def test_envelope_fields_are_unchanged(self):
+        # The addition must not disturb the existing §6 contract.
+        from fastmcp import Client
+        from mcp import McpError
+
+        with pytest.raises(McpError) as excinfo:
+            async with Client(server.mcp) as client:
+                await client.read_resource("codex://does-not-exist")
+        data = excinfo.value.error.data
+        assert data["code"] == "resource_not_found"
+        assert data["temporary"] is False
+        assert data["retry_after_ms"] is None
+        assert data["repair"]["next_step"] == "list_resources"
+
+    async def test_tool_errors_do_not_gain_the_new_keys(self):
+        # meta.request_id already carries correlation on the tool path; duplicating it
+        # would be two contracts for one fact.
+        from fastmcp import Client
+
+        async with Client(server.mcp) as client:
+            r = await client.call_tool("codex_job_status", {"job_id": "nope"}, raise_on_error=False)
+        assert "resource_uri" not in r.structured_content["error"]
+        assert "request_id" not in r.structured_content["error"]
 
 
 # --------------------------------------------------------------------------- #
@@ -5875,7 +5937,7 @@ async def test_keyed_sync_created_sets_meta_job_id_before_await(monkeypatch, cle
 
 
 def test_capabilities_advertise_idempotency_on_spend_committing_tools(clean_env):
-    by_name = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
     for name in (
         "codex_consult",
         "codex_review_changes",
@@ -5930,7 +5992,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-56")
+    assert result["fingerprint"].endswith("schema-60")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6592,7 +6654,7 @@ async def test_delegate_dry_run_echoes_model_and_reasoning_effort(monkeypatch, c
 
 
 async def test_capabilities_advertise_reasoning_effort(clean_env):
-    res = server.codex_capabilities()
+    res = server.codex_capabilities(detail="full")
     details = {t["name"]: t for t in res["tool_details"]}
     effort_tools = (
         "codex_consult",
@@ -6800,3 +6862,422 @@ async def test_valid_env_reasoning_effort_still_runs(monkeypatch, clean_env, tmp
     res = await server.codex_consult("q", workspace_root=str(tmp_path))
     assert res.get("_captured") is True
     assert calls["spec"]["reasoning_effort"] == "xhigh"
+
+
+class TestCapabilitiesDetail:
+    """F1: codex_capabilities defaults to a concise payload."""
+
+    @pytest.mark.anyio
+    async def test_summary_is_the_default_and_is_smaller(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+            full = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        s = len(json.dumps(summary, separators=(",", ":")))
+        f = len(json.dumps(full, separators=(",", ":")))
+        assert s < f, f"summary ({s}) must be smaller than full ({f})"
+        # The point of the finding: the default must be materially cheaper, not marginally.
+        assert s < f * 0.55
+
+    @pytest.mark.anyio
+    async def test_summary_keys_are_a_strict_subset_of_full_keys(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+            full = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        assert set(summary) <= set(full)
+        by_name = {t["name"]: t for t in full["tool_details"]}
+        for entry in summary["tool_details"]:
+            assert set(entry) <= set(by_name[entry["name"]]) | {"stability"}
+
+    @pytest.mark.anyio
+    async def test_summary_keeps_the_fields_with_no_tools_list_equivalent(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+        for entry in summary["tool_details"]:
+            assert "cost" in entry  # spend tier — not in tools/list
+            assert "error_codes" in entry  # branch keys — not in tools/list
+            assert "stability" in entry  # F9: explicit even when the tier is default
+        async_entries = [e for e in summary["tool_details"] if e["name"].endswith("_async")]
+        assert async_entries and all("async_lifecycle" in e for e in async_entries)
+
+    @pytest.mark.anyio
+    async def test_summary_drops_the_fields_tools_list_already_carries(self):
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            summary = (await c.call_tool("codex_capabilities", {})).structured_content
+        for entry in summary["tool_details"]:
+            assert "use_when" not in entry  # ~= description
+            assert "returns" not in entry  # ~= outputSchema
+            assert "key_optional_params" not in entry  # ~= inputSchema
+            assert "required_params" not in entry  # ~= inputSchema.required
+
+    @pytest.mark.anyio
+    async def test_include_schemas_still_works_in_summary_mode(self):
+        # The resource-blind fallback must not depend on detail="full".
+        from fastmcp import Client
+
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_capabilities", {"include_schemas": ["error-envelope"]})
+        assert "error_envelope" in json.dumps(r.structured_content)
+
+
+class TestSpendMarkers:
+    """N1: cost is readable from tools/list alone, not only from codex_capabilities."""
+
+    @pytest.mark.anyio
+    async def test_every_tool_declares_its_cost_in_its_description(self):
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+            caps = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        cost = {t["name"]: t["cost"] for t in caps["tool_details"]}
+        missing = []
+        for name, desc in tools.items():
+            if cost[name] == "active":
+                if "PAID —" not in desc:
+                    missing.append(f"{name} (active, missing the canonical 'PAID —' marker)")
+            elif "Free — no model call" not in desc:
+                missing.append(
+                    f"{name} (free, missing the canonical 'Free — no model call' marker)"
+                )
+        assert not missing, "tools with no cost marker: " + ", ".join(missing)
+
+    @pytest.mark.anyio
+    async def test_tool_mentions_in_descriptions_are_registered_tools(self):
+        """A `codex_x` tool name quoted in any description must actually exist — a marker
+        that points at the wrong (but real) tool wouldn't be caught here; this only catches a
+        typo or a stale reference to a renamed/removed tool. See the two tests below for the
+        stronger per-tool checks.
+
+        Backticks are optional in the match: the PAID blocks mention `codex_dry_run`,
+        `codex_delegate_dry_run`, and `codex_status` in plain prose (no backticks), and a
+        sweep that only saw backticked mentions would miss a rename of exactly those."""
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+        names = set(tools)
+        bad = []
+        for name, desc in tools.items():
+            for mentioned in re.findall(r"`?(codex_[a-z_]+)`?", desc):
+                if mentioned not in names:
+                    bad.append(f"{name} mentions unregistered tool {mentioned!r}")
+        assert not bad, "; ".join(bad)
+
+    @pytest.mark.anyio
+    async def test_codex_delegate_points_at_its_own_dry_run(self):
+        """codex_delegate's PAID block must send an agent to codex_delegate_dry_run — the only
+        tool that can preview a delegate call — not to codex_dry_run, which previews
+        codex_review_changes and cannot preview a delegate at all."""
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+        desc = tools["codex_delegate"]
+        assert "codex_delegate_dry_run" in desc
+        assert "codex_dry_run" not in desc
+
+    @pytest.mark.anyio
+    async def test_codex_consult_does_not_claim_a_preview_tool(self):
+        """codex_consult has no dry-run/preview counterpart at all, so its PAID block must not
+        point at either codex_dry_run (previews codex_review_changes) or
+        codex_delegate_dry_run (previews codex_delegate)."""
+        async with Client(server.mcp) as c:
+            tools = {t.name: (t.description or "") for t in await c.list_tools()}
+        desc = tools["codex_consult"]
+        assert "codex_dry_run" not in desc
+        assert "codex_delegate_dry_run" not in desc
+
+
+STABILITY_META_KEY = "dev.bconnelly.codex-in-claude/stability"
+
+
+class TestToolDisplayMetadata:
+    """F3 + F9: title and stability tier readable from tools/list alone."""
+
+    @pytest.mark.anyio
+    async def test_every_tool_has_a_title(self):
+        async with Client(server.mcp) as c:
+            tools = await c.list_tools()
+        assert not [t.name for t in tools if not t.title]
+
+    @pytest.mark.anyio
+    async def test_titles_are_short_and_distinct(self):
+        async with Client(server.mcp) as c:
+            tools = await c.list_tools()
+        titles = [t.title for t in tools]
+        assert len(set(titles)) == len(titles), "titles must be distinct"
+        assert all(len(t) <= 45 for t in titles), "titles are picker labels, not sentences"
+
+    @pytest.mark.anyio
+    async def test_stability_tier_matches_codex_capabilities(self):
+        async with Client(server.mcp) as c:
+            tools = await c.list_tools()
+            caps = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
+        expected = {t["name"]: t.get("stability") or "alpha" for t in caps["tool_details"]}
+        for t in tools:
+            assert (t.meta or {}).get(STABILITY_META_KEY) == expected[t.name], (
+                f"{t.name}: tools/list tier disagrees with codex_capabilities"
+            )
+
+
+async def _start_async_job_envelope(monkeypatch, tmp_path) -> dict:
+    """Start a stubbed async job (no real codex spend — same fake-store pattern as
+    test_consult_async_returns_job_id) and return its JobStarted envelope. The record
+    also backs a follow-up codex_job_status call, so the round-trip test below can
+    actually resolve it instead of 404ing."""
+    store = _FakeStore(record=_ok_record("running"))
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    return await server.codex_consult_async("why?", workspace_root=str(tmp_path))
+
+
+class TestAsyncFollowUp:
+    """F7: a started job names its poll surface in the structured result, not just prose."""
+
+    @pytest.mark.anyio
+    async def test_job_started_carries_a_callable_follow_up(self, monkeypatch, clean_env, tmp_path):
+        env = await _start_async_job_envelope(monkeypatch, tmp_path)
+        fu = env["follow_up"]
+        assert fu["next_step"] == "poll_job_status"
+        assert fu["tool"] == "codex_job_status"
+        assert fu["arguments"]["job_id"] == env["job_id"]
+        assert "alternative" in fu
+
+    @pytest.mark.anyio
+    async def test_follow_up_arguments_are_actually_callable(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        # §6 rule: repair arguments hold real callable values, never placeholders — prove
+        # it by actually calling codex_job_status with exactly the returned arguments.
+        env = await _start_async_job_envelope(monkeypatch, tmp_path)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_status", env["follow_up"]["arguments"], raise_on_error=False
+            )
+        assert r.structured_content["ok"] is True
+        assert r.structured_content["job_id"] == env["job_id"]
+
+
+# F5: seed stores for codex_job_list narrowing tests, keyed by tmp_path so repeated
+# calls within one test (mixed statuses) accumulate onto the same in-memory store
+# instead of clobbering it. tmp_path is unique per test, so keys never collide
+# across the suite.
+_SEED_STORES: dict[str, _FakeStore] = {}
+
+
+async def _seed_jobs(monkeypatch, tmp_path, *, count: int, status: str = "done") -> None:
+    """Seed `count` job records (no real codex spend) for a workspace, via the same
+    _FakeStore pattern used elsewhere in this file (see test_delegate_async_returns_job_id).
+    Repeated calls for the same tmp_path append to one shared fake store, so a test can
+    mix statuses (e.g. 3 done + 1 running) before listing."""
+    key = str(tmp_path)
+    store = _SEED_STORES.get(key)
+    if store is None:
+        store = _FakeStore(records=[])
+        _SEED_STORES[key] = store
+        monkeypatch.setattr(server.config, "job_store", lambda: store)
+    base = len(store._records)
+    for i in range(count):
+        idx = base + i
+        rec = _ok_record(status)
+        rec = {
+            **rec,
+            "job_id": f"seed-job-{idx}",
+            "started_at": f"2026-06-17T00:{idx:02d}:00+00:00",
+            "started_epoch": 2000.0 - idx,  # lower idx == "newer"
+        }
+        store._records.append(rec)
+
+
+class TestJobListNarrowing:
+    """F5: the job list can be narrowed and discloses when it was cut."""
+
+    @pytest.mark.anyio
+    async def test_limit_caps_the_returned_rows_and_sets_truncated(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        await _seed_jobs(monkeypatch, tmp_path, count=5)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 2})
+        body = r.structured_content
+        assert len(body["jobs"]) == 2
+        assert body["truncated"] is True
+        assert "limit" in body["truncation_hint"]
+
+    @pytest.mark.anyio
+    async def test_untruncated_list_reports_truncated_false(self, monkeypatch, clean_env, tmp_path):
+        await _seed_jobs(monkeypatch, tmp_path, count=2)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 20})
+        assert r.structured_content["truncated"] is False
+        assert "truncation_hint" not in r.structured_content
+
+    @pytest.mark.anyio
+    async def test_status_filter_narrows_by_lifecycle_state(self, monkeypatch, clean_env, tmp_path):
+        await _seed_jobs(monkeypatch, tmp_path, count=3, status="done")
+        await _seed_jobs(monkeypatch, tmp_path, count=1, status="running")
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_list", {"workspace_root": str(tmp_path), "status": "running"}
+            )
+        rows = r.structured_content["jobs"]
+        assert len(rows) == 1 and rows[0]["status"] == "running"
+        # JobSummary.result_ok is required-but-nullable and documented as "always present" —
+        # a running job's producer-declared outcome is genuinely unknown (None), not absent.
+        # Assert the key survives serialization explicitly: a recursive exclude_none (as in
+        # the JobListResult.model_dump(mode="json") call this tool used to make) would strip
+        # a None-valued key entirely, and that regression must fail here, not pass silently.
+        assert "result_ok" in rows[0]
+        assert rows[0]["result_ok"] is None
+
+    @pytest.mark.anyio
+    async def test_status_filter_applies_before_the_limit_slice(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        """Regression guard for a slice-before-filter bug: every other test in this class
+        uses few enough rows (<= 5) with limit=20 that the slice is a no-op, so a
+        slice-then-filter implementation would pass them all. Here 25 `done` rows outnumber
+        `limit`, so the slice bites first under the wrong order — it would keep only the 20
+        newest raw rows (all `done`, none `running`) and then filter to zero, or report
+        `truncated: true` on a result that is not actually cut once the status filter is
+        applied. Correct (filter-then-slice) behavior returns the single `running` row,
+        untruncated."""
+        await _seed_jobs(monkeypatch, tmp_path, count=25, status="done")
+        await _seed_jobs(monkeypatch, tmp_path, count=1, status="running")
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_list",
+                {"workspace_root": str(tmp_path), "status": "running", "limit": 20},
+            )
+        body = r.structured_content
+        rows = body["jobs"]
+        assert len(rows) == 1 and rows[0]["status"] == "running"
+        assert body["truncated"] is False
+        assert "truncation_hint" not in body
+
+    @pytest.mark.anyio
+    async def test_limit_boundaries(self, monkeypatch, clean_env, tmp_path):
+        # A new parameter is new API surface: test the domain, not just the happy value.
+        await _seed_jobs(monkeypatch, tmp_path, count=3)
+        async with Client(server.mcp) as c:
+            for bad in (0, -1, 1001):
+                r = await c.call_tool(
+                    "codex_job_list",
+                    {"workspace_root": str(tmp_path), "limit": bad},
+                    raise_on_error=False,
+                )
+                assert r.is_error, f"limit={bad} should be rejected"
+                assert r.structured_content["error"]["code"] == "invalid_arguments"
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 1})
+            assert len(r.structured_content["jobs"]) == 1
+
+
+def _ctx_double(*, roots_advertised: bool, roots=(), list_roots_raises=None):
+    """Minimal stand-in exposing only what _roots_from_ctx reads."""
+
+    class _Root:
+        def __init__(self, uri):
+            self.uri = uri
+
+    class _Caps:
+        roots = object() if roots_advertised else None
+
+    class _Params:
+        capabilities = _Caps()
+
+    class _Session:
+        client_params = _Params()
+
+    class _Ctx:
+        session = _Session()
+
+        async def list_roots(self):
+            if list_roots_raises is not None:
+                raise list_roots_raises
+            return [_Root(u) for u in roots]
+
+    return _Ctx()
+
+
+class TestRootsCapabilityGating:
+    """F8: 'client has no roots' and 'the roots probe failed' stop being the same signal."""
+
+    @pytest.mark.anyio
+    async def test_client_without_roots_reports_not_negotiated(self, clean_env):
+        # The in-memory FastMCP client advertises capabilities.roots = None.
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_dry_run", {"scope": "working_tree"}, raise_on_error=False)
+        meta = r.structured_content.get("meta", r.structured_content)
+        assert meta["roots_source"] == "not_negotiated"
+
+    @pytest.mark.anyio
+    async def test_probe_failure_is_distinguishable(self, clean_env):
+        # A client that DID advertise roots but whose list_roots raises must not look
+        # identical to one that never advertised them.
+        ctx = _ctx_double(roots_advertised=True, list_roots_raises=RuntimeError("boom"))
+        paths, source = await server._roots_from_ctx(ctx)
+        assert paths == []
+        assert source == "probe_failed"
+
+    @pytest.mark.anyio
+    async def test_advertised_roots_are_still_used(self, clean_env, tmp_path):
+        ctx = _ctx_double(roots_advertised=True, roots=[f"file://{tmp_path}"])
+        paths, source = await server._roots_from_ctx(ctx)
+        assert paths == [str(tmp_path)]
+        assert source == "client"
+
+    @pytest.mark.anyio
+    async def test_advertised_but_empty_roots_report_client_not_not_negotiated(self, clean_env):
+        # A client that DID advertise roots and answered with none is a different fact
+        # from a client that never advertised the capability at all — collapsing them
+        # would defeat the whole point of gating on the negotiated capability.
+        ctx = _ctx_double(roots_advertised=True, roots=[])
+        paths, source = await server._roots_from_ctx(ctx)
+        assert paths == []
+        assert source == "client"
+
+
+TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"
+
+
+class TestResourceTriageMetadata:
+    """F4: an agent can size a resource before spending context on its body."""
+
+    @pytest.mark.anyio
+    async def test_static_schema_resources_declare_their_size(self):
+        async with Client(server.mcp) as c:
+            resources = {str(r.uri): r for r in await c.list_resources()}
+        for uri in (
+            "codex://error-envelope",
+            "codex://result-meta",
+            "codex://capabilities-result",
+            "codex://status-result",
+            "codex://params",
+        ):
+            triage = (resources[uri].meta or {}).get(TRIAGE_META_KEY)
+            assert triage and isinstance(triage["size_bytes"], int)
+            assert triage["size_bytes"] > 0
+
+    @pytest.mark.anyio
+    async def test_declared_size_matches_the_actual_body(self):
+        # A stale size is worse than none — it would be trusted.
+        async with Client(server.mcp) as c:
+            resources = {str(r.uri): r for r in await c.list_resources()}
+            for uri, r in resources.items():
+                triage = (r.meta or {}).get(TRIAGE_META_KEY, {})
+                if "size_bytes" not in triage:
+                    continue
+                body = await c.read_resource(uri)
+                actual = len(body[0].text)
+                assert abs(actual - triage["size_bytes"]) <= actual * 0.02, (
+                    f"{uri}: declared {triage['size_bytes']}, actual {actual}"
+                )
+
+    @pytest.mark.anyio
+    async def test_the_mutable_resource_is_marked_volatile(self):
+        async with Client(server.mcp) as c:
+            resources = {str(r.uri): r for r in await c.list_resources()}
+        triage = (resources["codex://models"].meta or {}).get(TRIAGE_META_KEY)
+        assert triage["volatile"] is True
+        assert "fetched_at" in triage["freshness_via"]

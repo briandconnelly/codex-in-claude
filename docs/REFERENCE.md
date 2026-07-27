@@ -102,7 +102,7 @@ The six spend-committing tools — `codex_consult`, `codex_review_changes`, `cod
 same arguments replays the existing run instead of starting (and paying for) a duplicate Codex call:
 a sync call reattaches to the in-flight run and returns its result; an `_async` call returns the same
 `job_id`. The key is scoped to the concrete tool — the sync and `_async` variants are different tools
-and never share a key's run. Reuse with different arguments (including a different `timeout_seconds`)
+and never share a key's run (see ADR 0001 for why they are separate tools). Reuse with different arguments (including a different `timeout_seconds`)
 is refused with `idempotency_conflict`; a key whose prior result was already consumed/evicted is
 `idempotency_result_unavailable`; a still-publishing reservation is `idempotency_in_progress`
 (retryable). Omit the key for the prior no-dedup behavior.

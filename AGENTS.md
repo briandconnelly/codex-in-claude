@@ -76,6 +76,8 @@ Each skill's own description owns *when* it applies — consult it rather than r
 here. A Claude Code session surfaces these automatically; naming them keeps the expectation explicit
 and reachable by any harness that reads this file.
 
+Architectural decisions that affect the agent-visible surface are recorded in `docs/adr/`.
+
 ## Versioning
 
 - Semantic Versioning. **Pre-1.0:** a minor bump may change the agent-visible surface (a breaking

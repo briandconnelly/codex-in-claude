@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-56"
+FINGERPRINT = "codex-in-claude/0.1/schema-60"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -84,7 +84,23 @@ FINGERPRINT = "codex-in-claude/0.1/schema-56"
 # CI without a bump on drift in either the model schemas or the rendered writer output (its
 # `serialized` view pins the writers' serializer modes); only a mode change the representative
 # envelopes don't exercise escapes it and relies on this rule plus review.
-RESULT_FORMAT: int = 6
+# ErrorInfo's `resource_uri`/`request_id` (F6, #185) moved the `schemas` view of the snapshot
+# but deliberately did NOT bump this: both fields are populated only by the resource-read
+# middleware, which never writes result.json, so every persisted path keeps serializing them
+# as absent (`exclude_none`) — the `serialized` view is byte-identical before/after. A bump
+# here would have made every already-stored job result unreadable
+# (`server.py`'s replay check treats any other value as `job_result_incompatible`) for zero
+# compatibility gain. Regenerate the fixture to acknowledge the schema-view drift; only bump
+# the integer when the `serialized` view itself would actually move.
+# F8 (#roots_source): bumped 6->7. Meta.roots_source is new, extra="forbid", and dump_success
+# has no exclude_none, so every already-persisted success envelope's replay would need to
+# tolerate an unknown key an older reader's closed schema would reject — the exact case this
+# field exists to catch. Verified (not assumed): the `serialized` view's consult/review/delegate
+# success entries each gained "roots_source": null; the `error` entry did not move (serialize_error
+# uses exclude_none, and this field is never populated before a Codex-run-prepared error, so it
+# always serializes absent there) — the same asymmetry #185's ErrorInfo fields relied on to NOT
+# bump, except here the success side (which DOES retain nulls) moved, so this one must bump.
+RESULT_FORMAT: int = 7
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -159,6 +175,13 @@ ReviewScope = Literal["working_tree", "branch", "commit"]
 # includes them. Inert for branch/commit scopes.
 Untracked = Literal["explicit_only", "include", "exclude"]
 Detail = Literal["summary", "full"]
+# Which of three states the MCP-roots probe saw (F8, #contract-checklist §1/§2):
+# "client" — the client advertised roots and list_roots() returned (possibly empty);
+# "not_negotiated" — this client never advertised the roots capability (pass
+# workspace_root instead); "probe_failed" — roots were advertised but the call
+# errored this turn (transient; retrying may help). Defined once here and imported
+# into server.py so the two modules cannot drift on the value set.
+RootsSource = Literal["client", "not_negotiated", "probe_failed"]
 # Lifecycle states for a background job. Terminal: done|failed|cancelled|timeout.
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
 JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
@@ -166,6 +189,20 @@ JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
 # consult/propose/apply intent `Tier`. Omitted (None) means the tool inherits the
 # server-wide `stability` ("alpha"); a value flags a tool that differs from that norm.
 ToolStability = Literal["stable", "preview", "experimental"]
+
+# G1 (audit-2 gate follow-up): this inheritance rule previously lived only in
+# codex_capabilities' `returns` prose, which detail="full" now gates behind an extra
+# param — so a summary-only or resource-blind client couldn't reach it. Putting it on the
+# field itself fixes that at the source. Its only wire route is CAPABILITIES_RESULT_SCHEMA
+# (codex://capabilities-result / include_schemas=["capabilities-result"]) — a raw
+# TypeAdapter(...).json_schema() that is never passed through _strip_schema_noise, so it
+# reaches the wire regardless of _KEPT_DESCRIPTIONS. It is registered there anyway; see
+# that registration for why.
+_TOOL_STABILITY_DESC = (
+    "This tool's per-tool maturity override, advisory only. null means it inherits the "
+    "top-level `stability` (the server-wide tier); a value here flags a tool more "
+    "experimental than that norm."
+)
 
 
 def workspace_warning_for(source: str | None, cwd: str) -> str | None:
@@ -486,6 +523,12 @@ class Meta(BaseModel):
     cwd: str
     workspace_source: str | None = None  # how cwd was resolved: param|roots|cwd
     workspace_warning: str | None = None  # set when cwd was resolved from server cwd
+    # F8: which of the three roots states the workspace resolution saw — "client" (roots
+    # were advertised and used), "not_negotiated" (this client has none; pass
+    # workspace_root), or "probe_failed" (roots were advertised but the call errored;
+    # retrying may help). Distinguishes a client limitation from a transient failure, which
+    # a bare empty list could not.
+    roots_source: RootsSource | None = None
     tier: Tier = Field(
         description=(
             "Codex intent tier of the run this envelope describes — consult (read-only, no "
@@ -814,6 +857,11 @@ class ErrorInfo(BaseModel):
     limit_bytes: int | None = None
     actual_bytes: int | None = None
     candidate_roots: list[str] | None = None
+    # §6 correlation, populated only on the JSON-RPC (resource) carrier: the tool carrier
+    # already carries request_id on `meta`, and duplicating it there would be two homes for
+    # one fact. exclude_none strips both on the tool path.
+    resource_uri: str | None = None
+    request_id: str | None = None
     # Present only on a codex_transfer failure where the child `codex app-server`'s stderr
     # is the primary diagnostic (cli_contract_changed / timeout / transfer_incomplete);
     # omitted otherwise (#275).
@@ -942,11 +990,16 @@ class ToolCapability(BaseModel):
     cost: Literal["free", "active"]
     # Per-tool maturity (advisory). None ⇒ inherits the server-wide `stability`; set
     # only when a tool is more experimental than that norm (e.g. the async/job surface).
-    stability: ToolStability | None = None
-    use_when: str
+    stability: ToolStability | None = Field(default=None, description=_TOOL_STABILITY_DESC)
+    # Optional in the schema (not just at the Python default): `codex_capabilities`'
+    # `detail="summary"` (the default) strips use_when/returns from every entry before
+    # the response ships, so the published schema must accept an entry without them —
+    # only `detail="full"` carries them. Always populated wherever this model is
+    # constructed; the None branch exists for the wire, not for a real omission here.
+    use_when: str | None = None
     required_params: list[str] = Field(default_factory=list)
     key_optional_params: list[str] = Field(default_factory=list)
-    returns: str
+    returns: str | None = None
     # Error codes this tool may return. Advisory, not exhaustive: a guide for
     # branching/recovery, not a closed contract. Typed as ErrorCode so the schema
     # advertises the valid code set and entries are checked statically.
@@ -998,11 +1051,16 @@ class CapabilitiesResult(BaseModel):
     # §6 ErrorInfo shape (code/message/temporary/retry_after_ms/repair — the `error`
     # object of codex://error-envelope), no longer a bare null. `error.code` is the MCP
     # numeric -32002 (resource not found) or -32603 (read failure); the symbolic string
-    # code lives in `error.data.code` (e.g. resource_not_found).
+    # code lives in `error.data.code` (e.g. resource_not_found). resource_uri/request_id
+    # (audit F6, #185) add correlation: the tool carrier already has request_id on
+    # `meta`, so those two are populated only here, never on the tool path.
     resource_error_carrier: str = (
         "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/"
-        "retry_after_ms/repair) is in error.data, and error.code is the MCP numeric "
-        "-32002 (not found) or -32603 (read failure)"
+        "retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code "
+        "is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this "
+        "server keeps `code`/`message` rather than the machine_code/human_message "
+        "spelling some §6 profiles use — nesting inside `data` already avoids shadowing "
+        "the native JSON-RPC keys."
     )
     error_envelope_resource: str = "codex://error-envelope"
     result_meta_resource: str = "codex://result-meta"
@@ -1113,6 +1171,10 @@ class JobStarted(BaseModel):
     ttl_seconds: int
     expires_at: str | None = None
     meta: Meta
+    # §3 dispatched-vs-applied: the job is dispatched but its outcome is unconfirmed, so the
+    # success carrier names the verification surface with literally callable arguments. Reuses
+    # the `Repair` shape verbatim — one next-step vocabulary, not two (§6).
+    follow_up: Repair
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 
@@ -1170,6 +1232,7 @@ class DryRunResult(BaseModel):
     cwd: str
     workspace_source: str | None = None
     workspace_warning: str | None = None
+    roots_source: RootsSource | None = None  # F8: see Meta.roots_source
     tier: Tier
     sandbox: Sandbox
     isolation: Isolation
@@ -1224,6 +1287,7 @@ class DelegateDryRunResult(BaseModel):
     cwd: str
     workspace_source: str | None = None
     workspace_warning: str | None = None
+    roots_source: RootsSource | None = None  # F8: see Meta.roots_source
     tier: Tier = "propose"
     sandbox: Sandbox = "workspace-write"
     isolation: Isolation
@@ -1259,6 +1323,11 @@ class JobListResult(BaseModel):
     ok: Literal[True] = True
     jobs: list[JobSummary] = Field(default_factory=list)
     workspace: Workspace  # the resolved workspace these jobs were listed from (#54)
+    # §8 explicit truncation: `truncated` says rows beyond `limit` exist and were dropped —
+    # this is a cap, not a page, so there is no cursor to continue with. Always present;
+    # the hint is omitted when nothing was cut.
+    truncated: bool = False
+    truncation_hint: str | None = None
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 
@@ -1329,6 +1398,17 @@ _KEPT_DESCRIPTIONS = frozenset(
         _DRY_RUN_MODEL_DESC,
         _DRY_RUN_EFFORT_DESC,
         _FINGERPRINT_COVERS_DESC,
+        # _TOOL_STABILITY_DESC: verified empirically (removing this entry leaves the full
+        # suite green) that no current test needs this registration — its only wire route,
+        # CAPABILITIES_RESULT_SCHEMA, is a raw TypeAdapter(...).json_schema() that
+        # `published_schema()` never runs through `_strip_schema_noise` (see the comment at
+        # the field definition above). `ToolCapability` never appears in the tool's actual
+        # outputSchema (CAPABILITIES_SCHEMA) either — `_prune_defs` drops its $def, orphaned
+        # by the `tool_details` opaquing, *before* `_strip_schema_noise` would run, so that
+        # route can't exercise this set. Kept here anyway for consistency with every other
+        # `Field(description=...)` in this module, and as a safety net if a future change
+        # ever routes this field through a schema that IS stripped.
+        _TOOL_STABILITY_DESC,
     }
 )
 

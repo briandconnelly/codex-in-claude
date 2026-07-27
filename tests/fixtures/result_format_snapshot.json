@@ -1,5 +1,5 @@
 {
-  "result_format": 6,
+  "result_format": 7,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -278,6 +278,23 @@
             "request_id": {
               "title": "Request Id",
               "type": "string"
+            },
+            "roots_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client",
+                    "not_negotiated",
+                    "probe_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Roots Source"
             },
             "sandbox": {
               "enum": [
@@ -1056,6 +1073,23 @@
               "title": "Request Id",
               "type": "string"
             },
+            "roots_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client",
+                    "not_negotiated",
+                    "probe_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Roots Source"
+            },
             "sandbox": {
               "enum": [
                 "read-only",
@@ -1797,6 +1831,30 @@
               ],
               "default": null
             },
+            "request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Id"
+            },
+            "resource_uri": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resource Uri"
+            },
             "retry_after_ms": {
               "anyOf": [
                 {
@@ -2033,6 +2091,23 @@
             "request_id": {
               "title": "Request Id",
               "type": "string"
+            },
+            "roots_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client",
+                    "not_negotiated",
+                    "probe_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Roots Source"
             },
             "sandbox": {
               "enum": [
@@ -2868,6 +2943,23 @@
               "title": "Request Id",
               "type": "string"
             },
+            "roots_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client",
+                    "not_negotiated",
+                    "probe_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Roots Source"
+            },
             "sandbox": {
               "enum": [
                 "read-only",
@@ -3425,6 +3517,7 @@
         "reasoning_effort": null,
         "redacted_paths": [],
         "request_id": "00000000000000000000000000000000",
+        "roots_source": null,
         "sandbox": "read-only",
         "scope": null,
         "security_warnings": [],
@@ -3472,6 +3565,7 @@
         "reasoning_effort": null,
         "redacted_paths": [],
         "request_id": "00000000000000000000000000000000",
+        "roots_source": null,
         "sandbox": "read-only",
         "scope": null,
         "security_warnings": [],
@@ -3554,6 +3648,7 @@
         "reasoning_effort": null,
         "redacted_paths": [],
         "request_id": "00000000000000000000000000000000",
+        "roots_source": null,
         "sandbox": "read-only",
         "scope": null,
         "security_warnings": [],
