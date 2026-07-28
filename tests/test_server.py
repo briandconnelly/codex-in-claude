@@ -7584,6 +7584,37 @@ async def test_delivered_envelope_keeps_required_and_falsy_meta_values(
         assert required in meta
 
 
+async def test_delivered_envelope_keeps_populated_optional_meta_values(
+    clean_env, tmp_path, monkeypatch
+):
+    # The third case, and the one nothing covered (#400): an optional field that is
+    # actually SET must arrive with its value. The two tests around this one pin that
+    # nulls go and that falsy required values stay; a slim_meta that unconditionally
+    # deleted `model` and `session_id` satisfied both, and the whole suite, because
+    # every representative meta in the repo left its optionals null.
+    #
+    # Worth having on top of the wire-shape fixture, which drives _finished_job_envelope
+    # directly: this goes through the FastMCP boundary, so it also covers the
+    # output-schema serialization into structured_content.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    envelope = _consult_success_envelope(str(tmp_path))
+    populated = {"model": "a-model", "session_id": "sess-1", "reasoning_effort": "high"}
+    envelope["meta"].update(populated)
+    envelope["raw_response"] |= {"session_id": "sess-1", "model": "a-model"}
+    monkeypatch.setattr(server, "_worker_cmd", _fake_worker_cmd(envelope))
+    async with Client(server.mcp) as client:
+        res = await client.call_tool(
+            "codex_consult", {"question": "q", "workspace_root": str(tmp_path)}
+        )
+    meta = res.structured_content["meta"]
+    for key, value in populated.items():
+        assert meta[key] == value, f"delivery dropped or altered populated meta.{key}"
+    # `truncation_hint` stays null on this run, so slimming is still demonstrably on —
+    # otherwise every assertion above would also hold with slimming removed entirely.
+    assert "truncation_hint" not in meta
+
+
 async def test_delivered_envelope_preserves_payload_keys_and_empty_lists(
     clean_env, tmp_path, monkeypatch
 ):

@@ -13,7 +13,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from codex_in_claude import wire_shape_snapshot
-from codex_in_claude.schemas import RESULT_META_SCHEMA
+from codex_in_claude.schemas import RESULT_META_SCHEMA, Meta
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "wire_shape_snapshot.json"
 
@@ -49,7 +49,66 @@ def test_something_was_actually_omitted():
     # would still pass while the fixture quietly recorded the unslimmed shape.
     omitted = wire_shape_snapshot.build_snapshot()["omitted_meta_keys"]
     assert omitted and all(keys for keys in omitted.values())
-    assert "session_id" in omitted["consult"]
+    # `scope` is review-only, so it is null on a consult run no matter which optionals
+    # that envelope populates — unlike `session_id`, which this anchor used to name and
+    # which a consult now reports (#400).
+    assert "scope" in omitted["consult"]
+
+
+# --- populated optionals must survive delivery (#400) --------------------------------
+
+
+def test_populated_optional_meta_keys_survive_delivery():
+    # The gap this fixture had: every optional was null, so every optional was already
+    # absent, so deleting a populated one changed nothing. These keys are populated
+    # precisely so their deletion has somewhere to show up.
+    delivered = wire_shape_snapshot.build_snapshot()["delivered"]
+    for detail in ("summary", "full"):
+        consult = delivered[detail]["consult"]["meta"]
+        assert consult["model"] == "a-model"
+        assert consult["session_id"] == "sess-1"
+        assert consult["reasoning_effort"] == "high"
+        assert consult["roots_source"] == "client"
+        assert consult["workspace_source"] == "param"
+        assert consult["usage"]["total_tokens"] == 6
+        # A POPULATED FALSY optional: `slim_meta` keys on `is None`, so 0 must arrive.
+        assert consult["command_exit_code"] == 0
+        review = delivered[detail]["review"]["meta"]
+        assert review["scope"] == "branch"
+        assert review["base"] == "main"
+        assert review["paths"] == ["src/a.py"]
+        assert review["context_summary"]["files_changed"] == 1
+
+
+def test_every_producible_optional_is_populated_somewhere():
+    # The completeness rule for the envelope MATRIX, and the thing that makes this
+    # fixture's coverage self-checking rather than a matter of who remembered what.
+    #
+    # No single meta can hold every optional — branch scope excludes commit scope, a
+    # cwd-resolved workspace excludes a param-resolved one — so the guarantee is stated
+    # across envelopes: every optional a producer can actually set is populated in at
+    # least one delivered envelope, and therefore has somewhere for its deletion to show.
+    # Three fields are exempt because no worker can persist them into a stored success
+    # (see the builders in wire_shape_snapshot); their survival is pinned by
+    # TestSlimMetaPopulatedOptionals in test_schemas.py instead.
+    impossible_to_persist = {"job_kind", "idempotency_replayed", "rate_limit"}
+    optional = {name for name, f in Meta.model_fields.items() if f.default is None}
+    assert impossible_to_persist < optional  # the exemptions must BE optional fields
+    delivered = wire_shape_snapshot.build_snapshot()["delivered"]["summary"]
+    populated = {k for env in delivered.values() for k in env["meta"]}
+    assert optional - impossible_to_persist <= populated
+
+
+def test_one_envelope_stays_sparse_so_omission_remains_visible():
+    # The counterweight to the test above. If someone populates the delegate's meta too,
+    # every `omitted_meta_keys` list shrinks toward empty and the fixture stops being
+    # evidence that delivery omits anything — the failure this file exists to catch.
+    snap = wire_shape_snapshot.build_snapshot()
+    sparse = snap["delivered"]["summary"]["delegate_no_changes"]["meta"]
+    assert not {"model", "session_id", "usage", "roots_source"} & set(sparse)
+    assert len(snap["omitted_meta_keys"]["delegate_no_changes"]) > len(
+        snap["omitted_meta_keys"]["review"]
+    )
 
 
 def test_payload_keys_survive_delivery():
