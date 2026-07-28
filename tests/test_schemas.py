@@ -1138,3 +1138,93 @@ class TestSlimMeta:
         }
         odd = {"ok": True, "tool": "codex_consult", "meta": "not-a-dict"}
         assert s.slim_meta(odd) == odd
+
+
+# The optional `Meta` fields — those whose absence from a delivered envelope is
+# indistinguishable from their being null, and which are therefore the ONLY fields a
+# deletion regression can destroy invisibly (#400). Derived from the model rather than
+# listed, so adding an optional field to `Meta` fails the completeness check below until
+# the vector covers it.
+def _null_defaulting_meta_fields() -> set[str]:
+    return {name for name, f in Meta.model_fields.items() if f.default is None}
+
+
+# Every one of those fields, populated with a schema-appropriate NON-NULL value. Built
+# through `Meta` (not a raw dict) so `extra="forbid"` proves this fully-populated state is
+# actually constructible — a hand-rolled dict could pin a shape the model cannot produce.
+# Values are fixed literals: nothing here may be derived from the clock or the
+# environment, or `test_populated_optional_meta_values_all_survive` would churn.
+def _fully_populated_meta() -> Meta:
+    return Meta(
+        cwd="/repo",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=1,
+        elapsed_ms=1,
+        workspace_source="param",
+        workspace_warning="fell back to the server cwd",
+        roots_source="client",
+        model="a-model",
+        reasoning_effort="high",
+        scope="branch",
+        base="main",
+        commit="0" * 40,
+        paths=["src/a.py"],
+        command_exit_code=0,
+        session_id="sess-1",
+        truncation_hint="output was cut off",
+        usage=s.Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
+        rate_limit=s.RateLimit(status="available"),
+        context_summary=s.ContextSummary(files_changed=1, lines_added=2, lines_removed=3),
+        job_id="0" * 32,
+        job_kind="codex_delegate",
+        idempotency_replayed=True,
+    )
+
+
+class TestSlimMetaPopulatedOptionals:
+    """Deletion of a POPULATED optional `meta` key must be detectable (#400).
+
+    `TestSlimMeta` above pins that nulls go and that falsy values stay. Neither states
+    the third case: a non-null optional must arrive with its value. Nothing did — a
+    `slim_meta` that unconditionally dropped `model` and `session_id` from every
+    delivered envelope passed the entire suite, because every representative meta in the
+    repo left all 18 optionals null, and a null key is already absent by design."""
+
+    def test_the_vector_covers_exactly_the_optional_meta_fields(self):
+        # Completeness. Exact equality in BOTH directions: a new optional field on `Meta`
+        # is uncovered until added here, and a key left behind after a field is removed
+        # fails too rather than lingering as dead weight.
+        populated = _fully_populated_meta().model_dump(mode="json")
+        covered = {k for k in _null_defaulting_meta_fields() if populated.get(k) is not None}
+        assert covered == _null_defaulting_meta_fields()
+
+    def test_the_field_derivation_is_not_vacuous(self):
+        # The check above is only evidence if the derivation actually finds fields: a
+        # mis-written filter (inverted, or reading the wrong attribute) yields an empty
+        # set, against which `covered == derived` passes while covering nothing.
+        derived = _null_defaulting_meta_fields()
+        assert {"model", "session_id", "usage", "roots_source"} <= derived
+        assert len(derived) >= 18
+        # Required members and defaulted non-null ones are NOT optional in this sense —
+        # their absence would be a contract violation, not an omission.
+        assert derived.isdisjoint({"cwd", "tier", "truncated", "fingerprint", "compat_warnings"})
+
+    def test_populated_optional_meta_values_all_survive(self):
+        # Whole-dict equality, not a per-key membership sweep: equality also catches
+        # deletion of a key OUTSIDE the derived set (`request_id`, `fingerprint`,
+        # `server_version`), which a completeness-driven loop would never look at.
+        meta = _fully_populated_meta().model_dump(mode="json")
+        assert None not in meta.values()  # the probe below must be the only null
+        expected = dict(meta)
+        env = TestSlimMeta._envelope(meta={**meta, "a_null_probe": None})
+        out = s.slim_meta(env)
+        assert out["meta"] == expected
+
+    def test_slimming_still_ran(self):
+        # Guards the guard: if slimming stopped running, the equality above would still
+        # hold (nothing to drop), so pin that the null probe was in fact removed.
+        meta = _fully_populated_meta().model_dump(mode="json")
+        out = s.slim_meta(TestSlimMeta._envelope(meta={**meta, "a_null_probe": None}))
+        assert "a_null_probe" not in out["meta"]
