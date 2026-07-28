@@ -2914,6 +2914,38 @@ async def test_bad_detail_is_invalid_arguments_at_the_boundary(tool, args):
     assert err["invalid_arguments"][0]["field"] == "detail"
 
 
+async def test_bad_capabilities_detail_is_invalid_arguments_at_the_boundary():
+    """codex_capabilities takes `detail` on its OWN three-valued `CapabilitiesDetail`,
+    which the parametrized test above deliberately excludes (#398 item 3). Without this,
+    retyping it to a plain `str` would send an unknown token past boundary validation to
+    the handler, where it falls through both mode branches and returns the FULL payload —
+    a silent widening rather than an error.
+
+    The values are spelled out rather than read from `get_args(CapabilitiesDetail)`: an
+    expectation derived from the table under test cannot fail when that table is wrong.
+    Zero spend: this tool makes no model call at all."""
+    res = await server.mcp.call_tool("codex_capabilities", {"detail": "bogus"})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["details"]["field"] == "detail"
+    assert err["details"]["allowed_values"] == ["summary", "full", "contracts"]
+    assert err["invalid_arguments"][0]["field"] == "detail"
+
+
+async def test_null_capabilities_detail_is_rejected_rather_than_defaulted():
+    """`detail` here is `CapabilitiesDetail` with a default, NOT `CapabilitiesDetail |
+    None`, so an explicit null is invalid rather than "use the default" — unlike
+    codex_job_list's `limit`/`status`, where null IS documented as equivalent to omitting
+    the argument. That asymmetry is reachable by any client that fills every field, so pin
+    it: adding `| None` here would be a silent widening nothing else would catch."""
+    res = await server.mcp.call_tool("codex_capabilities", {"detail": None})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["details"]["field"] == "detail"
+
+
 async def test_bad_list_literal_element_lists_allowed_values_from_items():
     """An out-of-enum *element* of a `list[Literal] | None` param surfaces the element
     domain, which lives at `anyOf[].items.enum` (#373). The failing field is positional,
@@ -7460,6 +7492,115 @@ class TestJobListNarrowing:
             r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 1})
             assert len(r.structured_content["jobs"]) == 1
 
+    @pytest.mark.anyio
+    async def test_the_documented_upper_bound_is_accepted_and_carries_its_value(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        """`le=1000` is the documented ceiling, and `test_limit_boundaries` only proves
+        that 1001 is refused. Acceptance alone would be a weak assertion here: with a
+        handful of seeded rows, a regression that silently clamped the effective limit to
+        20 would still return every row and stay green. 1001 rows make the boundary value
+        observable — exactly 1000 come back, and the cut is disclosed. Seeded in its own
+        test rather than folded into `test_limit_boundaries`, whose other cases need three
+        rows, not a thousand."""
+        await _seed_jobs(monkeypatch, tmp_path, count=1001)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_list", {"workspace_root": str(tmp_path), "limit": 1000}
+            )
+        body = r.structured_content
+        assert len(body["jobs"]) == 1000
+        assert body["truncated"] is True
+        assert "truncation_hint" in body
+
+    @pytest.mark.anyio
+    async def test_invalid_status_token_is_rejected_at_the_boundary(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        """`status` is a Literal, so an out-of-domain token must fail validation rather
+        than filter to zero rows. Retyping it to a plain `str` would keep every other test
+        in this class green while silently returning an empty list for a typo.
+
+        The tokens are spelled out rather than derived from `get_args(JobState)`: an
+        expectation read from the same table the code reads cannot fail when that table is
+        wrong."""
+        await _seed_jobs(monkeypatch, tmp_path, count=3)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool(
+                "codex_job_list",
+                {"workspace_root": str(tmp_path), "status": "bogus"},
+                raise_on_error=False,
+            )
+        assert r.is_error
+        err = r.structured_content["error"]
+        assert err["code"] == "invalid_arguments"
+        assert err["details"]["field"] == "status"
+        assert err["details"]["allowed_values"] == [
+            "running",
+            "done",
+            "failed",
+            "cancelled",
+            "timeout",
+        ]
+
+    @pytest.mark.anyio
+    async def test_explicit_null_status_matches_omission(self, monkeypatch, clean_env, tmp_path):
+        """`status` is `JobState | None`, so an explicit null means "every state" — a
+        different fact from an out-of-domain token, and one only this test would notice
+        losing: dropping the `| None` would turn a documented input into an error while
+        the omitted-argument path kept working."""
+        await _seed_jobs(monkeypatch, tmp_path, count=3, status="done")
+        await _seed_jobs(monkeypatch, tmp_path, count=1, status="running")
+        async with Client(server.mcp) as c:
+            omitted = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path)})
+            explicit = await c.call_tool(
+                "codex_job_list", {"workspace_root": str(tmp_path), "status": None}
+            )
+        assert explicit.structured_content == omitted.structured_content
+        assert len(explicit.structured_content["jobs"]) == 4
+
+    @pytest.mark.anyio
+    async def test_lax_coercion_of_limit_is_pinned_as_observed_behavior(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        """Characterization, NOT a red-green regression test — it passes against today's
+        code by construction. `limit` advertises `int | None` (1-1000); the coercions below
+        come from the argument boundary running Pydantic in LAX mode (through FastMCP), not
+        from anything this server promises.
+
+        Pinned because nothing else can see this change. Lax and strict validation advertise
+        byte-identical input schemas, so `tool_input_schemas` does not move, no other
+        FINGERPRINT_COVERS category does either, and the manifest snapshot — the repo's
+        normal drift guard — is structurally blind to a validation-mode flip. A dependency
+        bump that changed the mode would otherwise alter agent-observable behavior in
+        silence.
+
+        This test stands in for every int param on the server, not just this one. A
+        deliberate tightening SHOULD change it, and should first run the breaking-change
+        analysis in AGENTS.md's Versioning section, since it narrows an accepted input
+        domain."""
+        await _seed_jobs(monkeypatch, tmp_path, count=3)
+        async with Client(server.mcp) as c:
+            # A numeric string carries its VALUE, not merely acceptance: 2 of the 3 rows.
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": "2"})
+            assert len(r.structured_content["jobs"]) == 2
+            assert r.structured_content["truncated"] is True
+            # `bool` is an int subclass, so `true` silently narrows the listing to one row.
+            r = await c.call_tool(
+                "codex_job_list", {"workspace_root": str(tmp_path), "limit": True}
+            )
+            assert len(r.structured_content["jobs"]) == 1
+            # An integral float is accepted; a fractional one is not.
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 2.0})
+            assert len(r.structured_content["jobs"]) == 2
+            r = await c.call_tool(
+                "codex_job_list",
+                {"workspace_root": str(tmp_path), "limit": 2.5},
+                raise_on_error=False,
+            )
+        assert r.is_error
+        assert r.structured_content["error"]["code"] == "invalid_arguments"
+
 
 def _ctx_double(*, roots_advertised: bool, roots=(), list_roots_raises=None):
     """Minimal stand-in exposing only what _roots_from_ctx reads."""
@@ -7550,6 +7691,18 @@ class TestResourceTriageMetadata:
     @pytest.mark.anyio
     async def test_declared_size_matches_the_actual_body(self):
         # A stale size is worse than none — it would be trusted.
+        #
+        # Compare BYTES, which is what `size_bytes` names and how server.py computes it
+        # (`len(json.dumps(payload).encode())`). Measuring len(text) — characters — agrees
+        # only while every body stays pure ASCII, a property of the current dump settings
+        # rather than of the field, so a resource picking up non-ASCII content would drift
+        # exactly the way the field's name was chosen to prevent, and this would pass.
+        #
+        # Exact equality, not a tolerance: registration and FastMCP's read path both
+        # serialize with a default `json.dumps`, so the two are equal by construction. Any
+        # divergence is a real inaccuracy in a number agents are told to trust, not
+        # measurement noise — and a 2% tolerance on a 20 KB body swallowed ~400 bytes of it.
+        compared = 0
         async with Client(server.mcp) as c:
             resources = {str(r.uri): r for r in await c.list_resources()}
             for uri, r in resources.items():
@@ -7557,10 +7710,15 @@ class TestResourceTriageMetadata:
                 if "size_bytes" not in triage:
                     continue
                 body = await c.read_resource(uri)
-                actual = len(body[0].text)
-                assert abs(actual - triage["size_bytes"]) <= actual * 0.02, (
+                actual = len(body[0].text.encode())
+                assert actual == triage["size_bytes"], (
                     f"{uri}: declared {triage['size_bytes']}, actual {actual}"
                 )
+                compared += 1
+        # Non-vacuous: the loop skips every resource without a declared size, so a triage
+        # regression that dropped the metadata would otherwise leave this green having
+        # compared nothing at all.
+        assert compared >= 5, f"only {compared} resource(s) carried a declared size"
 
     @pytest.mark.anyio
     async def test_the_mutable_resource_is_marked_volatile(self):
