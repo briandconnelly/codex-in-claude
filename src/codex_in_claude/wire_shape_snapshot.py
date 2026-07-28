@@ -19,21 +19,33 @@ chokepoint stamps ``meta.job_id`` before trimming, so a hand-rolled pipeline rep
 ``job_id`` as an omitted key when delivery never omits it, and — worse — a snapshot that
 calls the shaping helpers itself stays green when the *wiring* is removed, leaving the
 fixture blind to the one regression it exists to catch (Codex review of #334).
+
+The representative metas POPULATE their applicable optional fields (#400). They once left
+every optional null, which made the fixture blind in a way that reads as coverage: a null
+optional is already absent from a delivered envelope, so a regression deleting a
+*populated* optional key rendered a byte-identical fixture. That blindness was repo-wide,
+not local to this module — ``slim_meta`` was measurably free to destroy ``meta.model`` and
+``meta.session_id`` on every delivered envelope with the whole suite green. Which fields
+each envelope populates, and why three of them are populated nowhere, is documented on the
+builders below.
 """
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from codex_in_claude.schemas import (
     FINGERPRINT,
     RESULT_FORMAT,
     ConsultResult,
+    ContextSummary,
     Coverage,
     DelegateResult,
     Meta,
     RawResponse,
     ReviewResult,
+    Usage,
     dump_success,
 )
 from codex_in_claude.server import _finished_job_envelope
@@ -43,7 +55,15 @@ _VERSION_SENTINEL = "0.0.0"
 _REQUEST_ID_SENTINEL = "0" * 32
 
 
-def _representative_meta() -> Meta:
+def _meta(**optional: Any) -> Meta:
+    """A representative meta: the six required fields, pinned sentinels, and whatever
+    optional fields the caller populates.
+
+    Every value here must be a FIXED literal. Nothing may come from the clock, the
+    environment, or a random source, or the fixture churns on every render — which is
+    also why `rate_limit` is populated nowhere below (`RateLimit.as_of` and its windows'
+    `resets_at` are timestamps). See `_consult_meta` for the other reason it stays out.
+    """
     meta = Meta(
         cwd="/repo",
         tier="consult",
@@ -51,6 +71,7 @@ def _representative_meta() -> Meta:
         isolation="inherit",
         timeout_seconds=1,
         elapsed_ms=1,
+        **optional,
     )
     meta.fingerprint = _FINGERPRINT_SENTINEL
     meta.server_version = _VERSION_SENTINEL
@@ -58,15 +79,98 @@ def _representative_meta() -> Meta:
     return meta
 
 
+def _consult_meta() -> Meta:
+    """A consult's meta with its applicable optionals POPULATED (#400).
+
+    Populated on purpose: an optional field left null is slimmed away at delivery, so a
+    regression that unconditionally deletes it leaves this fixture byte-identical. Every
+    field below is one whose loss the snapshot can now see.
+
+    What is deliberately NOT here, because a real worker could never persist it into a
+    stored consult success — putting it in would document an impossible producer state:
+      * `job_kind`         — set only when a codex_job_* call resolved an existing
+                             record, and null "for every non-lifecycle call".
+      * `idempotency_replayed` — patched onto an outgoing replay response and "never
+                             persisted into a job's result.json".
+      * `rate_limit`       — null on codex 0.144+; quota no longer rides the exec stream.
+                             (It is also the one nested model carrying timestamps.)
+    Their survival is pinned at the unit level instead, by
+    `TestSlimMetaPopulatedOptionals` in tests/test_schemas.py.
+    """
+    return _meta(
+        workspace_source="param",
+        roots_source="client",
+        model="a-model",
+        reasoning_effort="high",
+        # 0 on purpose: a POPULATED FALSY optional. `slim_meta` keys on `is None`, never
+        # falsiness, and this extends that guarantee from the unit test to the real
+        # chokepoint. Do not "fix" it to a non-zero exit code.
+        command_exit_code=0,
+        session_id="sess-1",
+        usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
+    )
+
+
+def _review_meta() -> Meta:
+    """A review's meta: everything a consult reports, plus the review-scope fields.
+
+    `scope="branch"` carries `base` and `paths` but NOT `commit` — the two are
+    alternatives, and a meta reporting both describes a run that cannot happen.
+    """
+    return _meta(
+        workspace_source="param",
+        roots_source="client",
+        model="a-model",
+        reasoning_effort="high",
+        command_exit_code=0,
+        session_id="sess-1",
+        usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
+        scope="branch",
+        base="main",
+        paths=["src/a.py"],
+        context_summary=ContextSummary(files_changed=1, lines_added=2, lines_removed=3),
+    )
+
+
+def _sparse_meta() -> Meta:
+    """A meta with EVERY optional left null — the omission case, kept deliberately.
+
+    If every representative envelope were fully populated, `omitted_meta_keys` would go
+    empty everywhere and the fixture would stop showing that delivery drops anything at
+    all. One sparse envelope keeps the omission itself under review.
+    """
+    return _meta()
+
+
+def _fallback_meta() -> Meta:
+    """The meta the chokepoint falls back to for a GENERATED envelope (corruption, a
+    lifecycle error) rather than a delivered one.
+
+    Separate from the success builders above by design: it describes the failing
+    lifecycle call, not the run that produced the payload, so the two must be free to
+    diverge. Nothing in this module's happy path reads it — `_deliver` treats a
+    non-delivered envelope as an error — but sharing one builder invited the assumption
+    that the success examples and the error context must stay in step.
+    """
+    return _meta()
+
+
 def _raw() -> RawResponse:
     return RawResponse(text="RAW MODEL TEXT", session_id="sess-1", model="a-model")
 
 
 def _stored_envelopes() -> dict[str, dict]:
-    """The persisted envelopes, exactly as a worker writes them (nulls retained)."""
+    """The persisted envelopes, exactly as a worker writes them (nulls retained).
+
+    The three metas differ on purpose (#400). consult and review populate their
+    applicable optionals, so deleting one of those keys anywhere in the delivery path
+    moves this fixture; the no-changes delegate keeps a sparse meta, so the omission that
+    delivery performs stays visible in `omitted_meta_keys`. Populating all three would
+    have closed the deletion blind spot and opened an omission one.
+    """
     return {
         "consult": dump_success(
-            ConsultResult(summary="s", raw_response=_raw(), meta=_representative_meta())
+            ConsultResult(summary="s", raw_response=_raw(), meta=_consult_meta())
         ),
         "review": dump_success(
             ReviewResult(
@@ -79,13 +183,13 @@ def _stored_envelopes() -> dict[str, dict]:
                     untracked_files_omitted=0,
                 ),
                 raw_response=_raw(),
-                meta=_representative_meta(),
+                meta=_review_meta(),
             )
         ),
         # diff=None on purpose: a no-changes delegate. Its `diff` key must survive
         # delivery — it is the field the result's own next_steps tells callers to read.
         "delegate_no_changes": dump_success(
-            DelegateResult(summary="s", diff=None, raw_response=_raw(), meta=_representative_meta())
+            DelegateResult(summary="s", diff=None, raw_response=_raw(), meta=_sparse_meta())
         ),
     }
 
@@ -109,7 +213,7 @@ def _deliver(stored: dict, name: str, detail: str) -> dict:
         json.loads(json.dumps(stored)),  # a fresh dict, as a real disk read produces
         _JOB_ID_SENTINEL,
         _KIND_BY_NAME[name],
-        _representative_meta(),
+        _fallback_meta(),
         detail,
         None,
     )

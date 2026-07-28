@@ -5,20 +5,32 @@
         "assumptions": [],
         "findings": [],
         "meta": {
+          "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
           "job_id": "00000000000000000000000000000000",
+          "model": "a-model",
+          "reasoning_effort": "high",
           "redacted_paths": [],
           "request_id": "00000000000000000000000000000000",
+          "roots_source": "client",
           "sandbox": "read-only",
           "security_warnings": [],
           "server_version": "0.0.0",
+          "session_id": "sess-1",
           "tier": "consult",
           "timeout_seconds": 1,
-          "truncated": false
+          "truncated": false,
+          "usage": {
+            "cached_input_tokens": 3,
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 6
+          },
+          "workspace_source": "param"
         },
         "next_steps": [],
         "ok": true,
@@ -74,20 +86,42 @@
         },
         "findings": [],
         "meta": {
+          "base": "main",
+          "command_exit_code": 0,
           "compat_warnings": [],
+          "context_summary": {
+            "files_changed": 1,
+            "lines_added": 2,
+            "lines_removed": 3
+          },
           "cwd": "/repo",
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
           "job_id": "00000000000000000000000000000000",
+          "model": "a-model",
+          "paths": [
+            "src/a.py"
+          ],
+          "reasoning_effort": "high",
           "redacted_paths": [],
           "request_id": "00000000000000000000000000000000",
+          "roots_source": "client",
           "sandbox": "read-only",
+          "scope": "branch",
           "security_warnings": [],
           "server_version": "0.0.0",
+          "session_id": "sess-1",
           "tier": "consult",
           "timeout_seconds": 1,
-          "truncated": false
+          "truncated": false,
+          "usage": {
+            "cached_input_tokens": 3,
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 6
+          },
+          "workspace_source": "param"
         },
         "next_steps": [],
         "ok": true,
@@ -108,20 +142,32 @@
         "assumptions": [],
         "findings": [],
         "meta": {
+          "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
           "job_id": "00000000000000000000000000000000",
+          "model": "a-model",
+          "reasoning_effort": "high",
           "redacted_paths": [],
           "request_id": "00000000000000000000000000000000",
+          "roots_source": "client",
           "sandbox": "read-only",
           "security_warnings": [],
           "server_version": "0.0.0",
+          "session_id": "sess-1",
           "tier": "consult",
           "timeout_seconds": 1,
-          "truncated": false
+          "truncated": false,
+          "usage": {
+            "cached_input_tokens": 3,
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 6
+          },
+          "workspace_source": "param"
         },
         "next_steps": [],
         "ok": true,
@@ -177,20 +223,42 @@
         },
         "findings": [],
         "meta": {
+          "base": "main",
+          "command_exit_code": 0,
           "compat_warnings": [],
+          "context_summary": {
+            "files_changed": 1,
+            "lines_added": 2,
+            "lines_removed": 3
+          },
           "cwd": "/repo",
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
           "job_id": "00000000000000000000000000000000",
+          "model": "a-model",
+          "paths": [
+            "src/a.py"
+          ],
+          "reasoning_effort": "high",
           "redacted_paths": [],
           "request_id": "00000000000000000000000000000000",
+          "roots_source": "client",
           "sandbox": "read-only",
+          "scope": "branch",
           "security_warnings": [],
           "server_version": "0.0.0",
+          "session_id": "sess-1",
           "tier": "consult",
           "timeout_seconds": 1,
-          "truncated": false
+          "truncated": false,
+          "usage": {
+            "cached_input_tokens": 3,
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 6
+          },
+          "workspace_source": "param"
         },
         "next_steps": [],
         "ok": true,
@@ -210,21 +278,14 @@
   "omitted_meta_keys": {
     "consult": [
       "base",
-      "command_exit_code",
       "commit",
       "context_summary",
       "idempotency_replayed",
       "job_kind",
-      "model",
       "paths",
       "rate_limit",
-      "reasoning_effort",
-      "roots_source",
       "scope",
-      "session_id",
       "truncation_hint",
-      "usage",
-      "workspace_source",
       "workspace_warning"
     ],
     "delegate_no_changes": [
@@ -247,22 +308,11 @@
       "workspace_warning"
     ],
     "review": [
-      "base",
-      "command_exit_code",
       "commit",
-      "context_summary",
       "idempotency_replayed",
       "job_kind",
-      "model",
-      "paths",
       "rate_limit",
-      "reasoning_effort",
-      "roots_source",
-      "scope",
-      "session_id",
       "truncation_hint",
-      "usage",
-      "workspace_source",
       "workspace_warning"
     ]
   }
