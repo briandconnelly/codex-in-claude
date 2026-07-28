@@ -19,6 +19,7 @@ from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
     FINGERPRINT,
     JOB_POLL_AFTER_MS,
+    Detail,
     ErrorCode,
     Isolation,
     ReviewScope,
@@ -2230,7 +2231,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-64"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-65"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2871,6 +2872,32 @@ async def test_bad_isolation_enum_lists_allowed_values_from_anyof():
     err = res.structured_content["error"]
     assert err["code"] == "invalid_arguments"
     assert err["details"]["allowed_values"] == list(server.config.VALID_ISOLATIONS)
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("codex_consult", {"question": "hi"}),
+        ("codex_review_changes", {"scope": "working_tree"}),
+        ("codex_delegate", {"task": "x"}),
+        ("codex_job_result", {"job_id": "x"}),
+        ("codex_job_consume_result", {"job_id": "x"}),
+    ],
+)
+async def test_bad_detail_is_invalid_arguments_at_the_boundary(tool, args):
+    """Every `detail`-bearing tool rejects an out-of-enum value as `invalid_arguments`,
+    never the in-handler `unsupported_detail` (which _SCHEMA_GATED_CODES keeps unadvertised
+    because FastMCP validates before the handler runs). docs/REFERENCE.md documents this
+    code to direct MCP callers; without this test a retyping of `detail` to a plain `str`
+    would make that sentence false while the direct-call tests above still passed (#397).
+    Zero spend: boundary validation precedes any Codex call."""
+    res = await server.mcp.call_tool(tool, {**args, "detail": "bogus"})
+    assert res.is_error is True
+    err = res.structured_content["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["details"]["field"] == "detail"
+    assert err["details"]["allowed_values"] == list(get_args(Detail))
+    assert err["invalid_arguments"][0]["field"] == "detail"
 
 
 async def test_bad_list_literal_element_lists_allowed_values_from_items():
@@ -6013,7 +6040,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-64")
+    assert result["fingerprint"].endswith("schema-65")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

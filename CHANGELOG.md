@@ -51,10 +51,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   advertises both params and the cap-not-a-page semantics, so a client treating the
   `detail="full"` inventory as authoritative sees them too (audit F5, #396, #395).
 - `meta.roots_source` (and the matching field on `codex_dry_run`/`codex_delegate_dry_run`)
-  reports which of three states the MCP-roots resolution saw: `client` (the client advertised
-  roots and they were used, even if the list came back empty), `not_negotiated` (this client
+  reports which of three states the MCP-roots probe saw: `client` (the client advertised the
+  roots capability and the probe returned, possibly an empty list), `not_negotiated` (this client
   never advertised the roots capability — pass `workspace_root` instead), or `probe_failed`
-  (roots were advertised but the call errored this turn — retrying may help). Previously all
+  (roots were advertised but the call errored this turn — retrying may help). It reports the
+  probe, not where the workspace came from — `workspace_source` answers that. Previously all
   three collapsed into a silent empty list and a fallback to the server's own cwd; `roots` stays
   advisory either way, and `workspace_root` remains the durable path (audit F8). Which run the
   value describes now depends on the envelope, and `codex://result-meta` states the rule: when
@@ -110,6 +111,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   that was previously missing or unreachable.
 
 ### Fixed
+
+- **The documented contract misdescribed `detail` rejection and `roots_source`** (#397). Three
+  corrections, none of which changes behavior. (1) `docs/REFERENCE.md` told direct MCP callers that
+  an unrecognized `detail` value is rejected with `unsupported_detail`; it is not reachable that way
+  — `detail` is a closed enum in each tool's input schema, so the call boundary rejects the value as
+  `invalid_arguments` before the handler runs, and `unsupported_detail` stays deliberately
+  unadvertised as an in-handler guard for direct Python callers. A parametrized regression now pins
+  the boundary behavior across all five `detail`-bearing tools, so the corrected sentence cannot go
+  stale unnoticed. (2) `roots_source` was absent from `REFERENCE.md` entirely, including the
+  workspace-selection section that owns workspace resolution; it is now documented there with the
+  probe-versus-selection distinction and the correct placement note that the two dry-run tools
+  expose it top-level rather than under `meta`. (3) The published `codex://result-meta` description
+  said `client` means roots "were used", which conflates the roots probe with workspace selection —
+  `client` only reports that the probe returned, and it coexists normally with
+  `workspace_source: "param"` (an explicit `workspace_root` wins) or `"cwd"` (the probe returned no
+  usable root). Wording only, so it bumps `FINGERPRINT` (`schema-64` → `schema-65`) without moving
+  `RESULT_FORMAT`; not breaking.
 
 - **`meta.roots_source` never reached a delivered paid success envelope** — the one surface it
   was added for. A synchronous `codex_consult`/`codex_review_changes`/`codex_delegate` success is

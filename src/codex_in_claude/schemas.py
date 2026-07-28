@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-64"
+FINGERPRINT = "codex-in-claude/0.1/schema-65"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -583,12 +583,15 @@ class Meta(BaseModel):
     roots_source: RootsSource | None = Field(
         default=None,
         description=(
-            "Which of three states the MCP-roots resolution saw: 'client' (roots were "
-            "advertised and used, even if the list came back empty), 'not_negotiated' "
-            "(this client never advertised the roots capability — pass workspace_root "
-            "instead), or 'probe_failed' (roots were advertised but the call errored this "
-            "turn — retrying may help). Distinguishes a client limitation from a transient "
-            "failure, which a bare empty list could not. WHEN PRESENT, which run it "
+            "Which of three states the MCP-roots probe saw: 'client' (the client advertised "
+            "the roots capability and the probe returned, possibly an empty list), "
+            "'not_negotiated' (this client never advertised the roots capability — pass "
+            "workspace_root instead), or 'probe_failed' (roots were advertised but the call "
+            "errored this turn — retrying may help). Distinguishes a client limitation from "
+            "a transient failure, which a bare empty list could not. It reports the PROBE, "
+            "not where the workspace came from — workspace_source answers that, and 'client' "
+            "coexists with workspace_source 'param' (an explicit workspace_root wins over "
+            "roots) or 'cwd' (the probe returned no usable root). WHEN PRESENT, which run it "
             "describes depends on the envelope: a DELIVERED codex_consult / "
             "codex_review_changes / codex_delegate result — whether returned synchronously "
             "or fetched later via codex_job_result / codex_job_consume_result — reports the "
