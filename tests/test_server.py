@@ -2230,7 +2230,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-63"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-64"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6013,7 +6013,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-63")
+    assert result["fingerprint"].endswith("schema-64")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6575,8 +6575,13 @@ async def test_consult_empty_reasoning_effort_is_passed_through(monkeypatch, cle
 
 
 async def test_spec_without_effort_matches_legacy_hash(monkeypatch, clean_env, tmp_path):
-    # Regression (#309): a run with no effort override must build a spec byte-identical
-    # to the pre-#309 shape, so live idempotency dedup entries survive the upgrade.
+    # Regression (#309): a run with no effort override must keep building a spec that
+    # HASHES like the pre-#309 shape, so live idempotency dedup entries survive the
+    # upgrade. Since #393 the spec is no longer byte-identical — it carries the
+    # hash-excluded `roots_source` — so the structural half asserts the EXACT delta
+    # (that one key and no other) rather than filtering out everything hash-excluded,
+    # which would also hide an accidental change to cwd/workspace_source/kind or a
+    # future over-broad entry in _ARG_HASH_EXCLUDE.
     calls = _capture_run_sync(monkeypatch)
     await server.codex_consult(
         "q", workspace_root=str(tmp_path), extra_context="ctx", timeout_seconds=60
@@ -6595,7 +6600,8 @@ async def test_spec_without_effort_matches_legacy_hash(monkeypatch, clean_env, t
         "model": None,
         "timeout_seconds": 60,
     }
-    assert spec == legacy_spec
+    assert spec["roots_source"] == "not_negotiated"
+    assert {k: v for k, v in spec.items() if k != "roots_source"} == legacy_spec
     assert server._arg_hash_for_spec(spec) == server._arg_hash_for_spec(legacy_spec)
 
 
@@ -7631,3 +7637,221 @@ async def test_delegate_diff_key_survives_delivery_when_null(clean_env, tmp_path
     res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
     assert "diff" in res and res["diff"] is None
     assert [k for k, v in res["meta"].items() if v is None] == []
+
+
+# --- roots_source reaches the envelopes that report it (#393) ------------------------
+# The field was motivated by "a call that spends money", but a paid SUCCESS is delivered
+# from the worker-written result.json, not from the meta the handler prepared — so the
+# value has to travel through the job spec to reach a caller at all.
+
+
+def _spec_meta_worker_cmd(tool: str = "codex_consult", **payload):
+    """A `_worker_cmd` whose worker reads the REAL spec.json and builds its envelope's
+    meta through the REAL `_worker._meta_from_spec`.
+
+    Unlike `_fake_worker_cmd` (which writes a canned envelope and would bypass the spec
+    round-trip entirely), this exercises server-prep -> spec.json -> worker meta ->
+    delivery slimming, which is the whole chain #393 was broken in."""
+    extra = json.dumps(payload)
+
+    def factory(job_dir: object) -> list[str]:
+        code = (
+            "import json,os,pathlib,sys;"
+            "d=pathlib.Path(sys.argv[1]);"
+            "spec=json.loads((d/'spec.json').read_text());"
+            "from codex_in_claude._worker import _meta_from_spec;"
+            "env={'ok':True,'tool':sys.argv[2],"
+            "'raw_response':{'text':None,'session_id':None,'model':None},"
+            "'meta':_meta_from_spec(spec).model_dump(mode='json')};"
+            "env.update(json.loads(sys.argv[3]));"
+            "t=d/'result.json.tmp';"
+            "t.write_text(json.dumps(env));"
+            "os.replace(str(t), str(d/'result.json'))"
+        )
+        return [sys.executable, "-c", code, str(job_dir), tool, extra]
+
+    return factory
+
+
+async def test_delivered_sync_consult_success_carries_roots_source(
+    clean_env, tmp_path, monkeypatch
+):
+    # The regression the issue names: a PAID success delivered to the caller.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    monkeypatch.setattr(
+        server,
+        "_worker_cmd",
+        _spec_meta_worker_cmd("codex_consult", summary="s", findings=[], questions=[]),
+    )
+    res = await server.codex_consult(
+        "q", workspace_root=str(tmp_path), ctx=_ctx_double(roots_advertised=True, roots=())
+    )
+    assert res["ok"] is True
+    assert res["meta"]["roots_source"] == "client"
+
+
+async def test_delivered_sync_consult_reports_probe_failure(clean_env, tmp_path, monkeypatch):
+    # The three states must be distinguishable on the delivered envelope, not just at
+    # prep time — a transient probe failure is the one a caller can act on by retrying.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    monkeypatch.setattr(
+        server,
+        "_worker_cmd",
+        _spec_meta_worker_cmd("codex_consult", summary="s", findings=[], questions=[]),
+    )
+    ctx = _ctx_double(roots_advertised=True, list_roots_raises=RuntimeError("boom"))
+    res = await server.codex_consult("q", workspace_root=str(tmp_path), ctx=ctx)
+    assert res["ok"] is True
+    assert res["meta"]["roots_source"] == "probe_failed"
+
+
+async def test_fetched_async_result_carries_originating_roots_source(
+    clean_env, tmp_path, monkeypatch
+):
+    # A retrieved job result reports the ORIGINATING run's provenance, like meta.tier —
+    # NOT the roots state of the connection doing the fetching.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    _no_codex_sentinel(monkeypatch)
+    monkeypatch.setattr(
+        server,
+        "_worker_cmd",
+        _spec_meta_worker_cmd("codex_consult", summary="s", findings=[], questions=[]),
+    )
+    started = await server.codex_consult_async(
+        "q", workspace_root=str(tmp_path), ctx=_ctx_double(roots_advertised=True, roots=())
+    )
+    job_id = started["job_id"]
+    store = server.config.job_store()
+    for _ in range(200):
+        rec = store.status(str(tmp_path), job_id)
+        if rec and rec["status"] != "running":
+            break
+        await asyncio.sleep(0.05)
+    # Fetch from a connection with a DIFFERENT roots state than the originating run.
+    fetched = await server.codex_job_result(job_id, workspace_root=str(tmp_path), ctx=None)
+    assert fetched["ok"] is True
+    assert fetched["meta"]["roots_source"] == "client"  # originating, not the fetcher's
+
+
+async def test_async_replay_handle_reports_the_attaching_call(monkeypatch, clean_env, tmp_path):
+    # The other half of the contract: a JobStarted handle (including an idempotency
+    # replay) describes the CURRENT attaching call, so it may legitimately differ from
+    # the result later fetched for the same job.
+    snap = _ok_record("done")
+    store = _FakeIdemStore({"kind": "replay", "job_id": "job-abc"}, snapshot=snap)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_consult_async(
+        "q",
+        workspace_root=str(tmp_path),
+        idempotency_key="k1",
+        ctx=_ctx_double(roots_advertised=True, list_roots_raises=RuntimeError("boom")),
+    )
+    assert res["ok"] is True and res["meta"]["idempotency_replayed"] is True
+    assert res["meta"]["roots_source"] == "probe_failed"
+
+
+async def test_lifecycle_error_envelopes_carry_roots_source(monkeypatch, clean_env, tmp_path):
+    # A lifecycle call probes roots too, and its GENERATED error envelopes were dropping
+    # the answer — so an agent told "no such job" could not see that its roots were never
+    # negotiated, which is a likely reason it targeted the wrong workspace.
+    store = _FakeStore(status_dict=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    ctx = _ctx_double(roots_advertised=True, list_roots_raises=RuntimeError("boom"))
+    res = await server.codex_job_status("nope", workspace_root=str(tmp_path), ctx=ctx)
+    assert res["ok"] is False and res["error"]["code"] == "job_not_found"
+    assert res["meta"]["roots_source"] == "probe_failed"
+
+    res = await server.codex_job_cancel("nope", workspace_root=str(tmp_path), ctx=ctx)
+    assert res["ok"] is False and res["error"]["code"] == "job_not_found"
+    assert res["meta"]["roots_source"] == "probe_failed"
+
+    res = await server.codex_job_result("nope", workspace_root=str(tmp_path), ctx=ctx)
+    assert res["ok"] is False and res["error"]["code"] == "job_not_found"
+    assert res["meta"]["roots_source"] == "probe_failed"
+
+
+async def test_lifecycle_invalid_detail_error_carries_roots_source(
+    monkeypatch, clean_env, tmp_path
+):
+    # The pre-lookup validation branch resolves no job but HAS already probed roots.
+    store = _FakeStore(status_dict=None)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result(
+        "job-abc",
+        workspace_root=str(tmp_path),
+        detail="nonsense",
+        ctx=_ctx_double(roots_advertised=True, roots=()),
+    )
+    assert res["ok"] is False and res["error"]["code"] == "unsupported_detail"
+    assert res["meta"]["roots_source"] == "client"
+
+
+# --- roots_source is provenance, never call identity (#393) --------------------------
+
+
+def test_roots_source_is_excluded_from_the_arg_hash():
+    # The same logical call can see different roots states across reconnects, so folding
+    # it into the hash would turn a legitimate replay into idempotency_conflict.
+    base = {"kind": "codex_consult", "question": "q", "cwd": "/repo", "timeout_seconds": 60}
+    a = {**base, "roots_source": "client"}
+    b = {**base, "roots_source": "probe_failed"}
+    assert server._arg_hash_for_spec(a) == server._arg_hash_for_spec(b)
+    # And the key's mere presence must not move the hash off a pre-#393 record either.
+    assert server._arg_hash_for_spec(a) == server._arg_hash_for_spec(base)
+
+
+async def test_keyed_calls_replay_across_a_roots_state_change(monkeypatch, clean_env, tmp_path):
+    # End-to-end form of the rule above: two keyed calls differing ONLY in roots state
+    # must hash identically, which is what makes the second a replay rather than a
+    # conflict. Asserting the hash the store is asked to match is deterministic; letting
+    # the real index classify it would only re-test the store.
+    store = _FakeIdemStore({"kind": "created", "job_id": "job-abc", "started_at": "t"})
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    for ctx in (
+        _ctx_double(roots_advertised=True, roots=()),
+        _ctx_double(roots_advertised=True, list_roots_raises=RuntimeError("boom")),
+        None,
+    ):
+        await server.codex_consult_async(
+            "q", workspace_root=str(tmp_path), idempotency_key="k1", ctx=ctx
+        )
+    seen = {c["arg_hash"] for c in store.idem_calls}
+    assert len(store.idem_calls) == 3
+    assert len(seen) == 1, "roots state must not change a keyed call's dedup identity"
+
+
+async def test_prepare_helpers_put_roots_source_in_every_spec(monkeypatch, clean_env, tmp_path):
+    # All three pairs, since each builds its spec independently.
+    calls = _capture_run_sync(monkeypatch)
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    ctx = _ctx_double(roots_advertised=True, roots=())
+    await server.codex_consult("q", workspace_root=str(tmp_path), ctx=ctx)
+    assert calls["spec"]["roots_source"] == "client"
+    await server.codex_review_changes(workspace_root=str(tmp_path), ctx=ctx)
+    assert calls["spec"]["roots_source"] == "client"
+    await server.codex_delegate("do x", workspace_root=str(tmp_path), ctx=ctx)
+    assert calls["spec"]["roots_source"] == "client"
+    # ctx=None is a real state, not a missing key: the spec records it explicitly.
+    await server.codex_consult("q", workspace_root=str(tmp_path), ctx=None)
+    assert calls["spec"]["roots_source"] == "not_negotiated"
+
+
+async def test_guarded_internal_error_reports_no_roots_source(monkeypatch, clean_env, tmp_path):
+    # The published contract says absence means only "not reported" — never that the run
+    # is old. This is the envelope that proves it: _guard's last-resort handler builds its
+    # Meta with no ctx and does no I/O (the async roots probe could be the very thing that
+    # failed), so it reports NEITHER run. Pins the honest wording rather than forcing a
+    # probe into an exception path.
+    async def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server, "_resolve_job_workspace", boom)
+    res = await server.codex_job_status(
+        "job-abc",
+        workspace_root=str(tmp_path),
+        ctx=_ctx_double(roots_advertised=True, roots=()),
+    )
+    assert res["ok"] is False and res["error"]["code"] == "internal_error"
+    assert "roots_source" not in res["meta"]

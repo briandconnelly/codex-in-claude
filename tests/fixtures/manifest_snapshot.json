@@ -888,7 +888,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-63",
+            "default": "codex-in-claude/0.1/schema-64",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1036,7 +1036,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 18591
+          "size_bytes": 19985
         }
       },
       "mimeType": "application/schema+json",
@@ -1440,7 +1440,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-63",
+                "default": "codex-in-claude/0.1/schema-64",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1568,6 +1568,7 @@
                   }
                 ],
                 "default": null,
+                "description": "Which of three states the MCP-roots resolution saw: 'client' (roots were advertised and used, even if the list came back empty), 'not_negotiated' (this client never advertised the roots capability — pass workspace_root instead), or 'probe_failed' (roots were advertised but the call errored this turn — retrying may help). Distinguishes a client limitation from a transient failure, which a bare empty list could not. WHEN PRESENT, which run it describes depends on the envelope: a DELIVERED codex_consult / codex_review_changes / codex_delegate result — whether returned synchronously or fetched later via codex_job_result / codex_job_consume_result — reports the ORIGINATING run, like tier; a *_async job handle (including an idempotency replay handle), a dry-run preview, and an error a codex_job_* call GENERATES instead of delivering a stored result (job_not_found, a still-running or unreadable job, an unsupported detail) each report the CURRENT call. So a replay handle and the result later fetched for that same job may legitimately differ. Absence does NOT imply any of those: it means only that the value was not reported — the roots state was never recorded for that run, or the failure happened where it could not be (an unexpected server-side internal_error is built without one). Never infer a run's age or identity from a missing key.",
                 "title": "Roots Source"
               },
               "sandbox": {
@@ -2137,7 +2138,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 18591
+          "size_bytes": 19985
         }
       },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
@@ -2174,7 +2175,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 13021
+          "size_bytes": 14415
         }
       },
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
@@ -2200,7 +2201,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 13021
+          "size_bytes": 14415
         }
       },
       "mimeType": "application/schema+json",
@@ -2565,7 +2566,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-63",
+            "default": "codex-in-claude/0.1/schema-64",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2693,6 +2694,7 @@
               }
             ],
             "default": null,
+            "description": "Which of three states the MCP-roots resolution saw: 'client' (roots were advertised and used, even if the list came back empty), 'not_negotiated' (this client never advertised the roots capability — pass workspace_root instead), or 'probe_failed' (roots were advertised but the call errored this turn — retrying may help). Distinguishes a client limitation from a transient failure, which a bare empty list could not. WHEN PRESENT, which run it describes depends on the envelope: a DELIVERED codex_consult / codex_review_changes / codex_delegate result — whether returned synchronously or fetched later via codex_job_result / codex_job_consume_result — reports the ORIGINATING run, like tier; a *_async job handle (including an idempotency replay handle), a dry-run preview, and an error a codex_job_* call GENERATES instead of delivering a stored result (job_not_found, a still-running or unreadable job, an unsupported detail) each report the CURRENT call. So a replay handle and the result later fetched for that same job may legitimately differ. Absence does NOT imply any of those: it means only that the value was not reported — the roots state was never recorded for that run, or the failure happened where it could not be (an unexpected server-side internal_error is built without one). Never infer a run's age or identity from a missing key.",
             "title": "Roots Source"
           },
           "sandbox": {
@@ -3246,7 +3248,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-63",
+            "default": "codex-in-claude/0.1/schema-64",
             "title": "Fingerprint",
             "type": "string"
           },

@@ -2287,8 +2287,10 @@ def params_resource() -> dict:
 # caller branches on `isinstance(prep, dict)`. `timeout_seconds` is the sync per-call
 # timeout or the async job deadline — the only field that legitimately differs between
 # a pair's two specs, and it is the sole hash-affecting difference (parity is pinned in
-# tests/test_tool_pair_parity.py). Byte-identical behavior is required: the spec keys
-# feed the idempotency arg hash, so changing them would invalidate live dedup entries.
+# tests/test_tool_pair_parity.py). Hash-compatible behavior is required: the spec keys
+# feed the idempotency arg hash, so changing a HASHED key would invalidate live dedup
+# entries. A key listed in _ARG_HASH_EXCLUDE is pure provenance and may be added freely
+# (that is how `roots_source` reaches the worker without moving any hash — #393).
 #
 # `include_detail` (not a nullable `detail`) selects the sync twin: `_resolve_detail`
 # maps None to "summary", so None cannot double as an "async, skip detail" sentinel.
@@ -2405,6 +2407,10 @@ async def _prepare_consult(
         "isolation": isolation_v,
         "model": model or d.model,
         "timeout_seconds": timeout_seconds,
+        # Provenance, not an input: written unconditionally (unlike the two conditional
+        # keys below) because it is hash-excluded, so its presence cannot invalidate a
+        # pre-#393 dedup entry. The worker needs it to reach a delivered envelope (#393).
+        "roots_source": roots_source,
     }
     # Written only when an effort override applies: an absent key keeps a no-effort
     # spec byte-identical to the pre-#309 shape, so existing idempotency arg hashes
@@ -2520,6 +2526,8 @@ async def _prepare_review(
         "extra_context": extra_context or "",
         "git_timeout": config.git_timeout_seconds(),
         "max_bytes": config.max_input_bytes(),
+        # See _prepare_consult: hash-excluded provenance, written unconditionally (#393).
+        "roots_source": roots_source,
     }
     # See _prepare_consult: written only when set, preserving pre-#309 arg hashes.
     if effort is not None:
@@ -2653,6 +2661,8 @@ async def _prepare_delegate(
         "timeout_seconds": timeout_seconds,
         "git_timeout": git_timeout,
         "max_diff_bytes": config.max_delegate_diff_bytes(),
+        # See _prepare_consult: hash-excluded provenance, written unconditionally (#393).
+        "roots_source": roots_source,
     }
     # See _prepare_consult: written only when set, preserving pre-#309 arg hashes.
     if effort is not None:
@@ -3011,7 +3021,11 @@ def _worker_cmd(job_dir: object) -> list[str]:
 # provenance/scope dimensions already captured by (workspace, tool), never a knob that
 # changes the paid run. `detail` is never in a spec (it is presentation-only). Hashing
 # raw effective values is fine — the hash is internal and never returned.
-_ARG_HASH_EXCLUDE = frozenset({"cwd", "workspace_source", "kind"})
+# Spec keys that describe HOW the call was resolved rather than WHAT it asks for. They
+# must not enter the dedup identity: `roots_source` in particular is per-connection, so
+# the same logical keyed call can legitimately see a different value across reconnects
+# and must still replay rather than raise idempotency_conflict (#393).
+_ARG_HASH_EXCLUDE = frozenset({"cwd", "workspace_source", "kind", "roots_source"})
 
 # Backoff hint for idempotency_in_progress (a reservation still being published, or a
 # contended lock), and how long a SYNC keyed call waits for that publication before
@@ -4076,8 +4090,15 @@ def _job_not_found(job_id: str, meta: Meta, workspace_root: str | None = None) -
 
 async def _resolve_job_workspace(
     ctx: Context | None, workspace_root: str | None
-) -> tuple[str, str | None, dict | None]:
-    """Resolve the workspace for a lifecycle call. Returns (cwd, source, error)."""
+) -> tuple[str, str | None, RootsSource, dict | None]:
+    """Resolve the workspace for a lifecycle call. Returns (cwd, source, roots_source,
+    error).
+
+    `roots_source` is returned on the success path too, not just folded into the
+    workspace-error envelope: every lifecycle-GENERATED error below reports the roots
+    state THIS lookup saw, which is often why the caller is looking at the wrong
+    workspace at all (#393). It never overwrites a delivered stored result — that one
+    keeps the originating run's value."""
     cwd_guess = workspace.server_cwd()
     roots, roots_source = await _roots_from_ctx(ctx)
     wres = workspace.resolve_workspace(workspace_root, roots, cwd_guess)
@@ -4085,8 +4106,8 @@ async def _resolve_job_workspace(
     if wres.error_code is not None:
         meta = _job_meta(cwd, wres.source, roots_source=roots_source)
         err = _workspace_error_result(wres.error_code, wres.error_detail, roots, meta)
-        return cwd, wres.source, err
-    return cwd, wres.source, None
+        return cwd, wres.source, roots_source, err
+    return cwd, wres.source, roots_source, None
 
 
 def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
@@ -4143,13 +4164,15 @@ async def codex_job_status(
     runtime (bounded), so following it backs you off instead of tight-looping (a
     delegate often runs ~20s). `expires_at` is null while running and is set once the
     job finishes; results are then retained `ttl_seconds` past that completion."""
-    cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
+    cwd, source, roots_source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     store = config.job_store()
     data = await asyncio.to_thread(store.status, cwd, job_id)
     if data is None:
-        return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
+        return _job_not_found(
+            job_id, _job_meta(cwd, source, roots_source=roots_source), workspace_root
+        )
     return _job_status_model(data, _job_workspace(cwd, source)).model_dump(mode="json")
 
 
@@ -4255,20 +4278,24 @@ async def _job_result_impl(
     consume: bool,
     detail: str = "summary",
 ) -> dict:
-    cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
+    cwd, source, roots_source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     detail_v, detail_err = _resolve_detail(detail)
     if detail_err is not None:
-        return serialize_error(ErrorResult(error=detail_err, meta=_job_meta(cwd, source)))
+        return serialize_error(
+            ErrorResult(error=detail_err, meta=_job_meta(cwd, source, roots_source=roots_source))
+        )
     assert detail_v is not None
     store = config.job_store()
     rec, payload = await asyncio.to_thread(store.result_payload, cwd, job_id)
     if rec is None:
-        return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
+        return _job_not_found(
+            job_id, _job_meta(cwd, source, roots_source=roots_source), workspace_root
+        )
     # Derive the lifecycle-error meta from the job's kind so a running/corrupt
     # consult/review job reports consult/read-only, not the default propose tier.
-    meta = _job_meta(cwd, source, rec["kind"])
+    meta = _job_meta(cwd, source, rec["kind"], roots_source=roots_source)
     envelope, delivered = _finished_job_envelope(
         rec, payload, job_id, rec["kind"], meta, detail_v, workspace_root
     )
@@ -4468,13 +4495,15 @@ async def codex_job_cancel(
     cannot be resumed). If the worktree could not be removed, `cleanup_warnings`
     names the leftover path. Already-terminal jobs are returned unchanged, so cancel
     is idempotent — a retry after a lost response is safe. Free — no model call."""
-    cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
+    cwd, source, roots_source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     store = config.job_store()
     data = await asyncio.to_thread(store.cancel, cwd, job_id)
     if data is None:
-        return _job_not_found(job_id, _job_meta(cwd, source), workspace_root)
+        return _job_not_found(
+            job_id, _job_meta(cwd, source, roots_source=roots_source), workspace_root
+        )
     return _job_status_model(data, _job_workspace(cwd, source)).model_dump(mode="json")
 
 
@@ -4512,7 +4541,10 @@ async def codex_job_list(
     more than `limit`'s 1000 ceiling.
     Includes sync-originated records (any sync consult/review/delegate call); the cap/TTL
     eviction covers both."""
-    cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
+    # `_roots_source` is unused here alone: a successful listing returns a Workspace, not
+    # a Meta, so it has no member to report it on. The workspace-error envelope built
+    # inside the resolver still carries it.
+    cwd, source, _roots_source, err = await _resolve_job_workspace(ctx, workspace_root)
     if err is not None:
         return err
     store = config.job_store()

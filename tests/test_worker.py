@@ -362,3 +362,72 @@ def test_worker_threads_reasoning_effort_consult_and_review(tmp_path, monkeypatc
 
     assert seen["consult"] == "low"
     assert seen["review"] == "medium"
+
+
+# --- roots_source provenance in the worker-written envelope (#393) -------------------
+# The worker's Meta is the one a DELIVERED paid success (or crash) envelope carries, so
+# roots_source has to survive the spec round-trip to reach a caller at all.
+
+
+def test_worker_threads_roots_source(tmp_path, monkeypatch):
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path), roots_source="client")
+
+    seen = {}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        seen["meta_roots_source"] = meta.roots_source
+        return {"ok": True, "tool": "codex_delegate", "summary": task}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    assert _worker.main([str(jd)]) == 0
+    assert seen["meta_roots_source"] == "client"
+
+
+def test_worker_roots_source_absent_is_none(tmp_path, monkeypatch):
+    # A legacy spec (written before #393) lacks the key; the worker reads it as None,
+    # which slims away on delivery — absence, not a wrong value. No migration needed.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    seen = {}
+
+    async def fake_run_delegate(task, cwd, meta, **kw):
+        seen["meta_roots_source"] = meta.roots_source
+        return {"ok": True, "tool": "codex_delegate", "summary": task}
+
+    monkeypatch.setattr(delegate, "run_delegate", fake_run_delegate)
+    assert _worker.main([str(jd)]) == 0
+    assert seen["meta_roots_source"] is None
+
+
+def test_worker_crash_error_carries_roots_source(tmp_path, monkeypatch):
+    # The crash sink builds its own Meta from the spec through a SEPARATE serializer
+    # branch (serialize_error, not dump_success), so a paid failure could lose the field
+    # while every success test still passed.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path), roots_source="probe_failed")
+
+    async def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(delegate, "run_delegate", boom)
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out["ok"] is False
+    assert out["meta"]["roots_source"] == "probe_failed"
+
+
+def test_worker_crash_error_omits_roots_source_for_legacy_spec(tmp_path, monkeypatch):
+    # Guards the guard above: serialize_error uses exclude_none, so a legacy spec must
+    # leave the key ABSENT rather than emit an explicit null.
+    jd = tmp_path / "job"
+    _write_spec(jd, cwd=str(tmp_path))
+
+    async def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(delegate, "run_delegate", boom)
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert "roots_source" not in out["meta"]
