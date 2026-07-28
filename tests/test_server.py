@@ -2885,11 +2885,15 @@ async def test_bad_isolation_enum_lists_allowed_values_from_anyof():
     ],
 )
 async def test_bad_detail_is_invalid_arguments_at_the_boundary(tool, args):
-    """Every `detail`-bearing tool rejects an out-of-enum value as `invalid_arguments`,
-    never the in-handler `unsupported_detail` (which _SCHEMA_GATED_CODES keeps unadvertised
-    because FastMCP validates before the handler runs). docs/REFERENCE.md documents this
-    code to direct MCP callers; without this test a retyping of `detail` to a plain `str`
-    would make that sentence false while the direct-call tests above still passed (#397).
+    """The five tools sharing the result `Detail` enum — the ones REFERENCE.md's "Detail
+    levels" section documents — reject an out-of-enum value as `invalid_arguments`, never
+    the in-handler `unsupported_detail` (which _SCHEMA_GATED_CODES keeps unadvertised
+    because FastMCP validates before the handler runs). That doc sentence is written for
+    direct MCP callers; without this test a retyping of `detail` to a plain `str` would
+    make it false while the direct-call tests above still passed (#397).
+
+    `codex_capabilities` also takes a `detail`, but on its own three-valued
+    `CapabilitiesDetail`; pinning that one is #398's item 3, deliberately not absorbed here.
     Zero spend: boundary validation precedes any Codex call."""
     res = await server.mcp.call_tool(tool, {**args, "detail": "bogus"})
     assert res.is_error is True

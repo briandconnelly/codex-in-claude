@@ -598,7 +598,7 @@ class Meta(BaseModel):
             "ORIGINATING run, like tier; a *_async job handle (including an idempotency "
             "replay handle), a dry-run preview, and an error a codex_job_* call GENERATES "
             "instead of delivering a stored result (job_not_found, a still-running or "
-            "unreadable job, an unsupported detail) each report the CURRENT call. So a "
+            "unreadable job) each report the CURRENT call. So a "
             "replay handle and the result later fetched for that same job may legitimately "
             "differ. Absence does NOT imply any of those: it means only that the value was "
             "not reported — the roots state was never recorded for that run, or the failure "

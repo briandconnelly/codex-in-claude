@@ -214,8 +214,9 @@ empty list cannot. It does **not** say where the workspace came from: `workspace
 that, and `roots_source: "client"` sits happily beside `workspace_source: "param"` (an explicit
 `workspace_root` wins over roots) or `"cwd"` (the probe returned no usable root).
 
-`codex_dry_run` and `codex_delegate_dry_run` expose the same value as a **top-level** `roots_source`
-rather than under `meta`. Which run it describes depends on the envelope: a delivered
+On a **successful** preview, `codex_dry_run` and `codex_delegate_dry_run` expose the same value as a
+**top-level** `roots_source` rather than under `meta`; their error envelopes carry it under `meta`
+like every other tool. Which run it describes depends on the envelope: a delivered
 `codex_consult`/`codex_review_changes`/`codex_delegate` result — returned synchronously or fetched
 later via `codex_job_result`/`codex_job_consume_result` — reports the **originating** run, like
 `tier`, while an `*_async` job handle (including an idempotency replay handle), a dry-run preview,
