@@ -13,7 +13,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from codex_in_claude import wire_shape_snapshot
-from codex_in_claude.schemas import RESULT_META_SCHEMA
+from codex_in_claude.schemas import RESULT_META_SCHEMA, Meta
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "wire_shape_snapshot.json"
 
@@ -78,6 +78,25 @@ def test_populated_optional_meta_keys_survive_delivery():
         assert review["base"] == "main"
         assert review["paths"] == ["src/a.py"]
         assert review["context_summary"]["files_changed"] == 1
+
+
+def test_every_producible_optional_is_populated_somewhere():
+    # The completeness rule for the envelope MATRIX, and the thing that makes this
+    # fixture's coverage self-checking rather than a matter of who remembered what.
+    #
+    # No single meta can hold every optional — branch scope excludes commit scope, a
+    # cwd-resolved workspace excludes a param-resolved one — so the guarantee is stated
+    # across envelopes: every optional a producer can actually set is populated in at
+    # least one delivered envelope, and therefore has somewhere for its deletion to show.
+    # Three fields are exempt because no worker can persist them into a stored success
+    # (see the builders in wire_shape_snapshot); their survival is pinned by
+    # TestSlimMetaPopulatedOptionals in test_schemas.py instead.
+    impossible_to_persist = {"job_kind", "idempotency_replayed", "rate_limit"}
+    optional = {name for name, f in Meta.model_fields.items() if f.default is None}
+    assert impossible_to_persist < optional  # the exemptions must BE optional fields
+    delivered = wire_shape_snapshot.build_snapshot()["delivered"]["summary"]
+    populated = {k for env in delivered.values() for k in env["meta"]}
+    assert optional - impossible_to_persist <= populated
 
 
 def test_one_envelope_stays_sparse_so_omission_remains_visible():

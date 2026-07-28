@@ -135,6 +135,69 @@
         "summary": "s",
         "tool": "codex_review_changes",
         "verdict": "unknown"
+      },
+      "review_commit_truncated": {
+        "assumptions": [],
+        "confidence": "medium",
+        "coverage": {
+          "omission_reasons": [
+            "truncated"
+          ],
+          "status": "partial",
+          "untracked_files_detected": null,
+          "untracked_files_included": null,
+          "untracked_files_omitted": null
+        },
+        "findings": [],
+        "meta": {
+          "command_exit_code": 0,
+          "commit": "0000000000000000000000000000000000000000",
+          "compat_warnings": [],
+          "context_summary": {
+            "files_changed": 1,
+            "lines_added": 2,
+            "lines_removed": 3
+          },
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "model": "a-model",
+          "reasoning_effort": "high",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "roots_source": "not_negotiated",
+          "sandbox": "read-only",
+          "scope": "commit",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "session_id": "sess-1",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": true,
+          "truncation_hint": "diff truncated at the byte cap; narrow the scope with paths",
+          "usage": {
+            "cached_input_tokens": 3,
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 6
+          },
+          "workspace_source": "cwd",
+          "workspace_warning": "workspace resolved from the server's own cwd (/repo); pass workspace_root (or configure an MCP root) to be sure the task targets the intended repository"
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": "RAW MODEL TEXT"
+        },
+        "review_status": "completed",
+        "summary": "s",
+        "tool": "codex_review_changes",
+        "verdict": "unknown"
       }
     },
     "summary": {
@@ -272,6 +335,69 @@
         "summary": "s",
         "tool": "codex_review_changes",
         "verdict": "unknown"
+      },
+      "review_commit_truncated": {
+        "assumptions": [],
+        "confidence": "medium",
+        "coverage": {
+          "omission_reasons": [
+            "truncated"
+          ],
+          "status": "partial",
+          "untracked_files_detected": null,
+          "untracked_files_included": null,
+          "untracked_files_omitted": null
+        },
+        "findings": [],
+        "meta": {
+          "command_exit_code": 0,
+          "commit": "0000000000000000000000000000000000000000",
+          "compat_warnings": [],
+          "context_summary": {
+            "files_changed": 1,
+            "lines_added": 2,
+            "lines_removed": 3
+          },
+          "cwd": "/repo",
+          "elapsed_ms": 1,
+          "fingerprint": "<fingerprint>",
+          "isolation": "inherit",
+          "job_id": "00000000000000000000000000000000",
+          "model": "a-model",
+          "reasoning_effort": "high",
+          "redacted_paths": [],
+          "request_id": "00000000000000000000000000000000",
+          "roots_source": "not_negotiated",
+          "sandbox": "read-only",
+          "scope": "commit",
+          "security_warnings": [],
+          "server_version": "0.0.0",
+          "session_id": "sess-1",
+          "tier": "consult",
+          "timeout_seconds": 1,
+          "truncated": true,
+          "truncation_hint": "diff truncated at the byte cap; narrow the scope with paths",
+          "usage": {
+            "cached_input_tokens": 3,
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 6
+          },
+          "workspace_source": "cwd",
+          "workspace_warning": "workspace resolved from the server's own cwd (/repo); pass workspace_root (or configure an MCP root) to be sure the task targets the intended repository"
+        },
+        "next_steps": [],
+        "ok": true,
+        "questions": [],
+        "raw_response": {
+          "model": "a-model",
+          "session_id": "sess-1",
+          "text": null
+        },
+        "review_status": "completed",
+        "summary": "s",
+        "tool": "codex_review_changes",
+        "verdict": "unknown"
       }
     }
   },
@@ -314,6 +440,13 @@
       "rate_limit",
       "truncation_hint",
       "workspace_warning"
+    ],
+    "review_commit_truncated": [
+      "base",
+      "idempotency_replayed",
+      "job_kind",
+      "paths",
+      "rate_limit"
     ]
   }
 }

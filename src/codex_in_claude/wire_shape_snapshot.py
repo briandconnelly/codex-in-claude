@@ -47,6 +47,7 @@ from codex_in_claude.schemas import (
     ReviewResult,
     Usage,
     dump_success,
+    workspace_warning_for,
 )
 from codex_in_claude.server import _finished_job_envelope
 
@@ -132,6 +133,39 @@ def _review_meta() -> Meta:
     )
 
 
+def _review_commit_truncated_meta() -> Meta:
+    """The optional states the other builders CANNOT reach, in one producible run.
+
+    Three fields stayed null everywhere after the first pass at #400, leaving the fixture
+    blind to their deletion even though real producers set all three — `_worker` stamps
+    `commit` and `workspace_warning`, `orchestration` stamps `truncation_hint`. Each needs
+    a run state the consult/branch-review builders exclude:
+      * `commit`            — scope="commit"; the alternative to branch's base/paths.
+      * `truncation_hint`   — a diff that hit the byte cap (so `truncated` is True here,
+                              and the coverage below is `partial` for that reason).
+      * `workspace_warning` — a workspace resolved from the server's own cwd, so
+                              `workspace_source` is "cwd" rather than "param".
+    None of those conflict, so one envelope covers all three: a commit-scope review, of a
+    repo resolved by fallback, whose diff was truncated. The warning text is built by the
+    production helper rather than hand-copied, so it cannot drift from what callers see.
+    """
+    return _meta(
+        workspace_source="cwd",
+        workspace_warning=workspace_warning_for("cwd", "/repo"),
+        roots_source="not_negotiated",
+        model="a-model",
+        reasoning_effort="high",
+        command_exit_code=0,
+        session_id="sess-1",
+        usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
+        scope="commit",
+        commit="0" * 40,
+        context_summary=ContextSummary(files_changed=1, lines_added=2, lines_removed=3),
+        truncated=True,
+        truncation_hint="diff truncated at the byte cap; narrow the scope with paths",
+    )
+
+
 def _sparse_meta() -> Meta:
     """A meta with EVERY optional left null — the omission case, kept deliberately.
 
@@ -186,6 +220,19 @@ def _stored_envelopes() -> dict[str, dict]:
                 meta=_review_meta(),
             )
         ),
+        # The states `review` above cannot hold at once — commit scope, a truncated
+        # diff, a cwd-resolved workspace — so every optional a producer can set is
+        # populated SOMEWHERE across this matrix. `test_every_producible_optional_is_
+        # populated_somewhere` in tests/test_wire_shape.py enforces exactly that.
+        "review_commit_truncated": dump_success(
+            ReviewResult(
+                summary="s",
+                review_status="completed",
+                coverage=Coverage(status="partial", omission_reasons=["truncated"]),
+                raw_response=_raw(),
+                meta=_review_commit_truncated_meta(),
+            )
+        ),
         # diff=None on purpose: a no-changes delegate. Its `diff` key must survive
         # delivery — it is the field the result's own next_steps tells callers to read.
         "delegate_no_changes": dump_success(
@@ -198,6 +245,7 @@ _JOB_ID_SENTINEL = "0" * 32
 _KIND_BY_NAME = {
     "consult": "codex_consult",
     "review": "codex_review_changes",
+    "review_commit_truncated": "codex_review_changes",
     "delegate_no_changes": "codex_delegate",
 }
 
