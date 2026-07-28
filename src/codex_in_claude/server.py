@@ -4520,10 +4520,12 @@ async def codex_job_list(
     if status is not None:
         rows = [r for r in rows if r["status"] == status]
     # limit=None means "no tool-side cap" — the store's own retention is the only bound
-    # (#396), so the caller is the only source of truncation. Compute it before slicing;
-    # rows[:None] is a no-op slice, so the cut below is correct for both cases.
+    # (#396), so the caller is the only source of truncation. Compute it before the cut, and
+    # skip the cut entirely when uncapped: rows[:None] would return the same rows but as a
+    # fresh shallow copy, which is pure waste on the path that now carries every retained row.
     truncated = limit is not None and len(rows) > limit
-    rows = rows[:limit]
+    if limit is not None:
+        rows = rows[:limit]
     jobs = [
         JobSummary(
             job_id=r["job_id"],
