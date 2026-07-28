@@ -79,10 +79,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Changed
 
 - Delivered `codex_consult`/`codex_review_changes`/`codex_delegate` success envelopes now omit
-  `meta` members whose value is null, instead of sending ~18 explicit null keys on every call.
+  `meta` members whose value is null, instead of sending 17 explicit null keys on every call.
   A key's absence means exactly what the null meant — not applicable, or not reported for this
   run — so read `meta` with a null-safe accessor rather than by testing key presence. Measured
-  against the representative envelopes: 33–42% smaller. The six required `meta` members are
+  against the representative envelopes in `tests/fixtures/wire_shape_snapshot.json`: ~30–38%
+  smaller at `detail="summary"` (~30–37% at `full`). The six required `meta` members are
   always present and empty arrays stay empty arrays; everything outside `meta` is delivered
   verbatim, so top-level fields (including `codex_delegate`'s `diff`, which is null when a run
   proposes no changes) and all of `raw_response` keep their keys. The `*_async` job handle and
@@ -102,7 +103,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - Net effect on the preloaded discovery surface: this release's other additions (per-tool cost
   markers, titles, stability tiers, `codex_job_list` filters, `roots_source` provenance,
   resource triage metadata) outgrew the compression above for every client, not just
-  `codex_capabilities` callers. `tools/list` went from 79,242 to 83,354 bytes (+5.2%). That is a
+  `codex_capabilities` callers. `tools/list` went from 79,242 to 83,895 bytes (+5.9%). That is a
   deliberate trade: a larger preloaded surface in exchange for cost/stability/next-step metadata
   that was previously missing or unreachable.
 
