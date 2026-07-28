@@ -37,10 +37,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - Every tool now carries a `title` for human-facing pickers and a namespaced
   `_meta` stability tier, so a client reading only `tools/list` can see which tools are
   experimental.
-- `codex_job_list` gained `limit` (1-1000, default 20) and `status` filters to narrow the
-  returned jobs. When more jobs match than `limit`, the response sets `truncated: true` with
-  a `truncation_hint` naming `limit`/`status` as the way to see the rest — the extra rows are
-  dropped, not paged, so there is no cursor (audit F5).
+- `codex_job_list` gained optional `limit` (1-1000) and `status` filters to narrow the
+  returned jobs. Both are purely opt-in: omitting `limit` (the default) still returns every
+  job the store retains, so the tool every error's repair hint names as *the* way to recover
+  a lost `job_id` never hides a row the server deliberately kept — the job store's own
+  per-workspace retention cap stays the single bound on the response. Only an explicit
+  `limit` can truncate; when more jobs match, the response sets `truncated: true` with a
+  `truncation_hint` pointing back at omitting `limit` (or narrowing with `status`) — the
+  extra rows are dropped, not paged, so there is no cursor. Running jobs are never evicted,
+  so a busy workspace can retain more rows than `limit`'s 1000 ceiling can ask for, which is
+  why omitting it is the only complete listing. The tool's `codex_capabilities` record
+  advertises both params and the cap-not-a-page semantics, so a client treating the
+  `detail="full"` inventory as authoritative sees them too (audit F5, #396, #395).
 - `meta.roots_source` (and the matching field on `codex_dry_run`/`codex_delegate_dry_run`)
   reports which of three states the MCP-roots resolution saw: `client` (the client advertised
   roots and they were used, even if the list came back empty), `not_negotiated` (this client

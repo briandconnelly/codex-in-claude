@@ -754,12 +754,13 @@ JobIdParam = Annotated[
     ),
 ]
 JobLimitParam = Annotated[
-    int,
+    int | None,
     Field(
         ge=1,
         le=1000,
-        description="Maximum jobs to return, newest first (1-1000, default 20). When more "
-        "match, the response sets truncated=true; narrow with `status` or raise `limit`.",
+        description="Maximum jobs to return, newest first (1-1000). Omit (or pass null) to "
+        "return every job the store retains — the default. Only an explicit limit truncates: "
+        "then the response sets truncated=true and the extra rows are dropped.",
     ),
 ]
 JobStatusFilterParam = Annotated[
@@ -1958,10 +1959,13 @@ def codex_capabilities(
                 stability=_TOOL_STABILITY.get("codex_job_list"),
                 use_when="To recover job_ids or inspect known jobs for a workspace, "
                 "including sync-originated ones.",
-                key_optional_params=["workspace_root"],
+                key_optional_params=["workspace_root", "limit", "status"],
                 returns="Compact job summaries, newest first, each with result_ok "
                 "(true=success, false=stored error, null=running/unclassifiable) so a "
-                "stored failure is triageable without a per-job fetch. Not permanent "
+                "stored failure is triageable without a per-job fetch. Every retained job "
+                "unless the caller passes `limit`, which caps the rows and sets "
+                "truncated=true — a cap, not a page: the extra rows are dropped and there "
+                "is no cursor. Not permanent "
                 "storage: "
                 "terminal records expire after the TTL, and a per-workspace soft cap "
                 "(default 50) evicts the oldest terminal records as new jobs start. "
@@ -4483,7 +4487,7 @@ async def codex_job_cancel(
 async def codex_job_list(
     ctx: Context | None = None,
     workspace_root: WorkspaceRootParam = None,
-    limit: JobLimitParam = 20,
+    limit: JobLimitParam = None,
     status: JobStatusFilterParam = None,
 ) -> dict:
     """List the background jobs known for this workspace, newest first.
@@ -4493,15 +4497,17 @@ async def codex_job_list(
     `result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,
     so a stored failure is triageable without fetching each result.
 
-    Returns the 20 newest by default; pass `limit` (1-1000) or `status` to narrow. When more
-    jobs match than `limit`, the response sets `truncated: true` with a `truncation_hint` —
-    the extra rows are dropped, not paged, so raise `limit` or filter rather than looking for
-    a cursor.
+    Returns every retained job by default; pass `limit` (1-1000) or `status` to narrow. Only
+    an explicit `limit` truncates: when more jobs match, the response sets `truncated: true`
+    with a `truncation_hint` — the extra rows are dropped, not paged, so omit `limit` to get
+    them all rather than looking for a cursor.
 
     Read a job's result promptly — a finished record can silently drop off. This list is
     not permanent storage: terminal records expire after the TTL (default 24h), and a
     per-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records
     as new jobs start, so a finished job can disappear even before its `expires_at`.
+    Running jobs are never evicted, so a busy workspace can hold more than the cap — and
+    more than `limit`'s 1000 ceiling.
     Includes sync-originated records (any sync consult/review/delegate call); the cap/TTL
     eviction covers both."""
     cwd, source, err = await _resolve_job_workspace(ctx, workspace_root)
@@ -4511,7 +4517,10 @@ async def codex_job_list(
     rows = await asyncio.to_thread(store.list_jobs, cwd)
     if status is not None:
         rows = [r for r in rows if r["status"] == status]
-    truncated = len(rows) > limit
+    # limit=None means "no tool-side cap" — the store's own retention is the only bound
+    # (#396), so the caller is the only source of truncation. Compute it before slicing;
+    # rows[:None] is a no-op slice, so the cut below is correct for both cases.
+    truncated = limit is not None and len(rows) > limit
     rows = rows[:limit]
     jobs = [
         JobSummary(
@@ -4531,8 +4540,8 @@ async def codex_job_list(
         workspace=_job_workspace(cwd, source),
         truncated=truncated,
         truncation_hint=(
-            f"showing the {limit} newest of more matching jobs; raise `limit` (max 1000) "
-            "or narrow with `status`"
+            f"showing the {limit} newest of more matching jobs; omit `limit` for every "
+            "retained match, or narrow with `status`"
             if truncated
             else None
         ),
