@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-65"
+FINGERPRINT = "codex-in-claude/0.1/schema-66"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -199,8 +199,9 @@ RootsSource = Literal["client", "not_negotiated", "probe_failed"]
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
 JobState = Literal["running", "done", "failed", "cancelled", "timeout"]
 # Per-tool maturity, advertised as discovery metadata in codex_capabilities. NOT the
-# consult/propose/apply intent `Tier`. Omitted (None) means the tool inherits the
-# server-wide `stability` ("alpha"); a value flags a tool that differs from that norm.
+# consult/propose/apply intent `Tier`. None means the tool inherits the server-wide
+# `stability` ("alpha"); a value flags a tool that differs from that norm. It reaches the
+# wire as an explicit null, never as an absent key — see _normalize_tool_details (#399).
 ToolStability = Literal["stable", "preview", "experimental"]
 
 # G1 (audit-2 gate follow-up): this inheritance rule previously lived only in
@@ -1067,6 +1068,8 @@ class ToolCapability(BaseModel):
     cost: Literal["free", "active"]
     # Per-tool maturity (advisory). None ⇒ inherits the server-wide `stability`; set
     # only when a tool is more experimental than that norm (e.g. the async/job surface).
+    # Optional here, but delivered on every inventory entry: `codex_capabilities` forces
+    # the key back after `exclude_none` strips it, so None ships as null (#399).
     stability: ToolStability | None = Field(default=None, description=_TOOL_STABILITY_DESC)
     # Optional in the schema (not just at the Python default): `codex_capabilities`'
     # `detail="summary"` (the default) strips use_when/returns from every entry before
