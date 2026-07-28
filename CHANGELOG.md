@@ -141,7 +141,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   back, so a paid success — and a paid failure, whose stored envelope is built the same way —
   reports the roots state its run actually saw. The same value now also reaches the
   lifecycle-generated error envelopes (`job_not_found`, a running/corrupt/incompatible job, and
-  `codex_job_cancel`), which probed roots and then discarded the answer;
+  `codex_job_cancel` — plus the in-handler `unsupported_detail` guard, which only a direct Python
+  caller can reach, since over MCP a bad `detail` is rejected as `invalid_arguments` before the
+  handler runs), which probed roots and then discarded the answer;
   those report the CURRENT lookup, not the inspected job's originating run. `roots_source` is
   provenance rather than call identity, so it is excluded from the idempotency argument hash: a
   keyed call that reconnects with a different roots state still replays instead of failing

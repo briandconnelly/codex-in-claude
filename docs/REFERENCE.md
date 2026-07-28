@@ -211,12 +211,13 @@ returned, possibly an empty list), `not_negotiated` (the client never advertised
 pass `workspace_root` instead), or `probe_failed` (roots were advertised but the probe errored this
 turn — retrying may help). It separates a client limitation from a transient failure, which a bare
 empty list cannot. It does **not** say where the workspace came from: `workspace_source` answers
-that, and `roots_source: "client"` sits happily beside `workspace_source: "param"` (an explicit
+that, and `roots_source: "client"` coexists with `workspace_source: "param"` (an explicit
 `workspace_root` wins over roots) or `"cwd"` (the probe returned no usable root).
 
 On a **successful** preview, `codex_dry_run` and `codex_delegate_dry_run` expose the same value as a
-**top-level** `roots_source` rather than under `meta`; their error envelopes carry it under `meta`
-like every other tool. Which run it describes depends on the envelope: a delivered
+**top-level** `roots_source` rather than under `meta`; when their error envelopes report it at all it
+sits under `meta` like every other tool, and an argument rejected at the call boundary carries none
+because no roots probe has run yet. Which run it describes depends on the envelope: a delivered
 `codex_consult`/`codex_review_changes`/`codex_delegate` result — returned synchronously or fetched
 later via `codex_job_result`/`codex_job_consume_result` — reports the **originating** run, like
 `tier`, while an `*_async` job handle (including an idempotency replay handle), a dry-run preview,
