@@ -49,7 +49,7 @@ from codex_in_claude.server import mcp
 # still within budget, no further change. Measured again 2026-07-27 (#396: codex_job_list's
 # `limit` became nullable so a no-arg call returns every retained job — the integer-or-null
 # schema costs ~30 bytes, the rest is the reworded param description, docstring, and the
-# now-explicit "running jobs are never evicted" ceiling caveat): 83,739 bytes — budget raised
+# now-explicit "running jobs are never evicted" ceiling caveat): 83,895 bytes — budget raised
 # to the next 500 above the measured value. Spent deliberately: the wording it buys is what
 # tells a client the default is complete and that `truncated` is a cap with no cursor.
 TOOLS_LIST_BYTE_BUDGET = 84_000

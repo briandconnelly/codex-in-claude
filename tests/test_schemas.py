@@ -764,7 +764,7 @@ def _wire_catalog_bytes() -> int:
 # `would_call_model`/`coverage`). The last step also absorbed headroom earlier PRs consumed
 # without resetting the cap. → ~76,714 (#333: idempotency_key/reasoning_effort inline
 # descriptions compressed to codex://params summaries, sync/async tool docstrings slimmed,
-# workspace_root/isolation tightened — guarantees frozen by tests/test_server.py). → ~83,756
+# workspace_root/isolation tightened — guarantees frozen by tests/test_server.py). → ~83,912
 # (#396: codex_job_list's `limit` became nullable so a no-arg call returns every retained job
 # — the integer-or-null schema plus the reworded param description, docstring, and the
 # now-explicit "running jobs are never evicted" ceiling caveat; the bytes buy the client the

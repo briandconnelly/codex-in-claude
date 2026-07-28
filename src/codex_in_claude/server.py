@@ -759,8 +759,9 @@ JobLimitParam = Annotated[
         ge=1,
         le=1000,
         description="Maximum jobs to return, newest first (1-1000). Omit (or pass null) to "
-        "return every job the store retains — the default. Only an explicit limit truncates: "
-        "then the response sets truncated=true and the extra rows are dropped.",
+        "return every retained job that matches — the default; it caps nothing, and does not "
+        "override `status`. Only an explicit limit truncates: then the response sets "
+        "truncated=true and the extra rows are dropped.",
     ),
 ]
 JobStatusFilterParam = Annotated[
@@ -1963,9 +1964,9 @@ def codex_capabilities(
                 returns="Compact job summaries, newest first, each with result_ok "
                 "(true=success, false=stored error, null=running/unclassifiable) so a "
                 "stored failure is triageable without a per-job fetch. Every retained job "
-                "unless the caller passes `limit`, which caps the rows and sets "
-                "truncated=true — a cap, not a page: the extra rows are dropped and there "
-                "is no cursor. Not permanent "
+                "matching `status` unless the caller also passes `limit`, which caps the "
+                "rows and sets truncated=true — a cap, not a page: the extra rows are "
+                "dropped and there is no cursor. Not permanent "
                 "storage: "
                 "terminal records expire after the TTL, and a per-workspace soft cap "
                 "(default 50) evicts the oldest terminal records as new jobs start. "
@@ -4497,10 +4498,11 @@ async def codex_job_list(
     `result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,
     so a stored failure is triageable without fetching each result.
 
-    Returns every retained job by default; pass `limit` (1-1000) or `status` to narrow. Only
-    an explicit `limit` truncates: when more jobs match, the response sets `truncated: true`
-    with a `truncation_hint` — the extra rows are dropped, not paged, so omit `limit` to get
-    them all rather than looking for a cursor.
+    Returns every retained job by default; pass `limit` (1-1000) or `status` to narrow. They
+    narrow independently — omitting `limit` returns every job matching `status`, not every
+    job. Only an explicit `limit` truncates: when more jobs match, the response sets
+    `truncated: true` with a `truncation_hint` — the extra rows are dropped, not paged, so
+    omit `limit` to get them all rather than looking for a cursor.
 
     Read a job's result promptly — a finished record can silently drop off. This list is
     not permanent storage: terminal records expire after the TTL (default 24h), and a

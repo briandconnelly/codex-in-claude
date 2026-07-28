@@ -3217,8 +3217,11 @@ def test_capabilities_advertise_job_list_narrowing_controls():
     row = next(t for t in caps["tool_details"] if t["name"] == "codex_job_list")
     assert set(row["key_optional_params"]) == {"workspace_root", "limit", "status"}
     returns = row["returns"]
-    assert "truncated" in returns
-    assert "cursor" in returns  # the cap-not-a-page guarantee
+    assert "truncated=true" in returns
+    # Assert the guarantee's phrasing, not just the word "cursor": a bare substring check
+    # would pass just as happily on "continue with a cursor" — the exact reversal of the
+    # cap-not-a-page contract this test exists to pin.
+    assert "there is no cursor" in returns
 
 
 async def test_capabilities_list_error_codes_per_tool():
@@ -7326,7 +7329,7 @@ class TestJobListNarrowing:
         await _seed_jobs(monkeypatch, tmp_path, count=3)
         async with Client(server.mcp) as c:
             r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 1})
-        assert "omit" in r.structured_content["truncation_hint"]
+        assert "omit `limit`" in r.structured_content["truncation_hint"]
 
     @pytest.mark.anyio
     async def test_untruncated_list_reports_truncated_false(self, monkeypatch, clean_env, tmp_path):

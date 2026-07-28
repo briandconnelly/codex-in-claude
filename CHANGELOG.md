@@ -41,7 +41,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   returned jobs. Both are purely opt-in: omitting `limit` (the default) still returns every
   job the store retains, so the tool every error's repair hint names as *the* way to recover
   a lost `job_id` never hides a row the server deliberately kept — the job store's own
-  per-workspace retention cap stays the single bound on the response. Only an explicit
+  retention policy is the only server-side limiter, and a soft one, since running jobs are
+  exempt from eviction. Only an explicit
   `limit` can truncate; when more jobs match, the response sets `truncated: true` with a
   `truncation_hint` pointing back at omitting `limit` (or narrowing with `status`) — the
   extra rows are dropped, not paged, so there is no cursor. Running jobs are never evicted,
