@@ -5,12 +5,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-28
+
+A discovery-metadata and envelope-slimming release. Every tool now states its cost, its title, and
+its stability tier in `tools/list` itself; `codex_capabilities` gains a `summary` default and a
+`contracts` mode, so a client can fetch a schema or recheck a `fingerprint` without re-reading the
+whole tool inventory; `codex_job_list` gains `limit`/`status` filters; and each `codex://` resource
+carries triage metadata a client can read before spending context on the body. Delivered success
+envelopes stop sending explicit null `meta` members, and `meta.roots_source` now reports what the
+MCP-roots probe actually saw on every envelope that reports it. Several capability and
+documentation contracts that described something other than what was being sent are corrected. The
+agent-visible surface changed ten times (result `fingerprint` `codex-in-claude/0.1/schema-56` →
+`schema-66`, and the persisted `RESULT_FORMAT` `6` → `7`), so pre-1.0 this is a minor release;
+clients that cache by `fingerprint` re-fetch the contract. Every change is backward-compatible — no
+tool, field, or error code was removed or retyped.
+
 ### Added
 
 - `codex_capabilities` accepts `detail="contracts"`, which omits `tool_details` and returns
   everything else unchanged. The `include_schemas` fallback for resource-blind clients previously
   re-sent the whole tool inventory on every schema fetch; pairing it with `contracts` drops a
-  schema fetch from 30,170 to 22,848 bytes, and `detail="contracts"` alone is a 3,787-byte
+  schema fetch from 30,404 to 23,082 bytes, and `detail="contracts"` alone is a 3,787-byte
   `fingerprint` recheck for cache revalidation (was 11,109). `tool_details` is the only field
   removed, and it is already optional in the published schemas, so a `contracts` response still
   validates against both the tool's `outputSchema` and `codex://capabilities-result` — no schema
@@ -81,12 +96,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 - Delivered `codex_consult`/`codex_review_changes`/`codex_delegate` success envelopes now omit
   `meta` members whose value is null, instead of sending a run of explicit null keys on every
-  call — 17 of them in each representative envelope in `tests/fixtures/wire_shape_snapshot.json`,
-  though a real call's count varies with which members apply to it.
+  call — between 5 and 17 of them across the representative envelopes in
+  `tests/fixtures/wire_shape_snapshot.json`, though a real call's count varies with which
+  members apply to it.
   A key's absence means exactly what the null meant — not applicable, or not reported for this
   run — so read `meta` with a null-safe accessor rather than by testing key presence. Measured
-  against the representative envelopes in `tests/fixtures/wire_shape_snapshot.json`: ~30–38%
-  smaller at `detail="summary"` (~30–37% at `full`). The six required `meta` members are
+  against those same representative envelopes: ~6–37% smaller at `detail="summary"`, and the
+  same ~6–37% at `full`; the saving scales with how many members the run leaves
+  inapplicable, so the sparsest envelope gains most. The six required `meta` members are
   always present and empty arrays stay empty arrays; everything outside `meta` is delivered
   verbatim, so top-level fields (including `codex_delegate`'s `diff`, which is null when a run
   proposes no changes) and all of `raw_response` keep their keys. The `*_async` job handle and
@@ -101,7 +118,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `*_async` tools only, `async_lifecycle`). Pass `detail="full"` for the previous payload. The
   `extra_context` parameter contract moved its full text to `codex://params` and
   `idempotency_key`'s inline summary was compressed. The durable size win is `codex_capabilities`'
-  own response — 21,605 → 11,109 bytes (−49%) — but that is paid only by clients that call the
+  own response — 21,763 → 11,109 bytes (−49%) — but that is paid only by clients that call the
   tool, not by every client the way `tools/list` is.
 - Net effect on the preloaded discovery surface: this release's other additions (per-tool cost
   markers, titles, stability tiers, `codex_job_list` filters, `roots_source` provenance,
