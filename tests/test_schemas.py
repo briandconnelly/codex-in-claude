@@ -764,10 +764,14 @@ def _wire_catalog_bytes() -> int:
 # `would_call_model`/`coverage`). The last step also absorbed headroom earlier PRs consumed
 # without resetting the cap. → ~76,714 (#333: idempotency_key/reasoning_effort inline
 # descriptions compressed to codex://params summaries, sync/async tool docstrings slimmed,
-# workspace_root/isolation tightened — guarantees frozen by tests/test_server.py). Tighten
-# deliberately when the surface legitimately shrinks; a bump means the wire response grew —
-# justify it.
-CATALOG_BYTE_CAP = 83_500
+# workspace_root/isolation tightened — guarantees frozen by tests/test_server.py). → ~83,912
+# (#396: codex_job_list's `limit` became nullable so a no-arg call returns every retained job
+# — the integer-or-null schema plus the reworded param description, docstring, and the
+# now-explicit "running jobs are never evicted" ceiling caveat; the bytes buy the client the
+# knowledge that the default listing is complete and that `truncated` is a cap with no
+# cursor). Tighten deliberately when the surface legitimately shrinks; a bump means the wire
+# response grew — justify it.
+CATALOG_BYTE_CAP = 84_000
 
 
 def test_wire_catalog_under_cap():
@@ -926,7 +930,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-62"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-63"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

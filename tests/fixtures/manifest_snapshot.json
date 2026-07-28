@@ -488,11 +488,13 @@
           "invalid_arguments"
         ],
         "key_optional_params": [
-          "workspace_root"
+          "workspace_root",
+          "limit",
+          "status"
         ],
         "name": "codex_job_list",
         "required_params": [],
-        "returns": "Compact job summaries, newest first, each with result_ok (true=success, false=stored error, null=running/unclassifiable) so a stored failure is triageable without a per-job fetch. Not permanent storage: terminal records expire after the TTL, and a per-workspace soft cap (default 50) evicts the oldest terminal records as new jobs start. Running jobs are never evicted, so the list can transiently exceed the cap; older finished jobs drop off. Includes sync-originated records; the cap/TTL eviction covers both.",
+        "returns": "Compact job summaries, newest first, each with result_ok (true=success, false=stored error, null=running/unclassifiable) so a stored failure is triageable without a per-job fetch. Every retained job matching `status` unless the caller also passes `limit`, which caps the rows and sets truncated=true — a cap, not a page: the extra rows are dropped and there is no cursor. Not permanent storage: terminal records expire after the TTL, and a per-workspace soft cap (default 50) evicts the oldest terminal records as new jobs start. Running jobs are never evicted, so the list can transiently exceed the cap; older finished jobs drop off. Includes sync-originated records; the cap/TTL eviction covers both.",
         "stability": "experimental",
         "use_when": "To recover job_ids or inspect known jobs for a workspace, including sync-originated ones."
       },
@@ -886,7 +888,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-62",
+            "default": "codex-in-claude/0.1/schema-63",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1438,7 +1440,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-62",
+                "default": "codex-in-claude/0.1/schema-63",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2563,7 +2565,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-62",
+            "default": "codex-in-claude/0.1/schema-63",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3244,7 +3246,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-62",
+            "default": "codex-in-claude/0.1/schema-63",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -5801,17 +5803,24 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List the background jobs known for this workspace, newest first.\n\nFree — no model call. Use to recover job_ids lost across context compaction or\ninterruption. Returns each job's id, kind, status, start time, result_available,\n`result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,\nso a stored failure is triageable without fetching each result.\n\nReturns the 20 newest by default; pass `limit` (1-1000) or `status` to narrow. When more\njobs match than `limit`, the response sets `truncated: true` with a `truncation_hint` —\nthe extra rows are dropped, not paged, so raise `limit` or filter rather than looking for\na cursor.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nIncludes sync-originated records (any sync consult/review/delegate call); the cap/TTL\neviction covers both.",
+      "description": "List the background jobs known for this workspace, newest first.\n\nFree — no model call. Use to recover job_ids lost across context compaction or\ninterruption. Returns each job's id, kind, status, start time, result_available,\n`result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,\nso a stored failure is triageable without fetching each result.\n\nReturns every retained job by default; pass `limit` (1-1000) or `status` to narrow. They\nnarrow independently — omitting `limit` returns every job matching `status`, not every\njob. Only an explicit `limit` truncates: when more jobs match, the response sets\n`truncated: true` with a `truncation_hint` — the extra rows are dropped, not paged, so\nomit `limit` to get them all rather than looking for a cursor.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so a busy workspace can hold more than the cap — and\nmore than `limit`'s 1000 ceiling.\nIncludes sync-originated records (any sync consult/review/delegate call); the cap/TTL\neviction covers both.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "limit": {
-            "default": 20,
-            "description": "Maximum jobs to return, newest first (1-1000, default 20). When more match, the response sets truncated=true; narrow with `status` or raise `limit`.",
-            "maximum": 1000,
-            "minimum": 1,
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Maximum jobs to return, newest first (1-1000). Omit (or pass null) to return every retained job that matches — the default; it caps nothing, and does not override `status`. Only an explicit limit truncates: then the response sets truncated=true and the extra rows are dropped."
           },
           "status": {
             "anyOf": [

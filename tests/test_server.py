@@ -2230,7 +2230,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-62"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-63"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3205,6 +3205,23 @@ def test_job_poll_interval_has_single_source():
 
     assert JOB_POLL_AFTER_MS == jobs.DEFAULT_POLL_AFTER_MS
     assert jobs.JobStore.__dataclass_fields__["poll_after_ms"].default == JOB_POLL_AFTER_MS
+
+
+def test_capabilities_advertise_job_list_narrowing_controls():
+    """#395: a client treating the detail="full" inventory as authoritative learns about
+    `limit`/`status` and the no-cursor truncation semantics there, not only from the input
+    schema. The manifest snapshot would flag drift here, but it is an acknowledgment guard,
+    not a semantic assertion — a refactor that dropped these could pass with a refreshed
+    fixture, so assert the meaning directly."""
+    caps = server.codex_capabilities(detail="full")
+    row = next(t for t in caps["tool_details"] if t["name"] == "codex_job_list")
+    assert set(row["key_optional_params"]) == {"workspace_root", "limit", "status"}
+    returns = row["returns"]
+    assert "truncated=true" in returns
+    # Assert the guarantee's phrasing, not just the word "cursor": a bare substring check
+    # would pass just as happily on "continue with a cursor" — the exact reversal of the
+    # cap-not-a-page contract this test exists to pin.
+    assert "there is no cursor" in returns
 
 
 async def test_capabilities_list_error_codes_per_tool():
@@ -5996,7 +6013,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-62")
+    assert result["fingerprint"].endswith("schema-63")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -7259,6 +7276,36 @@ class TestJobListNarrowing:
     """F5: the job list can be narrowed and discloses when it was cut."""
 
     @pytest.mark.anyio
+    async def test_no_arg_call_returns_every_retained_job(self, monkeypatch, clean_env, tmp_path):
+        """#396: the default must not undercut the store's own retention bound.
+
+        The store already caps retention per workspace (soft cap, default 50); a
+        tool-side default of 20 hid rows the server deliberately kept, from the very
+        call advertised as the way to recover a lost job_id. 25 rows is above the old
+        default and below the store cap, so a subset here can only come from the tool.
+        """
+        await _seed_jobs(monkeypatch, tmp_path, count=25)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path)})
+        body = r.structured_content
+        assert len(body["jobs"]) == 25
+        assert body["truncated"] is False
+        assert "truncation_hint" not in body
+
+    @pytest.mark.anyio
+    async def test_explicit_null_limit_matches_omission(self, monkeypatch, clean_env, tmp_path):
+        """`limit: null` is documented as equivalent to omitting it — assert that
+        against the omitted call rather than trusting the two paths coincide."""
+        await _seed_jobs(monkeypatch, tmp_path, count=25)
+        async with Client(server.mcp) as c:
+            omitted = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path)})
+            explicit = await c.call_tool(
+                "codex_job_list", {"workspace_root": str(tmp_path), "limit": None}
+            )
+        assert explicit.structured_content == omitted.structured_content
+        assert len(explicit.structured_content["jobs"]) == 25
+
+    @pytest.mark.anyio
     async def test_limit_caps_the_returned_rows_and_sets_truncated(
         self, monkeypatch, clean_env, tmp_path
     ):
@@ -7269,6 +7316,20 @@ class TestJobListNarrowing:
         assert len(body["jobs"]) == 2
         assert body["truncated"] is True
         assert "limit" in body["truncation_hint"]
+
+    @pytest.mark.anyio
+    async def test_truncation_hint_names_omitting_limit_as_the_full_recovery_path(
+        self, monkeypatch, clean_env, tmp_path
+    ):
+        """Truncation is now always caller-induced, so the hint must name the one move
+        that always recovers every retained match — omitting `limit`. Raising it is not
+        that move: `le=1000` is a hard ceiling, and running jobs are never evicted, so a
+        workspace can retain more matching rows than an explicit limit can ever ask for.
+        """
+        await _seed_jobs(monkeypatch, tmp_path, count=3)
+        async with Client(server.mcp) as c:
+            r = await c.call_tool("codex_job_list", {"workspace_root": str(tmp_path), "limit": 1})
+        assert "omit `limit`" in r.structured_content["truncation_hint"]
 
     @pytest.mark.anyio
     async def test_untruncated_list_reports_truncated_false(self, monkeypatch, clean_env, tmp_path):
