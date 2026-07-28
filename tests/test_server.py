@@ -2244,30 +2244,35 @@ def test_capabilities_payload_discloses_fingerprint_covers():
 
 
 def test_capabilities_mark_m4_surface_experimental():
-    """The newer async + background-job lifecycle tools advertise stability=experimental;
-    the sync core inherits the server-wide alpha, carried as an explicit null (#71, #399)."""
+    """Every tool's advertised stability matches _TOOL_STABILITY: the newer async +
+    background-job lifecycle tools (and codex_transfer) say experimental, and everything
+    else inherits the server-wide alpha, carried as an explicit null (#71, #399)."""
     caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
-    experimental = {
-        "codex_consult_async",
-        "codex_review_changes_async",
-        "codex_delegate_async",
-        "codex_job_status",
-        "codex_job_result",
-        "codex_job_consume_result",
-        "codex_job_cancel",
-        "codex_job_list",
+    # The expected values are spelled out rather than read from _TOOL_STABILITY, which is the
+    # map the payload is BUILT from: deriving them would compare the code against itself and
+    # stay green even if an override changed value or disappeared (confirmed by mutating the
+    # map). The set-equality guard below is what keeps this literal list from going stale —
+    # the failure it prevents is real, since an incomplete list previously left codex_transfer
+    # asserted by neither half of this test.
+    expected = {
+        "codex_transfer": "experimental",
+        "codex_consult_async": "experimental",
+        "codex_review_changes_async": "experimental",
+        "codex_delegate_async": "experimental",
+        "codex_job_status": "experimental",
+        "codex_job_result": "experimental",
+        "codex_job_consume_result": "experimental",
+        "codex_job_cancel": "experimental",
+        "codex_job_list": "experimental",
     }
-    for name in experimental:
-        assert by_name[name]["stability"] == "experimental", name
-    # #399: default-tier tools carry the key with a null value — never omit it. `exclude_none`
-    # used to drop it here (but not in summary mode), so the two modes disagreed on the same
-    # field. Derived from _TOOL_STABILITY rather than a hand-listed set so a tool that gains
-    # or loses an override cannot silently fall out of this assertion.
+    assert set(expected) == set(server._TOOL_STABILITY), "a tool gained or lost an override"
+    # #399: every entry carries the key — a default-tier tool gets an explicit null rather
+    # than the omission `exclude_none` used to produce here (but not in summary mode, which
+    # is how the two modes came to disagree on the same field).
     for name, entry in by_name.items():
-        if name not in server._TOOL_STABILITY:
-            assert "stability" in entry, name
-            assert entry["stability"] is None, name
+        assert "stability" in entry, name
+        assert entry["stability"] == expected.get(name), name
 
 
 def test_server_advertises_tools_list_changed():
