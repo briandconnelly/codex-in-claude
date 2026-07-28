@@ -37,6 +37,31 @@ the `commands/` slash prompts, the bundled skills, and roughly thirty tests.
   - `codex_capabilities`' own default response went 21,167 → 10,885 bytes, a −49% cut — but that is paid only by clients that call the tool, not by every client the way `tools/list` is.
   - Parameter rationalization (audit-2 F2): only `extra_context` moved to the `codex://params` resource, and `idempotency_key` was compressed in place.
     Three other parameters (`workspace_root`, `model`, `isolation`) were measured and deliberately **not** registered, because their current descriptions are already terse enough that adding the required `codex://params` pointer made them longer.
-- `tests/test_wire_size.py` pins the resulting size so drift is a reviewed decision.
+- `tests/test_wire_size.py` budgets the resulting size — it asserts a ceiling, not an exact
+  value — so growth stays within the headroom and exceeding it is a reviewed decision.
 - Revisit only if an eval shows agents selecting correctly from a `mode` parameter at the rate
   they currently select `_async` by name.
+
+## Postscript (2026-07-28)
+
+Every byte figure above was measured on 2026-07-26, when this decision was made, and is left
+unedited as the historical record.
+Later work in the same pre-0.16.0 window has already outgrown them, so do not read them as current.
+
+This postscript deliberately restates no replacement numbers: a copied figure is exactly what went
+stale here, and a second copy would go stale the same way.
+Where to look instead, and what each source actually promises:
+
+- `tests/test_wire_size.py` mechanically enforces a `tools/list` byte **ceiling** — the current
+  budget, not any figure above — and its comments record measurements behind that budget.
+  Treat those comments as commentary rather than a complete history; entries have been dropped in
+  rebases before.
+  Because only a ceiling is enforced, the payload can also drift below the budget without any
+  comment changing, so re-measure with the test's own method for an exact current size.
+- ADR 0003 and `docs/REFERENCE.md` carry `codex_capabilities` response figures, but these are
+  decision-time and explicitly indicative measurements, not current ones — `REFERENCE.md` says so
+  in place.
+
+The later growth does not change the decision.
+The exact post-compaction totals were never its deciding criterion; it turns on selection
+reliability (#338), and the figures record what that reliability cost at the time.

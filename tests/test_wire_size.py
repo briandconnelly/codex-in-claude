@@ -1,8 +1,9 @@
 """Wire-size budget for the discovery surface (audit 2, F2).
 
 `tools/list` is what every client pays before its first useful call, and the least-capable
-realistic client preloads all of it. This pins the serialized size so a future description or
-schema addition has to be a deliberate, reviewed budget change rather than silent drift."""
+realistic client preloads all of it. This bounds the serialized size with a ceiling — growth
+within the remaining headroom passes, and exceeding it forces a future description or schema
+addition to be a deliberate, reviewed budget change rather than silent drift."""
 
 import json
 

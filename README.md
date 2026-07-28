@@ -182,8 +182,9 @@ so branch on that result type before reading fields. Failure is a uniform, machi
 `error` with a stable `code` and symbolic `repair` hint. The contract is versioned by `fingerprint`.
 
 Calling the MCP tools directly instead of through the `/codex:*` commands? See
-[`docs/REFERENCE.md`](docs/REFERENCE.md) for the full contract — every error field, rate-limit
-reporting (`meta.rate_limit`), background-job semantics, and workspace selection (`workspace_root`).
+[`docs/REFERENCE.md`](docs/REFERENCE.md) for the detailed contract — error-envelope semantics,
+rate-limit reporting (`codex_status`), background-job semantics, and workspace selection
+(`workspace_root`). It points on to `codex://error-envelope` for the full error schema.
 
 ## Safety
 
