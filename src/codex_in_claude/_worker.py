@@ -29,6 +29,7 @@ from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     ErrorResult,
     Meta,
+    RootsSource,
     Sandbox,
     Tier,
     workspace_warning_for,
@@ -79,6 +80,11 @@ def _meta_from_spec(spec: dict) -> Meta:
         # (the key is written only when an effort was set, preserving idempotency
         # hashes); .get() reads both as None.
         reasoning_effort=spec.get("reasoning_effort"),
+        # The roots state the ORIGINATING call saw (#393). It reaches a caller only via
+        # this spec round-trip: a delivered success/crash envelope is built here, not
+        # from the meta the handler prepared. Absent from a pre-#393 spec; .get() reads
+        # that as None, which slims away on delivery — no migration.
+        roots_source=cast("RootsSource | None", spec.get("roots_source")),
         timeout_seconds=spec["timeout_seconds"],
         elapsed_ms=0,
         scope=spec.get("scope"),

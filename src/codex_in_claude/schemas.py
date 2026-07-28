@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-63"
+FINGERPRINT = "codex-in-claude/0.1/schema-64"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -97,9 +97,14 @@ FINGERPRINT = "codex-in-claude/0.1/schema-63"
 # tolerate an unknown key an older reader's closed schema would reject — the exact case this
 # field exists to catch. Verified (not assumed): the `serialized` view's consult/review/delegate
 # success entries each gained "roots_source": null; the `error` entry did not move (serialize_error
-# uses exclude_none, and this field is never populated before a Codex-run-prepared error, so it
-# always serializes absent there) — the same asymmetry #185's ErrorInfo fields relied on to NOT
+# uses exclude_none, and the representative error envelope leaves this field unpopulated, so it
+# serializes absent there) — the same asymmetry #185's ErrorInfo fields relied on to NOT
 # bump, except here the success side (which DOES retain nulls) moved, so this one must bump.
+# #393 later made the worker POPULATE roots_source, so a real stored error (the worker's crash
+# sink builds its meta from the same spec) can now carry the key where it previously never did.
+# That does NOT move this integer: the field is already known at format 7, so a format-7 reader
+# accepts it — only an UNKNOWN key would trip a closed schema. The representative envelope above
+# still leaves it null, so the `serialized` view is unchanged and the snapshot stays green.
 RESULT_FORMAT: int = 7
 
 
@@ -570,12 +575,31 @@ class Meta(BaseModel):
     cwd: str
     workspace_source: str | None = None  # how cwd was resolved: param|roots|cwd
     workspace_warning: str | None = None  # set when cwd was resolved from server cwd
-    # F8: which of the three roots states the workspace resolution saw — "client" (roots
-    # were advertised and used), "not_negotiated" (this client has none; pass
-    # workspace_root), or "probe_failed" (roots were advertised but the call errored;
-    # retrying may help). Distinguishes a client limitation from a transient failure, which
-    # a bare empty list could not.
-    roots_source: RootsSource | None = None
+    # F8. The `which run` clause is published (not just commented) because #393 made the
+    # field reach two kinds of envelope that answer it differently — a stored result
+    # replays the producer's value while a handle reports the attaching call — and a
+    # client diffing those two would otherwise read a contradiction. Mirrors how `tier`
+    # below states its own originating-run rule.
+    roots_source: RootsSource | None = Field(
+        default=None,
+        description=(
+            "Which of three states the MCP-roots resolution saw: 'client' (roots were "
+            "advertised and used, even if the list came back empty), 'not_negotiated' "
+            "(this client never advertised the roots capability — pass workspace_root "
+            "instead), or 'probe_failed' (roots were advertised but the call errored this "
+            "turn — retrying may help). Distinguishes a client limitation from a transient "
+            "failure, which a bare empty list could not. Which run it describes depends on "
+            "the envelope: a DELIVERED codex_consult / codex_review_changes / codex_delegate "
+            "result — whether returned synchronously or fetched later via codex_job_result / "
+            "codex_job_consume_result — reports the ORIGINATING run, like tier. Every other "
+            "envelope reports the CURRENT call: a *_async job handle (including an "
+            "idempotency replay handle), a dry-run preview, and any error a codex_job_* call "
+            "GENERATES instead of delivering a stored result (job_not_found, a still-running "
+            "or unreadable job, an unsupported detail). So a replay handle and the result "
+            "later fetched for that same job may legitimately differ. Absent on a result "
+            "produced before this field was reported."
+        ),
+    )
     tier: Tier = Field(
         description=(
             "Codex intent tier of the run this envelope describes — consult (read-only, no "

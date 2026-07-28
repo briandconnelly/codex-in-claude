@@ -930,7 +930,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-63"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-64"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

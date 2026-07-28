@@ -56,8 +56,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   never advertised the roots capability — pass `workspace_root` instead), or `probe_failed`
   (roots were advertised but the call errored this turn — retrying may help). Previously all
   three collapsed into a silent empty list and a fallback to the server's own cwd; `roots` stays
-  advisory either way, and `workspace_root` remains the durable path (audit F8). Bumps the
-  persisted result-format (`RESULT_FORMAT` `6` → `7`) for the new `Meta` field; not breaking.
+  advisory either way, and `workspace_root` remains the durable path (audit F8). Which run the
+  value describes now depends on the envelope, and `codex://result-meta` states the rule: a
+  DELIVERED consult/review/delegate result reports the ORIGINATING run (like `meta.tier`) whether
+  returned synchronously or fetched later, while every other envelope — a `*_async` handle, a
+  dry-run preview, and any error a `codex_job_*` call generates instead of delivering a stored
+  result — reports the CURRENT call, so a replay handle and the result later fetched for the same
+  job may legitimately differ. Bumps the persisted result-format (`RESULT_FORMAT` `6` → `7`)
+  for the new `Meta` field; not breaking.
 - Each `codex://` resource now carries a namespaced `_meta["dev.bconnelly.codex-in-claude/triage"]`
   so an agent can decide whether a body is worth the context before reading it: the five static
   schema resources declare `size_bytes` (computed from the payload at registration, so it cannot
@@ -100,6 +106,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`meta.roots_source` never reached a delivered paid success envelope** — the one surface it
+  was added for. A synchronous `codex_consult`/`codex_review_changes`/`codex_delegate` success is
+  delivered from the worker-written `result.json`, not from the `meta` the handler prepared, and
+  the job spec never carried `roots_source`, so the worker stored `null` and the null-omission
+  rule then dropped the key entirely. The three job specs now carry it and the worker reads it
+  back, so a paid success — and a paid failure, whose stored envelope is built the same way —
+  reports the roots state its run actually saw. The same value now also reaches the
+  lifecycle-generated error envelopes (`job_not_found`, a running/corrupt/incompatible job, an
+  unsupported `detail`, and `codex_job_cancel`), which probed roots and then discarded the answer;
+  those report the CURRENT lookup, not the inspected job's originating run. `roots_source` is
+  provenance rather than call identity, so it is excluded from the idempotency argument hash: a
+  keyed call that reconnects with a different roots state still replays instead of failing
+  `idempotency_conflict`, and pre-existing dedup entries keep matching unchanged. Results stored
+  before this change carry no value and keep omitting the key. `RESULT_FORMAT` stays `7` (the
+  field is already known at that format, so no stored payload became unreadable); bumps
+  `FINGERPRINT` (`schema-63` → `schema-64`) for the published `codex://result-meta` description
+  that now states which run the value describes. Not breaking (#393).
 - **`capabilities-result` schema's `required` list contradicted the default response.**
   `ToolCapability.use_when`/`.returns` were marked required in the published schema (reachable via
   `codex_capabilities(include_schemas=["capabilities-result"])`), but `detail="summary"` — the
