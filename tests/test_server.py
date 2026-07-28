@@ -2231,7 +2231,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-65"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-66"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2245,7 +2245,7 @@ def test_capabilities_payload_discloses_fingerprint_covers():
 
 def test_capabilities_mark_m4_surface_experimental():
     """The newer async + background-job lifecycle tools advertise stability=experimental;
-    the sync core inherits the server-wide alpha (field omitted via exclude_none) (#71)."""
+    the sync core inherits the server-wide alpha, carried as an explicit null (#71, #399)."""
     caps = server.codex_capabilities(detail="full")
     by_name = {t["name"]: t for t in caps["tool_details"]}
     experimental = {
@@ -2260,9 +2260,14 @@ def test_capabilities_mark_m4_surface_experimental():
     }
     for name in experimental:
         assert by_name[name]["stability"] == "experimental", name
-    # Sync core tools omit the field entirely (inherit server-wide stability).
-    for name in ("codex_consult", "codex_review_changes", "codex_delegate", "codex_status"):
-        assert "stability" not in by_name[name], name
+    # #399: default-tier tools carry the key with a null value — never omit it. `exclude_none`
+    # used to drop it here (but not in summary mode), so the two modes disagreed on the same
+    # field. Derived from _TOOL_STABILITY rather than a hand-listed set so a tool that gains
+    # or loses an override cannot silently fall out of this assertion.
+    for name, entry in by_name.items():
+        if name not in server._TOOL_STABILITY:
+            assert "stability" in entry, name
+            assert entry["stability"] is None, name
 
 
 def test_server_advertises_tools_list_changed():
@@ -6044,7 +6049,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-65")
+    assert result["fingerprint"].endswith("schema-66")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6947,8 +6952,23 @@ class TestCapabilitiesDetail:
             full = (await c.call_tool("codex_capabilities", {"detail": "full"})).structured_content
         assert set(summary) <= set(full)
         by_name = {t["name"]: t for t in full["tool_details"]}
+        # Both modes must describe the same inventory: summary narrows each entry, never the
+        # tool list. Compared as ordered lists, not sets — both modes project the same
+        # underlying list, so a duplicated or reordered row is drift, and a set comparison
+        # would swallow it (as would `by_name`, which collapses duplicates on construction).
+        assert [t["name"] for t in summary["tool_details"]] == [
+            t["name"] for t in full["tool_details"]
+        ]
         for entry in summary["tool_details"]:
-            assert set(entry) <= set(by_name[entry["name"]]) | {"stability"}
+            # #399: a subset with no carve-out. `stability` used to need one, because summary
+            # force-added the key that `exclude_none` had dropped from full. Subset, not
+            # PROPER subset: the contract is that full never drops a key summary carries, so
+            # an entry whose two modes agreed exactly would satisfy it.
+            assert set(entry) <= set(by_name[entry["name"]]), entry["name"]
+            # Key presence alone would still pass if a summary transform changed a value, so
+            # pin agreement on every shared key too.
+            for key, value in entry.items():
+                assert value == by_name[entry["name"]][key], f"{entry['name']}.{key}"
 
     @pytest.mark.anyio
     async def test_summary_keeps_the_fields_with_no_tools_list_equivalent(self):

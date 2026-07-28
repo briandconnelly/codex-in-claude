@@ -1691,8 +1691,24 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
 # ToolCapability restates the preloaded catalog (use_when ~= description, returns ~=
 # outputSchema, *_params ~= inputSchema), so detail="summary" drops it. `stability` is
 # serialized even when None — it is null for default-tier tools, and stripping it would
-# re-create the gap F9 closes.
+# re-create the gap F9 closes. `_normalize_tool_details` (not this tuple) is what puts the
+# key there, for every mode that carries an inventory.
 _CAPABILITY_SUMMARY_FIELDS = ("name", "cost", "stability", "error_codes", "async_lifecycle")
+# Declared field order, so a re-added key lands where the model puts it rather than at the end.
+_TOOL_CAPABILITY_FIELDS = tuple(ToolCapability.model_fields)
+
+
+def _normalize_tool_details(entry: dict) -> dict:
+    """Re-add the `stability` key `exclude_none` drops for a default-tier tool (#399).
+
+    `stability` is None wherever a tool inherits the server-wide tier, so `exclude_none`
+    strips it — but every detail mode that carries an inventory promises the key is
+    present, with null meaning inheritance. Forcing it here, before any mode branches, is
+    what keeps `full` from dropping a key `summary` carries: the modes disagreed for as
+    long as only the summary branch did it.
+    """
+    entry.setdefault("stability", None)
+    return {k: entry[k] for k in _TOOL_CAPABILITY_FIELDS if k in entry}
 
 
 @mcp.tool(
@@ -2033,7 +2049,8 @@ def codex_capabilities(
                 "prerequisites, deprecation_policy, per-tool error_codes, async_lifecycle "
                 "(on the *_async tools), and fingerprint. A top-level `stability` names the "
                 "server lifecycle stage; a per-tool `stability` is an advisory maturity "
-                "override and, when omitted, inherits the server-wide value.",
+                "override, always present, and null there means it inherits the "
+                "server-wide value.",
             ),
             ToolCapability(
                 name="codex_models",
@@ -2119,9 +2136,11 @@ def codex_capabilities(
         # violates the annotated Literal's domain, and this module is not a public Python API.
         caps.schemas = {k: available[k] for k in dict.fromkeys(include_schemas)}
     # exclude_none so optional per-tool fields are omitted entirely when unset (rather
-    # than emitting noisy nulls): a tool that inherits the server-wide `stability` drops
-    # it, and only the *_async tools carry `async_lifecycle`.
+    # than emitting noisy nulls): only the *_async tools carry `async_lifecycle`, and
+    # use_when/returns are full-only. `stability` is the one field that must survive that
+    # strip, so _normalize_tool_details puts it back — once, before any mode branches.
     payload = caps.model_dump(mode="json", exclude_none=True)
+    payload["tool_details"] = [_normalize_tool_details(e) for e in payload["tool_details"]]
     if detail == "contracts":
         # #339: shed the inventory and return. `tool_details` is already non-required in
         # both published schemas (default_factory=list keeps it out of `required`), so
@@ -2134,9 +2153,9 @@ def codex_capabilities(
         return payload
     if detail == "summary":
         payload["tool_details"] = [
-            # `.get` for stability: exclude_none drops it for default-tier tools, and the
-            # summary contract promises the key is always present.
-            {k: entry.get(k) for k in _CAPABILITY_SUMMARY_FIELDS if k in entry or k == "stability"}
+            # A plain projection: `stability` needs no special case here now that
+            # _normalize_tool_details has already forced it on every entry (#399).
+            {k: entry[k] for k in _CAPABILITY_SUMMARY_FIELDS if k in entry}
             for entry in payload["tool_details"]
         ]
     return payload

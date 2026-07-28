@@ -112,6 +112,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_capabilities` delivered the per-tool `stability` key in one detail mode but not the
+  other** (#399). `detail="summary"` force-added `stability: null` for the eight default-tier tools,
+  while `detail="full"` had it stripped by `exclude_none` — so a client moving from the default mode
+  to the richer one *lost* a key, contradicting the docstring's framing of `full` as additive. The
+  key is now forced once, before either mode branches, so `full` can no longer drop a key
+  `summary` carries and a single code path is what puts `stability` on both;
+  `detail="contracts"` carries no inventory and is unaffected. Null keeps its published meaning — the tool inherits the server-wide `stability` — and
+  the field stays optional in both published schemas, so this only adds key presence:
+  `FINGERPRINT` moves (`schema-65` → `schema-66`), `RESULT_FORMAT` does not, and it is not breaking.
+  The subset regression no longer carves `stability` out and now also pins that both modes describe
+  the same tools and agree on every shared value.
+
 - **The documented contract misdescribed `detail` rejection and `roots_source`** (#397). Three
   corrections, none of which changes behavior. (1) `docs/REFERENCE.md` told direct MCP callers that
   an unrecognized `detail` value is rejected with `unsupported_detail`; it is not reachable that way

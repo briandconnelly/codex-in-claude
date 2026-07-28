@@ -115,6 +115,7 @@
           "question"
         ],
         "returns": "A result envelope with summary, optional findings, and meta. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex always runs with a resolved working dir (workspace_root, your MCP roots, or the server cwd) and may read and send files from it; it always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model). Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
+        "stability": null,
         "use_when": "You want a read-only second opinion or answer from Codex (a different model) on a question, design, or an ad-hoc diff you paste inline; use codex_review_changes when the diff comes from git. Prefer codex_consult_async for a high-reasoning-effort or broad repo-grounded consult that can exceed the synchronous deadline."
       },
       {
@@ -221,6 +222,7 @@
         "name": "codex_review_changes",
         "required_params": [],
         "returns": "A result envelope with verdict, findings, and a context summary. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) extra_context to OpenAI; Codex may also read other repo files and always auto-loads AGENTS.md and discovers skills in .agents/skills/ and user-global $CODEX_HOME/skills/ (a selected skill's body can reach the model). Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
+        "stability": null,
         "use_when": "You want Codex to review your git changes (working_tree, branch, or commit) and return structured findings. Prefer codex_review_changes_async for a multi-file or whole-branch review that can exceed the synchronous deadline."
       },
       {
@@ -327,6 +329,7 @@
           "task"
         ],
         "returns": "A result envelope whose `diff` holds Codex's proposed, unapplied changes plus a summary. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends your task (raw) to OpenAI and lets Codex read tracked files in the throwaway worktree and send their content, including the tracked AGENTS.md and .agents/skills/ context it auto-loads — plus your user-global $CODEX_HOME/skills/ skills, which load from outside the worktree and so are neither tracked nor seeded. Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
+        "stability": null,
         "use_when": "You want Codex to implement a coding task and return a reviewable diff WITHOUT touching your working tree (it works in a throwaway git worktree). Prefer codex_delegate_async for a substantial or multi-file task that can exceed the synchronous deadline."
       },
       {
@@ -507,6 +510,7 @@
         "name": "codex_status",
         "required_params": [],
         "returns": "Readiness, version, auth, and resolved defaults.",
+        "stability": null,
         "use_when": "Before active calls, to confirm codex is installed and authenticated."
       },
       {
@@ -567,6 +571,7 @@
         "name": "codex_dry_run",
         "required_params": [],
         "returns": "Scope, context summary, prompt size, redactions, and the effective model/reasoning_effort overrides the paid call would send (unvalidated).",
+        "stability": null,
         "use_when": "Before codex_review_changes, to preview scope/diff size/redactions without spending."
       },
       {
@@ -594,6 +599,7 @@
           "task"
         ],
         "returns": "The HEAD baseline (commit, tracked/uncommitted/untracked counts and size), prompt size, the effective model/reasoning_effort overrides the paid call would send (unvalidated), and the resolved workspace — no worktree created.",
+        "stability": null,
         "use_when": "Before codex_delegate/codex_delegate_async, to preview the seeded baseline, prompt size, and workspace without spending."
       },
       {
@@ -604,7 +610,8 @@
         "key_optional_params": [],
         "name": "codex_capabilities",
         "required_params": [],
-        "returns": "This inventory: tools, tiers, sandboxes, scope, negative_scope, prerequisites, deprecation_policy, per-tool error_codes, async_lifecycle (on the *_async tools), and fingerprint. A top-level `stability` names the server lifecycle stage; a per-tool `stability` is an advisory maturity override and, when omitted, inherits the server-wide value.",
+        "returns": "This inventory: tools, tiers, sandboxes, scope, negative_scope, prerequisites, deprecation_policy, per-tool error_codes, async_lifecycle (on the *_async tools), and fingerprint. A top-level `stability` names the server lifecycle stage; a per-tool `stability` is an advisory maturity override, always present, and null there means it inherits the server-wide value.",
+        "stability": null,
         "use_when": "To discover the tool inventory, tiers, and result fingerprint (cache by it)."
       },
       {
@@ -616,6 +623,7 @@
         "name": "codex_models",
         "required_params": [],
         "returns": "An advisory model catalog: source (cache|static|none), models (slug + display_name + default_reasoning_effort/supported_reasoning_efforts when the cache advertises them), and the cache's fetched_at/client_version when read from Codex's on-disk cache. Not fingerprint-stable — do not cache it by the capabilities fingerprint.",
+        "stability": null,
         "use_when": "To discover valid `model` slugs — and each model's advertised reasoning-effort set — before passing `model` or `reasoning_effort` to a Codex call; also available at the codex://models resource. Advisory — codex/the backend validate the real values at run time."
       }
     ],
@@ -888,7 +896,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-65",
+            "default": "codex-in-claude/0.1/schema-66",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1440,7 +1448,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-65",
+                "default": "codex-in-claude/0.1/schema-66",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2566,7 +2574,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-65",
+            "default": "codex-in-claude/0.1/schema-66",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3248,7 +3256,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-65",
+            "default": "codex-in-claude/0.1/schema-66",
             "title": "Fingerprint",
             "type": "string"
           },
