@@ -133,8 +133,10 @@ may read or act on during a run. The schema is unchanged; the inline marker is t
   `null` (its `session_id`/`model` — also in `meta` — are kept).
 - `detail="full"` — includes the complete raw model output for diagnostics.
 
-An unrecognized value is rejected with `unsupported_detail`. For async work the worker always stores
-the full envelope, so a later `codex_job_result(..., detail="full")` can still recover the raw text.
+At the MCP call boundary an unrecognized value is rejected as `invalid_arguments` before the tool
+handler runs, with `details.allowed_values` listing the accepted values. For async work the worker
+always stores the full envelope, so a later `codex_job_result(..., detail="full")` can still recover
+the raw text.
 
 ## Idempotency
 
@@ -202,6 +204,29 @@ When calling the MCP tools directly, pass `workspace_root` as an absolute path t
 want Codex to inspect or edit. Claude Code usually supplies the current repo as an MCP root for slash
 commands; if neither an MCP root nor `workspace_root` is available, the server may fall back to its
 own launch directory and return `meta.workspace_warning`.
+
+`meta.roots_source` reports what the MCP-roots probe saw, which is a different axis from
+`workspace_source` below: `client` (the client advertised the roots capability and the probe
+returned, possibly an empty list), `not_negotiated` (the client never advertised the capability —
+pass `workspace_root` instead), or `probe_failed` (roots were advertised but the probe errored this
+turn — retrying may help). It separates a client limitation from a transient failure, which a bare
+empty list cannot. It does **not** say where the workspace came from: `workspace_source` answers
+that, and `roots_source: "client"` coexists with `workspace_source: "param"` (an explicit
+`workspace_root` wins over roots) or `"cwd"` (the probe returned no usable root).
+
+On a **successful** preview, `codex_dry_run` and `codex_delegate_dry_run` expose the same value as a
+**top-level** `roots_source` rather than under `meta`; when their error envelopes report it at all it
+sits under `meta` like every other tool, and an argument rejected at the call boundary carries none
+because no roots probe has run yet. Which run it describes depends on the envelope: a delivered
+`codex_consult`/`codex_review_changes`/`codex_delegate` result — returned synchronously or fetched
+later via `codex_job_result`/`codex_job_consume_result` — reports the **originating** run, like
+`tier`, while an `*_async` job handle (including an idempotency replay handle), a dry-run preview,
+and an error a `codex_job_*` call generates instead of delivering a stored result each report the
+**current** call. So a replay handle and the result later fetched for that same job may legitimately
+differ. A missing key means only that the value was not reported (see
+[Result envelopes](#result-envelopes) for the null-omission rule) — never infer a run's age or
+identity from its absence. The exhaustive per-envelope matrix ships with the field itself at
+`codex://result-meta`.
 
 The job-lifecycle tools (`codex_job_status`, `codex_job_list`, `codex_job_cancel`) carry the resolved
 workspace on **successful** responses too — a compact `workspace` object with `cwd`,

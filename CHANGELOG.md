@@ -51,10 +51,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   advertises both params and the cap-not-a-page semantics, so a client treating the
   `detail="full"` inventory as authoritative sees them too (audit F5, #396, #395).
 - `meta.roots_source` (and the matching field on `codex_dry_run`/`codex_delegate_dry_run`)
-  reports which of three states the MCP-roots resolution saw: `client` (the client advertised
-  roots and they were used, even if the list came back empty), `not_negotiated` (this client
+  reports which of three states the MCP-roots probe saw: `client` (the client advertised the
+  roots capability and the probe returned, possibly an empty list), `not_negotiated` (this client
   never advertised the roots capability — pass `workspace_root` instead), or `probe_failed`
-  (roots were advertised but the call errored this turn — retrying may help). Previously all
+  (roots were advertised but the call errored this turn — retrying may help). It reports the
+  probe, not where the workspace came from — `workspace_source` answers that. Previously all
   three collapsed into a silent empty list and a fallback to the server's own cwd; `roots` stays
   advisory either way, and `workspace_root` remains the durable path (audit F8). Which run the
   value describes now depends on the envelope, and `codex://result-meta` states the rule: when
@@ -111,6 +112,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **The documented contract misdescribed `detail` rejection and `roots_source`** (#397). Three
+  corrections, none of which changes behavior. (1) `docs/REFERENCE.md` told direct MCP callers that
+  an unrecognized `detail` value is rejected with `unsupported_detail`; it is not reachable that way
+  — `detail` is a closed enum in each tool's input schema, so the call boundary rejects the value as
+  `invalid_arguments` before the handler runs, and `unsupported_detail` stays deliberately
+  unadvertised as an in-handler guard for direct Python callers. A parametrized regression now pins
+  the boundary behavior across the five tools sharing the result `Detail` enum, so the corrected
+  sentence cannot go stale unnoticed (`codex_capabilities` has its own three-valued
+  `CapabilitiesDetail`; pinning that one is #398's item 3). The same published description no longer
+  offers an unsupported `detail` as an example of a lifecycle-generated error, since over MCP that
+  rejection never reaches the handler. (2) `roots_source` was absent from `REFERENCE.md` entirely,
+  including the workspace-selection section that owns workspace resolution; it is now documented
+  there with the probe-versus-selection distinction and the correct placement note that the two
+  dry-run tools expose it top-level on a *successful* preview, while their error envelopes carry it
+  under `meta` like every other tool. (3) The published `codex://result-meta` description
+  said `client` means roots "were used", which conflates the roots probe with workspace selection —
+  `client` only reports that the probe returned, and it coexists normally with
+  `workspace_source: "param"` (an explicit `workspace_root` wins) or `"cwd"` (the probe returned no
+  usable root). Wording only, so it bumps `FINGERPRINT` (`schema-64` → `schema-65`) without moving
+  `RESULT_FORMAT`; not breaking.
+
 - **`meta.roots_source` never reached a delivered paid success envelope** — the one surface it
   was added for. A synchronous `codex_consult`/`codex_review_changes`/`codex_delegate` success is
   delivered from the worker-written `result.json`, not from the `meta` the handler prepared, and
@@ -118,8 +140,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   rule then dropped the key entirely. The three job specs now carry it and the worker reads it
   back, so a paid success — and a paid failure, whose stored envelope is built the same way —
   reports the roots state its run actually saw. The same value now also reaches the
-  lifecycle-generated error envelopes (`job_not_found`, a running/corrupt/incompatible job, an
-  unsupported `detail`, and `codex_job_cancel`), which probed roots and then discarded the answer;
+  lifecycle-generated error envelopes (`job_not_found`, a running/corrupt/incompatible job, and
+  `codex_job_cancel` — plus the in-handler `unsupported_detail` guard, which only a direct Python
+  caller can reach, since over MCP a bad `detail` is rejected as `invalid_arguments` before the
+  handler runs), which probed roots and then discarded the answer;
   those report the CURRENT lookup, not the inspected job's originating run. `roots_source` is
   provenance rather than call identity, so it is excluded from the idempotency argument hash: a
   keyed call that reconnects with a different roots state still replays instead of failing
