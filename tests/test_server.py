@@ -7836,3 +7836,22 @@ async def test_prepare_helpers_put_roots_source_in_every_spec(monkeypatch, clean
     # ctx=None is a real state, not a missing key: the spec records it explicitly.
     await server.codex_consult("q", workspace_root=str(tmp_path), ctx=None)
     assert calls["spec"]["roots_source"] == "not_negotiated"
+
+
+async def test_guarded_internal_error_reports_no_roots_source(monkeypatch, clean_env, tmp_path):
+    # The published contract says absence means only "not reported" — never that the run
+    # is old. This is the envelope that proves it: _guard's last-resort handler builds its
+    # Meta with no ctx and does no I/O (the async roots probe could be the very thing that
+    # failed), so it reports NEITHER run. Pins the honest wording rather than forcing a
+    # probe into an exception path.
+    async def boom(*a, **k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server, "_resolve_job_workspace", boom)
+    res = await server.codex_job_status(
+        "job-abc",
+        workspace_root=str(tmp_path),
+        ctx=_ctx_double(roots_advertised=True, roots=()),
+    )
+    assert res["ok"] is False and res["error"]["code"] == "internal_error"
+    assert "roots_source" not in res["meta"]

@@ -57,12 +57,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (roots were advertised but the call errored this turn — retrying may help). Previously all
   three collapsed into a silent empty list and a fallback to the server's own cwd; `roots` stays
   advisory either way, and `workspace_root` remains the durable path (audit F8). Which run the
-  value describes now depends on the envelope, and `codex://result-meta` states the rule: a
-  DELIVERED consult/review/delegate result reports the ORIGINATING run (like `meta.tier`) whether
-  returned synchronously or fetched later, while every other envelope — a `*_async` handle, a
-  dry-run preview, and any error a `codex_job_*` call generates instead of delivering a stored
-  result — reports the CURRENT call, so a replay handle and the result later fetched for the same
-  job may legitimately differ. Bumps the persisted result-format (`RESULT_FORMAT` `6` → `7`)
+  value describes now depends on the envelope, and `codex://result-meta` states the rule: when
+  present, a DELIVERED consult/review/delegate result reports the ORIGINATING run (like
+  `meta.tier`) whether returned synchronously or fetched later, while a `*_async` handle, a
+  dry-run preview, and an error a `codex_job_*` call generates instead of delivering a stored
+  result each report the CURRENT call — so a replay handle and the result later fetched for the
+  same job may legitimately differ. Absence implies none of that: it means only that the value
+  was not reported (an unexpected server-side `internal_error`, for instance, is built without
+  one), so never infer a run's age or identity from a missing key. Bumps the persisted result-format (`RESULT_FORMAT` `6` → `7`)
   for the new `Meta` field; not breaking.
 - Each `codex://` resource now carries a namespaced `_meta["dev.bconnelly.codex-in-claude/triage"]`
   so an agent can decide whether a body is worth the context before reading it: the five static
