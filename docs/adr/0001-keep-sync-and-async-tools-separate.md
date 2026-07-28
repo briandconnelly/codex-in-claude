@@ -52,10 +52,12 @@ This postscript deliberately restates no replacement numbers: a copied figure is
 stale here, and a second copy would go stale the same way.
 Where to look instead, and what each source actually promises:
 
-- `tests/test_wire_size.py` is the only figure above under mechanical enforcement — it asserts a
-  `tools/list` byte **ceiling**, and carries a dated log of each measurement that moved it.
-  Because it enforces a ceiling, the payload can drift below the budget without the log changing;
-  re-measure with the test's own method for an exact current size.
+- `tests/test_wire_size.py` mechanically enforces a `tools/list` byte **ceiling** — the current
+  budget, not any figure above — and its comments record measurements behind that budget.
+  Treat those comments as commentary rather than a complete history; entries have been dropped in
+  rebases before.
+  Because only a ceiling is enforced, the payload can also drift below the budget without any
+  comment changing, so re-measure with the test's own method for an exact current size.
 - ADR 0003 and `docs/REFERENCE.md` carry `codex_capabilities` response figures, but these are
   decision-time and explicitly indicative measurements, not current ones — `REFERENCE.md` says so
   in place.
