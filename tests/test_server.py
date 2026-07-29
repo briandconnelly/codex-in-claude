@@ -8209,11 +8209,27 @@ async def test_blank_question_rejected_even_with_context(clean_env, tmp_path):
     assert res["error"]["details"]["field"] == "question"
 
 
-async def test_oversized_whitespace_is_too_large_not_blank(clean_env, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "codex_consult",
+        "codex_consult_async",
+        "codex_delegate",
+        "codex_delegate_async",
+        "codex_delegate_dry_run",
+    ],
+)
+async def test_oversized_whitespace_is_too_large_not_blank(clean_env, tmp_path, monkeypatch, tool):
     """A whitespace-only value past the byte limit is BOTH blank and oversized. The
-    size check keeps precedence, so every pre-existing ordering is undisturbed."""
+    size check keeps precedence, so every pre-existing ordering is undisturbed.
+
+    Parameterized across all five tools because the precedence is implemented in THREE
+    independent places — `_prepare_consult`, `_prepare_delegate`, and
+    `codex_delegate_dry_run`'s inline path — so covering one helper would leave the other
+    two free to drift (Codex review of this branch)."""
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
     monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
-    res = await server.codex_consult(" " * 2000, workspace_root=str(tmp_path))
+    res = await getattr(server, tool)(" " * 2000, workspace_root=str(tmp_path))
     assert res["error"]["code"] == "input_too_large"
 
 
