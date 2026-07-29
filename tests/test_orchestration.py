@@ -80,14 +80,22 @@ def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
     """`InvalidArgument` promises the rejected value is never echoed (schemas.py:859-862)
     — it may be a secret, and this path's value is caller-supplied free text. The
     exception text embeds it (`got {untracked!r}`, _core/gitdiff.py:1053), so the machine
-    fields are built from the known domain instead of from `str(exc)`."""
-    secret = "sk-" + "d" * 32
+    fields are built from the known domain instead of from `str(exc)`.
+
+    The probe value is deliberately NOT secret-shaped: `gitdiff_error` runs `str(exc)`
+    through `redact_text`, so an `sk-…` value would be stripped from a reused message
+    regardless, and the test would pass against the very bug it guards. Mutating the
+    implementation to reuse `str(exc)` must make this fail — verified by doing so."""
+    value = "an-ordinary-value-redaction-ignores"
     out = orchestration.gitdiff_error(
-        InvalidUntrackedError(f"untracked must be one of [...], got {secret!r}"), _make_meta()
+        InvalidUntrackedError(f"untracked must be one of [...], got {value!r}"), _make_meta()
     )
     err = out["error"]
-    assert secret not in str(err["invalid_arguments"])
-    assert secret not in str(err["details"])
+    assert value not in str(err["invalid_arguments"])
+    assert value not in str(err["details"])
+    # The instrument works: the same value IS present in the human-readable message,
+    # so its absence above reflects the no-echo rule, not a value that never arrived.
+    assert value in err["message"]
 
 
 def test_stamp_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):
