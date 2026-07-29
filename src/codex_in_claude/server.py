@@ -418,7 +418,8 @@ def _blank_input_error(value: str, field: str, tool_name: str, meta: Meta) -> di
                     f"Supply a {field} with actual content, then retry. Leading and "
                     "trailing whitespace around that content is fine."
                 ),
-                details=ErrorDetail(field=field, reason=reason),
+                # `details` is derived from the entry below by make_error (#416), so the
+                # mirror it promises cannot drift from what this call site passes.
                 invalid_arguments=[InvalidArgument(field=field, reason=reason)],
             ),
             meta=meta,
@@ -514,11 +515,8 @@ def _invalid_arguments_envelope(
                 message[:300],
                 repair_tool=tool_name,
                 repair_alternative=repair,
-                details=ErrorDetail(
-                    field=first.field,
-                    reason=first.reason,
-                    allowed_values=first.allowed_values,
-                ),
+                # `details` mirrors items[0], derived by make_error (#416) — this builder
+                # used to construct the mirror by hand, which is how it could drift.
                 invalid_arguments=items,
             ),
             meta=meta,
@@ -1454,12 +1452,19 @@ async def codex_transfer(
     # 1. Validate the transcript path before spawning anything (zero side effects).
     validation = appserver.validate_transcript_path(transcript_path)
     if validation.realpath is None:
+        # One `reason`, three carriers: the message, `details`, and the per-argument list
+        # `docs/REFERENCE.md` promises for this code (#416) — so they cannot disagree
+        # about why the argument was rejected. Bounded by the same cap the call-boundary
+        # builder applies; today's reasons are short server-side literals, but the bound
+        # belongs with the field, not with the current set of values. `details` is derived
+        # from the entry by make_error. No `allowed_values`: a path is not an enum.
+        reason = (validation.reason or "invalid transcript_path.")[:_MAX_ARG_REASON_LEN]
         return serialize_error(
             ErrorResult(
                 error=make_error(
                     "invalid_arguments",
-                    validation.reason or "invalid transcript_path.",
-                    details=ErrorDetail(field="transcript_path"),
+                    reason,
+                    invalid_arguments=[InvalidArgument(field="transcript_path", reason=reason)],
                     repair_tool="codex_transfer",
                 ),
                 meta=_meta(cwd_guess, None),

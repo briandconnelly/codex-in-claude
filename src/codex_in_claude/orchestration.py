@@ -25,10 +25,12 @@ from codex_in_claude.schemas import (
     ErrorCode,
     ErrorDetail,
     ErrorResult,
+    InvalidArgument,
     Meta,
     RawResponse,
     ReviewResult,
     ReviewScope,
+    Untracked,
     dump_success,
 )
 
@@ -291,12 +293,31 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
     details = (
         ErrorDetail(field=offending, allowed_values=allowed) if (offending or allowed) else None
     )
+    # InvalidUntrackedError is the one exception here mapped to invalid_arguments, which
+    # owes the per-argument list docs/REFERENCE.md promises for that code (#416). Its
+    # reason is BUILT from the known domain rather than reused from `str(exc)`: the
+    # exception text embeds the rejected value (`got {untracked!r}`), and InvalidArgument
+    # promises never to echo one — it may be a secret, and this path's value is
+    # caller-supplied free text. The human-readable `message` below is unchanged.
+    args: list[InvalidArgument] | None = None
+    if code == "invalid_arguments" and offending:
+        args = [
+            InvalidArgument(
+                field=offending,
+                reason=f"{offending} must be one of "
+                + ", ".join(repr(v) for v in sorted(get_args(Untracked)))
+                + ".",
+                allowed_values=list(get_args(Untracked)),
+            )
+        ]
+        details = None  # derived from the entry by make_error, so the two cannot drift
     return serialize_error(
         ErrorResult(
             error=make_error(
                 cast("ErrorCode", code),
                 (redaction.redact_text(str(exc)) or "")[:300],
                 details=details,
+                invalid_arguments=args,
             ),
             meta=meta,
         )

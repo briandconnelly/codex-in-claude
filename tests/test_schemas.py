@@ -639,10 +639,19 @@ def test_error_envelope_validates_non_temporary_error():
     import jsonschema
 
     from codex_in_claude.errors import make_error, serialize_error
-    from codex_in_claude.schemas import ERROR_ENVELOPE_SCHEMA, ErrorResult, Meta
+    from codex_in_claude.schemas import (
+        ERROR_ENVELOPE_SCHEMA,
+        ErrorResult,
+        InvalidArgument,
+        Meta,
+    )
 
     env = ErrorResult(
-        error=make_error("invalid_arguments", "bad args"),
+        error=make_error(
+            "invalid_arguments",
+            "bad args",
+            invalid_arguments=[InvalidArgument(field="scope", reason="bad")],
+        ),
         meta=Meta(
             cwd="/x",
             tier="consult",

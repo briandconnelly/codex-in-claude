@@ -7,6 +7,26 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Every `invalid_arguments` envelope this release builds now carries the per-argument list** (#416). `docs/REFERENCE.md`
+  promises that an envelope with this code carries a list of `{field, reason, allowed_values}` per
+  offending argument, with `details` mirroring the first. Two producers omitted it: `codex_transfer`'s
+  rejection of an invalid `transcript_path` (which also left `details.reason` unset), and the
+  `untracked`-policy rejection reached by a direct call that bypasses the schema. A client branching on
+  that list per the documented contract found it absent on those envelopes. The rule now lives in the
+  one constructor every producer goes through, so a listless envelope is a loud programming error
+  rather than a silently non-conformant result, and `details` is always derived from the first entry —
+  supplying one for this code is itself rejected, which is what makes the documented mirror structural
+  rather than a convention each producer has to remember. The `untracked` entry states its allowed
+  values without echoing the rejected one, keeping `InvalidArgument`'s promise that a rejected value
+  is never copied into a machine-readable field. Replay of a stored job result is deliberately
+  untouched — a record written
+  before this rule is returned as it was written, since normalizing it would mean inventing repair
+  data the run never produced. No such record can exist through the MCP surface (the only stored
+  envelope that could carry this code comes from a schema-validated enum), so this is a statement
+  about provenance rather than a known gap. No result `fingerprint` or `RESULT_FORMAT` change: the
+  envelope's schema, error-code sets, and descriptions are unchanged — only the values populated at
+  runtime.
+
 - **BREAKING (agent surface): a blank `question` or `task` is now rejected before any spend**
   (#411). An empty or whitespace-only value passed validation and bought a real Codex run that
   could produce nothing — the prompt builders strip it, so the model received framing scaffolding

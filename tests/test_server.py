@@ -6123,6 +6123,58 @@ async def test_transfer_invalid_path_no_spawn(monkeypatch):
     assert not called  # no subprocess attempted
 
 
+# --- transfer's invalid_arguments shape (#416) --------------------------------
+# The hand-raised rejection emitted only `details.field`, so a client branching on the
+# per-argument list `docs/REFERENCE.md:34-35` promises for this code found it absent.
+# Expected values below are LITERAL, not read back off the envelope: an assertion that
+# `details.reason == invalid_arguments[0].reason` passes while both are wrong.
+
+_TRANSCRIPT_REASON = "transcript_path must be a .jsonl session transcript."
+
+
+async def test_transfer_invalid_path_carries_the_per_argument_list(monkeypatch):
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch, realpath=None, reason=_TRANSCRIPT_REASON)
+    result = await server.codex_transfer(transcript_path="/x.txt")
+    err = result["error"]
+    assert err["invalid_arguments"] == [{"field": "transcript_path", "reason": _TRANSCRIPT_REASON}]
+    # `details` mirrors the first entry, and the message states the same reason, so the
+    # three cannot disagree about why the argument was rejected.
+    assert err["details"] == {"field": "transcript_path", "reason": _TRANSCRIPT_REASON}
+    assert err["message"] == _TRANSCRIPT_REASON
+    # A path is not an enum: absent from the wire dict, not present-and-null (§8).
+    assert "allowed_values" not in err["invalid_arguments"][0]
+
+
+async def test_transfer_invalid_path_falls_back_when_the_validator_gives_no_reason(monkeypatch):
+    """Defense only: every `realpath=None` branch of `validate_transcript_path`
+    returns a reason, so this state is fabricated here. It pins
+    that the fallback reaches all three carriers rather than leaving `reason` unset."""
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch, realpath=None, reason=None)
+    err = (await server.codex_transfer(transcript_path="/x.txt"))["error"]
+    assert err["message"] == "invalid transcript_path."
+    assert err["details"]["reason"] == "invalid transcript_path."
+    assert err["invalid_arguments"][0]["reason"] == "invalid transcript_path."
+
+
+@pytest.mark.parametrize(
+    ("length", "truncated"),
+    [(server._MAX_ARG_REASON_LEN, False), (server._MAX_ARG_REASON_LEN + 1, True)],
+)
+async def test_transfer_invalid_path_bounds_the_reason(monkeypatch, length, truncated):
+    """The bound is the same one the call-boundary builder applies. Real validator
+    reasons are short server-side literals, so this too is fabricated input — it pins the
+    bound for any future reason that is not."""
+    _ready_codex(monkeypatch)
+    _patch_validation(monkeypatch, realpath=None, reason="r" * length)
+    err = (await server.codex_transfer(transcript_path="/x.txt"))["error"]
+    expected = "r" * server._MAX_ARG_REASON_LEN
+    assert err["invalid_arguments"][0]["reason"] == expected
+    assert err["details"]["reason"] == expected
+    assert (len(err["invalid_arguments"][0]["reason"]) < length) is truncated
+
+
 async def test_transfer_codex_not_found(monkeypatch):
     """A missing binary is codex_not_found, and the auth probe is never even reached.
 
