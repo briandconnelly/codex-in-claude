@@ -53,7 +53,15 @@ from codex_in_claude.server import mcp
 # now-explicit "running jobs are never evicted" ceiling caveat): 83,895 bytes — budget raised
 # to the next 500 above the measured value. Spent deliberately: the wording it buys is what
 # tells a client the default is complete and that `truncated` is a cap with no cursor.
-TOOLS_LIST_BYTE_BUDGET = 84_000
+# Measured again 2026-07-29 (#411: `question`/`task` must be non-blank, so the three param
+# descriptions — QuestionParam, TaskParam, TaskDryRunParam, across five tools — state the rule
+# and when it is enforced): 84,292 bytes — budget raised to the next 500 above the measured
+# value. Spent deliberately, and the cheapest wording that carries the rule was chosen (the
+# first draft cost ~145 bytes more): the constraint is enforced at runtime rather than by a
+# schema `minLength`, so these descriptions are the ONLY place a client can discover it before
+# spending. It buys back a whole class of wasted paid calls — the reported repro burned 23,120
+# tokens on a whitespace-only question.
+TOOLS_LIST_BYTE_BUDGET = 84_500
 
 
 @pytest.mark.anyio

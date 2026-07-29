@@ -215,3 +215,50 @@ async def test_delegate_pair_spec_parity_with_reasoning_effort(
     await server.codex_delegate_async("do work", **kw)
     assert capture_tail["sync"]["spec"]["reasoning_effort"] == "low"
     _specs_equal_modulo_timeout(capture_tail["sync"]["spec"], capture_tail["async"]["spec"])
+
+
+# --- blank-input parity (#411) ------------------------------------------------
+# The blank-argument guard is the one pre-flight error whose envelope is deliberately
+# NOT byte-identical across a pair: `invalid_arguments` names the tool that was called
+# in `repair.tool` (errors.py, #184/N3), so steering an async caller at its sync twin
+# would be wrong. Everything else in the block must still match.
+
+
+def _error_sans_tool_identity(err: dict, tool: str) -> dict:
+    """The error block with the two members that deliberately name the called tool
+    NORMALIZED rather than discarded: `repair.tool` is dropped, and `message` keeps
+    everything after its `"<tool>: "` prefix (the boundary builder's
+    `"<tool>: N invalid argument(s): ..."` format). Stripping only the prefix keeps the
+    rest of the message under the parity assertion, so post-prefix wording cannot drift
+    between the twins unnoticed (Copilot review)."""
+    out = {k: v for k, v in err.items() if k != "repair"}
+    out["repair"] = {k: v for k, v in err["repair"].items() if k != "tool"}
+    out["message"] = err["message"].removeprefix(f"{tool}: ")
+    return out
+
+
+@pytest.mark.parametrize(
+    ("sync_tool", "async_tool", "field"),
+    [
+        ("codex_consult", "codex_consult_async", "question"),
+        ("codex_delegate", "codex_delegate_async", "task"),
+    ],
+)
+async def test_pair_blank_input_parity(
+    clean_env, tmp_path, monkeypatch, sync_tool, async_tool, field
+):
+    _no_git_preflight(monkeypatch)
+    sync = await getattr(server, sync_tool)("   ", workspace_root=str(tmp_path))
+    asyncr = await getattr(server, async_tool)("   ", workspace_root=str(tmp_path))
+    assert sync["error"]["code"] == "invalid_arguments"
+    assert sync["error"]["details"]["field"] == field
+    # Identical everywhere except where the tool is deliberately named — including the
+    # message BODY, which must match once each twin's own name is stripped.
+    assert _error_sans_tool_identity(sync["error"], sync_tool) == _error_sans_tool_identity(
+        asyncr["error"], async_tool
+    )
+    # ...and there each twin names ITSELF, never the other.
+    assert sync["error"]["repair"]["tool"] == sync_tool
+    assert asyncr["error"]["repair"]["tool"] == async_tool
+    assert sync["error"]["message"].startswith(f"{sync_tool}:")
+    assert asyncr["error"]["message"].startswith(f"{async_tool}:")
