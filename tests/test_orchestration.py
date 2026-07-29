@@ -5,7 +5,7 @@ from __future__ import annotations
 import anyio
 
 from codex_in_claude import codex, orchestration
-from codex_in_claude._core.gitdiff import DiffResult, DiffSummary
+from codex_in_claude._core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Coverage, Meta
 
@@ -49,6 +49,45 @@ def test_gitdiff_error_redacts_secret():
     out = orchestration.gitdiff_error(RuntimeError(f"git failed token={secret}"), _make_meta())
     assert secret not in str(out)
     assert "[redacted: secret value]" in str(out)
+
+
+# --- gitdiff_error's invalid_arguments shape (#416) ---------------------------
+# InvalidUntrackedError is the one gitdiff exception mapped to invalid_arguments, so its
+# envelope owes the per-argument list docs/REFERENCE.md:34-35 promises. Reachable by a
+# direct Python call that bypasses the Literal param (see
+# test_dry_run_invalid_untracked_returns_structured_error in test_server.py).
+
+
+def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
+    out = orchestration.gitdiff_error(
+        InvalidUntrackedError("untracked must be one of [...], got 'bogus'"), _make_meta()
+    )
+    err = out["error"]
+    assert err["code"] == "invalid_arguments"
+    # Literal, NOT get_args(Untracked): an expectation derived from the same source the
+    # implementation reads cannot fail when that source is wrong.
+    assert err["invalid_arguments"] == [
+        {
+            "field": "untracked",
+            "reason": "untracked must be one of 'exclude', 'explicit_only', 'include'.",
+            "allowed_values": ["explicit_only", "include", "exclude"],
+        }
+    ]
+    assert err["details"] == err["invalid_arguments"][0]
+
+
+def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
+    """`InvalidArgument` promises the rejected value is never echoed (schemas.py:859-862)
+    — it may be a secret, and this path's value is caller-supplied free text. The
+    exception text embeds it (`got {untracked!r}`, _core/gitdiff.py:1053), so the machine
+    fields are built from the known domain instead of from `str(exc)`."""
+    secret = "sk-" + "d" * 32
+    out = orchestration.gitdiff_error(
+        InvalidUntrackedError(f"untracked must be one of [...], got {secret!r}"), _make_meta()
+    )
+    err = out["error"]
+    assert secret not in str(err["invalid_arguments"])
+    assert secret not in str(err["details"])
 
 
 def test_stamp_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):

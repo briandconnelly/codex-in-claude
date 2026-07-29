@@ -325,7 +325,31 @@ def make_error(
     to poll rather than retry — #201). `repair_tool` distinguishes three states: omitted
     keeps the table's tool; a string overrides it; explicit `None` CLEARS it (no tool in
     the emitted repair) for a call site the table's tool does not fit — e.g. #332's local
-    config-shape refusal, which must not steer to codex_models."""
+    config-shape refusal, which must not steer to codex_models.
+
+    `invalid_arguments` carries one extra invariant (#416): `docs/REFERENCE.md` promises
+    the per-argument list on EVERY envelope with that code, with `details` mirroring the
+    first entry. Two producers had drifted from that promise independently, so the rule
+    lives here — the one constructor every producer goes through — rather than being
+    re-implemented per call site. A missing list is a programming error and raises;
+    `details` is DERIVED from the first entry when the call site supplies none, and an
+    explicitly supplied `details` always wins (a combined-size failure names
+    `fields=[...]`, which no single entry can mirror).
+
+    Deliberately not an `ErrorInfo` model_validator: replay reconstructs stored records
+    with `ErrorResult.model_validate`, and a record written before this rule legitimately
+    carries no list — validating there would make those jobs unreadable."""
+    if code == "invalid_arguments":
+        if not invalid_arguments:
+            raise ValueError(
+                "make_error: an invalid_arguments envelope must carry a non-empty "
+                "invalid_arguments list (docs/REFERENCE.md)"
+            )
+        if details is None:
+            first = invalid_arguments[0]
+            details = ErrorDetail(
+                field=first.field, reason=first.reason, allowed_values=first.allowed_values
+            )
     next_step, tool, temp_default, alt_default = _REPAIR_BY_CODE[code]
     if repair_next_step is not None:
         next_step = repair_next_step
