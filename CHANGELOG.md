@@ -29,7 +29,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (`<root>+suffix`, `<root>@v2`) is never rewritten into the wrong file. It also composes with
   secret redaction in the one order safe for both passes: a worktree path carrying a
   secret-shaped label (`api_key=<root>/…`) is redacted rather than shortened, since shortening it
-  would drop the value below the redactor's length threshold and let the secret through. `diff`
+  would drop the value below the redactor's length threshold and let the secret through. Both the
+  raw `file://<root>` spelling and the percent-encoded one (`file:///tmp/a%25b%20c/tree`, what a
+  path containing a space or `%` canonically encodes to) are covered. `diff`
   was never affected; it
   already carried correct `a/`/`b/` paths, and remains the authoritative source for what changed. No
   result `fingerprint` or `RESULT_FORMAT` change: no schema, field description, or documented

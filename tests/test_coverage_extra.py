@@ -68,7 +68,10 @@ def test_delegate_prompt_asks_for_repository_relative_paths():
     The server's rewrite is a backstop for spellings it can match — this instruction is what
     keeps uncommon spellings from arising at all, and it regressed silently without a test."""
     out = prompts.build_delegate_prompt("do the thing")
-    assert "repository-relative" in out
+    # Assert the contiguous directive, not scattered keywords: an inverted instruction
+    # ("Do not use repository-relative paths ... not by absolute path") would satisfy a
+    # keyword check while leaving the safeguard broken.
+    assert "refer to files by repository-relative paths" in out
     assert "not by absolute path" in out
 
 

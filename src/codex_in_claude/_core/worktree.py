@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import os
 import re
 import shutil
@@ -564,7 +565,14 @@ def path_aliases(path: str) -> tuple[str, ...]:
     if not root or not Path(root).is_absolute():
         raise ValueError(f"path_aliases needs an absolute path below the root, got {path!r}")
     forms = {root, os.path.realpath(root)}
+    # Both file-URI spellings: the raw concatenation an agent typically writes, and the
+    # canonical percent-encoded one `Path.as_uri()` produces. They differ as soon as an
+    # ancestor holds a space or `%` (`/tmp/a%b c` -> `file:///tmp/a%25b%20c`), so covering
+    # only the raw form would leave a valid URI pointing into the deleted worktree.
     aliases = forms | {f"file://{form}" for form in forms}
+    for form in forms:
+        with contextlib.suppress(ValueError):
+            aliases.add(Path(form).as_uri())
     return tuple(sorted(aliases, key=len, reverse=True))
 
 
@@ -616,18 +624,45 @@ def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str)
     return pattern.sub(replacement, text)
 
 
-# The stand-in an alias wears while the secret redactor runs. Two properties make it work,
-# and both are required:
+# The stand-in an alias wears while the secret redactor runs. Three properties are required,
+# and the third is why this is derived per input rather than being a module constant:
 #
-# 1. EVERY character is inside the redactor's inline-value character class
-#    (`redaction.SECRET_VALUE_PATTERNS`, the labelled-secret pattern), so the redactor can
-#    only swallow this token WHOLE or not at all. Its value match is anchored at a label
-#    and runs greedily until a character outside that class, and there is no such character
-#    inside this token — so it can never stop part-way through and leave a fragment.
-# 2. It is comfortably longer than that pattern's 16-character minimum, so a labelled path
-#    still reads as a long value and stays redacted regardless of how short the real root is
-#    (erring toward redaction).
-_ALIAS_PLACEHOLDER = "cicwt0worktree0alias0placeholder0"
+# 1. EVERY character is alphanumeric, hence inside the redactor's inline-value character
+#    class (`redaction.SECRET_VALUE_PATTERNS`), so the redactor can only swallow the token
+#    WHOLE or not at all. Its value match is anchored at a label and runs greedily until a
+#    character outside that class; there is no such character inside the token, so it can
+#    never stop part-way through and leave a fragment.
+# 2. It is comfortably longer than the labelled pattern's 16-character minimum, so a
+#    labelled path still reads as a long value and stays redacted no matter how short the
+#    real root is (erring toward redaction).
+# 3. It is ABSENT from the text being sanitized, verified rather than assumed. A fixed
+#    sentinel let model output smuggle a covered secret straight through: the final
+#    token -> `.` replacement also hit sentinels ALREADY in the text, and `.` is structural
+#    in secret shapes. `eyJ<8 chars><sentinel><8 chars><sentinel><8 chars>` carries no dots
+#    while the redactor inspects it, so the JWT pattern misses — and the replacement then
+#    reconstructs a valid JWT in the output. Deriving the token from the text and checking
+#    membership closes that: nothing pre-existing can be turned into `.`.
+_PLACEHOLDER_PREFIX = "cicwt0alias0"
+
+
+def _placeholder_seed(text: str) -> str:
+    """The hex tail that makes a staged placeholder text-specific. A seam: overriding it is
+    the only way a test can force the collision that ``_staged_placeholder``'s loop exists
+    to handle, since deriving a digest that appears inside its own input is not
+    constructible."""
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:24]
+
+
+def _staged_placeholder(text: str) -> str:
+    """An alphanumeric token, longer than the redactor's length floor, guaranteed absent
+    from ``text``. Derived from the text's own digest so it is deterministic, then extended
+    until it does not occur — absence is CHECKED, which is the property that matters;
+    unpredictability is not relied upon. The loop terminates because each pass lengthens the
+    token while ``text`` is finite."""
+    token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)
+    while token in text:
+        token += "0"
+    return token
 
 
 def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
@@ -646,20 +681,22 @@ def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
       ``://<root>/abcdefgh`` — whose bare root is now preceded by ``/`` and so fails the
       left-hand delimiter check. Both the dead path and the secret survive.
 
-    So each alias is first staged behind ``_ALIAS_PLACEHOLDER``, which the redactor cannot
-    partially consume (see there); redaction runs against that; then any placeholder that
-    survived — i.e. was not part of a redacted secret — becomes ``.``.
+    So each alias is first staged behind a token from ``_staged_placeholder`` — which the
+    redactor can neither partially consume nor confuse with pre-existing text (see there for
+    all three required properties); redaction runs against that; then any token that survived
+    — i.e. was not part of a redacted secret — becomes ``.``.
 
     Redaction remains best-effort by contract (see ``redaction``): an adversarial model can
     always emit an unlabelled secret that no pattern matches. This closes the interaction
     between the two passes, not that broader gap."""
     if not text:
         return text
-    staged = _replace_aliases(text, aliases, _ALIAS_PLACEHOLDER)
+    placeholder = _staged_placeholder(text)
+    staged = _replace_aliases(text, aliases, placeholder)
     redacted = redact_text(staged)
     if not redacted:
         return redacted
-    return redacted.replace(_ALIAS_PLACEHOLDER, ".")
+    return redacted.replace(placeholder, ".")
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:

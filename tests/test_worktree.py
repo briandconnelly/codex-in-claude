@@ -948,8 +948,12 @@ def test_sanitize_prose_survives_a_crafted_partial_alias_consumption():
 
 
 def test_sanitize_prose_never_leaks_the_placeholder():
+    # The staged token is derived per input, so assert on its fixed prefix: any surviving
+    # token — whole or fragment — carries it.
     for text in (f"{ROOT}/a", f"api_key={ROOT}/a", f"see {ROOT} here", "nothing to do"):
-        assert worktree._ALIAS_PLACEHOLDER not in (worktree.sanitize_prose(text, ALIASES) or "")
+        out = worktree.sanitize_prose(text, ALIASES) or ""
+        assert worktree._PLACEHOLDER_PREFIX not in out
+        assert worktree._staged_placeholder(text) not in out
 
 
 def test_sanitize_prose_still_redacts_ordinary_secrets():
@@ -969,3 +973,75 @@ def test_path_aliases_rejects_whitespace_bearing_and_root_paths(bad):
     # yields aliases that cannot rewrite anything. All are programming errors.
     with pytest.raises(ValueError):
         worktree.path_aliases(bad)
+
+
+# The published fixed sentinel this module used before the collision was found. Kept here as
+# a literal so the regression test reproduces the original attack exactly.
+_FORMER_FIXED_PLACEHOLDER = "cicwt0worktree0alias0placeholder0"
+
+
+def test_sanitize_prose_cannot_synthesize_a_jwt_via_placeholder_collision():
+    """A fixed sentinel let model output ENCODE structural characters. `.` separates a JWT's
+    segments, so `eyJ<8>` + sentinel + `<8>` + sentinel + `<8>` carried no dots while the
+    redactor looked at it, then the final sentinel -> `.` replacement reconstructed a valid
+    JWT in the output — a secret the redactor covers, smuggled past it. The staged sentinel
+    is now derived per input and verified absent from it, so no pre-existing text can be
+    turned into `.`."""
+    attack = (
+        "eyJ" + "a" * 8 + _FORMER_FIXED_PLACEHOLDER + "b" * 8 + _FORMER_FIXED_PLACEHOLDER + "c" * 8
+    )
+    out = worktree.sanitize_prose(attack, ALIASES)
+    assert out is not None
+    # The give-away is a reconstructed `eyJ….….…` shape that was not in the input.
+    assert not (out.startswith("eyJ") and out.count(".") == 2), f"JWT reconstructed: {out}"
+    # Sanity: the same payload with literal dots IS redacted, so this test guards a real gap.
+    literal = "eyJ" + "a" * 8 + "." + "b" * 8 + "." + "c" * 8
+    assert "[redacted: secret value]" in (worktree.sanitize_prose(literal, ALIASES) or "")
+
+
+def test_staged_placeholder_is_verified_absent_from_the_input():
+    # White-box: the guarantee is absence CHECKED against this input, not an unlikely
+    # constant. Text that already contains the derived token forces a different token.
+    text = "some prose"
+    token = worktree._staged_placeholder(text)
+    assert token not in text
+    assert token.isalnum()  # every char inside the redactor's value class
+    assert len(token) > 16  # clears the labelled-secret length floor
+    assert worktree._staged_placeholder(token) != token
+
+
+def test_sanitize_prose_leaves_a_literal_token_lookalike_untouched():
+    text = f"the build wrote {_FORMER_FIXED_PLACEHOLDER} to the log"
+    assert worktree.sanitize_prose(text, ALIASES) == text
+
+
+def test_path_aliases_includes_percent_encoded_file_uri(tmp_path):
+    # `Path.as_uri()` percent-encodes spaces and `%`, so a canonical file URI Codex emits for
+    # a TMPDIR containing either would not match a naively concatenated `file://` alias.
+    root = tmp_path / "a%b c" / "tree"
+    root.mkdir(parents=True)
+    aliases = worktree.path_aliases(str(root))
+    encoded = root.as_uri()
+    assert encoded in aliases
+    assert "%25b%20c" in encoded  # the encoding really differs from the raw form
+    assert worktree.relativize(f"open {encoded}/f.py", aliases) == "open ./f.py"
+    # The raw, unencoded spelling still works too.
+    assert worktree.relativize(f"open file://{root}/f.py", aliases) == "open ./f.py"
+
+
+def test_staged_placeholder_extends_on_a_forced_collision(monkeypatch):
+    """The absence CHECK, not just the derivation, is the guarantee. A digest that appears
+    inside its own input is not constructible, so the seed is stubbed to force the collision
+    the loop exists for — otherwise the loop is unfalsifiable and its removal goes unnoticed
+    (a mutation probe caught exactly that)."""
+    monkeypatch.setattr(worktree, "_placeholder_seed", lambda _text: "deadbeef")
+    base = worktree._PLACEHOLDER_PREFIX + "deadbeef"
+    text = f"log line mentioning {base} inline"
+
+    token = worktree._staged_placeholder(text)
+
+    assert token not in text
+    assert token.startswith(base)
+    assert len(token) > len(base)  # the loop extended it
+    # And the collision cannot survive into output: nothing pre-existing becomes `.`.
+    assert worktree.sanitize_prose(text, ALIASES) == text
