@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import os
 import re
 import shutil
 import subprocess
@@ -512,6 +513,64 @@ def capture_diff(wt: str, *, timeout: int) -> str:
             f"capturing the worktree diff failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
         )
     return proc.stdout
+
+
+# A character that can continue a path component. Used as a match boundary so an alias
+# is only rewritten where it is the WHOLE leading portion of a path, never a fragment of
+# a longer name. `/` belongs on the LEFT only: on the right it is exactly what separates
+# the root from the path we want to keep (`<root>/src/f.py`), while on the left it would
+# mean the alias is the tail of some longer path (`/other<root>/f.py`) — a different file.
+# The `-` is backslash-escaped so appending `/` for the left-hand class cannot form a range.
+_PATH_CHAR = r"A-Za-z0-9_.~\-"
+
+
+def path_aliases(path: str) -> tuple[str, ...]:
+    """Every textual spelling of ``path`` an agent's prose might use, longest first.
+
+    Covers the symlinked-ancestor case (macOS resolves ``/tmp`` -> ``/private/tmp`` and
+    ``/var/folders`` -> ``/private/var/folders``, so the path ``mkdtemp`` returned and the
+    one the agent reports can differ) and the ``file://`` URI spelling of each. Sorted
+    longest-first so a containing alias is always tried before an alias it contains.
+
+    Capture these while the worktree still EXISTS. ``realpath`` happens to resolve a
+    deleted path correctly today — only the surviving ancestors carry the symlinks — but
+    relying on that would make a rename of this call site silently degrade the alias set."""
+    root = path.rstrip("/") or path
+    forms = {root, os.path.realpath(root)}
+    aliases = forms | {f"file://{form}" for form in forms}
+    return tuple(sorted(aliases, key=len, reverse=True))
+
+
+def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
+    """Rewrite absolute paths under a throwaway worktree to repo-relative form.
+
+    The worktree is torn down before the caller reads a delegate result, so every
+    absolute path the agent wrote into its prose is dead on arrival (#412). Each alias is
+    replaced by a single ``.``, which leaves the rest of the path to follow on its own:
+    ``<root>/src/f.py`` -> ``./src/f.py``, ``file://<root>/f.py`` -> ``./f.py``, and a
+    bare ``<root>`` -> ``.``.
+
+    The paths stay RELATIVE rather than being re-rooted at the live repo: the diff is not
+    applied, so a live absolute path would be equally dead for a new file and, worse,
+    would point at a real file whose content differs from what the agent described.
+
+    The ``./`` prefix is load-bearing, not cosmetic: bare-relative output would turn
+    ``[x](<root>/javascript:a)`` into a link target with a live URI scheme, and stripping
+    only the root from a ``file://`` URI would leave ``file://./f.py``, where ``.`` parses
+    as the HOST. Prefixing sidesteps both without teaching this function to parse Markdown.
+
+    Known limitation: a sentence-final bare root (``... in <root>.``) is left alone,
+    because rewriting it would emit ``..`` — the parent directory, which is more
+    misleading than the dead path it replaced.
+
+    ``None`` passes through unchanged, mirroring ``redaction.redact_text``."""
+    if not text:
+        return text
+    alternation = "|".join(re.escape(alias) for alias in aliases if alias)
+    if not alternation:
+        return text
+    pattern = re.compile(rf"(?<![{_PATH_CHAR}/])(?:{alternation})(?![{_PATH_CHAR}])")
+    return pattern.sub(".", text)
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:

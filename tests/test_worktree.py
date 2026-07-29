@@ -721,3 +721,138 @@ def test_unneutralizable_filter_name_fails_closed(repo, tmp_path):
     _git(repo, "config", "filter.ev=il.smudge", str(tmp_path / "nope.sh"))
     with pytest.raises(worktree.WorktreeError, match="cannot be safely neutralized"):
         worktree.create(str(repo), timeout=30)
+
+
+# --- Worktree-path relativization in returned prose (#412) --------------------------
+#
+# Codex runs with cwd = the throwaway worktree, so it writes absolute paths into its
+# prose; the worktree is torn down before the caller reads the result, leaving every
+# such path dead. `path_aliases` + `relativize` rewrite them to repo-relative form.
+
+
+def test_path_aliases_includes_realpath_and_file_uri_forms(tmp_path):
+    # A symlinked ancestor (macOS: /tmp -> /private/tmp, /var -> /private/var) means the
+    # path mkdtemp handed us and the one Codex reports can differ. Build the symlink here
+    # rather than relying on the host's /tmp, so this covers both aliases on Linux CI too.
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    wt = str(link / "tree")
+
+    aliases = worktree.path_aliases(wt)
+
+    assert wt in aliases
+    assert str(real / "tree") in aliases
+    assert f"file://{wt}" in aliases
+    assert f"file://{real / 'tree'}" in aliases
+    # Longest-first, so a containing alias (file:// form, or the longer of the two roots)
+    # is always tried before an alias it contains.
+    assert list(aliases) == sorted(aliases, key=len, reverse=True)
+    assert len(set(aliases)) == len(aliases)
+
+
+def test_path_aliases_dedupes_when_realpath_matches(tmp_path):
+    wt = str(tmp_path / "tree")
+    aliases = worktree.path_aliases(wt)
+    assert len(set(aliases)) == len(aliases)
+    assert aliases == (f"file://{wt}", wt)
+
+
+def test_path_aliases_strips_trailing_separator(tmp_path):
+    # A trailing slash would make every alias fail to match `<root>/file` (the text has one
+    # separator, the alias two), silently disabling the rewrite.
+    wt = str(tmp_path / "tree")
+    assert worktree.path_aliases(wt + "/") == worktree.path_aliases(wt)
+
+
+def test_path_aliases_on_removed_path(tmp_path):
+    # Aliases are captured while the worktree exists, but must not depend on it: realpath
+    # resolves the surviving ancestors and passes the missing leaf through unchanged.
+    wt = tmp_path / "tree"
+    wt.mkdir()
+    before = worktree.path_aliases(str(wt))
+    wt.rmdir()
+    assert worktree.path_aliases(str(wt)) == before
+
+
+ROOT = "/private/tmp/cic-worktree-__g9bg1q/tree"
+ALIASES = (f"file://{ROOT}", ROOT)
+
+
+def test_relativize_rewrites_the_observed_bug_shapes():
+    # The two forms the live reproduction produced: a markdown link target and a code span.
+    text = f"Created [REPRO.md]({ROOT}/REPRO.md).\n\nFull path: `{ROOT}/REPRO.md`."
+    out = worktree.relativize(text, ALIASES)
+    assert out == "Created [REPRO.md](./REPRO.md).\n\nFull path: `./REPRO.md`."
+    assert ROOT not in out
+
+
+def test_relativize_rewrites_nested_path():
+    out = worktree.relativize(f"see {ROOT}/src/pkg/mod.py now", ALIASES)
+    assert out == "see ./src/pkg/mod.py now"
+
+
+def test_relativize_rewrites_bare_root():
+    assert worktree.relativize(f"I worked in {ROOT} today", ALIASES) == "I worked in . today"
+
+
+def test_relativize_rewrites_file_uri_without_leaving_a_host():
+    # Stripping only the root from `file://<root>/f.py` would yield `file://./f.py`, where
+    # `.` parses as the URI HOST — a malformed link, worse than the dead path.
+    out = worktree.relativize(f"open file://{ROOT}/f.py", ALIASES)
+    assert out == "open ./f.py"
+    assert "file://" not in out
+
+
+def test_relativize_prefixes_dot_slash_so_no_uri_scheme_can_be_exposed():
+    # Bare-relative output would leave `javascript:a` as a live markdown link target.
+    out = worktree.relativize(f"[x]({ROOT}/javascript:a)", ALIASES)
+    assert out == "[x](./javascript:a)"
+
+
+def test_relativize_rewrites_every_occurrence():
+    out = worktree.relativize(f"{ROOT}/a and {ROOT}/b and {ROOT}", ALIASES)
+    assert out == "./a and ./b and ."
+
+
+def test_relativize_rewrites_at_string_start_and_end():
+    assert worktree.relativize(f"{ROOT}/a.py", ALIASES) == "./a.py"
+    assert worktree.relativize(f"in {ROOT}", ALIASES) == "in ."
+
+
+def test_relativize_leaves_partial_component_match_alone():
+    # `<parent>/treex/f` merely starts with the root; rewriting it would invent a path.
+    text = f"{ROOT}x/f.py"
+    assert worktree.relativize(text, ALIASES) == text
+
+
+def test_relativize_leaves_root_as_suffix_of_longer_path_alone():
+    text = f"/other{ROOT}/f.py"
+    assert worktree.relativize(text, ALIASES) == text
+
+
+def test_relativize_leaves_sentence_final_bare_root_alone():
+    # KNOWN LIMITATION, deliberate: rewriting `<root>.` would emit `..`, which reads as the
+    # parent directory — strictly more misleading than the dead path it replaced. A `.`
+    # after the root is therefore treated as a path-continuation character.
+    text = f"the root is {ROOT}."
+    assert worktree.relativize(text, ALIASES) == text
+
+
+def test_relativize_preserves_none_and_empty():
+    assert worktree.relativize(None, ALIASES) is None
+    assert worktree.relativize("", ALIASES) == ""
+
+
+def test_relativize_with_no_aliases_is_identity():
+    text = f"{ROOT}/a.py"
+    assert worktree.relativize(text, ()) == text
+
+
+def test_relativize_escapes_regex_metacharacters_in_the_root(tmp_path):
+    # mkdtemp roots are tame, but a caller-supplied one is not: an unescaped `.` or `+`
+    # would match characters it should not.
+    root = "/tmp/a+b(c)/t.ee"
+    out = worktree.relativize(f"{root}/f.py and /tmp/aab(c)/txee/f.py", (root,))
+    assert out == "./f.py and /tmp/aab(c)/txee/f.py"

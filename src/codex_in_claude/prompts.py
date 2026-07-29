@@ -49,7 +49,13 @@ DELEGATE_FRAMING = (
     "surrounding code's style and conventions. Run available tests when useful.\n"
     f"{_UNTRUSTED_DATA_CLAUSE}\n"
     "When done, summarize what you changed and why, and call out anything Claude "
-    "should verify before applying."
+    "should verify before applying.\n"
+    # Your working directory is a throwaway worktree that is deleted before Claude reads
+    # your answer, so an absolute path out of it is dead on arrival (#412). The server
+    # rewrites the ones it recognizes, but a path spelled in a form it cannot match would
+    # survive — this keeps that rewrite a backstop rather than the only mechanism.
+    "In your final summary, refer to files by repository-relative paths (for example, "
+    "`src/module.py`), not by absolute path."
 )
 
 

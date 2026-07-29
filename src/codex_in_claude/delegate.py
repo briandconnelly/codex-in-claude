@@ -122,6 +122,9 @@ async def run_delegate(
             )
         )
 
+    # Captured while the worktree exists, for rewriting worktree-absolute paths out of
+    # Codex's prose below — the teardown in the `finally` runs before that text is built.
+    wt_aliases = worktree.path_aliases(wt.path)
     if wt.baseline_warning:
         meta.security_warnings = [wt.baseline_warning]
     try:
@@ -158,10 +161,21 @@ async def run_delegate(
         worktree.remove(cwd, wt, timeout=git_timeout)
 
     meta.context_summary = _diffstat(diff)
+    # Rewrite worktree-absolute paths to repo-relative BEFORE redacting (#412). The
+    # worktree is gone by now, so those paths are dead on arrival; both fields built from
+    # this text (summary and raw_response.text) are covered by the single call.
+    #
+    # The order is load-bearing, not stylistic: a worktree path is long enough and drawn
+    # from a narrow enough alphabet to trip redaction's labelled-secret pattern all by
+    # itself (`SSH_KEY=<root>/id_thing` redacts to `SSH_KEY=[redacted: secret value]`).
+    # Redacting first would therefore erase the very text this rewrite needs to match,
+    # leaving nothing to relativize; relativizing first also shortens the value below that
+    # pattern's length floor, so the false positive stops firing. Do not swap these.
+    relativized = worktree.relativize(result.last_message, wt_aliases)
     # Redact inline secret-looking values from Codex's free-text before it is returned,
     # mirroring the diff redaction below (#58): a secret echoed in prose (e.g. quoting a
     # config it read) would otherwise reach the caller unredacted in summary/raw_response.
-    last_message = redaction.redact_text(result.last_message)
+    last_message = redaction.redact_text(relativized)
     summary = (last_message or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"

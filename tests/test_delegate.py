@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from codex_in_claude import codex
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Meta
@@ -264,3 +266,81 @@ def test_run_delegate_classifies_effort_rejection(monkeypatch):
     )
     assert out["ok"] is False
     assert out["error"]["code"] == "invalid_reasoning_effort"
+
+
+# --- Worktree paths in returned prose (#412) ----------------------------------------
+def _run_delegate_with_message(monkeypatch, message: str, *, wt_path: str, diff: str = ""):
+    """Drive run_delegate with a canned last_message and worktree path; return the result."""
+    from types import SimpleNamespace
+
+    import anyio
+
+    from codex_in_claude import delegate
+    from codex_in_claude._core import worktree
+
+    removed: list = []
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=message)
+
+    monkeypatch.setattr(
+        worktree, "create", lambda *a, **k: SimpleNamespace(path=wt_path, baseline_warning=None)
+    )
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: diff)
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: removed.append(True))
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+
+    result = anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/repo",
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+    return result, removed
+
+
+def test_run_delegate_relativizes_worktree_paths_in_summary_and_raw(monkeypatch, tmp_path):
+    """The worktree is torn down before the caller reads the result, so an absolute path
+    into it is dead on arrival (#412). Assert the CONTENT changed — asserting only that
+    summary and raw_response.text agree would pass against the bug, since both derive from
+    the same last_message."""
+    wt = str(tmp_path / "cic-worktree-x" / "tree")
+    message = f"Created [f.md]({wt}/f.md).\n\nFull path: `{wt}/f.md`."
+
+    result, removed = _run_delegate_with_message(
+        monkeypatch, message, wt_path=wt, diff="diff --git a/f.md b/f.md\n+x\n"
+    )
+
+    real = os.path.realpath(wt)
+    for field in (result["summary"], result["raw_response"]["text"]):
+        assert "./f.md" in field
+        assert wt not in field
+        assert real not in field
+    assert result["summary"] == "Created [f.md](./f.md).\n\nFull path: `./f.md`."
+    assert removed, "the worktree must still be torn down"
+
+
+def test_run_delegate_relativizes_on_the_empty_diff_branch(monkeypatch, tmp_path):
+    """The `Codex made no changes.` branch builds its own summary string; the rewrite must
+    already have been applied to the text it wraps."""
+    wt = str(tmp_path / "cic-worktree-y" / "tree")
+    result, _ = _run_delegate_with_message(
+        monkeypatch, f"I looked at {wt}/a.py and changed nothing.", wt_path=wt, diff=""
+    )
+    assert result["summary"] == "Codex made no changes. I looked at ./a.py and changed nothing."
+    assert wt not in result["summary"]
+
+
+def test_run_delegate_preserves_none_last_message(monkeypatch, tmp_path):
+    """A successful run with no final message keeps raw_response.text null — the rewrite
+    must not coerce None into a string."""
+    wt = str(tmp_path / "cic-worktree-z" / "tree")
+    result, _ = _run_delegate_with_message(monkeypatch, None, wt_path=wt)
+    assert result["raw_response"]["text"] is None
+    assert result["summary"] == "Codex made no changes. (codex returned no summary)"
