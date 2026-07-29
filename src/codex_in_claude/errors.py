@@ -331,10 +331,12 @@ def make_error(
     the per-argument list on EVERY envelope with that code, with `details` mirroring the
     first entry. Two producers had drifted from that promise independently, so the rule
     lives here — the one constructor every producer goes through — rather than being
-    re-implemented per call site. A missing list is a programming error and raises;
-    `details` is DERIVED from the first entry when the call site supplies none, and an
-    explicitly supplied `details` always wins (a combined-size failure names
-    `fields=[...]`, which no single entry can mirror).
+    re-implemented per call site. BOTH halves are enforced: a missing list raises, and
+    `details` is ALWAYS derived from the first entry. Deriving unconditionally (rather
+    than only filling a gap) is what makes the mirror structural — a call site cannot pass
+    a `details` that disagrees, because it cannot pass one at all. Nothing needs to: the
+    one detail shape no single entry can mirror, `fields=[...]` for a combined-size
+    failure, belongs to `input_too_large`.
 
     Deliberately not an `ErrorInfo` model_validator: replay reconstructs stored records
     with `ErrorResult.model_validate`, and a record written before this rule legitimately
@@ -345,11 +347,15 @@ def make_error(
                 "make_error: an invalid_arguments envelope must carry a non-empty "
                 "invalid_arguments list (docs/REFERENCE.md)"
             )
-        if details is None:
-            first = invalid_arguments[0]
-            details = ErrorDetail(
-                field=first.field, reason=first.reason, allowed_values=first.allowed_values
+        if details is not None:
+            raise ValueError(
+                "make_error: `details` is derived from invalid_arguments[0] for this code "
+                "and must not be supplied (docs/REFERENCE.md: details mirrors the first)"
             )
+        first = invalid_arguments[0]
+        details = ErrorDetail(
+            field=first.field, reason=first.reason, allowed_values=first.allowed_values
+        )
     next_step, tool, temp_default, alt_default = _REPAIR_BY_CODE[code]
     if repair_next_step is not None:
         next_step = repair_next_step

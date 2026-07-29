@@ -418,7 +418,8 @@ def _blank_input_error(value: str, field: str, tool_name: str, meta: Meta) -> di
                     f"Supply a {field} with actual content, then retry. Leading and "
                     "trailing whitespace around that content is fine."
                 ),
-                details=ErrorDetail(field=field, reason=reason),
+                # `details` is derived from the entry below by make_error (#416), so the
+                # mirror it promises cannot drift from what this call site passes.
                 invalid_arguments=[InvalidArgument(field=field, reason=reason)],
             ),
             meta=meta,
@@ -514,11 +515,8 @@ def _invalid_arguments_envelope(
                 message[:300],
                 repair_tool=tool_name,
                 repair_alternative=repair,
-                details=ErrorDetail(
-                    field=first.field,
-                    reason=first.reason,
-                    allowed_values=first.allowed_values,
-                ),
+                # `details` mirrors items[0], derived by make_error (#416) — this builder
+                # used to construct the mirror by hand, which is how it could drift.
                 invalid_arguments=items,
             ),
             meta=meta,

@@ -62,7 +62,7 @@ def test_make_error_rejects_invalid_arguments_without_the_list(omitted):
     loud here, where tests catch it, rather than a silently non-conformant envelope.
 
     Deliberately NOT an ErrorInfo model_validator: replay reconstructs stored records
-    with `ErrorResult.model_validate` (server.py:4450), and a record written before
+    with `ErrorResult.model_validate` in the job-result reader, and a record written before
     this rule legitimately has no list. Validating there would make old jobs unreadable."""
     with pytest.raises(ValueError, match="invalid_arguments"):
         make_error("invalid_arguments", "bad arg", invalid_arguments=omitted)
@@ -85,20 +85,36 @@ def test_make_error_derives_details_from_the_first_invalid_argument():
     assert e.details.allowed_values == ["branch"]
 
 
-def test_make_error_keeps_an_explicit_details_over_the_derived_one():
-    """Derivation fills a GAP; it never overwrites. `_combined_input_detail`-style call
-    sites that pass a deliberately different `details` (e.g. `fields=[...]` naming a
-    combination) keep it."""
-    explicit = ErrorDetail(fields=["question", "extra_context"])
+def test_make_error_rejects_an_explicit_details_for_invalid_arguments():
+    """Derivation is UNCONDITIONAL, which is what makes the mirror structural: a call site
+    cannot pass a `details` that disagrees with the first entry because it cannot pass one
+    at all. Rejected loudly rather than silently ignored — a silent no-op would let a call
+    site believe it had set something it had not.
+
+    Nothing legitimately needs the exception: the one shape no single entry can mirror,
+    `fields=[...]` for a combined-size failure, belongs to `input_too_large`
+    (`_combined_input_detail`'s only caller, the consult combined-size guard)."""
+    with pytest.raises(ValueError, match="derived from invalid_arguments"):
+        make_error(
+            "invalid_arguments",
+            "too big together",
+            details=ErrorDetail(fields=["question", "extra_context"]),
+            invalid_arguments=[InvalidArgument(field="question", reason="combined size")],
+        )
+
+
+def test_make_error_mirrors_details_for_every_invalid_arguments_producer():
+    """The mirror holds for a multi-entry list too: `details` tracks the FIRST entry,
+    including its allowed_values, and never a later one."""
     e = make_error(
         "invalid_arguments",
-        "too big together",
-        details=explicit,
-        invalid_arguments=[InvalidArgument(field="question", reason="combined size")],
+        "two bad args",
+        invalid_arguments=[
+            InvalidArgument(field="scope", reason="bad scope", allowed_values=["branch"]),
+            InvalidArgument(field="base", reason="bad base", allowed_values=["main"]),
+        ],
     )
-    assert e.details is explicit
-    assert e.details.fields == ["question", "extra_context"]
-    assert e.details.field is None
+    assert e.details == ErrorDetail(field="scope", reason="bad scope", allowed_values=["branch"])
 
 
 def test_resource_not_found_repair_lists_resources():

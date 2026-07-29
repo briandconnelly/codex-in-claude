@@ -77,9 +77,9 @@ def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
 
 
 def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
-    """`InvalidArgument` promises the rejected value is never echoed (schemas.py:859-862)
+    """`InvalidArgument` promises the rejected value is never echoed (see its docstring)
     — it may be a secret, and this path's value is caller-supplied free text. The
-    exception text embeds it (`got {untracked!r}`, _core/gitdiff.py:1053), so the machine
+    exception text embeds it (`got {untracked!r}`), so the machine
     fields are built from the known domain instead of from `str(exc)`.
 
     The probe value is deliberately NOT secret-shaped: `gitdiff_error` runs `str(exc)`

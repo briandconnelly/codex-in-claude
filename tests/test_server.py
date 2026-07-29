@@ -6148,7 +6148,7 @@ async def test_transfer_invalid_path_carries_the_per_argument_list(monkeypatch):
 
 async def test_transfer_invalid_path_falls_back_when_the_validator_gives_no_reason(monkeypatch):
     """Defense only: every `realpath=None` branch of `validate_transcript_path`
-    (appserver.py:279-307) returns a reason, so this state is fabricated here. It pins
+    returns a reason, so this state is fabricated here. It pins
     that the fallback reaches all three carriers rather than leaving `reason` unset."""
     _ready_codex(monkeypatch)
     _patch_validation(monkeypatch, realpath=None, reason=None)

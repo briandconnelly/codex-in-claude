@@ -7,7 +7,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
-- **Every `invalid_arguments` envelope now carries the per-argument list** (#416). `docs/REFERENCE.md`
+- **Every `invalid_arguments` envelope this release builds now carries the per-argument list** (#416). `docs/REFERENCE.md`
   promises that an envelope with this code carries a list of `{field, reason, allowed_values}` per
   offending argument, with `details` mirroring the first. Two producers omitted it: `codex_transfer`'s
   rejection of an invalid `transcript_path` (which also left `details.reason` unset), and the
@@ -17,8 +17,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   rather than a silently non-conformant result, and `details` is derived from the first entry unless
   the call site supplies its own. The `untracked` entry states its allowed values without echoing the
   rejected one, keeping `InvalidArgument`'s promise that a rejected value is never copied into a
-  machine-readable field. No result `fingerprint` or `RESULT_FORMAT` change: the envelope's schema,
-  error-code sets, and descriptions are unchanged — only the values populated at runtime.
+  machine-readable field. Replay of a stored job result is deliberately untouched — a record written
+  before this rule is returned as it was written, since normalizing it would mean inventing repair
+  data the run never produced. No such record can exist through the MCP surface (the only stored
+  envelope that could carry this code comes from a schema-validated enum), so this is a statement
+  about provenance rather than a known gap. No result `fingerprint` or `RESULT_FORMAT` change: the
+  envelope's schema, error-code sets, and descriptions are unchanged — only the values populated at
+  runtime.
 
 - **BREAKING (agent surface): a blank `question` or `task` is now rejected before any spend**
   (#411). An empty or whitespace-only value passed validation and bought a real Codex run that
