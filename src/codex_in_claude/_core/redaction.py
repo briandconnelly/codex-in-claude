@@ -17,16 +17,20 @@ SECRET_PATH_RE = re.compile(
 )
 
 # Inline secret-value shapes redacted within otherwise-sendable lines.
+# Labelled secrets: a `key`/`token`/`password`-ish label, a `:`/`=`, then a long value.
+# Named because the code-reference exemption below applies to this pattern alone (#421).
+LABELLED_VALUE_PATTERN = re.compile(
+    # The optional opening quote also matches a JSON-escaped quote (\") so a secret
+    # quoted inside an unparsed JSON string (raw_response.text) is still redacted (#58).
+    r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
+)
+
 SECRET_VALUE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
     re.compile(r"(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{16,}"),
-    re.compile(
-        # The optional opening quote also matches a JSON-escaped quote (\") so a secret
-        # quoted inside an unparsed JSON string (raw_response.text) is still redacted (#58).
-        r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
-    ),
+    LABELLED_VALUE_PATTERN,
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     # Unlabeled secrets caught by shape alone (#73), independent of an adjacent label.
     # JWT: three base64url segments after the `eyJ` ("{" base64) header marker.
@@ -44,6 +48,55 @@ SECRET_VALUE_PATTERNS = [
 ]
 
 
+# --------------------------------------------------------------------------- #
+# Code-reference exemption for the labelled pattern (#421)
+# --------------------------------------------------------------------------- #
+# LABELLED_VALUE_PATTERN matches any 16+ character identifier run after a `key`/`token`
+# label, so ordinary source tripped it — `token = _helper(x)`, `key = OrderedDict()`,
+# `idempotency_key: KeyParam = None`. On a review that masked the code under review out
+# of the diff and, because any inline mask makes `coverage` partial, downgraded a `pass`
+# to `unknown`.
+#
+# So a match is exempted only when it is provably a code reference rather than a
+# credential. Every condition below removes a way a real credential gets written, and
+# the exemption applies ONLY to diff lines (see DiffRedactor) — never to redact_text's
+# arbitrary prose, where no syntax guarantee holds. The other patterns still run on an
+# exempted line, so a value carrying a recognized vendor/JWT/PEM shape is caught anyway.
+
+# A dotted identifier path and nothing else: no `+ / = ~ -`, which real base64-ish
+# secrets carry and Python/JS names cannot.
+_CODE_REFERENCE_VALUE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
+# Never exempt these: a human password may legitimately end right before `(`, as in
+# `password = correcthorsebatterystaple(2024)`.
+_PASSWORD_LABEL_RE = re.compile(r"(?i)(?:passw(?:or)?d|pwd|passphrase|secret)\s*[:=]")
+# Whitespace after the separator. `api_key=value` — config, env, shell, query string —
+# never gets the exemption; PEP8-style `key = value` and `key: Type` do.
+_SPACED_SEPARATOR_RE = re.compile(r"[:=]\s")
+
+
+def _is_code_reference(match: re.Match) -> bool:
+    """Whether a LABELLED_VALUE_PATTERN match is a code reference, not a credential."""
+    label = match.group(1)
+    if not _SPACED_SEPARATOR_RE.search(label) or _PASSWORD_LABEL_RE.search(label):
+        return False
+    if label.endswith(("'", '"')):  # a quoted literal is a value, not a reference
+        return False
+    value = match.group(0)[len(label) :]
+    if not _CODE_REFERENCE_VALUE_RE.match(value):
+        return False
+    # What follows the value. Read from the match end — which is the true end of the
+    # value, since the greedy `{16,}` has no trailing assertion to backtrack against. A
+    # trailing lookahead would instead let it match one char short to satisfy the
+    # assertion, redacting `_placeholder_seed` and leaving `d(text)` behind.
+    rest = match.string[match.end() :]
+    if rest.startswith("(") or re.match(r"\s+\+", rest):
+        return True  # a call, or an operand in an expression
+    # A default after an annotation — `idempotency_key: KeyParam = None`. Only ever
+    # written with a `:` separator; allowing it after `=` would exempt
+    # `token = abcd1234abcd1234efgh = leftover`, leaking a real value.
+    return bool(re.match(r"\s+=", rest)) and ":" in label
+
+
 def _diff_path_from_header(line: str) -> str:
     spec = line[len("diff --git ") :]
     try:
@@ -56,13 +109,19 @@ def _diff_path_from_header(line: str) -> str:
     return spec
 
 
-def _redact_secret_values(line: str) -> tuple[str, bool]:
+def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str, bool]:
+    """Replace inline secret-looking values. ``exempt_code`` leaves provable code
+    references intact — only sound for a line of source (a diff body line), so callers
+    handling arbitrary prose must leave it False (#421)."""
     redacted = False
     out = line
     for pattern in SECRET_VALUE_PATTERNS:
+        exempting = exempt_code and pattern is LABELLED_VALUE_PATTERN
 
-        def repl(match: re.Match) -> str:
+        def repl(match: re.Match, *, exempting: bool = exempting) -> str:
             nonlocal redacted
+            if exempting and _is_code_reference(match):
+                return match.group(0)
             redacted = True
             if match.lastindex:
                 return f"{match.group(1)}[redacted: secret value]"
@@ -139,7 +198,9 @@ class DiffRedactor:
             line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))
         ) or line.startswith("Authorization:")
         if scan_line:
-            emit, changed = _redact_secret_values(line)
+            # A diff body line is source, so a labelled match that is provably a code
+            # reference is left intact (#421).
+            emit, changed = _redact_secret_values(line, exempt_code=True)
             if changed and self._current_path and self._current_path not in self.redacted:
                 self.redacted.append(self._current_path)
             return [emit]

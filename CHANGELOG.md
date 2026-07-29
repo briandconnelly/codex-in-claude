@@ -7,6 +7,40 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Secret redaction no longer scrubs ordinary source out of reviewed diffs** (#421). The
+  labelled-secret pattern matches any 16-or-more-character identifier run after a `key`/`token`-ish
+  label, so plain code tripped it: `token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)` reached
+  Codex as `token = [redacted: secret value] + _placeholder_seed(text)`. Sweeping this repository's
+  own tracked files found 35 lines matching that pattern and no other, about half of them innocuous —
+  including all six `idempotency_key: IdempotencyKeyParam = None,` handler signatures. Two harms
+  compounded: the reviewer could not see the code it was asked to review (in the reported case the
+  masked lines *were* the mechanism under review, so a "no findings" verdict rested on much less
+  evidence than it appeared to), and because any inline mask makes `coverage.status` partial, the
+  never-false-pass rule turned a model `pass` into `unknown` citing `redacted` — which reads as "this
+  file had secrets" when one innocuous assignment tripped a heuristic. A labelled match inside a diff
+  body line is now left intact when it is provably a code reference rather than a credential: the
+  separator must be followed by whitespace (so `api_key=value` in config, env, shell, or a query
+  string is never exempt), the label must not be from the password family (a human password may
+  legitimately end right before `(`), the value must be unquoted and a bare dotted identifier path
+  (no `+ / = ~ -`, which real base64-ish secrets carry), and it must be followed by a call, an
+  operand, or — only with a `:` separator — an annotation default. Redaction is not weakened: the
+  exemption applies only to diff body lines and never to `redact_text`'s arbitrary prose, where no
+  syntax guarantee holds, and every vendor/JWT/PEM/connection-string pattern still runs on an
+  exempted line, so a value carrying a recognized secret shape is caught regardless. Verified against
+  19 realistic credential-bearing lines — including `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, and
+  `NPM_TOKEN` values with no vendor prefix, which this pattern is the last line of defense for — none
+  of which the exemption reaches. Two design traps are pinned by tests: the check runs in the
+  substitution callback rather than as a trailing lookahead, because a greedy value can match one
+  character short to satisfy an assertion (redacting `_placeholder_seed` and leaving `d(text)`), and
+  the annotation-default case is restricted to the `:` separator, because allowing it after `=` would
+  exempt `token = abcd1234abcd1234efgh = leftover`. Roughly half the false positives remain: quoted
+  identifier-ish constants such as `RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"`, which are
+  structurally identical to `API_KEY = "ghp_…"`. Shannon entropy does not separate them (innocuous
+  values measured 3.35–4.44 bits/char, realistic generic secrets 2.81–4.32, with an MD5-shaped secret
+  *below* several innocuous constants), so no cheap heuristic is safe there. The `redacted` omission
+  reason's documented meaning is also corrected: it claimed a whole file's hunk was dropped, but the
+  same disclosure has always covered inline masking too.
+
 - **`codex_delegate`'s prose no longer points into the deleted worktree** (#412). Codex runs with its
   working directory set to the throwaway worktree, and that worktree is torn down before the caller
   reads the result — so every absolute path Codex wrote into its summary was dead on arrival. A
