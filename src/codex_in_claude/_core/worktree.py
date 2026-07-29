@@ -515,13 +515,24 @@ def capture_diff(wt: str, *, timeout: int) -> str:
     return proc.stdout
 
 
-# A character that can continue a path component. Used as a match boundary so an alias
-# is only rewritten where it is the WHOLE leading portion of a path, never a fragment of
-# a longer name. `/` belongs on the LEFT only: on the right it is exactly what separates
-# the root from the path we want to keep (`<root>/src/f.py`), while on the left it would
-# mean the alias is the tail of some longer path (`/other<root>/f.py`) — a different file.
-# The `-` is backslash-escaped so appending `/` for the left-hand class cannot form a range.
-_PATH_CHAR = r"A-Za-z0-9_.~\-"
+# An alias is rewritten only where prose punctuation (or a string edge) brackets it, so it
+# is the WHOLE leading portion of a path and never a fragment of a longer name. This is an
+# ALLOWLIST of delimiters, deliberately not a denylist of "path characters": a POSIX
+# component may contain nearly any byte, so `<root>+suffix`, `<root>@v2` and `/pré<root>`
+# name DIFFERENT paths, and a denylist that forgot `+`/`@`/`%`/non-ASCII silently rewrote
+# them into the wrong file. Erring toward a missed rewrite is safe; erring toward a wrong
+# one points the caller at the wrong content.
+#
+# `/` is asymmetric on purpose. On the RIGHT it is what separates the root from the path we
+# want to keep (`<root>/src/f.py`), so it must be allowed — an earlier draft forbade it on
+# both sides and was a silent no-op on every real case. On the LEFT it would mean the alias
+# is the tail of a longer path (`/other<root>/f.py`), a different file, so it is excluded.
+#
+# `.` is absent from the right-hand set deliberately: allowing it would rewrite a
+# sentence-final `<root>.` to `..`, the parent directory — more misleading than the dead
+# path it replaced. See `relativize`'s documented limitation.
+_LEFT_DELIMS = r"\s(\[{`\"'<=,;:|"
+_RIGHT_DELIMS = r"/\s)\]}`\"'<>,;:!?*|"
 
 
 def path_aliases(path: str) -> tuple[str, ...]:
@@ -534,8 +545,16 @@ def path_aliases(path: str) -> tuple[str, ...]:
 
     Capture these while the worktree still EXISTS. ``realpath`` happens to resolve a
     deleted path correctly today — only the surviving ancestors carry the symlinks — but
-    relying on that would make a rename of this call site silently degrade the alias set."""
-    root = path.rstrip("/") or path
+    relying on that would make a rename of this call site silently degrade the alias set.
+
+    Raises ``ValueError`` for a blank or relative ``path``. Neither can anchor an absolute
+    path, and a blank one is actively dangerous: it resolves to the process CWD and yields
+    a bare ``file://`` alias that would rewrite any unrelated URI (``file:///etc/passwd``
+    -> ``./etc/passwd``). Rejecting is right for a ``_core`` API whose future callers do
+    not exist yet — a silent broad rewrite is far worse than a loud programming error."""
+    root = path.strip().rstrip("/") or path.strip()
+    if not root or not root.startswith("/"):
+        raise ValueError(f"path_aliases needs a non-blank absolute path, got {path!r}")
     forms = {root, os.path.realpath(root)}
     aliases = forms | {f"file://{form}" for form in forms}
     return tuple(sorted(aliases, key=len, reverse=True))
@@ -559,17 +578,26 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
     only the root from a ``file://`` URI would leave ``file://./f.py``, where ``.`` parses
     as the HOST. Prefixing sidesteps both without teaching this function to parse Markdown.
 
+    A match needs prose punctuation (or a string edge) on both sides — see ``_LEFT_DELIMS``
+    / ``_RIGHT_DELIMS`` for why that is an allowlist rather than a denylist of path
+    characters, and why ``/`` is allowed on only one side.
+
     Known limitation: a sentence-final bare root (``... in <root>.``) is left alone,
     because rewriting it would emit ``..`` — the parent directory, which is more
     misleading than the dead path it replaced.
 
+    Aliases are sorted longest-first HERE rather than trusting the caller's order: with a
+    containing alias tried second, a shorter one it contains would match first and name
+    the wrong file. Blank entries are dropped — an empty alias matches everywhere.
+
     ``None`` passes through unchanged, mirroring ``redaction.redact_text``."""
     if not text:
         return text
-    alternation = "|".join(re.escape(alias) for alias in aliases if alias)
-    if not alternation:
+    usable = sorted({alias for alias in aliases if alias.strip()}, key=len, reverse=True)
+    if not usable:
         return text
-    pattern = re.compile(rf"(?<![{_PATH_CHAR}/])(?:{alternation})(?![{_PATH_CHAR}])")
+    alternation = "|".join(re.escape(alias) for alias in usable)
+    pattern = re.compile(rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})(?=[{_RIGHT_DELIMS}]|$)")
     return pattern.sub(".", text)
 
 

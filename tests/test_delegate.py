@@ -344,3 +344,18 @@ def test_run_delegate_preserves_none_last_message(monkeypatch, tmp_path):
     result, _ = _run_delegate_with_message(monkeypatch, None, wt_path=wt)
     assert result["raw_response"]["text"] is None
     assert result["summary"] == "Codex made no changes. (codex returned no summary)"
+
+
+def test_run_delegate_redacts_before_relativizing(monkeypatch, tmp_path):
+    """Order matters for SECRECY, not just for matching (#412 review). Relativizing first
+    shortens a labelled worktree-prefixed value below the redactor's length floor, so a
+    short secret riding on a worktree path would survive — a bypass an injected task could
+    aim for deliberately, since the worktree path is visible to the model. Redaction runs
+    first; the dead path is removed along with the value, which serves #412 too."""
+    wt = str(tmp_path / "cic-worktree-s" / "tree")
+    result, _ = _run_delegate_with_message(
+        monkeypatch, f"Set api_key={wt}/abcdefgh in the config.", wt_path=wt
+    )
+    assert "[redacted: secret value]" in result["summary"]
+    assert "abcdefgh" not in result["summary"]
+    assert "abcdefgh" not in (result["raw_response"]["text"] or "")

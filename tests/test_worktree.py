@@ -856,3 +856,63 @@ def test_relativize_escapes_regex_metacharacters_in_the_root(tmp_path):
     root = "/tmp/a+b(c)/t.ee"
     out = worktree.relativize(f"{root}/f.py and /tmp/aab(c)/txee/f.py", (root,))
     assert out == "./f.py and /tmp/aab(c)/txee/f.py"
+
+
+def test_path_aliases_rejects_empty_and_relative_paths():
+    # An empty path resolves to the CWD and yields a bare `file://` alias, which would
+    # rewrite any unrelated file URI (`file:///etc/passwd` -> `./etc/passwd`). A relative
+    # path cannot anchor an absolute one. Both are programming errors, not inputs to
+    # tolerate — `_core` is written for callers that do not exist yet.
+    for bad in ("", "   ", "relative/tree", "./tree"):
+        with pytest.raises(ValueError, match="absolute"):
+            worktree.path_aliases(bad)
+
+
+def test_relativize_sorts_aliases_longest_first_itself():
+    # Correctness must not depend on the caller's ordering: with `/root` tried first, the
+    # longer `/root/sub` never gets a chance and the result names the wrong file.
+    assert worktree.relativize("/root/sub/file", ("/root", "/root/sub")) == "./file"
+    assert worktree.relativize("/root/sub/file", ("/root/sub", "/root")) == "./file"
+
+
+def test_relativize_ignores_blank_aliases():
+    assert worktree.relativize("open file:///etc/passwd", ("", "   ")) == "open file:///etc/passwd"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["+suffix", "@v2/f.py", "%20x", "x/f.py", ".bak/f.py", "~1/f.py", "-old/f.py", "=v"],
+)
+def test_relativize_leaves_sibling_paths_alone(suffix):
+    # A POSIX path component may contain nearly any byte, so `<root>+suffix`, `<root>@v2`
+    # and friends are DIFFERENT directories. Rewriting them would invent a path and point
+    # the caller at the wrong file. Only a `/` or prose punctuation ends the root.
+    text = f"{ROOT}{suffix}"
+    assert worktree.relativize(text, ALIASES) == text
+
+
+@pytest.mark.parametrize("prefix", ["/pré", "/other", "x", "9", "_", "-", "~", "+", "@", "%"])
+def test_relativize_leaves_enclosing_paths_alone(prefix):
+    # The alias appearing mid-path means it is the tail of some longer, unrelated path.
+    text = f"{prefix}{ROOT}/f.py"
+    assert worktree.relativize(text, ALIASES) == text
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [("(", ")"), ("[", "]"), ("`", "`"), ('"', '"'), ("'", "'"), ("<", ">"), (" ", " ")],
+)
+def test_relativize_matches_inside_common_prose_delimiters(left, right):
+    out = worktree.relativize(f"x{left}{ROOT}/f.py{right}y", ALIASES)
+    assert out == f"x{left}./f.py{right}y"
+
+
+@pytest.mark.parametrize("punct", [":", ",", ";", "!", "?", ")", "]", "`", '"', ">"])
+def test_relativize_treats_ambiguous_punctuation_as_prose(punct):
+    # `:`/`,`/`;` (and the closers) are all LEGAL bytes in a POSIX path component, so
+    # `<root>:8080` could in principle name a sibling directory. They are treated as prose
+    # punctuation anyway: a trailing colon or comma after a path is overwhelmingly more
+    # common in a sentence than a sibling whose name embeds one. This is a deliberate
+    # ambiguity call, not an oversight — `.` is the one that goes the other way, because
+    # its wrong answer (`..`) actively names a real, different directory.
+    assert worktree.relativize(f"in {ROOT}{punct} ok", ALIASES) == f"in .{punct} ok"
