@@ -346,12 +346,11 @@ def test_run_delegate_preserves_none_last_message(monkeypatch, tmp_path):
     assert result["summary"] == "Codex made no changes. (codex returned no summary)"
 
 
-def test_run_delegate_redacts_before_relativizing(monkeypatch, tmp_path):
-    """Order matters for SECRECY, not just for matching (#412 review). Relativizing first
-    shortens a labelled worktree-prefixed value below the redactor's length floor, so a
-    short secret riding on a worktree path would survive — a bypass an injected task could
-    aim for deliberately, since the worktree path is visible to the model. Redaction runs
-    first; the dead path is removed along with the value, which serves #412 too."""
+def test_run_delegate_does_not_let_a_secret_ride_on_a_worktree_path(monkeypatch, tmp_path):
+    """A short secret prefixed by a worktree path must not escape redaction (#412 review).
+    Rewriting the path first would shorten the labelled value below the redactor's 16-char
+    floor; the worktree path is visible to Codex, so an injected task could aim for that
+    shape deliberately. The redaction-safe combination lives in worktree.sanitize_prose."""
     wt = str(tmp_path / "cic-worktree-s" / "tree")
     result, _ = _run_delegate_with_message(
         monkeypatch, f"Set api_key={wt}/abcdefgh in the config.", wt_path=wt
@@ -359,3 +358,15 @@ def test_run_delegate_redacts_before_relativizing(monkeypatch, tmp_path):
     assert "[redacted: secret value]" in result["summary"]
     assert "abcdefgh" not in result["summary"]
     assert "abcdefgh" not in (result["raw_response"]["text"] or "")
+
+
+def test_run_delegate_survives_crafted_partial_alias_consumption(monkeypatch, tmp_path):
+    """Adversarial model output cannot make the redactor eat part of an alias and thereby
+    resurrect the dead path (#412 review round 2)."""
+    wt = str(tmp_path / "cic-worktree-c" / "tree")
+    result, _ = _run_delegate_with_message(
+        monkeypatch, f"api_key={'A' * 16}=file://{wt}/abcdefgh", wt_path=wt
+    )
+    assert "abcdefgh" not in result["summary"]
+    assert wt not in result["summary"]
+    assert "cic-worktree-" not in result["summary"]

@@ -547,14 +547,22 @@ def path_aliases(path: str) -> tuple[str, ...]:
     deleted path correctly today — only the surviving ancestors carry the symlinks — but
     relying on that would make a rename of this call site silently degrade the alias set.
 
-    Raises ``ValueError`` for a blank or relative ``path``. Neither can anchor an absolute
-    path, and a blank one is actively dangerous: it resolves to the process CWD and yields
-    a bare ``file://`` alias that would rewrite any unrelated URI (``file:///etc/passwd``
-    -> ``./etc/passwd``). Rejecting is right for a ``_core`` API whose future callers do
-    not exist yet — a silent broad rewrite is far worse than a loud programming error."""
-    root = path.strip().rstrip("/") or path.strip()
-    if not root or not root.startswith("/"):
-        raise ValueError(f"path_aliases needs a non-blank absolute path, got {path!r}")
+    Raises ``ValueError`` unless ``path`` is absolute, free of surrounding whitespace, and
+    below the filesystem root. Each rejection is a programming error a ``_core`` caller
+    would rather hear loudly than have silently reinterpreted:
+
+    - blank resolves to the process CWD and yields a bare ``file://`` alias that would
+      rewrite any unrelated URI (``file:///etc/passwd`` -> ``./etc/passwd``);
+    - surrounding whitespace cannot be trimmed away, because trimming would ACCEPT the
+      relative ``"\\n/tmp/tree"`` and would silently retarget the legal absolute
+      ``"/tmp/tree\\n"`` (a different file) onto ``/tmp/tree``;
+    - ``/`` is never a worktree, and its aliases cannot rewrite anything anyway (nothing
+      follows the root to supply the required delimiter)."""
+    if path != path.strip() or not path:
+        raise ValueError(f"path_aliases needs a path without surrounding whitespace, got {path!r}")
+    root = path.rstrip("/")
+    if not root or not Path(root).is_absolute():
+        raise ValueError(f"path_aliases needs an absolute path below the root, got {path!r}")
     forms = {root, os.path.realpath(root)}
     aliases = forms | {f"file://{form}" for form in forms}
     return tuple(sorted(aliases, key=len, reverse=True))
@@ -590,7 +598,14 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
     containing alias tried second, a shorter one it contains would match first and name
     the wrong file. Blank entries are dropped — an empty alias matches everywhere.
 
-    ``None`` passes through unchanged, mirroring ``redaction.redact_text``."""
+    ``None`` passes through unchanged, mirroring ``redaction.redact_text``.
+
+    Prefer ``sanitize_prose`` for text that is also being secret-redacted — the two
+    operations interact, and it is the only combination that is safe for both."""
+    return _replace_aliases(text, aliases, ".")
+
+
+def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str) -> str | None:
     if not text:
         return text
     usable = sorted({alias for alias in aliases if alias.strip()}, key=len, reverse=True)
@@ -598,7 +613,53 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
         return text
     alternation = "|".join(re.escape(alias) for alias in usable)
     pattern = re.compile(rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})(?=[{_RIGHT_DELIMS}]|$)")
-    return pattern.sub(".", text)
+    return pattern.sub(replacement, text)
+
+
+# The stand-in an alias wears while the secret redactor runs. Two properties make it work,
+# and both are required:
+#
+# 1. EVERY character is inside the redactor's inline-value character class
+#    (`redaction.SECRET_VALUE_PATTERNS`, the labelled-secret pattern), so the redactor can
+#    only swallow this token WHOLE or not at all. Its value match is anchored at a label
+#    and runs greedily until a character outside that class, and there is no such character
+#    inside this token — so it can never stop part-way through and leave a fragment.
+# 2. It is comfortably longer than that pattern's 16-character minimum, so a labelled path
+#    still reads as a long value and stays redacted regardless of how short the real root is
+#    (erring toward redaction).
+_ALIAS_PLACEHOLDER = "cicwt0worktree0alias0placeholder0"
+
+
+def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
+    """Relativize worktree paths AND redact secrets — the one order safe for both (#412).
+
+    Doing these in sequence is not safe in either direction, which is why they are one
+    function rather than two calls a caller has to order correctly:
+
+    - **Relativize, then redact** shortens a labelled worktree-prefixed value below the
+      redactor's 16-character floor, so ``api_key=<root>/abcdefgh`` becomes
+      ``api_key=./abcdefgh`` and the secret escapes. Codex sees the worktree path, so an
+      injected task can aim for that shape deliberately.
+    - **Redact, then relativize** lets the redactor consume PART of an alias. Its value
+      class covers ``=`` but stops at ``:``, so a crafted
+      ``api_key=<16 chars>=file://<root>/abcdefgh`` has ``...=file`` eaten, leaving
+      ``://<root>/abcdefgh`` — whose bare root is now preceded by ``/`` and so fails the
+      left-hand delimiter check. Both the dead path and the secret survive.
+
+    So each alias is first staged behind ``_ALIAS_PLACEHOLDER``, which the redactor cannot
+    partially consume (see there); redaction runs against that; then any placeholder that
+    survived — i.e. was not part of a redacted secret — becomes ``.``.
+
+    Redaction remains best-effort by contract (see ``redaction``): an adversarial model can
+    always emit an unlabelled secret that no pattern matches. This closes the interaction
+    between the two passes, not that broader gap."""
+    if not text:
+        return text
+    staged = _replace_aliases(text, aliases, _ALIAS_PLACEHOLDER)
+    redacted = redact_text(staged)
+    if not redacted:
+        return redacted
+    return redacted.replace(_ALIAS_PLACEHOLDER, ".")
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:

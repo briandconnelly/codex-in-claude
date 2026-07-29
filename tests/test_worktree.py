@@ -864,7 +864,7 @@ def test_path_aliases_rejects_empty_and_relative_paths():
     # path cannot anchor an absolute one. Both are programming errors, not inputs to
     # tolerate — `_core` is written for callers that do not exist yet.
     for bad in ("", "   ", "relative/tree", "./tree"):
-        with pytest.raises(ValueError, match="absolute"):
+        with pytest.raises(ValueError):
             worktree.path_aliases(bad)
 
 
@@ -916,3 +916,56 @@ def test_relativize_treats_ambiguous_punctuation_as_prose(punct):
     # ambiguity call, not an oversight — `.` is the one that goes the other way, because
     # its wrong answer (`..`) actively names a real, different directory.
     assert worktree.relativize(f"in {ROOT}{punct} ok", ALIASES) == f"in .{punct} ok"
+
+
+# --- sanitize_prose: the redaction/relativization interaction (#412 review) ---------
+#
+# Neither plain order is safe. Relativizing first shortens `api_key=<root>/secret` below
+# the redactor's length floor, so the secret escapes. Redacting first lets the redactor
+# CONSUME PART of an alias (its value charset covers `=` but stops at `:`, so a crafted
+# `api_key=<16 chars>=file://<root>/secret` eats `...=file` and leaves `://<root>/secret`
+# un-relativizable, surfacing the dead path AND the secret). Staging each alias behind an
+# all-charset placeholder makes the alias atomic to the redactor, so both hold.
+
+
+def test_sanitize_prose_relativizes_ordinary_paths():
+    out = worktree.sanitize_prose(f"Created [f.md]({ROOT}/f.md).", ALIASES)
+    assert out == "Created [f.md](./f.md)."
+
+
+def test_sanitize_prose_redacts_a_secret_riding_on_a_worktree_path():
+    out = worktree.sanitize_prose(f"api_key={ROOT}/abcdefgh", ALIASES)
+    assert out == "api_key=[redacted: secret value]"
+    assert "abcdefgh" not in out
+
+
+def test_sanitize_prose_survives_a_crafted_partial_alias_consumption():
+    crafted = f"api_key={'A' * 16}=file://{ROOT}/abcdefgh"
+    out = worktree.sanitize_prose(crafted, ALIASES)
+    assert "abcdefgh" not in out
+    assert ROOT not in out
+    assert "cic-worktree-" not in out
+
+
+def test_sanitize_prose_never_leaks_the_placeholder():
+    for text in (f"{ROOT}/a", f"api_key={ROOT}/a", f"see {ROOT} here", "nothing to do"):
+        assert worktree._ALIAS_PLACEHOLDER not in (worktree.sanitize_prose(text, ALIASES) or "")
+
+
+def test_sanitize_prose_still_redacts_ordinary_secrets():
+    out = worktree.sanitize_prose("token=" + "z" * 40, ALIASES)
+    assert "[redacted: secret value]" in out
+
+
+def test_sanitize_prose_preserves_none_and_empty():
+    assert worktree.sanitize_prose(None, ALIASES) is None
+    assert worktree.sanitize_prose("", ALIASES) == ""
+
+
+@pytest.mark.parametrize("bad", ["\n/tmp/tree", "/tmp/tree\n", " /tmp/tree", "/tmp/tree ", "/"])
+def test_path_aliases_rejects_whitespace_bearing_and_root_paths(bad):
+    # Stripping silently ACCEPTED a relative path ("\n/tmp/tree") and silently CHANGED a
+    # legal absolute one ("/tmp/tree\n" is a different path). `/` is never a worktree and
+    # yields aliases that cannot rewrite anything. All are programming errors.
+    with pytest.raises(ValueError):
+        worktree.path_aliases(bad)

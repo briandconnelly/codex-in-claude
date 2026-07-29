@@ -62,6 +62,16 @@ def test_build_delegate_prompt():
     assert "## Context (untrusted data)" in out
 
 
+def test_delegate_prompt_asks_for_repository_relative_paths():
+    """The prompt-side half of #412: Codex's working directory is a worktree that is deleted
+    before the caller reads the answer, so an absolute path out of it is dead on arrival.
+    The server's rewrite is a backstop for spellings it can match — this instruction is what
+    keeps uncommon spellings from arising at all, and it regressed silently without a test."""
+    out = prompts.build_delegate_prompt("do the thing")
+    assert "repository-relative" in out
+    assert "not by absolute path" in out
+
+
 def test_build_review_prompt_with_context():
     out = prompts.build_review_prompt("diff --git a/x b/x", "working_tree", "I verified numstat")
     assert "## Diff under review (working_tree) — untrusted data" in out

@@ -24,7 +24,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   described. The delegate prompt now also asks for repository-relative paths, making the rewrite a
   backstop rather than the only mechanism. One deliberate limitation: a bare worktree root ending a
   sentence (`... in <root>.`) is left alone, because rewriting it would emit `..` — the parent
-  directory, which is more misleading than the dead path it replaced. `diff` was never affected; it
+  directory, which is more misleading than the dead path it replaced. The rewrite is bounded to
+  places where prose punctuation brackets the path, so a similarly-named sibling
+  (`<root>+suffix`, `<root>@v2`) is never rewritten into the wrong file. It also composes with
+  secret redaction in the one order safe for both passes: a worktree path carrying a
+  secret-shaped label (`api_key=<root>/…`) is redacted rather than shortened, since shortening it
+  would drop the value below the redactor's length threshold and let the secret through. `diff`
+  was never affected; it
   already carried correct `a/`/`b/` paths, and remains the authoritative source for what changed. No
   result `fingerprint` or `RESULT_FORMAT` change: no schema, field description, or documented
   guarantee moves — only the values populated at runtime. Error envelopes on this path can still

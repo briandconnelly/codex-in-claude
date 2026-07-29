@@ -161,24 +161,15 @@ async def run_delegate(
         worktree.remove(cwd, wt, timeout=git_timeout)
 
     meta.context_summary = _diffstat(diff)
-    # Redact inline secret-looking values from Codex's free-text before it is returned,
-    # mirroring the diff redaction below (#58): a secret echoed in prose (e.g. quoting a
-    # config it read) would otherwise reach the caller unredacted in summary/raw_response.
-    #
-    # Then rewrite worktree-absolute paths to repo-relative (#412): the worktree is gone by
-    # now, so those paths are dead on arrival. One call covers both fields built from this
-    # text (summary and raw_response.text).
-    #
-    # REDACT FIRST — the order is load-bearing for secrecy. Relativizing first shortens a
-    # labelled worktree-prefixed value (`api_key=<root>/abcdefgh`) below the redactor's
-    # 16-character floor, so a short secret riding on a worktree path escapes; Codex sees
-    # the worktree path, so an injected task could aim for that shape deliberately.
-    # Redaction does fire on a bare path this way (a path is long enough and narrow enough
-    # in alphabet to look like a labelled secret), which loses that path mention — but it
-    # removes the dead path rather than surfacing it, which serves #412 anyway, and it only
-    # happens to a path already carrying a secret-shaped label. Do not swap these.
-    redacted = redaction.redact_text(result.last_message)
-    last_message = worktree.relativize(redacted, wt_aliases)
+    # Redact inline secret-looking values from Codex's free-text (mirroring the diff
+    # redaction below, #58: a secret echoed in prose — e.g. quoting a config it read —
+    # would otherwise reach the caller unredacted) AND rewrite worktree-absolute paths to
+    # repo-relative, since the worktree is gone by now and those paths are dead on arrival
+    # (#412). Both passes are in `sanitize_prose` rather than called here in sequence
+    # because they interact: neither plain order is safe, and the safe combination is not
+    # something a call site should have to remember. See that function for the two attacks.
+    # One call covers both fields built from this text (summary and raw_response.text).
+    last_message = worktree.sanitize_prose(result.last_message, wt_aliases)
     summary = (last_message or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
