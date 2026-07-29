@@ -1045,3 +1045,33 @@ def test_staged_placeholder_extends_on_a_forced_collision(monkeypatch):
     assert len(token) > len(base)  # the loop extended it
     # And the collision cannot survive into output: nothing pre-existing becomes `.`.
     assert worktree.sanitize_prose(text, ALIASES) == text
+
+
+def test_staged_placeholder_rechecks_each_extension(monkeypatch):
+    """A single `if` is not enough — the recheck must loop. Text holding both the base token
+    and base+"0" forces two extensions; a one-shot check would return base+"0", which is
+    still present."""
+    monkeypatch.setattr(worktree, "_placeholder_seed", lambda _text: "deadbeef")
+    base = worktree._PLACEHOLDER_PREFIX + "deadbeef"
+    text = f"{base} and {base}0 both appear"
+
+    token = worktree._staged_placeholder(text)
+
+    assert token not in text
+    assert token == base + "00"
+
+
+def test_alias_replacement_cannot_abut_an_alphanumeric():
+    """Why alias -> `.` cannot synthesize a covered secret, stated as a test rather than left
+    to a comment. Every shape the redactor covers needs its structural characters flanked by
+    alphanumerics (a JWT's `eyJ<seg>.<seg>.<seg>`), but a match requires a prose DELIMITER
+    immediately before the alias — so a substitution never lands directly after an
+    alphanumeric, and the reconstructed dots always carry the delimiters with them."""
+    # Aliases jammed against alnum text: no delimiter, so no substitution at all.
+    jammed = f"eyJ{'a' * 8}{ROOT}{'b' * 8}{ROOT}{'c' * 8}"
+    assert worktree.sanitize_prose(jammed, ALIASES) == jammed
+    # Delimited: substitution happens, but the delimiters survive, so it is not a JWT.
+    spaced = f"eyJ{'a' * 8} {ROOT} {'b' * 8} {ROOT} {'c' * 8}"
+    out = worktree.sanitize_prose(spaced, ALIASES)
+    assert out == f"eyJ{'a' * 8} . {'b' * 8} . {'c' * 8}"
+    assert ".." not in out
