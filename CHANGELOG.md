@@ -14,10 +14,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `untracked`-policy rejection reached by a direct call that bypasses the schema. A client branching on
   that list per the documented contract found it absent on those envelopes. The rule now lives in the
   one constructor every producer goes through, so a listless envelope is a loud programming error
-  rather than a silently non-conformant result, and `details` is derived from the first entry unless
-  the call site supplies its own. The `untracked` entry states its allowed values without echoing the
-  rejected one, keeping `InvalidArgument`'s promise that a rejected value is never copied into a
-  machine-readable field. Replay of a stored job result is deliberately untouched — a record written
+  rather than a silently non-conformant result, and `details` is always derived from the first entry —
+  supplying one for this code is itself rejected, which is what makes the documented mirror structural
+  rather than a convention each producer has to remember. The `untracked` entry states its allowed
+  values without echoing the rejected one, keeping `InvalidArgument`'s promise that a rejected value
+  is never copied into a machine-readable field. Replay of a stored job result is deliberately
+  untouched — a record written
   before this rule is returned as it was written, since normalizing it would mean inventing repair
   data the run never produced. No such record can exist through the MCP surface (the only stored
   envelope that could carry this code comes from a schema-validated enum), so this is a statement
