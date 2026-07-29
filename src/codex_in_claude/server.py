@@ -389,12 +389,12 @@ def _combined_input_detail(extra_context: str | None) -> ErrorDetail:
 def _blank_input_error(value: str, field: str, tool_name: str, meta: Meta) -> dict | None:
     """Reject an empty or whitespace-only `question`/`task` pre-spend, else return None.
 
-    Blank input reduces to nothing when the prompt is assembled (`prompts.build_consult_
-    prompt`/`build_delegate_prompt` strip it), so the run could only spend quota on an
-    empty ask — the free preview reported `prompt_bytes` of framing scaffolding alone
-    (#411). `str.strip()` is deliberately the same blankness test the prompt builders
-    use, so the guard and the builder can never disagree about an edge case (U+00A0 and
-    U+2003 are blank to it; U+200B is content).
+    Blank input reduces to nothing when the prompt is assembled — both
+    `prompts.build_consult_prompt` and `prompts.build_delegate_prompt` strip it — so the
+    run could only spend quota on an empty ask; the free preview reported `prompt_bytes`
+    of framing scaffolding alone (#411). `str.strip()` is deliberately the same blankness
+    test those builders use, so the guard and the builder can never disagree about an edge
+    case (U+00A0 and U+2003 are blank to it; U+200B is content).
 
     This is the runtime twin of the call-boundary `invalid_arguments` envelope: it
     carries the per-argument list whose first entry `details` mirrors, as
