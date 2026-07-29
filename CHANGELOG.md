@@ -5,6 +5,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **BREAKING (agent surface): a blank `question` or `task` is now rejected before any spend**
+  (#411). An empty or whitespace-only value passed validation and bought a real Codex run that
+  could produce nothing — the prompt builders strip it, so the model received framing scaffolding
+  and no ask (a reported `codex_consult(question="   ")` burned 23,120 tokens and returned
+  `ok: true`). `codex_consult`, `codex_consult_async`, `codex_delegate`, `codex_delegate_async`,
+  and `codex_delegate_dry_run` now return `invalid_arguments` with `details.field` naming the
+  offending argument, the per-argument `invalid_arguments` list, and a `correct_arguments` repair
+  whose `repair.tool` names the tool that was called. Flagged breaking because it narrows an
+  accepted value set: input that previously returned `ok: true` now returns an error. Blankness is
+  Python's `str.strip()`, the same test the prompt builders apply, so U+00A0 and U+2003 are blank
+  while U+200B counts as content. The check sits after the byte-limit guard, so a whitespace-only
+  value past the limit still reports `input_too_large`. `codex_delegate_dry_run` rejects it exactly
+  as the paid call does rather than previewing it, keeping its promise that a failure in the free
+  preview is a failure the paid call would also hit. Result `fingerprint`
+  `codex-in-claude/0.1/schema-66` → `schema-67`; the persisted `RESULT_FORMAT` is unchanged.
+
 ## [0.16.0] - 2026-07-28
 
 A discovery-metadata and envelope-slimming release. Every tool now states its cost, its title, and

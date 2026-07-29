@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-66"
+FINGERPRINT = "codex-in-claude/0.1/schema-67"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -311,10 +311,14 @@ ErrorCode = Literal[
     "invalid_base",
     "invalid_commit",
     "invalid_paths",
-    # Tool-argument validation failed at the MCP call-tool boundary (unknown/extra
-    # arg, missing required arg, wrong type, or out-of-enum Literal value). Re-emitted
-    # from the Pydantic ValidationError that FastMCP raises BEFORE the handler runs, so
-    # the failure carries the structured envelope instead of raw validator prose (#136).
+    # Tool-argument validation failed, from either of two paths. (1) At the MCP call-tool
+    # boundary — unknown/extra arg, missing required arg, wrong type, or out-of-enum
+    # Literal value — re-emitted from the Pydantic ValidationError that FastMCP raises
+    # BEFORE the handler runs, so the failure carries the structured envelope instead of
+    # raw validator prose (#136). (2) In-handler, where an argument is well-typed but
+    # semantically unusable and no schema rule can express it: a transcript_path that
+    # fails validation, or a blank `question`/`task` that would spend on an empty ask
+    # (#411). Both paths emit the same envelope shape.
     "invalid_arguments",
     "invalid_workspace_root",
     "workspace_outside_roots",
@@ -844,7 +848,9 @@ def dump_success(result: _SuccessBase) -> dict:
 
 class InvalidArgument(BaseModel):
     """One field-level argument-validation failure (#136). Machine-actionable detail
-    behind the `invalid_arguments` error code, one entry per Pydantic error."""
+    behind the `invalid_arguments` error code — one entry per Pydantic error at the
+    call-tool boundary, or per rejected argument for an in-handler validation the
+    schema cannot express (e.g. a blank `question`/`task`, #411)."""
 
     model_config = ConfigDict(extra="forbid")
     field: str  # the offending argument name (accessor path for nested locations)

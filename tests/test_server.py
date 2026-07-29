@@ -2231,7 +2231,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-66"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-67"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6086,7 +6086,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-66")
+    assert result["fingerprint"].endswith("schema-67")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -8100,3 +8100,151 @@ async def test_guarded_internal_error_reports_no_roots_source(monkeypatch, clean
     )
     assert res["ok"] is False and res["error"]["code"] == "internal_error"
     assert "roots_source" not in res["meta"]
+
+
+# ------------------------------------------------- blank question/task (#411)
+# A blank (empty or whitespace-only) `question`/`task` reduces to nothing at prompt
+# assembly (prompts.build_consult_prompt / build_delegate_prompt strip it), so a run
+# could only spend quota on an empty ask. These pin the pre-spend rejection across the
+# whole input domain, not just the values the reproducer used.
+
+# Values that MUST be rejected. str.strip() is the shared definition of blank, so the
+# guard and the prompt builder cannot disagree; U+00A0/U+2003 are stripped by it.
+_BLANK_INPUTS = ["", "   ", "\t\n", "\r\n\t ", "\u00a0", "\u2003"]
+# Values that MUST be accepted. U+200B (zero-width space) is NOT whitespace to
+# str.strip(), so it survives as content and must not be rejected; surrounding
+# whitespace around real content must not be either.
+_NONBLANK_INPUTS = ["x", "  x  ", "\u200b", "\n do the thing \n"]
+
+
+@pytest.mark.parametrize("blank", _BLANK_INPUTS)
+@pytest.mark.parametrize("tool", ["codex_consult", "codex_consult_async"])
+async def test_blank_question_rejected_pre_spend(clean_env, tmp_path, tool, blank):
+    res = await getattr(server, tool)(blank, workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_arguments"
+    assert res["error"]["details"]["field"] == "question"
+
+
+@pytest.mark.parametrize("blank", _BLANK_INPUTS)
+@pytest.mark.parametrize(
+    "tool", ["codex_delegate", "codex_delegate_async", "codex_delegate_dry_run"]
+)
+async def test_blank_task_rejected_pre_spend(monkeypatch, clean_env, tmp_path, tool, blank):
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    res = await getattr(server, tool)(blank, workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_arguments"
+    assert res["error"]["details"]["field"] == "task"
+
+
+@pytest.mark.parametrize("value", _NONBLANK_INPUTS)
+async def test_nonblank_task_accepted(clean_env, tmp_path, value):
+    """The accept side of the domain: the free dry run runs the real guard with no model
+    call, so it pins that the guard rejects ONLY blank input."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "f.txt").write_text("x")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.email=t@e",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "init",
+        ],
+        check=True,
+    )
+    res = await server.codex_delegate_dry_run(value, workspace_root=str(tmp_path))
+    assert res["ok"] is True, res
+    assert res["prompt_bytes"] > 0
+
+
+@pytest.mark.parametrize(
+    ("tool", "field"),
+    [
+        ("codex_consult", "question"),
+        ("codex_consult_async", "question"),
+        ("codex_delegate", "task"),
+        ("codex_delegate_async", "task"),
+        ("codex_delegate_dry_run", "task"),
+    ],
+)
+async def test_blank_input_envelope_mirrors_boundary_shape(
+    monkeypatch, clean_env, tmp_path, tool, field
+):
+    """docs/REFERENCE.md promises invalid_arguments carries a per-argument list whose
+    first entry `details` mirrors. The runtime guard honors that same contract, and
+    `repair.tool` names the tool that was actually called (errors.py: #184/N3) so an
+    async caller is never steered at its sync twin."""
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    res = await getattr(server, tool)("   ", workspace_root=str(tmp_path))
+    err = res["error"]
+    assert err["code"] == "invalid_arguments"
+    assert err["invalid_arguments"] == [{"field": field, "reason": err["details"]["reason"]}]
+    assert err["details"]["field"] == field
+    assert err["repair"]["tool"] == tool
+    assert err["repair"]["next_step"] == "correct_arguments"
+    # The rule is enforced at runtime, not by a schema constraint, so the repair prose
+    # must not send the caller to the inputSchema to find it.
+    assert "inputSchema" not in err["repair"]["alternative"]
+    assert field in err["repair"]["alternative"]
+    assert err["temporary"] is False
+
+
+async def test_blank_question_rejected_even_with_context(clean_env, tmp_path):
+    """`extra_context` is material, not the ask: supplying it does not make a blank
+    question answerable, so the rejection is unconditional."""
+    res = await server.codex_consult(
+        "  ", workspace_root=str(tmp_path), extra_context="here is a big diff"
+    )
+    assert res["error"]["code"] == "invalid_arguments"
+    assert res["error"]["details"]["field"] == "question"
+
+
+async def test_oversized_whitespace_is_too_large_not_blank(clean_env, tmp_path, monkeypatch):
+    """A whitespace-only value past the byte limit is BOTH blank and oversized. The
+    size check keeps precedence, so every pre-existing ordering is undisturbed."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_MAX_INPUT_BYTES", "1000")
+    res = await server.codex_consult(" " * 2000, workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "input_too_large"
+
+
+async def test_workspace_error_beats_blank_input(clean_env):
+    """Workspace resolution still runs first: a bad workspace wins over blank input."""
+    res = await server.codex_consult("", workspace_root="relative/not/abs")
+    assert res["error"]["code"] == "invalid_workspace_root"
+
+
+async def test_blank_task_rejected_before_git_preflight(clean_env, tmp_path, monkeypatch):
+    """The guard sits ahead of the repo preflight, so a blank task costs no git work —
+    and is reported as the argument error rather than a misleading not_a_git_repo."""
+    called = []
+
+    def boom(*a, **k):
+        called.append(1)
+        raise AssertionError("git preflight must not run for a blank task")
+
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
+    res = await server.codex_delegate("  ", workspace_root=str(tmp_path))
+    assert res["error"]["code"] == "invalid_arguments"
+    assert not called
+
+
+async def test_blank_task_dry_run_matches_paid_delegate(clean_env, tmp_path, monkeypatch):
+    """The free preview's whole promise is that a failure there is a failure the paid
+    call would also hit (#411): on blank input both must fail identically, modulo the
+    tool each names."""
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", lambda *a, **k: None)
+    paid = await server.codex_delegate("", workspace_root=str(tmp_path))
+    dry = await server.codex_delegate_dry_run("", workspace_root=str(tmp_path))
+    assert paid["error"]["code"] == dry["error"]["code"] == "invalid_arguments"
+    assert paid["error"]["details"] == dry["error"]["details"]
+    assert paid["error"]["invalid_arguments"] == dry["error"]["invalid_arguments"]

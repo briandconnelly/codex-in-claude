@@ -769,9 +769,12 @@ def _wire_catalog_bytes() -> int:
 # — the integer-or-null schema plus the reworded param description, docstring, and the
 # now-explicit "running jobs are never evicted" ceiling caveat; the bytes buy the client the
 # knowledge that the default listing is complete and that `truncated` is a cap with no
-# cursor). Tighten deliberately when the surface legitimately shrinks; a bump means the wire
+# cursor). → ~84,309 (#411: QuestionParam/TaskParam/TaskDryRunParam state that a blank
+# `question`/`task` is rejected before any model call; the rule is enforced at runtime, not by a
+# schema `minLength`, so the description is the only place a client can discover it pre-spend).
+# Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 84_000
+CATALOG_BYTE_CAP = 84_500
 
 
 def test_wire_catalog_under_cap():
@@ -930,7 +933,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-66"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-67"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

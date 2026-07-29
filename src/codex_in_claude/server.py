@@ -386,6 +386,46 @@ def _combined_input_detail(extra_context: str | None) -> ErrorDetail:
     return ErrorDetail(field="question")
 
 
+def _blank_input_error(value: str, field: str, tool_name: str, meta: Meta) -> dict | None:
+    """Reject an empty or whitespace-only `question`/`task` pre-spend, else return None.
+
+    Blank input reduces to nothing when the prompt is assembled (`prompts.build_consult_
+    prompt`/`build_delegate_prompt` strip it), so the run could only spend quota on an
+    empty ask — the free preview reported `prompt_bytes` of framing scaffolding alone
+    (#411). `str.strip()` is deliberately the same blankness test the prompt builders
+    use, so the guard and the builder can never disagree about an edge case (U+00A0 and
+    U+2003 are blank to it; U+200B is content).
+
+    This is the runtime twin of the call-boundary `invalid_arguments` envelope: it
+    carries the per-argument list whose first entry `details` mirrors, as
+    `docs/REFERENCE.md` promises for this code, and names the tool that was actually
+    called so an async caller is never steered at its sync twin (#184/N3). Sits after
+    the byte-limit check, so a whitespace-only value past that limit still reports
+    `input_too_large` and every pre-existing pre-flight precedence is undisturbed."""
+    if (value or "").strip():
+        return None
+    reason = f"{field} must not be empty or whitespace-only."
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "invalid_arguments",
+                f"{tool_name}: 1 invalid argument(s): {field} — {reason}",
+                repair_tool=tool_name,
+                # Override the table's "consult the inputSchema" prose: this rule is
+                # enforced at runtime, not by a schema constraint, so pointing at the
+                # schema would send the caller somewhere the answer is not.
+                repair_alternative=(
+                    f"Supply a {field} with actual content, then retry. Leading and "
+                    "trailing whitespace around that content is fine."
+                ),
+                details=ErrorDetail(field=field, reason=reason),
+                invalid_arguments=[InvalidArgument(field=field, reason=reason)],
+            ),
+            meta=meta,
+        )
+    )
+
+
 def _invalid_arguments_envelope(
     tool_name: str,
     *,
@@ -618,14 +658,16 @@ QuestionParam = Annotated[
     str,
     Field(
         description="The question or prompt to send Codex (a different model) for a "
-        "read-only answer."
+        "read-only answer. Must be non-blank: empty or whitespace-only is "
+        "rejected before any model call."
     ),
 ]
 TaskParam = Annotated[
     str,
     Field(
         description="The coding task for Codex to implement inside a throwaway git "
-        "worktree; the resulting diff is returned for review, not applied to your tree."
+        "worktree; the resulting diff is returned for review, not applied to your tree. "
+        "Must be non-blank: empty or whitespace-only is rejected before any model call."
     ),
 ]
 WorkspaceRootParam = Annotated[
@@ -808,7 +850,8 @@ TaskDryRunParam = Annotated[
     Field(
         description="The coding task you want Codex to implement via a real "
         "codex_delegate call; this dry run only previews the seeded baseline and prompt "
-        "size — it does NOT call Codex or return a diff."
+        "size — it does NOT call Codex or return a diff. Must be non-blank: empty or "
+        "whitespace-only is rejected here too, not previewed."
     ),
 ]
 ModelDryRunParam = Annotated[
@@ -2318,6 +2361,7 @@ def params_resource() -> dict:
 async def _prepare_consult(
     *,
     question: str,
+    tool_name: str,
     workspace_root: str | None,
     extra_context: str | None,
     model: str | None,
@@ -2414,6 +2458,9 @@ async def _prepare_consult(
                 meta=meta,
             )
         )
+    blank_err = _blank_input_error(question, "question", tool_name, meta)
+    if blank_err is not None:
+        return blank_err
 
     spec = {
         "kind": "codex_consult",
@@ -2561,6 +2608,7 @@ async def _prepare_review(
 async def _prepare_delegate(
     *,
     task: str,
+    tool_name: str,
     workspace_root: str | None,
     model: str | None,
     reasoning_effort: str | None,
@@ -2638,6 +2686,9 @@ async def _prepare_delegate(
                 meta=meta,
             )
         )
+    blank_err = _blank_input_error(task, "task", tool_name, meta)
+    if blank_err is not None:
+        return blank_err
 
     detail_v: str | None = None
     if include_detail:
@@ -2749,6 +2800,7 @@ async def codex_consult(
     )
     prep = await _prepare_consult(
         question=question,
+        tool_name="codex_consult",
         workspace_root=workspace_root,
         extra_context=extra_context,
         model=model,
@@ -2935,6 +2987,7 @@ async def codex_delegate(
     )
     prep = await _prepare_delegate(
         task=task,
+        tool_name="codex_delegate",
         workspace_root=workspace_root,
         model=model,
         reasoning_effort=reasoning_effort,
@@ -3009,6 +3062,7 @@ async def codex_delegate_async(
     deadline = config.job_max_seconds()
     prep = await _prepare_delegate(
         task=task,
+        tool_name="codex_delegate_async",
         workspace_root=workspace_root,
         model=model,
         reasoning_effort=reasoning_effort,
@@ -3591,6 +3645,7 @@ async def codex_consult_async(
     deadline = config.job_max_seconds()
     prep = await _prepare_consult(
         question=question,
+        tool_name="codex_consult_async",
         workspace_root=workspace_root,
         extra_context=extra_context,
         model=model,
@@ -3982,6 +4037,11 @@ async def codex_delegate_dry_run(
                 meta=meta,
             )
         )
+    # Ahead of worktree.plan(), matching where the paid call rejects it: this preview's
+    # contract is that a failure here is a failure the paid call would also hit (#411).
+    blank_err = _blank_input_error(task, "task", "codex_delegate_dry_run", meta)
+    if blank_err is not None:
+        return blank_err
 
     try:
         plan = worktree.plan(cwd, timeout=config.git_timeout_seconds())
