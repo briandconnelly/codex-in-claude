@@ -7,6 +7,37 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`codex_delegate`'s prose no longer points into the deleted worktree** (#412). Codex runs with its
+  working directory set to the throwaway worktree, and that worktree is torn down before the caller
+  reads the result — so every absolute path Codex wrote into its summary was dead on arrival. A
+  reported run came back with ``Created [HELLO_SMOKE_TEST.md](/private/tmp/cic-worktree-8t22rdm3/tree/HELLO_SMOKE_TEST.md)``,
+  an invitation to open a file that no longer existed anywhere. The summary is the field an agent
+  reads first, and the failure it produces — a bare "no such file" — gives no hint that the path was
+  ephemeral by construction, so an agent that did not cross-reference `diff` could conclude the run
+  half-failed and waste a turn re-running it. Worktree-absolute paths are now rewritten to
+  repository-relative form (`./src/module.py`) on the way out, covering both `summary` and
+  `raw_response.text`, which are built from the same model text; the `file://` spelling and the
+  symlinked-ancestor spelling (macOS resolves `/tmp` to `/private/tmp`) are rewritten too, since
+  either can be the form Codex reports. Paths stay *relative* rather than being re-rooted at the live
+  repository on purpose: the diff is not applied, so a live absolute path would be equally dead for a
+  new file and, for an existing one, would point at real content that differs from what Codex
+  described. The delegate prompt now also asks for repository-relative paths, making the rewrite a
+  backstop rather than the only mechanism. One deliberate limitation: a bare worktree root ending a
+  sentence (`... in <root>.`) is left alone, because rewriting it would emit `..` — the parent
+  directory, which is more misleading than the dead path it replaced. The rewrite is bounded to
+  places where prose punctuation brackets the path, so a similarly-named sibling
+  (`<root>+suffix`, `<root>@v2`) is never rewritten into the wrong file. It also composes with
+  secret redaction in the one order safe for both passes: a worktree path carrying a
+  secret-shaped label (`api_key=<root>/…`) is redacted rather than shortened, since shortening it
+  would drop the value below the redactor's length threshold and let the secret through. Both the
+  raw `file://<root>` spelling and the percent-encoded one (`file:///tmp/a%25b%20c/tree`, what a
+  path containing a space or `%` canonically encodes to) are covered. `diff`
+  was never affected; it
+  already carried correct `a/`/`b/` paths, and remains the authoritative source for what changed. No
+  result `fingerprint` or `RESULT_FORMAT` change: no schema, field description, or documented
+  guarantee moves — only the values populated at runtime. Error envelopes on this path can still
+  quote a worktree path through git or Codex stderr; that surface is tracked separately in #420.
+
 - **Every `invalid_arguments` envelope this release builds now carries the per-argument list** (#416). `docs/REFERENCE.md`
   promises that an envelope with this code carries a list of `{field, reason, allowed_values}` per
   offending argument, with `details` mirroring the first. Two producers omitted it: `codex_transfer`'s

@@ -122,6 +122,9 @@ async def run_delegate(
             )
         )
 
+    # Captured while the worktree exists, for rewriting worktree-absolute paths out of
+    # Codex's prose below — the teardown in the `finally` runs before that text is built.
+    wt_aliases = worktree.path_aliases(wt.path)
     if wt.baseline_warning:
         meta.security_warnings = [wt.baseline_warning]
     try:
@@ -158,10 +161,15 @@ async def run_delegate(
         worktree.remove(cwd, wt, timeout=git_timeout)
 
     meta.context_summary = _diffstat(diff)
-    # Redact inline secret-looking values from Codex's free-text before it is returned,
-    # mirroring the diff redaction below (#58): a secret echoed in prose (e.g. quoting a
-    # config it read) would otherwise reach the caller unredacted in summary/raw_response.
-    last_message = redaction.redact_text(result.last_message)
+    # Redact inline secret-looking values from Codex's free-text (mirroring the diff
+    # redaction below, #58: a secret echoed in prose — e.g. quoting a config it read —
+    # would otherwise reach the caller unredacted) AND rewrite worktree-absolute paths to
+    # repo-relative, since the worktree is gone by now and those paths are dead on arrival
+    # (#412). Both passes are in `sanitize_prose` rather than called here in sequence
+    # because they interact: neither plain order is safe, and the safe combination is not
+    # something a call site should have to remember. See that function for the two attacks.
+    # One call covers both fields built from this text (summary and raw_response.text).
+    last_message = worktree.sanitize_prose(result.last_message, wt_aliases)
     summary = (last_message or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"

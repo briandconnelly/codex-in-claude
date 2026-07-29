@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -512,6 +514,189 @@ def capture_diff(wt: str, *, timeout: int) -> str:
             f"capturing the worktree diff failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
         )
     return proc.stdout
+
+
+# An alias is rewritten only where prose punctuation (or a string edge) brackets it, so it
+# is the WHOLE leading portion of a path and never a fragment of a longer name. This is an
+# ALLOWLIST of delimiters, deliberately not a denylist of "path characters": a POSIX
+# component may contain nearly any byte, so `<root>+suffix`, `<root>@v2` and `/pré<root>`
+# name DIFFERENT paths, and a denylist that forgot `+`/`@`/`%`/non-ASCII silently rewrote
+# them into the wrong file. Erring toward a missed rewrite is safe; erring toward a wrong
+# one points the caller at the wrong content.
+#
+# `/` is asymmetric on purpose. On the RIGHT it is what separates the root from the path we
+# want to keep (`<root>/src/f.py`), so it must be allowed — an earlier draft forbade it on
+# both sides and was a silent no-op on every real case. On the LEFT it would mean the alias
+# is the tail of a longer path (`/other<root>/f.py`), a different file, so it is excluded.
+#
+# `.` is absent from the right-hand set deliberately: allowing it would rewrite a
+# sentence-final `<root>.` to `..`, the parent directory — more misleading than the dead
+# path it replaced. See `relativize`'s documented limitation.
+_LEFT_DELIMS = r"\s(\[{`\"'<=,;:|"
+_RIGHT_DELIMS = r"/\s)\]}`\"'<>,;:!?*|"
+
+
+def path_aliases(path: str) -> tuple[str, ...]:
+    """Every textual spelling of ``path`` an agent's prose might use, longest first.
+
+    Covers the symlinked-ancestor case (macOS resolves ``/tmp`` -> ``/private/tmp`` and
+    ``/var/folders`` -> ``/private/var/folders``, so the path ``mkdtemp`` returned and the
+    one the agent reports can differ) and the ``file://`` URI spelling of each. Sorted
+    longest-first so a containing alias is always tried before an alias it contains.
+
+    Capture these while the worktree still EXISTS. ``realpath`` happens to resolve a
+    deleted path correctly today — only the surviving ancestors carry the symlinks — but
+    relying on that would make a rename of this call site silently degrade the alias set.
+
+    Raises ``ValueError`` unless ``path`` is absolute, free of surrounding whitespace, and
+    below the filesystem root. Each rejection is a programming error a ``_core`` caller
+    would rather hear loudly than have silently reinterpreted:
+
+    - blank resolves to the process CWD and yields a bare ``file://`` alias that would
+      rewrite any unrelated URI (``file:///etc/passwd`` -> ``./etc/passwd``);
+    - surrounding whitespace cannot be trimmed away, because trimming would ACCEPT the
+      relative ``"\\n/tmp/tree"`` and would silently retarget the legal absolute
+      ``"/tmp/tree\\n"`` (a different file) onto ``/tmp/tree``;
+    - ``/`` is never a worktree, and its aliases cannot rewrite anything anyway (nothing
+      follows the root to supply the required delimiter)."""
+    if path != path.strip() or not path:
+        raise ValueError(f"path_aliases needs a path without surrounding whitespace, got {path!r}")
+    root = path.rstrip("/")
+    if not root or not Path(root).is_absolute():
+        raise ValueError(f"path_aliases needs an absolute path below the root, got {path!r}")
+    forms = {root, os.path.realpath(root)}
+    # Both file-URI spellings: the raw concatenation an agent typically writes, and the
+    # canonical percent-encoded one `Path.as_uri()` produces. They differ as soon as an
+    # ancestor holds a space or `%` (`/tmp/a%b c` -> `file:///tmp/a%25b%20c`), so covering
+    # only the raw form would leave a valid URI pointing into the deleted worktree.
+    aliases = forms | {f"file://{form}" for form in forms}
+    for form in forms:
+        with contextlib.suppress(ValueError):
+            aliases.add(Path(form).as_uri())
+    return tuple(sorted(aliases, key=len, reverse=True))
+
+
+def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
+    """Rewrite absolute paths under a throwaway worktree to repo-relative form.
+
+    The worktree is torn down before the caller reads a delegate result, so every
+    absolute path the agent wrote into its prose is dead on arrival (#412). Each alias is
+    replaced by a single ``.``, which leaves the rest of the path to follow on its own:
+    ``<root>/src/f.py`` -> ``./src/f.py``, ``file://<root>/f.py`` -> ``./f.py``, and a
+    bare ``<root>`` -> ``.``.
+
+    The paths stay RELATIVE rather than being re-rooted at the live repo: the diff is not
+    applied, so a live absolute path would be equally dead for a new file and, worse,
+    would point at a real file whose content differs from what the agent described.
+
+    The ``./`` prefix is load-bearing, not cosmetic: bare-relative output would turn
+    ``[x](<root>/javascript:a)`` into a link target with a live URI scheme, and stripping
+    only the root from a ``file://`` URI would leave ``file://./f.py``, where ``.`` parses
+    as the HOST. Prefixing sidesteps both without teaching this function to parse Markdown.
+
+    A match needs prose punctuation (or a string edge) on both sides — see ``_LEFT_DELIMS``
+    / ``_RIGHT_DELIMS`` for why that is an allowlist rather than a denylist of path
+    characters, and why ``/`` is allowed on only one side.
+
+    Known limitation: a sentence-final bare root (``... in <root>.``) is left alone,
+    because rewriting it would emit ``..`` — the parent directory, which is more
+    misleading than the dead path it replaced.
+
+    Aliases are sorted longest-first HERE rather than trusting the caller's order: with a
+    containing alias tried second, a shorter one it contains would match first and name
+    the wrong file. Blank entries are dropped — an empty alias matches everywhere.
+
+    ``None`` passes through unchanged, mirroring ``redaction.redact_text``.
+
+    Prefer ``sanitize_prose`` for text that is also being secret-redacted — the two
+    operations interact, and it is the only combination that is safe for both."""
+    return _replace_aliases(text, aliases, ".")
+
+
+def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str) -> str | None:
+    if not text:
+        return text
+    usable = sorted({alias for alias in aliases if alias.strip()}, key=len, reverse=True)
+    if not usable:
+        return text
+    alternation = "|".join(re.escape(alias) for alias in usable)
+    pattern = re.compile(rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})(?=[{_RIGHT_DELIMS}]|$)")
+    return pattern.sub(replacement, text)
+
+
+# The stand-in an alias wears while the secret redactor runs. Three properties are required,
+# and the third is why this is derived per input rather than being a module constant:
+#
+# 1. EVERY character is alphanumeric, hence inside the redactor's inline-value character
+#    class (`redaction.SECRET_VALUE_PATTERNS`), so the redactor can only swallow the token
+#    WHOLE or not at all. Its value match is anchored at a label and runs greedily until a
+#    character outside that class; there is no such character inside the token, so it can
+#    never stop part-way through and leave a fragment.
+# 2. It is comfortably longer than the labelled pattern's 16-character minimum, so a
+#    labelled path still reads as a long value and stays redacted no matter how short the
+#    real root is (erring toward redaction).
+# 3. It is ABSENT from the text being sanitized, verified rather than assumed. A fixed
+#    sentinel let model output smuggle a covered secret straight through: the final
+#    token -> `.` replacement also hit sentinels ALREADY in the text, and `.` is structural
+#    in secret shapes. `eyJ<8 chars><sentinel><8 chars><sentinel><8 chars>` carries no dots
+#    while the redactor inspects it, so the JWT pattern misses — and the replacement then
+#    reconstructs a valid JWT in the output. Deriving the token from the text and checking
+#    membership closes that: nothing pre-existing can be turned into `.`.
+_PLACEHOLDER_PREFIX = "cicwt0alias0"
+
+
+def _placeholder_seed(text: str) -> str:
+    """The hex tail that makes a staged placeholder text-specific. A seam: overriding it is
+    the only way a test can force the collision that ``_staged_placeholder``'s loop exists
+    to handle, since deriving a digest that appears inside its own input is not
+    constructible."""
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:24]
+
+
+def _staged_placeholder(text: str) -> str:
+    """An alphanumeric token, longer than the redactor's length floor, guaranteed absent
+    from ``text``. Derived from the text's own digest so it is deterministic, then extended
+    until it does not occur — absence is CHECKED, which is the property that matters;
+    unpredictability is not relied upon. The loop terminates because each pass lengthens the
+    token while ``text`` is finite."""
+    token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)
+    while token in text:
+        token += "0"
+    return token
+
+
+def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
+    """Relativize worktree paths AND redact secrets — the one order safe for both (#412).
+
+    Doing these in sequence is not safe in either direction, which is why they are one
+    function rather than two calls a caller has to order correctly:
+
+    - **Relativize, then redact** shortens a labelled worktree-prefixed value below the
+      redactor's 16-character floor, so ``api_key=<root>/abcdefgh`` becomes
+      ``api_key=./abcdefgh`` and the secret escapes. Codex sees the worktree path, so an
+      injected task can aim for that shape deliberately.
+    - **Redact, then relativize** lets the redactor consume PART of an alias. Its value
+      class covers ``=`` but stops at ``:``, so a crafted
+      ``api_key=<16 chars>=file://<root>/abcdefgh`` has ``...=file`` eaten, leaving
+      ``://<root>/abcdefgh`` — whose bare root is now preceded by ``/`` and so fails the
+      left-hand delimiter check. Both the dead path and the secret survive.
+
+    So each alias is first staged behind a token from ``_staged_placeholder`` — which the
+    redactor can neither partially consume nor confuse with pre-existing text (see there for
+    all three required properties); redaction runs against that; then any token that survived
+    — i.e. was not part of a redacted secret — becomes ``.``.
+
+    Redaction remains best-effort by contract (see ``redaction``): an adversarial model can
+    always emit an unlabelled secret that no pattern matches. This closes the interaction
+    between the two passes, not that broader gap."""
+    if not text:
+        return text
+    placeholder = _staged_placeholder(text)
+    staged = _replace_aliases(text, aliases, placeholder)
+    redacted = redact_text(staged)
+    if not redacted:
+        return redacted
+    return redacted.replace(placeholder, ".")
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:
