@@ -26,7 +26,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   operand, or — only with a `:` separator — an annotation default. The password-family test reads the
   whole logical label rather than the matched one, because the pattern can match a compound label's
   tail: `password_key = …` matches only at `_key`, so testing the match alone would miss the
-  `password` and leak the value. Redaction is not weakened: the
+  `password` and leak the value. `.` and `-` count as label characters there rather than boundaries,
+  so a properties/Spring/YAML key such as `config.password.key = …` or `app-secret-key = …` is judged
+  whole too. Redaction is not weakened: the
   exemption applies only to diff body lines and never to `redact_text`'s arbitrary prose, where no
   syntax guarantee holds, and every vendor/JWT/PEM/connection-string pattern still runs on an
   exempted line, so a value carrying a recognized secret shape is caught regardless. Verified against

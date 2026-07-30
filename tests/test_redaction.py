@@ -246,6 +246,12 @@ _MUST_REDACT = [
     "PASSWD_KEY = somethinglongenoughhere(x)",
     "client_secret_key = opaquevaluehere12345 + more",
     "app_passphrase_token = longvaluegoeshere(x)",
+    # ...and a DOTTED or HYPHENATED compound label, as properties/Spring/YAML config
+    # writes it, where `.`/`-` must count as label characters rather than boundaries.
+    "config.password.key = somethinglongvalue(x)",
+    "db.passwd.token = anotherlongvaluehere(y)",
+    "app-secret-key = opaquevaluegoeshere12(z)",
+    "spring.datasource.password.key = mysecretvaluehere(q)",
     # `=` separator never grants the ` =` follower exemption
     "token = abcd1234abcd1234efgh = leftover",
     # quoted literals are never exempt
