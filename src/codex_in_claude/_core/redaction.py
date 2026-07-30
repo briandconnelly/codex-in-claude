@@ -194,13 +194,13 @@ class DiffRedactor:
                 return [line, "[redacted: secret-looking file not sent]"]
         if self._skipping:
             return []
-        scan_line = (
-            line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))
-        ) or line.startswith("Authorization:")
+        body_line = line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))
+        scan_line = body_line or line.startswith("Authorization:")
         if scan_line:
-            # A diff body line is source, so a labelled match that is provably a code
-            # reference is left intact (#421).
-            emit, changed = _redact_secret_values(line, exempt_code=True)
+            # Only a diff BODY line is source, so only it may exempt a labelled match that
+            # is provably a code reference (#421). A bare `Authorization:` header is not
+            # source, so it gets the same conservative treatment as free-text prose.
+            emit, changed = _redact_secret_values(line, exempt_code=body_line)
             if changed and self._current_path and self._current_path not in self.redacted:
                 self.redacted.append(self._current_path)
             return [emit]

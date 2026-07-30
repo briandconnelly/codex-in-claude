@@ -279,3 +279,11 @@ def test_redact_text_does_not_exempt_code_references():
     text = "token = _placeholder_seed(text)"
     assert redaction.redact_text(text) != text
     assert "[redacted: secret value]" in redaction.redact_text(text)
+
+
+def test_authorization_header_line_is_not_treated_as_source():
+    # DiffRedactor scans bare `Authorization:` lines too, but a header is not source, so
+    # it gets prose's conservative treatment rather than the code-reference exemption.
+    line = "Authorization: token = _placeholder_seed(text)"
+    out, _ = redaction.redact(f"diff --git a/app.py b/app.py\n{line}")
+    assert "[redacted: secret value]" in out
