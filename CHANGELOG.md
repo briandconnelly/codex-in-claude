@@ -21,12 +21,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   did not support — the scheme run alone accounted for 577 ms of a 583 ms match, and the userinfo
   after a literal `://` for 0.0 ms — so capping the userinfo, the suggested remedy, would have fixed
   nothing. The scan now simply starts at the `://`. That costs no coverage, because the scheme was
-  never part of what gets replaced: the replacement keeps the leading group and the scheme sits
-  outside the match, preserved verbatim either way, so output is byte-identical wherever the old
-  pattern matched — verified by two differential sweeps over the pattern's own grammar slots
-  (599,040 single-candidate cases and 49,280 per-secret span checks on multi-candidate lines, both
-  exemption modes), each with a deliberately narrowed control to confirm the sweep could see a loss
-  at all. Neither a possessive quantifier nor a bounded run was the answer: possessive removes the
+  never part of the *replaced* span, only of the surrounding match: the old pattern captured it in
+  group 1 and the replacement handed it straight back, while the new one leaves it outside the match
+  altogether. Either way it survives verbatim, so output is byte-identical wherever the old pattern
+  matched. A committed test pins that invariant by keeping the old pattern as an oracle and requiring
+  it to find nothing in the current pipeline's output, over a product of the pattern's grammar slots
+  plus multi-candidate lines; because a negated character class cannot be policed by a corpus of
+  ordinary URLs, two further tests walk the whole printable domain of each userinfo class. Wider
+  differential sweeps run during development (599,040 single-candidate cases and 49,280 per-secret
+  span checks, both exemption modes), each against a deliberately narrowed control to confirm the
+  sweep could see a loss at all, found the same. Neither a possessive quantifier nor a bounded run was the answer: possessive removes the
   backtrack but not the rescan (still quadratic, measured), and a bound only trades the blowup for a
   magic constant. Anchoring also recognizes strictly more — userinfo whose `://` no letter-led run
   reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction for a fail-closed boundary and

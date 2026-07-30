@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import string
 import time
 
 import pytest
@@ -202,6 +203,33 @@ def test_connection_string_redaction_unchanged_for_scheme_led_urls():
     assert out == "postgres://user:[redacted: secret value]@db.example.com:5432/app"
 
 
+# The userinfo classes are NEGATED, so their domain is every character except a handful.
+# The sweep above cannot police that: its slots are built from ordinary URL text, so it
+# only ever probes those classes at a few dozen member characters and a narrowing that
+# excludes some unusual one passes it. Dropping `]` from the password class, for example,
+# leaks `postgres://u:pass]word@h` while leaving every other test in this file green.
+# These two walk the whole printable domain instead, so any character quietly removed
+# from either class fails here.
+_NON_MEMBERS = "@/"  # plus whitespace, handled below
+
+
+@pytest.mark.parametrize(
+    "char", [c for c in string.printable if c not in _NON_MEMBERS and not c.isspace()]
+)
+def test_password_class_covers_every_character_it_claims(char):
+    # `[^@\s/]+` — a password may contain anything but `@`, whitespace, and `/`.
+    assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize(
+    "char", [c for c in string.printable if c not in _NON_MEMBERS + ":" and not c.isspace()]
+)
+def test_username_class_covers_every_character_it_claims(char):
+    # `[^:@\s/]+` — same, and additionally not `:`, which separates user from password.
+    out = redaction.redact_text(f"x://a{char}b:secretpw@h")
+    assert out == f"x://a{char}b:[redacted: secret value]@h"
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -214,6 +242,12 @@ def test_connection_string_password_redacted_without_a_scheme(text):
     # Anchoring at `://` widens what is recognized: userinfo whose `://` is not
     # reachable by a letter-led run is now redacted too. Deliberate, and the safe
     # direction for a fail-closed boundary.
+    #
+    # LOAD-BEARING, not an illustration — do not fold into the sweep above. That sweep
+    # asks whether the OLD pattern can still match the output, so it is blind to a
+    # narrowing whose leftover the old pattern cannot match either. Re-adding a
+    # left-context requirement (`(?<=[\w+.-])`) is exactly that: it leaks, and only this
+    # test and the labelled-marker one below fail.
     out = redaction.redact_text(text)
     assert "hunter2pass" not in out
     assert out.endswith("@host")
@@ -242,6 +276,10 @@ def test_password_after_a_labelled_marker_is_redacted():
     it can consume the scheme and leave a marker ending in `]` — after which the old
     scheme-led pattern could not match, and the password went out intact. Anchoring
     at `://` is what closes that; this is a leak fix, not only a widening.
+
+    LOAD-BEARING, like the no-scheme case above and for the same reason: the sweep's
+    oracle cannot see a narrowing it also fails to match, and a left-context requirement
+    would reintroduce this leak while leaving that sweep green.
     """
     out = redaction.redact_text("key=abcdefghijklmnopx://user:hunter2@host")
     assert "hunter2" not in out
