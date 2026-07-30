@@ -27,12 +27,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   swallow a **later** sensitive label as its own value, sending out a secret the old pattern had
   redacted — `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]` and left
   the real value intact. A bracketed match now refuses to start when its own value would contain a
-  further label and separator. That guard has to look *inside* the value rather than past its end,
-  because the value character class contains `=`, so an unspaced `label=value` chain is absorbed
-  whole; the first attempt looked only past the end and still leaked 3162 of 134678 fuzzed cases.
-  Both forms are pinned by tests. The equivalent weakness for *non*-bracket matches is pre-existing —
-  reachable on the pre-#434 pattern too — and is tracked separately as #436 rather than widened into
-  this change. The accepted cost is the mirror of the guarantee: a bracketed match
+  further label and separator. Getting that guard right took two corrections, both found by review
+  rather than by the corpus A/B or an unstructured fuzz — random generation essentially never
+  produces the shapes involved. It has to look *inside* the value rather than past its end, because
+  the value character class contains `=`, so an unspaced `label=value` chain is absorbed whole. And
+  its label-to-separator step has to be the *same shape* as the pattern's own, including the closing
+  quote: a guard written as a bare separator cannot see a swallowed key wearing a `"`, which leaked
+  `cfg["token"] = "aws_secret_access_key": "<secret>"` — the exact input family #432 was written for,
+  and with the redaction marker landing on the harmless key name so the output read as successfully
+  redacted. That step is now written once and the guard's copy derived from it, so the two can differ
+  in capture groups but not in shape. Every form is pinned by a test, and each guard was
+  mutation-tested to confirm the test that claims to hold it actually fails without it. The
+  equivalent weakness for *non*-bracket matches is pre-existing — reachable on the pre-#434 pattern
+  too — and is tracked separately as #436 rather than widened into this change. The accepted cost is the mirror of the guarantee: a bracketed match
   can never take the #421 exemption, so ordinary source assigning to a `key`/`token`-ish subscript is
   masked out of a reviewed diff — and because the label alternatives are unanchored, that reaches
   innocent suffixes such as `obj["monkey"]` too. Measured rather than assumed: an A/B of the old and

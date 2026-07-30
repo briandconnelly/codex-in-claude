@@ -30,6 +30,19 @@ _LABEL_ALT = (
 # The value run, also used twice for the same reason.
 _VALUE_CHARS = r"[A-Za-z0-9._~+/=-]"
 
+# Everything between a sensitive label and its `:`/`=` separator: an optional closing quote
+# (`"api_key":`, #432) and, nested inside it, an optional closing bracket
+# (`cfg["password"]["key"] =`, #434).
+#
+# This is written ONCE and the guard's copy is DERIVED from it, because sharing the label
+# names was not enough. The first #434 fix hand-wrote the guard as a bare
+# `_LABEL_ALT\s*[:=]`, omitting this step entirely — so a swallowed label wearing a #432
+# closing quote was invisible to it and its secret leaked, on exactly the input family #432
+# exists for. Deriving the anonymous form rather than retyping it makes that drift
+# unrepresentable: the two cannot disagree about the shape, only about capture groups.
+_KEY_STEP = r"(?P<key_quote>\\?['\"](?P<key_bracket>\s*\])?)?\s*[:=]"
+_KEY_STEP_ANON = re.sub(r"\(\?P<\w+>", "(?:", _KEY_STEP)
+
 LABELLED_VALUE_PATTERN = re.compile(
     # Two optional quotes, both of which also match a JSON-escaped quote (\"), so a secret
     # inside an unparsed JSON string (raw_response.text) is redacted on both sides:
@@ -42,7 +55,7 @@ LABELLED_VALUE_PATTERN = re.compile(
     # truthy `key_quote` and can never take the exemption below. Moving the bracket out of
     # `key_quote` would silently break that guarantee.
     # `key_quote` is named because `_is_code_reference` keys the #421 exemption off it.
-    rf"(?i)({_LABEL_ALT}(?P<key_quote>\\?['\"](?P<key_bracket>\s*\])?)?\s*[:=]\s*(?:\\?['\"])?)"
+    rf"(?i)({_LABEL_ALT}{_KEY_STEP}\s*(?:\\?['\"])?)"
     # A bracketed match refuses to start when its own value would contain a LATER sensitive
     # label and separator. Found by the #434 review: a bracketed candidate matches EARLIER
     # than the pre-#434 pattern did, and `sub` never revisits consumed text, so
@@ -51,17 +64,22 @@ LABELLED_VALUE_PATTERN = re.compile(
     # separator out intact — where the old pattern had redacted it. Failing the candidate
     # here makes the engine advance and find the `api_key` match instead.
     #
-    # The guard has to look INSIDE the value rather than just past its end, because
-    # `_VALUE_CHARS` contains `=`: a `label=value` chain with no space is absorbed whole, so
-    # a trailing `(?!\s*[:=])` inspects the wrong position and misses it entirely (measured
-    # — the first attempt at this fix left 3162 of 134678 fuzzed cases leaking).
+    # The guard looks INSIDE the value, not past its end, because `_VALUE_CHARS` contains
+    # `=`: an unspaced `label=value` chain is absorbed whole, so a trailing `(?!\s*[:=])`
+    # inspects the wrong position and misses it entirely.
     #
-    # Conditioned on `key_bracket` so non-bracket matches keep their exact prior behavior.
-    # Unconditional, it would stop redacting `token = abcd1234abcd1234efgh = leftover`,
-    # which has no later label to fall through to. This deliberately does NOT fix the same
-    # class for non-bracket matches: that is pre-existing, reachable on the pre-#434 pattern
-    # too, and tracked separately as #436.
-    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}\s*[:=]))"
+    # It also has to allow the value run to start INSIDE a quoted key: the value's own
+    # opening quote consumes the swallowed key's opening `"`, so the run begins at the
+    # label and ends on its closing quote — which is why `_KEY_STEP_ANON` and not a bare
+    # separator (the second #434 review finding; the bare form leaked
+    # `cfg["token"] = "aws_secret_access_key": "<secret>"`).
+    #
+    # Conditioned on `key_bracket` so NON-bracket matches keep byte-identical behavior.
+    # Unconditional, it would also change them — `key:api_key=<secret>` would redact only
+    # the tail rather than the whole chain — and that class is pre-existing, reachable on
+    # the pre-#434 pattern too, so it is tracked separately as #436 rather than quietly
+    # altered here.
+    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}{_KEY_STEP_ANON}))"
     rf"{_VALUE_CHARS}{{16,}}"
 )
 

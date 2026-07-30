@@ -557,6 +557,25 @@ def test_bracket_match_does_not_swallow_a_later_sensitive_label():
             'obj["cache_key" ]:my_application_password="wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY"',
             "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY",
         ),
+        # The swallowed label wears a #432 closing QUOTE. This defeated the second attempt,
+        # whose guard hand-wrote the label→separator step as a bare separator and so could
+        # not see a quoted key at all — leaking the exact input family #432 was written for.
+        # It looks impossible for the value run to reach a JSON key, since `"` is not a
+        # value character; it is reachable because the pattern's own value-opening quote
+        # consumes the key's OPENING quote, so the run starts inside the key.
+        (
+            'cfg["token"] = "aws_secret_access_key": "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY"',
+            "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY",
+        ),
+        (
+            'settings["auth"]["token"] = \\"aws_secret_access_key\\": \\"abcdefghij1234567890\\"',
+            "abcdefghij1234567890",
+        ),
+        # ...and with the bracket step too, not just the quote
+        (
+            'cfg["token"] = "cfg["]["stripe_api_key"]: "opaquevaluewithnoprefix123"',
+            "opaquevaluewithnoprefix123",
+        ),
     ]:
         out = redaction.redact_text(line)
         assert secret not in out, out
@@ -572,6 +591,21 @@ def test_neutral_bracket_key_is_untouched():
     out, paths = redaction.redact(diff)
     assert out == diff
     assert paths == []
+
+
+def test_swallow_guard_leaves_non_bracket_matches_alone():
+    # The guard is CONDITIONED on `key_bracket`, and nothing else pinned that: making it
+    # unconditional passed every other test in this file. It is not a leak either way —
+    # both forms redact the secret — but an unconditional guard silently changes which SPAN
+    # a non-bracket chain redacts, and that class is pre-existing (reachable on the
+    # pre-#434 pattern too), so it belongs to #436 rather than to this change.
+    #
+    # Conditional (correct here): the whole chain is masked, exactly as before #434.
+    # Unconditional: `key:api_key=[redacted…]`, a narrower span and a behavior change to
+    # inputs this issue never touched.
+    assert redaction.redact_text("key:api_key=leftovervalue123456789") == (
+        "key:[redacted: secret value]"
+    )
 
 
 def test_bracket_key_redacts_ordinary_code_by_design():
