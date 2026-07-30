@@ -67,8 +67,13 @@ SECRET_VALUE_PATTERNS = [
 # secrets carry and Python/JS names cannot.
 _CODE_REFERENCE_VALUE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 # Never exempt these: a human password may legitimately end right before `(`, as in
-# `password = correcthorsebatterystaple(2024)`.
-_PASSWORD_LABEL_RE = re.compile(r"(?i)(?:passw(?:or)?d|pwd|passphrase|secret)\s*[:=]")
+# `password = correcthorsebatterystaple(2024)`. Matched as a substring rather than a whole
+# label, because LABELLED_VALUE_PATTERN can match a compound label's TAIL — the match for
+# `password_key = ...` starts at `_key`, so testing only the matched label misses the
+# `password` entirely and the value leaks.
+_SENSITIVE_LABEL_RE = re.compile(r"(?i)passw(?:or)?d|pwd|passphrase|secret")
+# The identifier characters running up to the match, so the label is judged whole.
+_LABEL_LEAD_RE = re.compile(r"[A-Za-z0-9_]*\Z")
 # Whitespace after the separator. `api_key=value` — config, env, shell, query string —
 # never gets the exemption; PEP8-style `key = value` and `key: Type` do.
 _SPACED_SEPARATOR_RE = re.compile(r"[:=]\s")
@@ -77,7 +82,12 @@ _SPACED_SEPARATOR_RE = re.compile(r"[:=]\s")
 def _is_code_reference(match: re.Match) -> bool:
     """Whether a LABELLED_VALUE_PATTERN match is a code reference, not a credential."""
     label = match.group(1)
-    if not _SPACED_SEPARATOR_RE.search(label) or _PASSWORD_LABEL_RE.search(label):
+    if not _SPACED_SEPARATOR_RE.search(label):
+        return False
+    # Judge the whole logical label, including the identifier characters the pattern
+    # matched no part of (`password_key` -> the match starts at `_key`).
+    lead = _LABEL_LEAD_RE.search(match.string[: match.start()])
+    if _SENSITIVE_LABEL_RE.search(f"{lead.group(0) if lead else ''}{label}"):
         return False
     if label.endswith(("'", '"')):  # a quoted literal is a value, not a reference
         return False

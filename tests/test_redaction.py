@@ -240,6 +240,12 @@ _MUST_REDACT = [
     "password = correcthorsebatterystaple(2024)",
     "passphrase = myverylongdicewarephrase(v2)",
     "secret = somethinglongenoughhere(rotated)",
+    # ...including a COMPOUND label, where the pattern matches only the trailing
+    # `_key`/`_token` and so never sees the sensitive word by itself.
+    "password_key = correcthorsebattery(2024)",
+    "PASSWD_KEY = somethinglongenoughhere(x)",
+    "client_secret_key = opaquevaluehere12345 + more",
+    "app_passphrase_token = longvaluegoeshere(x)",
     # `=` separator never grants the ` =` follower exemption
     "token = abcd1234abcd1234efgh = leftover",
     # quoted literals are never exempt

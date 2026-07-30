@@ -23,7 +23,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   string is never exempt), the label must not be from the password family (a human password may
   legitimately end right before `(`), the value must be unquoted and a bare dotted identifier path
   (no `+ / = ~ -`, which real base64-ish secrets carry), and it must be followed by a call, an
-  operand, or — only with a `:` separator — an annotation default. Redaction is not weakened: the
+  operand, or — only with a `:` separator — an annotation default. The password-family test reads the
+  whole logical label rather than the matched one, because the pattern can match a compound label's
+  tail: `password_key = …` matches only at `_key`, so testing the match alone would miss the
+  `password` and leak the value. Redaction is not weakened: the
   exemption applies only to diff body lines and never to `redact_text`'s arbitrary prose, where no
   syntax guarantee holds, and every vendor/JWT/PEM/connection-string pattern still runs on an
   exempted line, so a value carrying a recognized secret shape is caught regardless. Verified against
@@ -33,7 +36,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   substitution callback rather than as a trailing lookahead, because a greedy value can match one
   character short to satisfy an assertion (redacting `_placeholder_seed` and leaving `d(text)`), and
   the annotation-default case is restricted to the `:` separator, because allowing it after `=` would
-  exempt `token = abcd1234abcd1234efgh = leftover`. Roughly half the false positives remain: quoted
+  exempt `token = abcd1234abcd1234efgh = leftover`. Nine of the nineteen affected lines under `src/`
+  stop being redacted; the rest remain: quoted
   identifier-ish constants such as `RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"`, which are
   structurally identical to `API_KEY = "ghp_…"`. Shannon entropy does not separate them (innocuous
   values measured 3.35–4.44 bits/char, realistic generic secrets 2.81–4.32, with an MD5-shaped secret
