@@ -20,9 +20,13 @@ SECRET_PATH_RE = re.compile(
 # Labelled secrets: a `key`/`token`/`password`-ish label, a `:`/`=`, then a long value.
 # Named because the code-reference exemption below applies to this pattern alone (#421).
 LABELLED_VALUE_PATTERN = re.compile(
-    # The optional opening quote also matches a JSON-escaped quote (\") so a secret
-    # quoted inside an unparsed JSON string (raw_response.text) is still redacted (#58).
-    r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
+    # Two optional quotes, both of which also match a JSON-escaped quote (\"), so a secret
+    # inside an unparsed JSON string (raw_response.text) is redacted on both sides:
+    # `key_quote` closes the KEY (`"api_key": …`, #432) and the unnamed one opens the VALUE
+    # (#58). Without the first, the separator had to sit immediately after the label, so a
+    # quoted JSON key never matched at all and a generic secret in JSON went out unmasked.
+    # `key_quote` is named because `_is_code_reference` keys the #421 exemption off it.
+    r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)(?P<key_quote>\\?['\"])?\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
 )
 
 SECRET_VALUE_PATTERNS = [
@@ -125,9 +129,12 @@ _SENSITIVE_LABEL_RE = re.compile(r"(?i)passw(?:or)?d|pwd|passphrase|secret")
 # separators one logical key is written with — `.` and `-` (`config.password.key = …`,
 # `app-secret-key = …` in properties, Spring, and YAML) and `/` (path-style keys).
 # Whitespace stays a boundary, so the scan cannot run back across unrelated earlier text.
-# A bracketed key (`cfg["password"]["key"] = …`) needs no handling here: the labelled
-# pattern requires the separator right after the label, so `key"]` never matches at all —
-# a pre-existing false negative of its own, unaffected by this exemption.
+# A bracketed key (`cfg["password"]["key"] = …`) still needs no handling here: the labelled
+# pattern accepts a closing QUOTE before the separator (#432) but not a closing BRACKET, so
+# `key"]` never matches at all — a pre-existing false negative of its own, unaffected by
+# this exemption. Widening it is deliberately deferred (#434): the label would then have to
+# be read across `"]["`, which this scan cannot do, so `password` would go unseen and the
+# match would be exempted as a code reference — turning a false negative into a leak.
 _LABEL_LEAD_RE = re.compile(r"[A-Za-z0-9_.\-/]*\Z")
 # Whitespace after the separator. `api_key=value` — config, env, shell, query string —
 # never gets the exemption; PEP8-style `key = value` and `key: Type` do.
@@ -144,6 +151,17 @@ def _is_source_path(path: str) -> bool:
 def _is_code_reference(match: re.Match) -> bool:
     """Whether a LABELLED_VALUE_PATTERN match is a code reference, not a credential."""
     label = match.group(1)
+    # A quoted KEY is never a code reference, so every form #432 newly reaches fails closed.
+    # Two reasons, either sufficient. A quoted key marks data, not an assignment this
+    # function can reason about — and source files carry data freely, in comments,
+    # docstrings, and string fixtures, where `{"key": secretvalue(2024)}` is a literal
+    # rather than the call the follower test below would read it as. And the nested form
+    # defeats the sensitive-label guard outright: `_LABEL_LEAD_RE` stops at the `"`, so
+    # `{"password": {"key": …}}` matches at `key` and never sees `password`. That is the
+    # same compound-label weakness #421's review found, and it is why this test is a plain
+    # rejection rather than another condition to weigh.
+    if match.group("key_quote"):
+        return False
     if not _SPACED_SEPARATOR_RE.search(label):
         return False
     # Judge the whole logical label, including the identifier characters the pattern

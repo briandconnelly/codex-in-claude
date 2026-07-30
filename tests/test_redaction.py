@@ -332,3 +332,96 @@ def test_authorization_header_line_is_not_treated_as_source():
     line = "Authorization: token = _placeholder_seed(text)"
     out, _ = redaction.redact(f"diff --git a/app.py b/app.py\n{line}")
     assert "[redacted: secret value]" in out
+
+
+# --- quoted keys (#432) ------------------------------------------------------
+# The labelled pattern required its separator IMMEDIATELY after the label, but JSON puts
+# the key's closing quote there first, so a quoted key never matched. That silently
+# exempted the carrier this pattern exists for: a credential with no vendor shape
+# (AWS_SECRET_ACCESS_KEY, CI_JOB_TOKEN, an internal HMAC secret) sitting in JSON config,
+# a fixture, or a captured API response.
+
+# Values chosen to match NO other pattern in SECRET_VALUE_PATTERNS. A vendor-shaped probe
+# (`sk-…`, `ghp_…`) is stripped by its own pattern regardless, so a test using one passes
+# against the bug it guards (#417). test_probe_value_is_not_self_redacting is the control
+# that keeps this property honest.
+_PROBES = [
+    "abcdefghij1234567890",
+    "AbCdEf0123456789XyZwVu",
+    "opaquevaluewithnoprefix123",
+    "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY",
+]
+
+
+@pytest.mark.parametrize("value", _PROBES)
+def test_probe_value_is_not_self_redacting(value: str):
+    # Positive control for every #432 test below: each probe must survive redaction on its
+    # own. Without this, an "the secret is gone" assertion proves nothing about the label
+    # pattern — another pattern could be doing the work.
+    assert redaction.redact_text(value) == value
+
+
+_QUOTED_KEY_LINES = [
+    '"api_key": "abcdefghij1234567890"',
+    '  "client_secret": "AbCdEf0123456789XyZwVu",',
+    "'api_key': 'abcdefghij1234567890'",
+    '"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY"',
+    # whitespace between the key's closing quote and the separator, as JSON permits
+    '"password" : "opaquevaluewithnoprefix123"',
+    # a JSON blob inside an unparsed string, where both quotes arrive backslash-escaped —
+    # the case `raw_response.text` carries (#58 handled only the value's opening quote)
+    '{\\"api_key\\": \\"abcdefghij1234567890\\"}',
+]
+
+
+@pytest.mark.parametrize("line", _QUOTED_KEY_LINES)
+def test_quoted_key_secret_redacted_in_prose(line: str):
+    out = redaction.redact_text(line)
+    assert "[redacted: secret value]" in out
+    for probe in _PROBES:
+        assert probe not in out
+
+
+def test_quoted_key_secret_redacted_in_json_diff():
+    diff = 'diff --git a/config.json b/config.json\n+  "api_key": "abcdefghij1234567890"'
+    out, paths = redaction.redact(diff)
+    assert "abcdefghij1234567890" not in out
+    assert paths == ["config.json"]
+
+
+def test_unquoted_key_still_redacted():
+    # Compatibility control: the form that already worked before #432 must keep working.
+    out = redaction.redact_text('api_key: "abcdefghij1234567890"')
+    assert "[redacted: secret value]" in out
+
+
+# A quoted key inside a SOURCE file gets no code-reference exemption. Two independent
+# reasons, either one sufficient: a quoted key marks data rather than an assignment the
+# exemption can reason about (comments, docstrings, and string fixtures all carry JSON),
+# and `_LABEL_LEAD_RE` cannot read `password` across `": {"`, so the sensitive-label guard
+# never fires on the nested form. Widening the pattern without failing closed here would
+# have turned the #421 exemption into a leak.
+_QUOTED_KEY_IN_SOURCE = [
+    '+# captured: {"password": {"key": correcthorsebatterystaple(2024)}}',
+    "+    EXAMPLE = '{\"api_key\": opaquevaluewithnoprefix123(x)}'",
+    '+cfg = {"password": {"key": helper_function_name_here(x)}}',
+    '+    payload = {"api_key": "abcdefghij1234567890"}',
+]
+
+
+@pytest.mark.parametrize("line", _QUOTED_KEY_IN_SOURCE)
+def test_quoted_key_never_gets_code_exemption(line: str):
+    diff = f"diff --git a/app.py b/app.py\n{line}"
+    out, paths = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+    assert paths == ["app.py"]
+
+
+def test_neutral_quoted_key_is_untouched():
+    # The widening keys on the LABEL, not on the quoting: an ordinary JSON key keeps its
+    # value, so this does not degrade into "redact every quoted string in a config file".
+    line = '+  "display_name": "abcdefghij1234567890"'
+    diff = f"diff --git a/config.json b/config.json\n{line}"
+    out, paths = redaction.redact(diff)
+    assert out == diff
+    assert paths == []

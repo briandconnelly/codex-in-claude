@@ -57,6 +57,36 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   reason's documented meaning is also corrected: it claimed a whole file's hunk was dropped, but the
   same disclosure has always covered inline masking too.
 
+- **A generic secret under a quoted JSON key is now redacted** (#432). The labelled-secret pattern
+  required its `:`/`=` separator immediately after the label, but JSON puts the key's closing quote
+  there first, so `"api_key": "…"` never matched while the unquoted `api_key: "…"` did. That silently
+  exempted the carrier this pattern exists for. It is the last line of defense for credentials with
+  no recognizable vendor shape — `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, `NPM_TOKEN`, an internal
+  HMAC secret — and JSON is a very common carrier for exactly those: `.json` config, fixtures,
+  captured API responses, and the `raw_response.text` this redactor is applied to. A value carrying a
+  vendor prefix was caught anyway by its own pattern, which is why `"token": "ghp_…"` looked fine and
+  masked the gap. `redacted_paths` reported nothing in the missed cases, so `coverage` read
+  `complete`. The label group now accepts an optional closing quote, backslash-escaped or not, so a
+  JSON blob embedded in an unparsed string is covered on both sides — previously only the value's
+  opening quote was. Redaction is documented best-effort, so this was a gap rather than a broken
+  promise, but a gap in the pattern's core purpose. Crucially, a match that consumed a key quote is
+  never eligible for the code-reference exemption added in #421, so every newly reached form fails
+  closed. Widening the pattern without that guard would have converted the gap into a leak: a quoted
+  key marks data rather than an assignment the exemption can reason about, and source files carry
+  data freely, so `# captured: {"password": {"key": correcthorsebatterystaple(2024)}}` in a `.py`
+  file would have been exempted as a call. The nested form also defeats the sensitive-label guard
+  outright, since the label scan stops at the `"` and never sees `password` — the same compound-label
+  weakness #421's own review found, reappearing. Measured rather than assumed: across this
+  repository's 235 tracked files the change adds exactly two false positives (both benign
+  `"idempotency_key": "…"` literals, structurally indistinguishable from a real `"api_key":
+  "<generic secret>"`), the fail-closed guard adds none beyond those, and an A/B of the old and new
+  redactors over every tracked line found no line that stopped being redacted. Bracketed subscripts
+  (`cfg["password"]["key"] = …`) remain a known false negative and are deliberately deferred to
+  #434: the
+  pattern accepts a closing quote but not a closing bracket, and matching one would require reading
+  the label across `"]["`, which the same scan cannot do — so `password` would go unseen and the
+  match would be exempted, turning a false negative into a leak.
+
 - **`codex_delegate`'s prose no longer points into the deleted worktree** (#412). Codex runs with its
   working directory set to the throwaway worktree, and that worktree is torn down before the caller
   reads the result — so every absolute path Codex wrote into its summary was dead on arrival. A
