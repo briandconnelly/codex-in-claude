@@ -159,6 +159,27 @@ def _all_lines():
     yield from _MULTI_CANDIDATE_LINES
 
 
+def _sweep_leftovers(oracle, *, exempt_code=False):
+    """Drive every generated line through the CURRENT pipeline against ``oracle``.
+
+    Returns ``(hits, leftovers)`` — how many spans the oracle matched on the RAW
+    input (the sweep's own liveness signal) and every span it can still match in
+    the emitted output (each one a secret the oracle's era redacted and this one
+    did not). Factored out so the controls below exercise byte-identical sweep
+    logic: a control that re-implements the loop proves nothing about the loop
+    the real test runs.
+    """
+    hits = 0
+    leftovers = []
+    for line in _all_lines():
+        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
+        hits += len(oracle.findall(line))
+        found = oracle.search(out)
+        if found is not None:
+            leftovers.append((line, found.group(0)))
+    return hits, leftovers
+
+
 @pytest.mark.parametrize("exempt_code", [False, True])
 def test_no_password_the_old_pattern_redacted_stops_being_redacted(exempt_code):
     """The #438 anchoring may only widen coverage, never narrow it.
@@ -171,15 +192,11 @@ def test_no_password_the_old_pattern_redacted_stops_being_redacted(exempt_code):
     makes a containment check report failures that are not leaks and, worse, report
     successes when a real leak happens to repeat harmless text.
     """
-    oracle_hits = 0
-    for line in _all_lines():
-        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
-        oracle_hits += len(_PRE_438_CONNECTION_PATTERN.findall(line))
-        leftover = _PRE_438_CONNECTION_PATTERN.search(out)
-        assert leftover is None, f"{leftover.group(0)!r} survived redaction of {line!r}"
+    hits, leftovers = _sweep_leftovers(_PRE_438_CONNECTION_PATTERN, exempt_code=exempt_code)
+    assert not leftovers, f"{leftovers[0][1]!r} survived redaction of {leftovers[0][0]!r}"
     # The sweep is only evidence while the oracle still fires; without this a drifting
     # slot list would turn the whole test into a tautology that cannot fail.
-    assert oracle_hits > 900, f"oracle matched only {oracle_hits} spans — sweep went vacuous"
+    assert hits > 900, f"oracle matched only {hits} spans — sweep went vacuous"
 
 
 def test_long_run_redaction_is_not_quadratic():
@@ -290,6 +307,158 @@ def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
     # second pass cannot re-match and mangle it.
     text = "postgres://user:[redacted: secret value]@host"
     assert redaction.redact_text(text) == text
+
+
+# --- #440: a credential in ANY userinfo position -----------------------------
+# The matcher required a NON-EMPTY username before the password, so `://:pw@host`
+# — the canonical Redis URL, since Redis had no usernames before ACLs in 6.0 —
+# shipped its password verbatim. Widening that class to `*` closes it.
+#
+# Two test jobs, deliberately kept apart, because ONE of them cannot do the other's
+# work. The differential sweep below guards the OLD branch: nothing the previous
+# matcher redacted may stop being redacted. It is structurally incapable of policing
+# the branch this change ADDS — its oracle spells the old `+`, so it never matches an
+# empty username at all (measured: 0 oracle hits across every empty-username line in
+# `_all_lines()`, against 360 on the named ones). Shipping only the sweep would have
+# looked like coverage of the fix while being vacuous on exactly the fix. The new
+# branch therefore gets EXACT-OUTPUT contract tests instead, which also catch the
+# defect an oracle sweep cannot see at all: a PARTIAL replacement, whose marker
+# contains spaces and so destroys the very URL syntax the oracle needs to match.
+
+# The pre-#440 matcher, kept as an ORACLE for the branch it did cover — spelled out
+# rather than imported, for the reason the #438 oracle above is.
+_PRE_440_CONNECTION_PATTERN = re.compile(r"(://[^:@\s/]+:)[^@\s/]+(?=@)")
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+def test_no_password_the_pre_440_pattern_redacted_stops_being_redacted(exempt_code):
+    """Widening the username class may only ADD coverage (#440).
+
+    The repo's own history is that a widening turns a false negative into a LEAK:
+    `re.sub` never revisits consumed text, so a match landing earlier than before can
+    swallow a later candidate (#432, #434). Here it cannot — the widened match's value
+    class excludes `/`, so it can never contain the `//` of a later `://` — and this
+    sweep is the empirical check on that reasoning.
+    """
+    hits, leftovers = _sweep_leftovers(_PRE_440_CONNECTION_PATTERN, exempt_code=exempt_code)
+    assert not leftovers, f"{leftovers[0][1]!r} survived redaction of {leftovers[0][0]!r}"
+    assert hits > 900, f"oracle matched only {hits} spans — sweep went vacuous"
+
+
+def test_the_differential_sweep_can_actually_see_a_lost_redaction(monkeypatch):
+    """Control: prove the sweep above is a working instrument, not a green rubber stamp.
+
+    Narrowing the live matcher — re-adding the left-context requirement #438 removed —
+    must make the SAME sweep body report leftovers. Without this, a sweep that had gone
+    vacuous and a sweep over a correct matcher are indistinguishable.
+
+    Scope, stated because a passing control invites over-reading (and because the
+    complementary experiment fails): this proves sensitivity to a narrowing that drops
+    WHOLE candidates. It does NOT prove sensitivity to a narrowed character CLASS —
+    dropping `]` from the password class leaks `postgres://u:pass]word@h` and this sweep
+    stays green, because the leftover then contains a marker whose spaces the oracle
+    cannot match across. That class is covered only by the printable-domain walks above,
+    which is why those are not redundant with this.
+    """
+    narrowed = re.compile(r"(?<=[\w])(://[^:@\s/]*:)[^@\s/]+(?=@)")
+    patched = [
+        narrowed if p is redaction.SECRET_VALUE_PATTERNS[-1] else p
+        for p in redaction.SECRET_VALUE_PATTERNS
+    ]
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", patched)
+    _, leftovers = _sweep_leftovers(_PRE_440_CONNECTION_PATTERN)
+    assert leftovers, "the sweep reported no loss against a deliberately narrowed matcher"
+
+
+# Exact-output cases for the branch #440 adds. Exact rather than `not in`, so a
+# partial or over-broad replacement fails as loudly as a missed one.
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The canonical Redis URL from the issue.
+        (
+            "redis://:onlypass@localhost:6379",
+            "redis://:[redacted: secret value]@localhost:6379",
+        ),
+        # A scheme-led URL, for symmetry with the named-username case.
+        (
+            "DATABASE_URL=rediss://:s3cr3tPassw0rd@db.example.com:6380/0",
+            "DATABASE_URL=rediss://:[redacted: secret value]@db.example.com:6380/0",
+        ),
+        # No scheme at all — the `://` anchor is what the match hangs on (#438).
+        ("://:hunter2pass@host", "://:[redacted: secret value]@host"),
+        # A scheme the labelled pattern already ate, leaving a marker (#438's leak).
+        (
+            "key=abcdefghijklmnopx://:hunter2@host",
+            "key=[redacted: secret value]://:[redacted: secret value]@host",
+        ),
+        # Two empty-username candidates: `sub` must reach the second.
+        (
+            "a://:firstpass@h1 b://:secondpass@h2",
+            "a://:[redacted: secret value]@h1 b://:[redacted: secret value]@h2",
+        ),
+        # Mixed shapes on one line, in both orders — the empty-username match must not
+        # swallow the named one, nor be swallowed by it.
+        (
+            "redis://:firstpass@h1 postgres://u:secondpass@h2",
+            "redis://:[redacted: secret value]@h1 postgres://u:[redacted: secret value]@h2",
+        ),
+        (
+            "postgres://u:firstpass@h1 redis://:secondpass@h2",
+            "postgres://u:[redacted: secret value]@h1 redis://:[redacted: secret value]@h2",
+        ),
+        # A multi-segment password: the class admits `:`, so it goes whole.
+        ("redis://:p1:p2:p3@host", "redis://:[redacted: secret value]@host"),
+    ],
+)
+def test_empty_username_connection_string_exact_output(text, expected):
+    assert redaction.redact_text(text) == expected
+
+
+@pytest.mark.parametrize(
+    "char", [c for c in string.printable if c not in _NON_MEMBERS and not c.isspace()]
+)
+def test_empty_username_password_class_covers_every_character_it_claims(char):
+    # The password class is unchanged by #440, but it is now reachable through a
+    # SECOND route (empty username). A narrowing of the class on that route alone
+    # would leave the named-username walk above green, so it is walked here too.
+    assert redaction.redact_text(f"x://:ab{char}cd@h") == "x://:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "redis://:@localhost:6379",  # empty password — no secret to redact
+        "redis://user:@localhost:6379",  # ditto, with a username
+        "file:///etc/passwd",  # `://` then `/`, which the username class excludes
+        "http://[::1]:6379/db",  # IPv6 host, no userinfo
+        "https://example.com:8080/path",  # host:port, no `@`
+        "ssh://git@github.com/user/repo.git",  # userinfo with no password field
+        "git@github.com:user/repo.git",  # SCP-style, no `://`
+    ],
+)
+def test_widened_username_class_leaves_non_credentials_alone(text):
+    assert redaction.redact_text(text) == text
+
+
+def test_empty_username_redaction_is_idempotent():
+    text = "redis://:[redacted: secret value]@host"
+    assert redaction.redact_text(text) == text
+
+
+def test_widening_masks_a_regex_literal_that_looks_like_userinfo():
+    """Characterization, not an endorsement: the accepted cost of the widening.
+
+    The connection-string matcher gets no code-reference exemption — that applies to
+    `LABELLED_VALUE_PATTERN` alone (#421/#431) — so source that literally spells
+    password-only userinfo is masked. Recorded here so the tradeoff is a decision with
+    a test on it rather than a surprise, and so anyone tempted to "fix" it sees that
+    weakening a credential matcher is the thing being traded away. The same class
+    already existed for the named-username form (`sect://a:2@1`).
+    """
+    assert redaction.redact_text('pattern = r"://:.+@"') == (
+        'pattern = r"://:[redacted: secret value]@"'
+    )
 
 
 # --- free-text redaction (#58) ----------------------------------------------

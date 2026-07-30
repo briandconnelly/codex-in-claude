@@ -100,8 +100,19 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"sk_(?:live|test)_[A-Za-z0-9]{16,}"),
     re.compile(r"AIza[0-9A-Za-z_-]{35,}"),
-    # Connection-string userinfo: redact the password between `://user:` and `@host`,
+    # Connection-string userinfo: redact the password between `://[user]:` and `@host`,
     # keeping scheme, user, and host. The `@` lookahead avoids matching `host:port`.
+    #
+    # The username is OPTIONAL (`*`, not `+`) — `://:password@host` is password-only
+    # userinfo, and it is the canonical Redis URL rather than an edge case, since Redis
+    # had no usernames before ACLs in 6.0, so most `REDIS_URL` values still look like
+    # that. Requiring a username sent those passwords out verbatim (#440). Do not
+    # restore the `+`: it is the one userinfo form the rest of this pattern already
+    # handles correctly.
+    #
+    # The PASSWORD side stays `+` deliberately. `://user:@host` has an empty password,
+    # which holds no secret, and matching it would emit a `[redacted]` marker for a
+    # blank value — claiming to have hidden something that was never there.
     #
     # The scan starts AT the `://` and never looks left of it. It used to open with a
     # scheme run, `[a-zA-Z][\w+.-]*://`, which was quadratic (#438): that greedy class
@@ -124,7 +135,7 @@ SECRET_VALUE_PATTERNS = [
     # a real leak: when the labelled pattern's marker had already eaten the scheme
     # (`key=<...>://user:pw@host`), the old pattern could no longer match and the
     # password went out intact.
-    re.compile(r"(://[^:@\s/]+:)[^@\s/]+(?=@)"),
+    re.compile(r"(://[^:@\s/]*:)[^@\s/]+(?=@)"),
 ]
 
 
