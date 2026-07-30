@@ -113,10 +113,13 @@ SECRET_VALUE_PATTERNS = [
     # fix it (it drops the backtrack, not the rescan) and bounding the run only trades
     # the blowup for a magic constant.
     #
-    # Dropping the scheme costs no coverage, because the scheme was never part of what
-    # gets replaced: the replacement keeps group 1 and the scheme sits OUTSIDE the match,
-    # preserved verbatim either way. Output is byte-identical wherever the old pattern
-    # matched. It does recognize strictly more — userinfo whose `://` no letter-led run
+    # Dropping the scheme costs no coverage, because the scheme was never part of the
+    # REPLACED span, only of the surrounding match: the old pattern captured it in
+    # group 1 and the replacement handed it straight back, and the new one leaves it
+    # outside the match entirely. Either way it survives verbatim, so output is
+    # byte-identical wherever the old pattern matched — pinned by a differential test
+    # that runs the old pattern over the new pipeline's output and requires it to find
+    # nothing. It does recognize strictly more — userinfo whose `://` no letter-led run
     # reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction here, and closes
     # a real leak: when the labelled pattern's marker had already eaten the scheme
     # (`key=<...>://user:pw@host`), the old pattern could no longer match and the

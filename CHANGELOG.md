@@ -15,8 +15,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   a few hundred KB would take minutes. That matters because `redact_text` runs over *untrusted model
   output* (`raw_response.text`, summaries, finding fields), so the input's size and shape are
   influenced by what the model returns rather than only by what the caller wrote, and a synchronous
-  call that blows its deadline is terminated with its paid work lost. Nothing leaked; this was
-  liveness, not disclosure. The issue attributed the cost to the userinfo classes, which measurement
+  call that blows its deadline is terminated with its paid work lost. The slowdown itself disclosed
+  nothing — it was a liveness bug — though the fix for it also closes a separate leak, described
+  below. The issue attributed the cost to the userinfo classes, which measurement
   did not support — the scheme run alone accounted for 577 ms of a 583 ms match, and the userinfo
   after a literal `://` for 0.0 ms — so capping the userinfo, the suggested remedy, would have fixed
   nothing. The scan now simply starts at the `://`. That costs no coverage, because the scheme was
@@ -29,9 +30,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   backtrack but not the rescan (still quadratic, measured), and a bound only trades the blowup for a
   magic constant. Anchoring also recognizes strictly more — userinfo whose `://` no letter-led run
   reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction for a fail-closed boundary and
-  closes a real leak on the way: when the labelled-secret pattern had already replaced the text
-  before the `://` with a marker, the scheme it needed was gone, so `key=<eaten>://user:pw@host`
-  shipped its password intact. A regression test pins the liveness property with a budget ~275x
+  closes a genuine disclosure gap on the way: the patterns run in order over the same line, and when
+  the labelled-secret pattern had already replaced the text before the `://` with a marker, the
+  letters the scheme run needed were gone with it, so `key=<eaten>://user:pw@host` shipped its
+  password intact. That is a real leak on `main` today, fixed here. A regression test pins the liveness property with a budget ~275x
   above the fixed timing and ~7x below the broken one. The JWT pattern is quadratic in the same way
   under a repeated-anchor input and is tracked separately; a sweep of the remaining patterns found
   no others.

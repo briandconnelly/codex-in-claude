@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+import re
 import time
 
 import pytest
@@ -111,10 +113,72 @@ def test_url_with_port_not_treated_as_credentials():
 # ahead of the `://` literal. That run went to the end of every non-`/` stretch at
 # every start position and then backtracked hunting the literal, which is quadratic
 # and reachable from untrusted model output (redact_text/redact_tree). The scheme was
-# never needed inside the match — it sits outside the replacement span and is
-# preserved verbatim either way — so the scan now begins at `://`. Two consequences
-# are pinned below: matching is unchanged wherever the old pattern matched, and it
-# reaches userinfo the old pattern could not.
+# never part of the REDACTED span — the old pattern captured it in group 1 and the
+# replacement handed it straight back, and the new one leaves it outside the match
+# entirely — so the scan now begins at `://`. Two consequences are pinned below: no
+# password the old pattern redacted stops being redacted, and userinfo the old pattern
+# could not reach is now covered.
+
+# The pre-#438 pattern, kept as an ORACLE. The invariant that matters for a secret
+# boundary is one-directional — anchoring may recognize MORE, never less — and the only
+# way to test that is against the thing being replaced, so it is spelled out here rather
+# than imported. Comparing against the old PATTERN on the raw line, rather than against
+# the old pipeline's output, is deliberately the stricter check: an earlier pattern in
+# the list may have already consumed the value, and the assertion below holds either way.
+_PRE_438_CONNECTION_PATTERN = re.compile(r"([a-zA-Z][\w+.-]*://[^:@\s/]+:)[^@\s/]+(?=@)")
+
+# Slots of the pattern's own grammar. A structured product over these finds the shapes
+# that matter here; random text essentially never generates a well-formed userinfo.
+_LEADS = ["", "x", "9", "-", "=", '"', "//", "cfg = "]
+_SCHEMES = ["", "a", "postgres", "mongodb+srv", "s" * 40]
+_SEPARATORS = ["://", ":/", "//", ":"]
+_USERS = ["user", "u.s-e+r", "", "u:v"]
+_PASSWORDS = ["pw", "hunter2secret", "", "z" * 40]
+_HOSTS = ["host", "h:5432/db", ""]
+
+# Lines carrying several candidates at once, where substitution order matters: `sub`
+# never revisits consumed text, so a match that lands earlier than the old one did can
+# swallow a later candidate. That is how #434 turned a widening into a leak.
+_MULTI_CANDIDATE_LINES = [
+    "postgres://u:firstpassword@h1 mysql://v:secondpassword@h2",
+    "postgres://u:firstpassword@h1mysql://v:secondpassword@h2",
+    "key=abcdefghijklmnopx://user:hunter2@host",
+    'api_key = "abcdef0123456789abcd" postgres://u:tailpassword@h',
+    "://a:one@h postgres://b:two@h 9://c:three@h",
+    "Authorization: Bearer abcdef0123456789abcd postgres://u:pw12345678@h",
+]
+
+
+def _all_lines():
+    for lead, scheme, sep, user, pw, host in itertools.product(
+        _LEADS, _SCHEMES, _SEPARATORS, _USERS, _PASSWORDS, _HOSTS
+    ):
+        yield f"{lead}{scheme}{sep}{user}:{pw}@{host}"
+        yield f"{lead}{scheme}{sep}{user}:{pw}{host}"  # no `@` — must stay untouched
+    yield from _MULTI_CANDIDATE_LINES
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+def test_no_password_the_old_pattern_redacted_stops_being_redacted(exempt_code):
+    """The #438 anchoring may only widen coverage, never narrow it.
+
+    For every line, the pre-#438 pattern must find NOTHING left in what the current
+    pipeline emits: any span it could still match there is a password the old code
+    would have replaced and the new code did not. Asserting on the leftover span rather
+    than searching the output for the password TEXT is deliberate — the text can occur
+    innocently elsewhere on the line (`v:` is a substring of `mongodb+srv://`), which
+    makes a containment check report failures that are not leaks and, worse, report
+    successes when a real leak happens to repeat harmless text.
+    """
+    oracle_hits = 0
+    for line in _all_lines():
+        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
+        oracle_hits += len(_PRE_438_CONNECTION_PATTERN.findall(line))
+        leftover = _PRE_438_CONNECTION_PATTERN.search(out)
+        assert leftover is None, f"{leftover.group(0)!r} survived redaction of {line!r}"
+    # The sweep is only evidence while the oracle still fires; without this a drifting
+    # slot list would turn the whole test into a tautology that cannot fail.
+    assert oracle_hits > 900, f"oracle matched only {oracle_hits} spans — sweep went vacuous"
 
 
 def test_long_run_redaction_is_not_quadratic():
