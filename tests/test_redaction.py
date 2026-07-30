@@ -425,3 +425,113 @@ def test_neutral_quoted_key_is_untouched():
     out, paths = redaction.redact(diff)
     assert out == diff
     assert paths == []
+
+
+# --- bracket-subscripted keys (#434) -----------------------------------------
+# #432 taught the label group to step over a key's closing QUOTE, but not over the `"]`
+# that follows it in a subscript, so `cfg["password"]["key"] = <secret>` matched nothing
+# at all. The bracket now lives INSIDE the `key_quote` group, which is what keeps the
+# widening safe: reaching a `]` requires consuming a quote first, so `key_quote` is
+# always truthy on a bracketed match and `_is_code_reference` rejects it outright. The
+# invariant test below pins that structural property rather than trusting it.
+#
+# #434 argued this widening was unsafe on its own — that the match would be EXEMPTED as a
+# code reference, turning a false negative into a leak, and that `_LABEL_LEAD_RE` had to
+# learn to read across `"]["` in the same change. That analysis predates #432's own
+# fail-closed guard and does not hold: the `key_quote` rejection fires first, so no
+# `_LABEL_LEAD_RE` change is needed. The follower test below is the one that would catch a
+# regression here, because it uses a value the exemption WOULD accept.
+
+_BRACKET_KEY_LINES = [
+    'cfg["password"]["key"] = abcdefghij1234567890',
+    "cfg['passwd']['token'] = AbCdEf0123456789XyZwVu",
+    # the separator is reached over `"]`, so a nested lookup is covered at any depth
+    'settings["auth"]["api_key"] = opaquevaluewithnoprefix123',
+    # whitespace before the closing bracket is valid syntax in every language this
+    # pattern's source whitelist covers
+    'cfg["password"]["key" ] = wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY',
+    # a subscript inside an unparsed JSON string, where the quotes arrive escaped
+    'cfg[\\"password\\"][\\"key\\"] = abcdefghij1234567890',
+]
+
+
+@pytest.mark.parametrize("line", _BRACKET_KEY_LINES)
+def test_bracket_subscripted_key_secret_redacted_in_prose(line: str):
+    out = redaction.redact_text(line)
+    assert "[redacted: secret value]" in out
+    for probe in _PROBES:
+        assert probe not in out
+
+
+@pytest.mark.parametrize("line", _BRACKET_KEY_LINES)
+def test_bracket_subscripted_key_never_gets_code_exemption(line: str):
+    # The same lines inside a SOURCE file, where the #421 exemption is live. Redaction
+    # must not weaken just because the extension says "code".
+    diff = f"diff --git a/app.py b/app.py\n+{line}"
+    out, paths = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+    assert paths == ["app.py"]
+
+
+def test_bracket_key_with_exemption_triggering_follower_is_redacted():
+    # The case that actually exercises the disputed path. Every other probe here ends the
+    # line, which `_is_code_reference` rejects anyway on the follower test alone — so a
+    # broken `key_quote` guard would still pass them. This value is a bare dotted
+    # identifier followed by `(`, which the exemption WOULD accept if it were ever
+    # consulted, so only the fail-closed rejection keeps it redacted.
+    line = '+cfg["password"]["key"] = helper_function_name_here(x)'
+    diff = f"diff --git a/app.py b/app.py\n{line}"
+    out, paths = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+    assert "helper_function_name_here" not in out
+    assert paths == ["app.py"]
+
+
+def test_bracket_consuming_match_always_rejects_the_code_exemption():
+    # The structural invariant the widening rests on, asserted directly rather than
+    # inferred from behavior: a `]` can only be reached through `key_quote`, so no match
+    # can consume one while leaving that group empty. If a later edit moves the bracket
+    # outside the group, this fails even if every behavioral test above still passes.
+    probes = [
+        'a["key"] = ' + "x" * 20,
+        "a['key'] = " + "x" * 20,
+        'a[\\"key\\"] = ' + "x" * 20,
+        'a["key" ] = ' + "x" * 20,
+        'a["password"]["key"] = ' + "x" * 20,
+    ]
+    seen_bracket = 0
+    for probe in probes:
+        match = redaction.LABELLED_VALUE_PATTERN.search(probe)
+        assert match is not None, probe
+        if "]" in match.group(0):
+            seen_bracket += 1
+            assert match.group("key_quote"), probe
+            assert not redaction._is_code_reference(match), probe
+    # Guard the guard: if the pattern stopped matching brackets entirely, every assertion
+    # above would vacuously pass.
+    assert seen_bracket == len(probes)
+
+
+def test_neutral_bracket_key_is_untouched():
+    # The widening still keys on the LABEL. An ordinary subscript keeps its value, so this
+    # does not degrade into "redact every subscripted assignment in a source file".
+    line = '+cfg["display_name"]["value"] = abcdefghij1234567890'
+    diff = f"diff --git a/app.py b/app.py\n{line}"
+    out, paths = redaction.redact(diff)
+    assert out == diff
+    assert paths == []
+
+
+def test_bracket_key_redacts_ordinary_code_by_design():
+    # An ACCEPTED regression, pinned so it stays a deliberate policy choice rather than a
+    # surprise. A bracketed match can never take the #421 exemption, so ordinary source
+    # assigning to a `key`/`token`-ish subscript is masked out of a reviewed diff. The
+    # label alternatives are unanchored, so this reaches innocent suffixes too
+    # (`obj["monkey"]`). Measured over 3124 real source files: 3 newly redacted lines,
+    # two of which the unsubscripted form already redacts today. Fail-closed is the right
+    # direction for this boundary; revisit only with evidence the cost is material (#434).
+    line = '+token["refresh_token"] = self.refresh_token_generator(user, scope)'
+    diff = f"diff --git a/app.py b/app.py\n{line}"
+    out, paths = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+    assert paths == ["app.py"]
