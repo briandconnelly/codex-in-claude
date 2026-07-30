@@ -277,6 +277,32 @@ def test_credential_still_redacted_in_diff(line: str):
     assert paths == ["app.py"]
 
 
+# Config and data files, where `key: value(2024)` is a plain scalar rather than a call, so
+# the exemption's syntax argument does not hold. Each is a full diff, since the nested case
+# needs its label on a preceding line.
+_CONFIG_DIFFS = [
+    # nested YAML — the sensitive label is on the PREVIOUS line, out of reach of any
+    # line-local scan, so file type is the only thing that can save this
+    "diff --git a/conf.yml b/conf.yml\n+secrets:\n+  key: correcthorsebatterystaple(2024)",
+    # label words separated by whitespace or `/`, which no label charset can absorb
+    "diff --git a/app.conf b/app.conf\n+database password key: correcthorsebattery(2024)",
+    "diff --git a/app.conf b/app.conf\n+database/password/key: correcthorsebattery(2024)",
+    # a bare `key: value(x)` in data formats, with no sensitive word anywhere
+    "diff --git a/conf.yaml b/conf.yaml\n+  token: correcthorsebatterystaple(2024)",
+    "diff --git a/settings.json b/settings.json\n+  key: correcthorsebatterystaple(2024)",
+    "diff --git a/app.properties b/app.properties\n+key = correcthorsebatterystaple(2024)",
+    "diff --git a/notes.md b/notes.md\n+token = correcthorsebatterystaple(2024)",
+    # no path at all (a bare diff fragment): fail closed rather than guess
+    "+    token = correcthorsebatterystaple(2024)",
+]
+
+
+@pytest.mark.parametrize("diff", _CONFIG_DIFFS)
+def test_non_source_file_gets_no_code_exemption(diff: str):
+    out, _ = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+
+
 def test_vendor_shape_still_redacted_inside_exempt_context():
     # The exemption only suppresses the labelled pattern; every vendor/JWT/PEM shape
     # still runs, so a recognized secret in code-expression context is caught anyway.

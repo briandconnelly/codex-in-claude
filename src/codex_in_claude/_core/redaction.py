@@ -59,9 +59,58 @@ SECRET_VALUE_PATTERNS = [
 #
 # So a match is exempted only when it is provably a code reference rather than a
 # credential. Every condition below removes a way a real credential gets written, and
-# the exemption applies ONLY to diff lines (see DiffRedactor) — never to redact_text's
-# arbitrary prose, where no syntax guarantee holds. The other patterns still run on an
-# exempted line, so a value carrying a recognized vendor/JWT/PEM shape is caught anyway.
+# the exemption applies ONLY to a diff body line in a recognized SOURCE file (see
+# DiffRedactor) — never to redact_text's arbitrary prose, and never to config or data,
+# where none of this holds. The other patterns still run on an exempted line, so a value
+# carrying a recognized vendor/JWT/PEM shape is caught anyway.
+#
+# The file-type gate is load-bearing, not belt-and-braces. Every condition here is a claim
+# about CODE syntax: that an unquoted 16+ character run followed by `(` is an identifier
+# being called, not a literal. In YAML, properties, or Markdown the identical text is a
+# plain scalar — `key: correcthorsebatterystaple(2024)` is a password containing
+# parentheses — and no line-local test can tell the two apart. Worse, YAML nests the
+# sensitive label on a PRECEDING line (`secrets:` / `  key: …`), out of reach of any
+# same-line scan. So data formats keep redaction unconditionally.
+
+# Extensions whose `label = value` / `label: Type` lines are code. Deliberately a
+# whitelist: an unknown extension is treated as data and keeps redaction (fail closed).
+_SOURCE_SUFFIXES = frozenset(
+    {
+        ".c",
+        ".cc",
+        ".cjs",
+        ".cpp",
+        ".cs",
+        ".cxx",
+        ".dart",
+        ".go",
+        ".groovy",
+        ".h",
+        ".hh",
+        ".hpp",
+        ".java",
+        ".js",
+        ".jsx",
+        ".kt",
+        ".kts",
+        ".lua",
+        ".m",
+        ".mjs",
+        ".mm",
+        ".php",
+        ".py",
+        ".pyi",
+        ".pyx",
+        ".rb",
+        ".rs",
+        ".scala",
+        ".swift",
+        ".ts",
+        ".tsx",
+        ".vala",
+        ".zig",
+    }
+)
 
 # A dotted identifier path and nothing else: no `+ / = ~ -`, which real base64-ish
 # secrets carry and Python/JS names cannot.
@@ -79,6 +128,13 @@ _LABEL_LEAD_RE = re.compile(r"[A-Za-z0-9_.\-]*\Z")
 # Whitespace after the separator. `api_key=value` — config, env, shell, query string —
 # never gets the exemption; PEP8-style `key = value` and `key: Type` do.
 _SPACED_SEPARATOR_RE = re.compile(r"[:=]\s")
+
+
+def _is_source_path(path: str) -> bool:
+    """Whether a diff path names a file whose lines are code. Empty/extension-less paths
+    are not, so a diff fragment without a `diff --git` header keeps full redaction."""
+    _, dot, suffix = path.rpartition(".")
+    return bool(dot) and f".{suffix.lower()}" in _SOURCE_SUFFIXES
 
 
 def _is_code_reference(match: re.Match) -> bool:
@@ -193,11 +249,13 @@ class DiffRedactor:
         self.redacted: list[str] = []
         self._skipping = False
         self._current_path = ""
+        self._source_file = False
 
     def feed(self, line: str) -> list[str]:
         if line.startswith("diff --git "):
             spec = line[len("diff --git ") :]
             self._current_path = _diff_path_from_header(line)
+            self._source_file = _is_source_path(self._current_path)
             self._skipping = bool(
                 SECRET_PATH_RE.search(spec) or SECRET_PATH_RE.search(self._current_path)
             )
@@ -209,10 +267,11 @@ class DiffRedactor:
         body_line = line.startswith(("+", "-", " ")) and not line.startswith(("+++", "---"))
         scan_line = body_line or line.startswith("Authorization:")
         if scan_line:
-            # Only a diff BODY line is source, so only it may exempt a labelled match that
-            # is provably a code reference (#421). A bare `Authorization:` header is not
-            # source, so it gets the same conservative treatment as free-text prose.
-            emit, changed = _redact_secret_values(line, exempt_code=body_line)
+            # A labelled match may be exempted as a code reference only on a diff BODY
+            # line of a recognized source file (#421). A bare `Authorization:` header is
+            # not source, and neither is YAML/JSON/properties/Markdown content, so both
+            # get the same conservative treatment as free-text prose.
+            emit, changed = _redact_secret_values(line, exempt_code=body_line and self._source_file)
             if changed and self._current_path and self._current_path not in self.redacted:
                 self.redacted.append(self._current_path)
             return [emit]

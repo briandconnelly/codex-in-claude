@@ -28,9 +28,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   tail: `password_key = …` matches only at `_key`, so testing the match alone would miss the
   `password` and leak the value. `.` and `-` count as label characters there rather than boundaries,
   so a properties/Spring/YAML key such as `config.password.key = …` or `app-secret-key = …` is judged
-  whole too. Redaction is not weakened: the
-  exemption applies only to diff body lines and never to `redact_text`'s arbitrary prose, where no
-  syntax guarantee holds, and every vendor/JWT/PEM/connection-string pattern still runs on an
+  whole too. The exemption also applies only within a **recognized source file** — a whitelist of
+  code extensions, so an unknown extension keeps redaction. That gate is load-bearing rather than
+  belt-and-braces: every condition above is a claim about *code* syntax, and in YAML, properties, or
+  Markdown the identical text is a plain scalar, where `key: correcthorsebatterystaple(2024)` is a
+  password containing parentheses. Worse, YAML nests the sensitive label on a *preceding* line
+  (`secrets:` then `  key: …`), out of reach of any same-line test, so no label-scanning refinement
+  could have covered it. Redaction is not weakened: the exemption applies only to diff body lines and
+  never to `redact_text`'s arbitrary prose, where no syntax guarantee holds; a bare `Authorization:`
+  header is treated as prose too; and every vendor/JWT/PEM/connection-string pattern still runs on an
   exempted line, so a value carrying a recognized secret shape is caught regardless. Verified against
   19 realistic credential-bearing lines — including `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, and
   `NPM_TOKEN` values with no vendor prefix, which this pattern is the last line of defense for — none
@@ -43,7 +49,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   identifier-ish constants such as `RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"`, which are
   structurally identical to `API_KEY = "ghp_…"`. Shannon entropy does not separate them (innocuous
   values measured 3.35–4.44 bits/char, realistic generic secrets 2.81–4.32, with an MD5-shaped secret
-  *below* several innocuous constants), so no cheap heuristic is safe there. The `redacted` omission
+  *below* several innocuous constants), so no cheap heuristic is safe there. Two residuals are
+  disclosed rather than fixed: a data or prose fragment *inside* a source file — a config blob in a
+  docstring, an example in a comment — is judged as code; and the sensitive-label list covers the
+  password family and `secret` but not `auth`/`private`/`session`, because widening it would re-break
+  exactly the code this change fixes (`auth_token = _build_token(session)`). The `redacted` omission
   reason's documented meaning is also corrected: it claimed a whole file's hunk was dropped, but the
   same disclosure has always covered inline masking too.
 
