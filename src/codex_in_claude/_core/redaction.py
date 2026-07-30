@@ -19,14 +19,68 @@ SECRET_PATH_RE = re.compile(
 # Inline secret-value shapes redacted within otherwise-sendable lines.
 # Labelled secrets: a `key`/`token`/`password`-ish label, a `:`/`=`, then a long value.
 # Named because the code-reference exemption below applies to this pattern alone (#421).
+
+# The sensitive-label alternation. Defined once because the pattern below uses it TWICE —
+# as the label itself, and inside the guard that stops a bracketed match from swallowing a
+# later label. Two literal copies would drift, and a guard that silently stopped covering a
+# label the pattern still matches is precisely the failure this indirection prevents.
+_LABEL_ALT = (
+    r"(?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)"
+)
+# The value run, also used twice for the same reason.
+_VALUE_CHARS = r"[A-Za-z0-9._~+/=-]"
+
+# Everything between a sensitive label and its `:`/`=` separator: an optional closing quote
+# (`"api_key":`, #432) and, nested inside it, an optional closing bracket
+# (`cfg["password"]["key"] =`, #434).
+#
+# This is written ONCE and the guard's copy is DERIVED from it, because sharing the label
+# names was not enough. The first #434 fix hand-wrote the guard as a bare
+# `_LABEL_ALT\s*[:=]`, omitting this step entirely — so a swallowed label wearing a #432
+# closing quote was invisible to it and its secret leaked, on exactly the input family #432
+# exists for. Deriving the anonymous form rather than retyping it makes that drift
+# unrepresentable: the two cannot disagree about the shape, only about capture groups.
+_KEY_STEP = r"(?P<key_quote>\\?['\"](?P<key_bracket>\s*\])?)?\s*[:=]"
+_KEY_STEP_ANON = re.sub(r"\(\?P<\w+>", "(?:", _KEY_STEP)
+
 LABELLED_VALUE_PATTERN = re.compile(
     # Two optional quotes, both of which also match a JSON-escaped quote (\"), so a secret
     # inside an unparsed JSON string (raw_response.text) is redacted on both sides:
     # `key_quote` closes the KEY (`"api_key": …`, #432) and the unnamed one opens the VALUE
     # (#58). Without the first, the separator had to sit immediately after the label, so a
     # quoted JSON key never matched at all and a generic secret in JSON went out unmasked.
+    # `key_quote` also steps over the `]` of a subscript (`cfg["password"]["key"] = …`,
+    # #434), which is why `key_bracket` is NESTED inside it rather than sitting beside it:
+    # reaching a `]` requires consuming a quote first, so a bracketed match ALWAYS has a
+    # truthy `key_quote` and can never take the exemption below. Moving the bracket out of
+    # `key_quote` would silently break that guarantee.
     # `key_quote` is named because `_is_code_reference` keys the #421 exemption off it.
-    r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)(?P<key_quote>\\?['\"])?\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
+    rf"(?i)({_LABEL_ALT}{_KEY_STEP}\s*(?:\\?['\"])?)"
+    # A bracketed match refuses to start when its own value would contain a LATER sensitive
+    # label and separator. Found by the #434 review: a bracketed candidate matches EARLIER
+    # than the pre-#434 pattern did, and `sub` never revisits consumed text, so
+    # `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]`,
+    # swallowed `application_specific_api_key`, and sent the real secret after the second
+    # separator out intact — where the old pattern had redacted it. Failing the candidate
+    # here makes the engine advance and find the `api_key` match instead.
+    #
+    # The guard looks INSIDE the value, not past its end, because `_VALUE_CHARS` contains
+    # `=`: an unspaced `label=value` chain is absorbed whole, so a trailing `(?!\s*[:=])`
+    # inspects the wrong position and misses it entirely.
+    #
+    # It also has to allow the value run to start INSIDE a quoted key: the value's own
+    # opening quote consumes the swallowed key's opening `"`, so the run begins at the
+    # label and ends on its closing quote — which is why `_KEY_STEP_ANON` and not a bare
+    # separator (the second #434 review finding; the bare form leaked
+    # `cfg["token"] = "aws_secret_access_key": "<secret>"`).
+    #
+    # Conditioned on `key_bracket` so NON-bracket matches keep byte-identical behavior.
+    # Unconditional, it would also change them — `key:api_key=<secret>` would redact only
+    # the tail rather than the whole chain — and that class is pre-existing, reachable on
+    # the pre-#434 pattern too, so it is tracked separately as #436 rather than quietly
+    # altered here.
+    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}{_KEY_STEP_ANON}))"
+    rf"{_VALUE_CHARS}{{16,}}"
 )
 
 SECRET_VALUE_PATTERNS = [
@@ -129,12 +183,16 @@ _SENSITIVE_LABEL_RE = re.compile(r"(?i)passw(?:or)?d|pwd|passphrase|secret")
 # separators one logical key is written with — `.` and `-` (`config.password.key = …`,
 # `app-secret-key = …` in properties, Spring, and YAML) and `/` (path-style keys).
 # Whitespace stays a boundary, so the scan cannot run back across unrelated earlier text.
-# A bracketed key (`cfg["password"]["key"] = …`) still needs no handling here: the labelled
-# pattern accepts a closing QUOTE before the separator (#432) but not a closing BRACKET, so
-# `key"]` never matches at all — a pre-existing false negative of its own, unaffected by
-# this exemption. Widening it is deliberately deferred (#434): the label would then have to
-# be read across `"]["`, which this scan cannot do, so `password` would go unseen and the
-# match would be exempted as a code reference — turning a false negative into a leak.
+# A bracketed key (`cfg["password"]["key"] = …`) needs no handling here, and deliberately
+# gets none. This scan still cannot read a label across `"]["`, so it never sees the
+# `password` — but it does not have to: the labelled pattern reaches the separator over `"]`
+# only by consuming a key quote (#434), so `key_quote` is truthy and the rejection at the top
+# of `_is_code_reference` fires before this scan is ever consulted. #434 originally argued the
+# opposite — that widening the pattern would let a bracketed match be exempted here, and so had
+# to be paired with widening this scan. That predates #432's fail-closed guard and is wrong;
+# measured, not assumed. The cost of relying on the guard instead is that a bracketed match can
+# NEVER be exempted, so ordinary source assigning to a `key`-ish subscript is masked. Accepted:
+# fail-closed is the right direction for a secret boundary.
 _LABEL_LEAD_RE = re.compile(r"[A-Za-z0-9_.\-/]*\Z")
 # Whitespace after the separator. `api_key=value` — config, env, shell, query string —
 # never gets the exemption; PEP8-style `key = value` and `key: Type` do.

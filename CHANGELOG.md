@@ -7,6 +7,49 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A generic secret under a bracket-subscripted key is now redacted** (#434). The labelled-secret
+  pattern learned to step over a key's closing quote in #432, but not over the `"]` that follows it
+  in a subscript, so `cfg["password"]["key"] = <secret>` matched nothing at all — in source *and* in
+  data files, where no code exemption is even in play. Like the quoted-key gap before it, this hit
+  the carrier the pattern exists for: a credential with no recognizable vendor shape, which every
+  other pattern misses by design. #434 was filed arguing the obvious widening was unsafe on its own —
+  that the match would then be *exempted* as a code reference, turning a false negative into a leak,
+  and so had to be paired with teaching the label scan to read across `"]["`. That premise did not
+  survive checking: it predates #432's own fail-closed guard. Putting the bracket **inside** the
+  `key_quote` group means reaching a `]` requires consuming a quote first, so a bracketed match
+  always populates that group and is rejected for the exemption before the label scan is consulted —
+  verified structurally (no match can consume a `]` while leaving `key_quote` empty) and pinned by an
+  invariant test, so moving the bracket out of the group fails CI even if every behavioral test still
+  passes. No `_LABEL_LEAD_RE` change was needed. The group also tolerates whitespace before the
+  bracket (`cfg["key" ] = …`), which costs nothing measurable and is valid syntax in every language
+  the source whitelist covers. A bracketed match matches *earlier* than the old pattern did, which
+  needed a second guard: substitution never revisits consumed text, so a bracketed candidate could
+  swallow a **later** sensitive label as its own value, sending out a secret the old pattern had
+  redacted — `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]` and left
+  the real value intact. A bracketed match now refuses to start when its own value would contain a
+  further label and separator. Getting that guard right took two corrections, both found by review
+  rather than by the corpus A/B or an unstructured fuzz — random generation essentially never
+  produces the shapes involved. It has to look *inside* the value rather than past its end, because
+  the value character class contains `=`, so an unspaced `label=value` chain is absorbed whole. And
+  its label-to-separator step has to be the *same shape* as the pattern's own, including the closing
+  quote: a guard written as a bare separator cannot see a swallowed key wearing a `"`, which leaked
+  `cfg["token"] = "aws_secret_access_key": "<secret>"` — the exact input family #432 was written for,
+  and with the redaction marker landing on the harmless key name so the output read as successfully
+  redacted. That step is now written once and the guard's copy derived from it, so the two can differ
+  in capture groups but not in shape. Every form is pinned by a test, and each guard was
+  mutation-tested to confirm the test that claims to hold it actually fails without it. The
+  equivalent weakness for *non*-bracket matches is pre-existing — reachable on the pre-#434 pattern
+  too — and is tracked separately as #436 rather than widened into this change. The accepted cost is the mirror of the guarantee: a bracketed match
+  can never take the #421 exemption, so ordinary source assigning to a `key`/`token`-ish subscript is
+  masked out of a reviewed diff — and because the label alternatives are unanchored, that reaches
+  innocent suffixes such as `obj["monkey"]` too. Measured rather than assumed: an A/B of the old and
+  new redactors over 3124 real source files found **no** line that stopped being redacted and three
+  newly redacted, two of which the unsubscripted form (`client_secret = …`) already redacts today, so
+  only one is a genuinely new class. That trade is pinned by a test so it stays a deliberate policy
+  choice. Both places that had recorded the disproven analysis — this file's #432 entry and the
+  comment block in `_core/redaction.py` — are corrected, since left alone they would have sent the
+  next maintainer down the discarded two-part design.
+
 - **Secret redaction no longer scrubs ordinary source out of reviewed diffs** (#421). The
   labelled-secret pattern matches any 16-or-more-character identifier run after a `key`/`token`-ish
   label, so plain code tripped it: `token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)` reached
@@ -81,11 +124,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `"idempotency_key": "…"` literals, structurally indistinguishable from a real `"api_key":
   "<generic secret>"`), the fail-closed guard adds none beyond those, and an A/B of the old and new
   redactors over every tracked line found no line that stopped being redacted. Bracketed subscripts
-  (`cfg["password"]["key"] = …`) remain a known false negative and are deliberately deferred to
-  #434: the
-  pattern accepts a closing quote but not a closing bracket, and matching one would require reading
-  the label across `"]["`, which the same scan cannot do — so `password` would go unseen and the
-  match would be exempted, turning a false negative into a leak.
+  (`cfg["password"]["key"] = …`) remained a known false negative here, deferred to #434 on the
+  reasoning that matching one would require reading the label across `"]["` — so `password` would go
+  unseen and the match would be exempted, turning a false negative into a leak. That reasoning was
+  wrong, and #434 (below) records why: the fail-closed guard described above already covers the
+  bracketed form, so no label-scan change was needed.
 
 - **`codex_delegate`'s prose no longer points into the deleted worktree** (#412). Codex runs with its
   working directory set to the throwaway worktree, and that worktree is torn down before the caller
