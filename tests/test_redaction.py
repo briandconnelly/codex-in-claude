@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from codex_in_claude._core import redaction
 
 
@@ -188,3 +190,145 @@ def test_redact_tree_walks_nested_structures():
     # Short enum values and non-strings pass through unchanged.
     assert out["findings"][0]["severity"] == "high"
     assert out["count"] == 3
+
+
+# --- code-reference exemption (#421) ----------------------------------------
+# The labelled-value pattern matches any 16+ char identifier run after a `key`/`token`
+# label, so ordinary source was masked out of reviewed diffs — hiding the code under
+# review and downgrading `coverage` to `partial`. Diff lines exempt matches that are
+# provably code references; `redact_text` prose stays conservative.
+
+# Innocuous source observed being scrubbed on real reviews of this repo.
+_CODE_LINES = [
+    "+    token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)",
+    "+    token = _placeholder_seed(text)",
+    "+    state_token = _worktree_state_token(cwd, norm_paths, state_excludes, timeout)",
+    "+    key = collections.OrderedDict()",
+    "+    idempotency_key: IdempotencyKeyParam = None,",
+    "+    return {_STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY)}",
+]
+
+
+@pytest.mark.parametrize("line", _CODE_LINES)
+def test_code_reference_left_intact_in_diff(line: str):
+    diff = f"diff --git a/app.py b/app.py\n{line}"
+    out, paths = redaction.redact(diff)
+    # Byte-identical: a partial replacement (e.g. leaving `d(text)` behind) also fails.
+    assert out == diff
+    assert paths == []
+
+
+def test_code_reference_exemption_cannot_be_defeated_by_backtracking():
+    # A trailing negative lookahead would let the greedy value match one char short to
+    # satisfy the assertion, redacting `_placeholder_seed` and leaving `d(text)`.
+    line = "+    token = _placeholder_seed(text)"
+    out, _ = redaction.redact(f"diff --git a/app.py b/app.py\n{line}")
+    assert "[redacted" not in out
+    assert out.endswith(line)
+
+
+# Realistic credential-bearing lines that MUST stay redacted. Each one defeats a
+# specific condition of the exemption.
+_MUST_REDACT = [
+    # config/env/URL form — no whitespace after the separator
+    "SECRET_TOKEN=supersecretvalue1234567890",
+    "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIKSEVENGbPxRfiCYEXAMPLEKEY",
+    "CI_JOB_TOKEN=opaquevaluewithnoprefix123",
+    "api_key=AbCdEf0123456789XyZwVu(legacy)",
+    "?token=AbCdEf0123456789XyZwVu&next=/",
+    # password family is never exempt, even in code-expression context
+    "password = correcthorsebatterystaple(2024)",
+    "passphrase = myverylongdicewarephrase(v2)",
+    "secret = somethinglongenoughhere(rotated)",
+    # ...including a COMPOUND label, where the pattern matches only the trailing
+    # `_key`/`_token` and so never sees the sensitive word by itself.
+    "password_key = correcthorsebattery(2024)",
+    "PASSWD_KEY = somethinglongenoughhere(x)",
+    "client_secret_key = opaquevaluehere12345 + more",
+    "app_passphrase_token = longvaluegoeshere(x)",
+    # ...including when a further `_`-separated segment sits between the sensitive word and
+    # the segment the pattern matched. These are what make `_` load-bearing in the lead
+    # charset: in the cases above the scan reaches a sensitive word without crossing one.
+    "password_reset_key = correcthorsebattery(2024)",
+    "user_password_reset_token = correcthorsebattery(2024)",
+    # ...and a DOTTED or HYPHENATED compound label, as properties/Spring/YAML config
+    # writes it, where `.`/`-` must count as label characters rather than boundaries.
+    "config.password.key = somethinglongvalue(x)",
+    "db.passwd.token = anotherlongvaluehere(y)",
+    "app-secret-key = opaquevaluegoeshere12(z)",
+    "spring.datasource.password.key = mysecretvaluehere(q)",
+    # ...and a path-style key, where `/` must count as a label character too.
+    "database/password/key = correcthorsebattery(2024)",
+    # `=` separator never grants the ` =` follower exemption
+    "token = abcd1234abcd1234efgh = leftover",
+    # quoted literals are never exempt
+    'TOKEN = "AbCdEf0123456789XyZwVu"',
+    "api_key = 'abcdef0123456789abcdef0123'",
+    # ...including when the quoted string continues past the value, so that what follows
+    # it *is* an exemption trigger. Without the quote check these would be exempted.
+    'token = "abcdefghij1234567890 + trailing"',
+    'token: "abcdefghij1234567890 = trailing"',
+    # value carries non-identifier characters, so it is no code reference
+    "token = AbCdEf+0123456789/XyZwVu=",
+    # ...again positioned so the follower would otherwise exempt it.
+    "token = abc+def/ghi=jkl123456789 + more",
+    "token = AbCdEf+0123456789/XyZwVu=(x)",
+]
+
+
+@pytest.mark.parametrize("line", _MUST_REDACT)
+def test_credential_still_redacted_in_diff(line: str):
+    diff = f"diff --git a/app.py b/app.py\n+{line}"
+    out, paths = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+    assert paths == ["app.py"]
+
+
+# Config and data files, where `key: value(2024)` is a plain scalar rather than a call, so
+# the exemption's syntax argument does not hold. Each is a full diff, since the nested case
+# needs its label on a preceding line.
+_CONFIG_DIFFS = [
+    # nested YAML — the sensitive label is on the PREVIOUS line, out of reach of any
+    # line-local scan, so file type is the only thing that can save this
+    "diff --git a/conf.yml b/conf.yml\n+secrets:\n+  key: correcthorsebatterystaple(2024)",
+    # label words separated by whitespace or `/`, which no label charset can absorb
+    "diff --git a/app.conf b/app.conf\n+database password key: correcthorsebattery(2024)",
+    "diff --git a/app.conf b/app.conf\n+database/password/key: correcthorsebattery(2024)",
+    # a bare `key: value(x)` in data formats, with no sensitive word anywhere
+    "diff --git a/conf.yaml b/conf.yaml\n+  token: correcthorsebatterystaple(2024)",
+    "diff --git a/settings.json b/settings.json\n+  key: correcthorsebatterystaple(2024)",
+    "diff --git a/app.properties b/app.properties\n+key = correcthorsebatterystaple(2024)",
+    "diff --git a/notes.md b/notes.md\n+token = correcthorsebatterystaple(2024)",
+    # no path at all (a bare diff fragment): fail closed rather than guess
+    "+    token = correcthorsebatterystaple(2024)",
+]
+
+
+@pytest.mark.parametrize("diff", _CONFIG_DIFFS)
+def test_non_source_file_gets_no_code_exemption(diff: str):
+    out, _ = redaction.redact(diff)
+    assert "[redacted: secret value]" in out
+
+
+def test_vendor_shape_still_redacted_inside_exempt_context():
+    # The exemption only suppresses the labelled pattern; every vendor/JWT/PEM shape
+    # still runs, so a recognized secret in code-expression context is caught anyway.
+    diff = "diff --git a/app.py b/app.py\n+    token = sk-abcdefghijklmnopqrstuv(x)"
+    out, paths = redaction.redact(diff)
+    assert "sk-abcdefghijklmnopqrstuv" not in out
+    assert paths == ["app.py"]
+
+
+def test_redact_text_does_not_exempt_code_references():
+    # Prose carries no syntax guarantee, so free text stays conservatively redacted.
+    text = "token = _placeholder_seed(text)"
+    assert redaction.redact_text(text) != text
+    assert "[redacted: secret value]" in redaction.redact_text(text)
+
+
+def test_authorization_header_line_is_not_treated_as_source():
+    # DiffRedactor scans bare `Authorization:` lines too, but a header is not source, so
+    # it gets prose's conservative treatment rather than the code-reference exemption.
+    line = "Authorization: token = _placeholder_seed(text)"
+    out, _ = redaction.redact(f"diff --git a/app.py b/app.py\n{line}")
+    assert "[redacted: secret value]" in out
