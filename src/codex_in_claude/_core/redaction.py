@@ -102,7 +102,26 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"AIza[0-9A-Za-z_-]{35,}"),
     # Connection-string userinfo: redact the password between `://user:` and `@host`,
     # keeping scheme, user, and host. The `@` lookahead avoids matching `host:port`.
-    re.compile(r"([a-zA-Z][\w+.-]*://[^:@\s/]+:)[^@\s/]+(?=@)"),
+    #
+    # The scan starts AT the `://` and never looks left of it. It used to open with a
+    # scheme run, `[a-zA-Z][\w+.-]*://`, which was quadratic (#438): that greedy class
+    # holds every character a scheme does, so at each start position it ran to the end
+    # of the surrounding word and then backtracked one character at a time hunting the
+    # literal — work repeated at every position of a long run. 100 KB of unbroken text
+    # took ~15s, and `redact_text` runs on untrusted model output, so a call could hang
+    # past its deadline on data the caller never wrote. A possessive quantifier does not
+    # fix it (it drops the backtrack, not the rescan) and bounding the run only trades
+    # the blowup for a magic constant.
+    #
+    # Dropping the scheme costs no coverage, because the scheme was never part of what
+    # gets replaced: the replacement keeps group 1 and the scheme sits OUTSIDE the match,
+    # preserved verbatim either way. Output is byte-identical wherever the old pattern
+    # matched. It does recognize strictly more — userinfo whose `://` no letter-led run
+    # reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction here, and closes
+    # a real leak: when the labelled pattern's marker had already eaten the scheme
+    # (`key=<...>://user:pw@host`), the old pattern could no longer match and the
+    # password went out intact.
+    re.compile(r"(://[^:@\s/]+:)[^@\s/]+(?=@)"),
 ]
 
 

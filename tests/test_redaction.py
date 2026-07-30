@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from codex_in_claude._core import redaction
@@ -101,6 +103,90 @@ def test_unlabeled_connection_string_password_redacted():
 def test_url_with_port_not_treated_as_credentials():
     # No userinfo `@`, so the port must not be mistaken for a password.
     text = "see https://example.com:8080/path for details"
+    assert redaction.redact_text(text) == text
+
+
+# --- #438: the connection-string scan starts at `://` ------------------------
+# The pattern used to scan the SCHEME with an unbounded greedy `[a-zA-Z][\w+.-]*`
+# ahead of the `://` literal. That run went to the end of every non-`/` stretch at
+# every start position and then backtracked hunting the literal, which is quadratic
+# and reachable from untrusted model output (redact_text/redact_tree). The scheme was
+# never needed inside the match — it sits outside the replacement span and is
+# preserved verbatim either way — so the scan now begins at `://`. Two consequences
+# are pinned below: matching is unchanged wherever the old pattern matched, and it
+# reaches userinfo the old pattern could not.
+
+
+def test_long_run_redaction_is_not_quadratic():
+    """A long unbroken run must not blow the deadline (#438).
+
+    Measured on the author's machine: 15.0 s before the fix, 7.3 ms after (the
+    remaining cost is the other patterns' linear scans). The 2 s budget therefore
+    sits ~275x above the passing time and ~7x below the failing one, so it is a
+    liveness assertion rather than a timing-sensitive one.
+    """
+    text = "cfg = " + "a" * 100_000 + "x=" + "b" * 40
+    start = time.perf_counter()
+    redaction.redact_text(text)
+    assert time.perf_counter() - start < 2.0
+
+
+def test_connection_string_redaction_unchanged_for_scheme_led_urls():
+    # The exact output for a scheme-led URL is byte-for-byte what it was before #438:
+    # scheme, user, and host survive; only the password is replaced.
+    out = redaction.redact_text("postgres://user:s3cr3tPassw0rd@db.example.com:5432/app")
+    assert out == "postgres://user:[redacted: secret value]@db.example.com:5432/app"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "://user:hunter2pass@host",  # no scheme at all
+        "9://user:hunter2pass@host",  # a run with no letter to start a scheme match
+        "-://user:hunter2pass@host",
+    ],
+)
+def test_connection_string_password_redacted_without_a_scheme(text):
+    # Anchoring at `://` widens what is recognized: userinfo whose `://` is not
+    # reachable by a letter-led run is now redacted too. Deliberate, and the safe
+    # direction for a fail-closed boundary.
+    out = redaction.redact_text(text)
+    assert "hunter2pass" not in out
+    assert out.endswith("@host")
+
+
+def test_connection_string_password_with_colons_redacted():
+    # The password class admits `:` — it stops at `@`, `/`, or whitespace — so a
+    # multi-segment password is redacted whole rather than up to its first colon.
+    out = redaction.redact_text("postgres://user:p1:p2:p3@host")
+    assert out == "postgres://user:[redacted: secret value]@host"
+
+
+def test_two_connection_strings_on_one_line_both_redacted():
+    # Substitution never revisits consumed text, so a second URL on the same line
+    # must still be reached after the first match is replaced.
+    out = redaction.redact_text("postgres://u:firstpassword@h1 mysql://v:secondpassword@h2")
+    assert "firstpassword" not in out
+    assert "secondpassword" not in out
+    assert out.count("[redacted: secret value]") == 2
+
+
+def test_password_after_a_labelled_marker_is_redacted():
+    """A connection string whose scheme was eaten by an earlier marker (#438).
+
+    The labelled-secret pattern runs first and its value class includes letters, so
+    it can consume the scheme and leave a marker ending in `]` — after which the old
+    scheme-led pattern could not match, and the password went out intact. Anchoring
+    at `://` is what closes that; this is a leak fix, not only a widening.
+    """
+    out = redaction.redact_text("key=abcdefghijklmnopx://user:hunter2@host")
+    assert "hunter2" not in out
+
+
+def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
+    # The marker contains spaces and the password class stops at whitespace, so a
+    # second pass cannot re-match and mangle it.
+    text = "postgres://user:[redacted: secret value]@host"
     assert redaction.redact_text(text) == text
 
 
