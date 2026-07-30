@@ -22,7 +22,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   invariant test, so moving the bracket out of the group fails CI even if every behavioral test still
   passes. No `_LABEL_LEAD_RE` change was needed. The group also tolerates whitespace before the
   bracket (`cfg["key" ] = …`), which costs nothing measurable and is valid syntax in every language
-  the source whitelist covers. The accepted cost is the mirror of the guarantee: a bracketed match
+  the source whitelist covers. A bracketed match matches *earlier* than the old pattern did, which
+  needed a second guard: substitution never revisits consumed text, so a bracketed candidate could
+  swallow a **later** sensitive label as its own value, sending out a secret the old pattern had
+  redacted — `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]` and left
+  the real value intact. A bracketed match now refuses to start when its own value would contain a
+  further label and separator. That guard has to look *inside* the value rather than past its end,
+  because the value character class contains `=`, so an unspaced `label=value` chain is absorbed
+  whole; the first attempt looked only past the end and still leaked 3162 of 134678 fuzzed cases.
+  Both forms are pinned by tests. The equivalent weakness for *non*-bracket matches is pre-existing —
+  reachable on the pre-#434 pattern too — and is tracked separately as #436 rather than widened into
+  this change. The accepted cost is the mirror of the guarantee: a bracketed match
   can never take the #421 exemption, so ordinary source assigning to a `key`/`token`-ish subscript is
   masked out of a reviewed diff — and because the label alternatives are unanchored, that reaches
   innocent suffixes such as `obj["monkey"]` too. Measured rather than assumed: an A/B of the old and

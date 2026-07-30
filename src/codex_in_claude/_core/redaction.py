@@ -19,6 +19,17 @@ SECRET_PATH_RE = re.compile(
 # Inline secret-value shapes redacted within otherwise-sendable lines.
 # Labelled secrets: a `key`/`token`/`password`-ish label, a `:`/`=`, then a long value.
 # Named because the code-reference exemption below applies to this pattern alone (#421).
+
+# The sensitive-label alternation. Defined once because the pattern below uses it TWICE —
+# as the label itself, and inside the guard that stops a bracketed match from swallowing a
+# later label. Two literal copies would drift, and a guard that silently stopped covering a
+# label the pattern still matches is precisely the failure this indirection prevents.
+_LABEL_ALT = (
+    r"(?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)"
+)
+# The value run, also used twice for the same reason.
+_VALUE_CHARS = r"[A-Za-z0-9._~+/=-]"
+
 LABELLED_VALUE_PATTERN = re.compile(
     # Two optional quotes, both of which also match a JSON-escaped quote (\"), so a secret
     # inside an unparsed JSON string (raw_response.text) is redacted on both sides:
@@ -26,12 +37,32 @@ LABELLED_VALUE_PATTERN = re.compile(
     # (#58). Without the first, the separator had to sit immediately after the label, so a
     # quoted JSON key never matched at all and a generic secret in JSON went out unmasked.
     # `key_quote` also steps over the `]` of a subscript (`cfg["password"]["key"] = …`,
-    # #434), which is why the bracket lives INSIDE the group rather than beside it: reaching
-    # a `]` requires consuming a quote first, so a bracketed match ALWAYS has a truthy
-    # `key_quote` and can never take the exemption below. Moving the bracket out of this
-    # group would silently break that guarantee.
+    # #434), which is why `key_bracket` is NESTED inside it rather than sitting beside it:
+    # reaching a `]` requires consuming a quote first, so a bracketed match ALWAYS has a
+    # truthy `key_quote` and can never take the exemption below. Moving the bracket out of
+    # `key_quote` would silently break that guarantee.
     # `key_quote` is named because `_is_code_reference` keys the #421 exemption off it.
-    r"(?i)((?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)(?P<key_quote>\\?['\"](?:\s*\])?)?\s*[:=]\s*(?:\\?['\"])?)[A-Za-z0-9._~+/=-]{16,}"
+    rf"(?i)({_LABEL_ALT}(?P<key_quote>\\?['\"](?P<key_bracket>\s*\])?)?\s*[:=]\s*(?:\\?['\"])?)"
+    # A bracketed match refuses to start when its own value would contain a LATER sensitive
+    # label and separator. Found by the #434 review: a bracketed candidate matches EARLIER
+    # than the pre-#434 pattern did, and `sub` never revisits consumed text, so
+    # `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]`,
+    # swallowed `application_specific_api_key`, and sent the real secret after the second
+    # separator out intact — where the old pattern had redacted it. Failing the candidate
+    # here makes the engine advance and find the `api_key` match instead.
+    #
+    # The guard has to look INSIDE the value rather than just past its end, because
+    # `_VALUE_CHARS` contains `=`: a `label=value` chain with no space is absorbed whole, so
+    # a trailing `(?!\s*[:=])` inspects the wrong position and misses it entirely (measured
+    # — the first attempt at this fix left 3162 of 134678 fuzzed cases leaking).
+    #
+    # Conditioned on `key_bracket` so non-bracket matches keep their exact prior behavior.
+    # Unconditional, it would stop redacting `token = abcd1234abcd1234efgh = leftover`,
+    # which has no later label to fall through to. This deliberately does NOT fix the same
+    # class for non-bracket matches: that is pre-existing, reachable on the pre-#434 pattern
+    # too, and tracked separately as #436.
+    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}\s*[:=]))"
+    rf"{_VALUE_CHARS}{{16,}}"
 )
 
 SECRET_VALUE_PATTERNS = [

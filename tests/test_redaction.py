@@ -489,10 +489,9 @@ def test_bracket_key_with_exemption_triggering_follower_is_redacted():
 
 def test_bracket_consuming_match_always_rejects_the_code_exemption():
     # The structural invariant the widening rests on, asserted directly rather than
-    # inferred from behavior: a `]` can only be reached through `key_quote`, so no match
-    # can consume one while leaving that group empty. If a later edit moves the bracket
-    # outside the group, this fails even if every behavioral test above still passes.
-    probes = [
+    # inferred from behavior: a `]` can only be reached by first consuming a quote into
+    # `key_quote`, so no match can consume a bracket while leaving that group empty.
+    quoted = [
         'a["key"] = ' + "x" * 20,
         "a['key'] = " + "x" * 20,
         'a[\\"key\\"] = ' + "x" * 20,
@@ -500,7 +499,7 @@ def test_bracket_consuming_match_always_rejects_the_code_exemption():
         'a["password"]["key"] = ' + "x" * 20,
     ]
     seen_bracket = 0
-    for probe in probes:
+    for probe in quoted:
         match = redaction.LABELLED_VALUE_PATTERN.search(probe)
         assert match is not None, probe
         if "]" in match.group(0):
@@ -509,7 +508,60 @@ def test_bracket_consuming_match_always_rejects_the_code_exemption():
             assert not redaction._is_code_reference(match), probe
     # Guard the guard: if the pattern stopped matching brackets entirely, every assertion
     # above would vacuously pass.
-    assert seen_bracket == len(probes)
+    assert seen_bracket == len(quoted)
+
+    # The probes above all carry a quote, so they stay green under a rewrite that moves the
+    # bracket OUT of `key_quote` — which is exactly the unsafe refactor this test claims to
+    # catch. These UNQUOTED subscripts are what distinguishes the two: under the real
+    # pattern they must not match at all, because reaching the `]` requires a quote. Under
+    # the rewrite they match with an empty `key_quote`, and `a[key] = helper(x)` is then
+    # exempted as a code reference — reopening the leak the nesting exists to prevent.
+    for probe in ("a[key] = " + "x" * 20, "a[key] = helper_function_name_here(x)"):
+        match = redaction.LABELLED_VALUE_PATTERN.search(probe)
+        if match is not None and "]" in match.group(0):
+            raise AssertionError(
+                f"bracket consumed with key_quote={match.group('key_quote')!r}: {probe}"
+            )
+
+
+def test_bracket_match_does_not_swallow_a_later_sensitive_label():
+    # A bracketed candidate matches EARLIER than the pre-#434 pattern did, which let it
+    # consume a following sensitive label as its own value: `sub` never revisits consumed
+    # text, so the real secret after the second separator went out intact where the old
+    # pattern had redacted it (found by the #434 Codex review). Guarded here because the
+    # corpus A/B and the monotonicity fuzz both missed it — neither generated a value that
+    # itself ends in a second label.
+    for line, secret in [
+        (
+            'cfg["token"] = application_specific_api_key = "abcdefghij1234567890"',
+            "abcdefghij1234567890",
+        ),
+        (
+            'cfg["key"] = my_application_password = "opaquevaluewithnoprefix123"',
+            "opaquevaluewithnoprefix123",
+        ),
+        # No space around the chained separator. This is the form that defeated the FIRST
+        # attempt at this guard: the value character class contains `=`, so `label=value`
+        # is absorbed into the value whole and a guard that only looks PAST the value's end
+        # inspects the wrong position. It must therefore look inside the value.
+        (
+            '["secret"] : application_specific_api_key="abcdefghij1234567890",',
+            "abcdefghij1234567890",
+        ),
+        (
+            'cfg["a"]["passphrase"] = my_application_password=\'opaquevaluewithnoprefix123\')',
+            "opaquevaluewithnoprefix123",
+        ),
+        # ...and with the whitespace-tolerant bracket form
+        (
+            'obj["cache_key" ]:my_application_password="wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY"',
+            "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY",
+        ),
+    ]:
+        out = redaction.redact_text(line)
+        assert secret not in out, out
+        # and the redaction must land on the real value, not on the identifier before it
+        assert "[redacted: secret value]" in out
 
 
 def test_neutral_bracket_key_is_untouched():
