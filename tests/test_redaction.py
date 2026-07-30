@@ -361,10 +361,18 @@ def test_the_differential_sweep_can_actually_see_a_lost_redaction(monkeypatch):
     which is why those are not redundant with this.
     """
     narrowed = re.compile(r"(?<=[\w])(://[^:@\s/]*:)[^@\s/]+(?=@)")
-    patched = [
-        narrowed if p is redaction.SECRET_VALUE_PATTERNS[-1] else p
-        for p in redaction.SECRET_VALUE_PATTERNS
-    ]
+    target = redaction.CONNECTION_STRING_PASSWORD_PATTERN
+    patched = [narrowed if p is target else p for p in redaction.SECRET_VALUE_PATTERNS]
+    # Substituting by NAME, not by list position. An earlier version keyed on
+    # `SECRET_VALUE_PATTERNS[-1]`; appending a matcher pointed it at the wrong pattern,
+    # and it failed loudly — but only by luck, because narrowing THAT matcher happened to
+    # produce no leftovers. Had the appended pattern been one whose narrowing also stranded
+    # a password, the control would have gone green while exercising a matcher this sweep
+    # is not about. A name cannot drift onto the wrong pattern that way.
+    #
+    # The guard below is a diagnostic, not extra rigor: if the substitution silently no-op'd,
+    # the final assertion would fail anyway — this just says why.
+    assert patched != list(redaction.SECRET_VALUE_PATTERNS), "the control narrowed nothing"
     monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", patched)
     _, leftovers = _sweep_leftovers(_PRE_440_CONNECTION_PATTERN)
     assert leftovers, "the sweep reported no loss against a deliberately narrowed matcher"
@@ -459,6 +467,189 @@ def test_widening_masks_a_regex_literal_that_looks_like_userinfo():
     assert redaction.redact_text('pattern = r"://:.+@"') == (
         'pattern = r"://:[redacted: secret value]@"'
     )
+
+
+# --- #440: a token in the USERNAME slot with an empty password ---------------
+# The password matcher above preserves the username, so a credential stored THERE
+# left the machine intact: `https://<token>:@host` shipped the token verbatim.
+#
+# Only the `username:@` shape is matched, and only at 16+ characters. Both limits
+# are load-bearing, and both were set by what the alternatives destroy:
+#
+#   * A trailing bare `:` means a password field that is present and deliberately
+#     empty — the token-as-username idiom (Stripe's `https://sk_test_x:@api...`).
+#     But it does NOT by itself imply a token: RFC 1738 spells `ftp://foo:@host`
+#     as username `foo` with an empty password, so an UNGATED match on this shape
+#     masks `ftp://anonymous:@host` and `postgres://readonly:@db/app`.
+#   * The length gate is what separates those. 16 is not a new constant — it is
+#     already this file's credential threshold, in `LABELLED_VALUE_PATTERN`.
+#
+# The BARE `://token@host` form is deliberately NOT matched, at any threshold.
+# Length cannot establish credential semantics in that position: a 16+ gate masks
+# `git+ssh://deployment-automation@git.example.com/repo` (a documented pip VCS
+# URL), `ssh://continuous-integration@build.example.com`, `docker://prometheus-
+# operator@sha256:...` (a NAME@DIGEST ref, not userinfo at all), and the email
+# `https://first.last+alerts@example.com` — every one an identity, none a secret.
+# Raising the threshold only changes which identities get destroyed. That position
+# is already covered for every credential shape this module RECOGNIZES — the
+# vendor patterns match `ghp_`/`AKIA`/`sk-`/`xoxb-` there regardless of position —
+# so the residue is a generic opaque string, which is exactly what cannot be told
+# apart from a long username. Leaving it is this module's documented best-effort
+# boundary, not an oversight.
+#
+# `?` and `#` are excluded from the class though the password class admits them.
+# The roles differ: here the run is the text being REPLACED and must stop at the
+# end of the authority, or a query carrying an `@` gets masked as userinfo —
+# `https://example.com?email=first.last+alerts@example.org` collapses to
+# `https://[redacted: secret value]@example.org`, hiding the host. A password, by
+# contrast, may legitimately contain `?` and `#`, so narrowing THAT class would
+# lose real coverage.
+
+_TOKEN_16 = "s3cr3tOpaqueToke"  # exactly 16 chars — the gate's lower boundary
+_TOKEN_15 = "s3cr3tOpaqueTok"  # 15 — must NOT match
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The boundary itself, from both sides.
+        (f"https://{_TOKEN_16}:@host/path", "https://[redacted: secret value]:@host/path"),
+        (f"https://{_TOKEN_15}:@host/path", f"https://{_TOKEN_15}:@host/path"),
+        # A longer opaque token.
+        (
+            "https://s3cr3tOpaqueToken123456789:@api.example.com/v1",
+            "https://[redacted: secret value]:@api.example.com/v1",
+        ),
+        # Percent-encoding and punctuation inside the admitted class.
+        (
+            "https://tok%2Fen.with-punct_123~+=:@host",
+            "https://[redacted: secret value]:@host",
+        ),
+        # No scheme at all — the `://` anchor carries the match (#438).
+        (f"://{_TOKEN_16}:@host", "://[redacted: secret value]:@host"),
+        # A scheme already eaten by the labelled pattern's marker.
+        (
+            f"key=abcdefghijklmnopx://{_TOKEN_16}:@host",
+            "key=[redacted: secret value]://[redacted: secret value]:@host",
+        ),
+        # Two candidates of this shape: `sub` must reach the second.
+        (
+            f"https://{_TOKEN_16}:@h1 https://s3cr3tOtherToken99:@h2",
+            "https://[redacted: secret value]:@h1 https://[redacted: secret value]:@h2",
+        ),
+        # Mixed with the existing password shape, in BOTH orders — neither match
+        # may swallow the other.
+        (
+            f"https://{_TOKEN_16}:@h1 postgres://u:s3cr3tPass@h2",
+            "https://[redacted: secret value]:@h1 postgres://u:[redacted: secret value]@h2",
+        ),
+        (
+            f"postgres://u:s3cr3tPass@h1 https://{_TOKEN_16}:@h2",
+            "postgres://u:[redacted: secret value]@h1 https://[redacted: secret value]:@h2",
+        ),
+        # All three userinfo shapes on one line.
+        (
+            f"https://{_TOKEN_16}:@h1 redis://:s3cr3tPw@h2 postgres://u:s3cr3tPass@h3",
+            "https://[redacted: secret value]:@h1 "
+            "redis://:[redacted: secret value]@h2 "
+            "postgres://u:[redacted: secret value]@h3",
+        ),
+    ],
+)
+def test_username_token_with_empty_password_exact_output(text, expected, exempt_code):
+    # Both exemption modes: the code-reference exemption is keyed to
+    # LABELLED_VALUE_PATTERN alone, so this matcher must behave identically in each.
+    out, _ = redaction._redact_secret_values(text, exempt_code=exempt_code)
+    assert out == expected
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Short empty-password identities — RFC 1738's own reading of this syntax.
+        "ftp://anonymous:@host/pub",
+        "https://alice:@example.com",
+        "postgres://readonly:@db/app",
+        # Bare-username identities, deliberately out of scope at any length.
+        "ssh://git@github.com/user/repo.git",
+        "git+ssh://deployment-automation@git.example.com/repo",
+        "ssh://continuous-integration@build.example.com/x",
+        "https://first.last+alerts@example.com",
+        # A Docker NAME@DIGEST reference, which is not userinfo at all.
+        "docker://prometheus-operator@sha256:abcdef0123456789abcdef",
+        # A query string carrying an email — the `?`/`#` exclusion is what saves it.
+        "https://example.com?email=first.last+alerts@example.org",
+        "https://example.com#anchor=a.b.c.d.e.f.g.h.i.j@x",
+        # A long host with no userinfo at all.
+        "https://a-very-long-hostname-indeed.example.com:8443/path",
+        # A VCS revision after a `/`, which the class stops at.
+        "git+ssh://git@example.com/org/repo.git@a1b2c3d4e5f6a7b8",
+    ],
+)
+def test_username_token_matcher_leaves_identities_alone(text, exempt_code):
+    out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
+    assert out == text
+    assert redacted is False
+
+
+@pytest.mark.parametrize("char", ["@", " ", "\t", "/", "?", "#"])
+def test_username_token_run_is_terminated_by_every_authority_boundary(char):
+    # Each of these must break the 16+ run, so the padded value never reaches the
+    # gate as one token and this matcher does not fire. `?`/`#` are the load-bearing
+    # pair: without them a query string carrying an `@` is masked as userinfo.
+    text = f"https://abcdefgh{char}ijklmnopq:@host"
+    assert redaction.redact_text(text) == text
+
+
+def test_a_colon_in_the_run_makes_it_an_ordinary_password_url():
+    # `:` also terminates the run, but it is not a mere non-match: it turns the text
+    # into `user:password@host`, which the EXISTING matcher redacts. Pinned with its
+    # real output rather than folded into the sweep above, so that a regression which
+    # silently stopped redacting here could not hide behind an "unchanged" assertion.
+    assert redaction.redact_text("https://abcdefgh:ijklmnopq:@host") == (
+        "https://abcdefgh:[redacted: secret value]@host"
+    )
+
+
+def test_username_token_redaction_is_idempotent():
+    # The marker's own `:` truncates the run to `[redacted` (9 chars), under the
+    # gate, so a second pass cannot re-match and nest a marker inside a marker.
+    once = redaction.redact_text(f"https://{_TOKEN_16}:@h1 redis://:s3cr3tPw@h2")
+    assert redaction.redact_text(once) == once
+    assert once.count("[redacted: secret value]") == 2
+
+
+def test_username_token_redacted_in_a_source_diff_and_path_recorded():
+    diff = "\n".join(
+        [
+            "diff --git a/app.py b/app.py",
+            "+++ b/app.py",
+            f'+CLIENT = Api("https://{_TOKEN_16}:@api.example.com")',
+        ]
+    )
+    out, paths = redaction.redact(diff)
+    assert '+CLIENT = Api("https://[redacted: secret value]:@api.example.com")' in out
+    assert paths == ["app.py"]
+
+
+def test_identity_urls_in_a_source_diff_record_no_redaction():
+    # The blast radius argument: a false positive here would mask source, and any
+    # inline mask makes review coverage partial (#319/#431). So the identity cases
+    # must leave `redacted_paths` EMPTY, not merely leave the text alone.
+    diff = "\n".join(
+        [
+            "diff --git a/app.py b/app.py",
+            "+++ b/app.py",
+            '+REPO = "git+ssh://deployment-automation@git.example.com/repo"',
+            '+IMG = "docker://prometheus-operator@sha256:abcdef0123456789abcdef"',
+            '+FTP = "ftp://anonymous:@host/pub"',
+        ]
+    )
+    out, paths = redaction.redact(diff)
+    assert "[redacted: secret value]" not in out
+    assert paths == []
 
 
 # --- free-text redaction (#58) ----------------------------------------------

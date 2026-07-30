@@ -83,6 +83,17 @@ LABELLED_VALUE_PATTERN = re.compile(
     rf"{_VALUE_CHARS}{{16,}}"
 )
 
+# The connection-string userinfo matchers, named rather than left anonymous in the list
+# below. Their contract is one-directional — a change may widen what is recognized, never
+# narrow it — and the differential sweep that enforces that has to substitute one of them
+# to prove it can still see a loss. Addressing them by list POSITION is what that test did
+# first, and appending a matcher silently pointed it at the wrong one, so the control went
+# green while testing nothing. A name cannot drift that way.
+#
+# See the comments at each definition below for why each is shaped as it is.
+CONNECTION_STRING_PASSWORD_PATTERN = re.compile(r"(://[^:@\s/]*:)[^@\s/]+(?=@)")
+CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
+
 SECRET_VALUE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
@@ -135,7 +146,41 @@ SECRET_VALUE_PATTERNS = [
     # a real leak: when the labelled pattern's marker had already eaten the scheme
     # (`key=<...>://user:pw@host`), the old pattern could no longer match and the
     # password went out intact.
-    re.compile(r"(://[^:@\s/]*:)[^@\s/]+(?=@)"),
+    CONNECTION_STRING_PASSWORD_PATTERN,
+    # A token in the USERNAME slot, with a password field present but EMPTY
+    # (`://<token>:@host`) — the pattern above preserves the username, so a
+    # credential stored there went out verbatim (#440).
+    #
+    # Both restrictions are load-bearing, and each was set by what its absence
+    # destroys rather than by taste:
+    #
+    #   * Only the `:@` shape. A trailing bare colon is a password field that is
+    #     present and deliberately empty — the token-as-username idiom. The BARE
+    #     `://token@host` form is left alone at ANY threshold, because length cannot
+    #     establish credential semantics in that position: a 16+ rule masks
+    #     `git+ssh://deployment-automation@git.example.com/repo`, `ssh://continuous-
+    #     integration@build...`, `https://first.last+alerts@example.com`, and
+    #     `docker://prometheus-operator@sha256:...` (a NAME@DIGEST ref, not userinfo
+    #     at all) — identities every one. Raising the threshold only changes which
+    #     identities get destroyed. That position is already covered for every
+    #     credential shape this module RECOGNIZES, since the vendor patterns above
+    #     match `ghp_`/`AKIA`/`sk-`/`xoxb-` wherever they appear; what remains is a
+    #     generic opaque string, which is precisely what cannot be told apart from a
+    #     long username. Leaving it is this module's documented best-effort boundary.
+    #
+    #   * The 16-character gate. `:@` alone does not imply a token — RFC 1738 spells
+    #     `ftp://foo:@host` as username `foo` with an empty password — so an ungated
+    #     match masks `ftp://anonymous:@host` and `postgres://readonly:@db/app`. 16 is
+    #     not a new constant; it is already this file's credential threshold, in
+    #     LABELLED_VALUE_PATTERN's value run.
+    #
+    # `?` and `#` are excluded here although the PASSWORD class admits them, because
+    # the two runs play different roles. This run is the text being REPLACED, so it
+    # has to stop at the end of the authority or a query carrying an `@` is masked as
+    # userinfo — `https://example.com?email=a.b+c@example.org` would collapse to
+    # `https://[redacted: secret value]@example.org`, hiding the host. A password may
+    # legitimately contain `?` and `#`, so narrowing that class would lose coverage.
+    CONNECTION_STRING_USERNAME_TOKEN_PATTERN,
 ]
 
 
