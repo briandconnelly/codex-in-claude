@@ -83,6 +83,38 @@ LABELLED_VALUE_PATTERN = re.compile(
     rf"{_VALUE_CHARS}{{16,}}"
 )
 
+# The connection-string userinfo matchers, named rather than left anonymous in the list
+# below. Their contract is one-directional — a change may widen what is recognized, never
+# narrow it — and the differential sweep that enforces that has to substitute one of them
+# to prove it can still see a loss. Addressing them by list POSITION is what that test did
+# first, and appending a matcher pointed it at the wrong one. A name cannot drift that way.
+#
+# See the comments at each definition below for why each is shaped as it is.
+#
+# The password run's character class is CONDITIONAL on whether a username was present,
+# and the two arms are not interchangeable:
+#
+#   * With a username (`://user:…@`) the run admits `?` and `#`, byte-for-byte as before.
+#     This arm is deliberately untouched. Narrowing it would stop redacting a password
+#     containing a raw `?` or `#` (`x://u:ab?cd@h`), a loss the printable-domain walk in
+#     the tests already forbids, and the one-directional contract above rules out.
+#   * WITHOUT a username (`://:…@`, the branch #440 adds) the run stops at `?` and `#`.
+#     It has to: `://:` is also how an empty host with a port serializes, so admitting
+#     them made `custom://:8080?email=a@b` — a query string carrying an `@`, no userinfo
+#     anywhere — come out as `custom://:[redacted: secret value]@b`. Per RFC 3986 a raw
+#     `?`/`#` cannot appear in userinfo (it must be percent-encoded), so an `@` that
+#     follows one is in the query or fragment and never delimits a credential.
+#
+# Constraining only the NEW arm is what keeps this a pure widening: every input the old
+# pattern matched still matches, identically. The same false positive DOES exist on the
+# username arm (`https://host.example:8443?email=user@example.com` is masked, and was
+# before this change), but fixing that is a narrowing of a documented guarantee rather
+# than a bug in this one, so it is filed separately rather than folded in here.
+CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
+    r"(://(?P<cs_user>[^:@\s/]+)?:)(?(cs_user)[^@\s/]+|[^@\s/?#]+)(?=@)"
+)
+CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
+
 SECRET_VALUE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
@@ -100,8 +132,19 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"sk_(?:live|test)_[A-Za-z0-9]{16,}"),
     re.compile(r"AIza[0-9A-Za-z_-]{35,}"),
-    # Connection-string userinfo: redact the password between `://user:` and `@host`,
+    # Connection-string userinfo: redact the password between `://[user]:` and `@host`,
     # keeping scheme, user, and host. The `@` lookahead avoids matching `host:port`.
+    #
+    # The username is OPTIONAL (`*`, not `+`) — `://:password@host` is password-only
+    # userinfo, and it is the canonical Redis URL rather than an edge case, since Redis
+    # had no usernames before ACLs in 6.0, so most `REDIS_URL` values still look like
+    # that. Requiring a username sent those passwords out verbatim (#440). Do not
+    # restore the `+`: it is the one userinfo form the rest of this pattern already
+    # handles correctly.
+    #
+    # The PASSWORD side stays `+` deliberately. `://user:@host` has an empty password,
+    # which holds no secret, and matching it would emit a `[redacted]` marker for a
+    # blank value — claiming to have hidden something that was never there.
     #
     # The scan starts AT the `://` and never looks left of it. It used to open with a
     # scheme run, `[a-zA-Z][\w+.-]*://`, which was quadratic (#438): that greedy class
@@ -124,7 +167,41 @@ SECRET_VALUE_PATTERNS = [
     # a real leak: when the labelled pattern's marker had already eaten the scheme
     # (`key=<...>://user:pw@host`), the old pattern could no longer match and the
     # password went out intact.
-    re.compile(r"(://[^:@\s/]+:)[^@\s/]+(?=@)"),
+    CONNECTION_STRING_PASSWORD_PATTERN,
+    # A token in the USERNAME slot, with a password field present but EMPTY
+    # (`://<token>:@host`) — the pattern above preserves the username, so a
+    # credential stored there went out verbatim (#440).
+    #
+    # Both restrictions are load-bearing, and each was set by what its absence
+    # destroys rather than by taste:
+    #
+    #   * Only the `:@` shape. A trailing bare colon is a password field that is
+    #     present and deliberately empty — the token-as-username idiom. The BARE
+    #     `://token@host` form is left alone at ANY threshold, because length cannot
+    #     establish credential semantics in that position: a 16+ rule masks
+    #     `git+ssh://deployment-automation@git.example.com/repo`, `ssh://continuous-
+    #     integration@build...`, `https://first.last+alerts@example.com`, and
+    #     `docker://prometheus-operator@sha256:...` (a NAME@DIGEST ref, not userinfo
+    #     at all) — identities every one. Raising the threshold only changes which
+    #     identities get destroyed. That position is already covered for every
+    #     credential shape this module RECOGNIZES, since the vendor patterns above
+    #     match `ghp_`/`AKIA`/`sk-`/`xoxb-` wherever they appear; what remains is a
+    #     generic opaque string, which is precisely what cannot be told apart from a
+    #     long username. Leaving it is this module's documented best-effort boundary.
+    #
+    #   * The 16-character gate. `:@` alone does not imply a token — RFC 1738 spells
+    #     `ftp://foo:@host` as username `foo` with an empty password — so an ungated
+    #     match masks `ftp://anonymous:@host` and `postgres://readonly:@db/app`. 16 is
+    #     not a new constant; it is already this file's credential threshold, in
+    #     LABELLED_VALUE_PATTERN's value run.
+    #
+    # `?` and `#` are excluded here although the PASSWORD class admits them, because
+    # the two runs play different roles. This run is the text being REPLACED, so it
+    # has to stop at the end of the authority or a query carrying an `@` is masked as
+    # userinfo — `https://example.com?email=a.b+c@example.org` would collapse to
+    # `https://[redacted: secret value]@example.org`, hiding the host. A password may
+    # legitimately contain `?` and `#`, so narrowing that class would lose coverage.
+    CONNECTION_STRING_USERNAME_TOKEN_PATTERN,
 ]
 
 

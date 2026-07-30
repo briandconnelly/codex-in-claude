@@ -7,6 +7,51 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A connection-string credential is now redacted in every userinfo position it can occupy**
+  (#440). The matcher required a non-empty username before the password, so `redis://:pass@host`
+  went out verbatim — and that is not an edge case but the *canonical* Redis URL, since Redis had
+  no usernames before ACLs in 6.0, so it is the shape most `REDIS_URL` values still take. Widening
+  the username class to `*` closes it. Reviewing that widening surfaced a second live gap in the
+  same syntax: the replacement preserves the username, so a token stored *there* with an empty
+  password (`https://<token>:@host`, the token-as-username idiom) was never redacted either. That
+  is now matched too, at 16+ characters — not a new constant, but the credential threshold this
+  module already uses for labelled values. The password side stays required: an empty password
+  holds no secret, and matching it would emit a marker claiming to have hidden a blank value.
+  The **bare** `://token@host` form is deliberately left alone at any threshold, because length
+  cannot establish credential semantics in that position — a 16+ rule masks
+  `git+ssh://deployment-automation@git.example.com/repo` (a documented pip VCS URL),
+  `ssh://continuous-integration@build...`, `https://first.last+alerts@example.com`, and
+  `docker://prometheus-operator@sha256:…` (a `NAME@DIGEST` reference, not userinfo at all), every
+  one an identity rather than a secret, and raising the threshold only changes which identities get
+  destroyed. That position already carries every credential shape this module *recognizes*, since
+  the vendor patterns match `ghp_`/`AKIA`/`sk-`/`xoxb-` wherever they appear; what remains is a
+  generic opaque string, which is exactly what cannot be told apart from a long username, so it
+  stays inside the module's documented best-effort boundary. `?` and `#` are excluded from the new
+  run although the password class admits them, because the two play different roles: this run is
+  the text being *replaced* and must stop at the end of the authority, or a query carrying an `@`
+  is masked as userinfo (`https://example.com?email=a.b+c@example.org` would collapse to
+  `https://[redacted: secret value]@example.org`, hiding the host), whereas a password may
+  legitimately contain both. The password run makes the same distinction *conditionally*, on
+  whether a username was present, and the two arms are not interchangeable: `://:` is also how an
+  empty host with a port serializes, so the new empty-username arm had to stop at `?`/`#` — without
+  that, `custom://:8080?email=a@b`, a query string carrying an `@` and no userinfo at all, came out
+  as `custom://:[redacted: secret value]@b`. The username arm keeps admitting both, byte-for-byte
+  as before, because narrowing *it* would stop redacting a password containing a raw `?`, a real
+  loss this change is not allowed to take. Because widening a matcher is how #432 and #434 each turned a false
+  negative into a *leak*, the change is pinned by the differential sweep this repo uses for
+  redaction work — the previous matcher kept as an oracle that must find nothing left in the new
+  pipeline's output. That sweep is explicitly scoped to the branch it can see: its oracle spells
+  the old `+`, so it never matches an empty username at all (0 oracle hits across every
+  empty-username line in its own grammar product, against 360 on the named ones), and shipping it
+  alone would have looked like coverage of the fix while being vacuous on precisely the fix. The
+  new branches are pinned by exact-output tests instead, which also catch the defect no oracle
+  sweep can see — a *partial* replacement, whose marker contains spaces and so destroys the URL
+  syntax the oracle needs in order to match. Wider checks run during development agreed: a
+  97,200-line sweep over the pattern's grammar slots lost nothing, against a deliberately narrowed
+  control that lost 816 spans to prove the sweep could see a loss at all, and an A/B over 60,000
+  real files changed only the target Redis shape. One control deliberately *fails* to fire and is
+  documented as such: dropping `]` from the password class leaks `postgres://u:pass]word@h` while
+  the sweep stays green, which is why the printable-domain walks are not redundant with it.
 - **Redacting a long line no longer takes quadratic time** (#438). The connection-string pattern
   opened with a scheme run, `[a-zA-Z][\w+.-]*://`, whose character class holds everything a scheme
   is made of. At every start position that run consumed the rest of the surrounding word and then
