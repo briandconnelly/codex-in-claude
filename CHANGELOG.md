@@ -31,7 +31,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   the text being *replaced* and must stop at the end of the authority, or a query carrying an `@`
   is masked as userinfo (`https://example.com?email=a.b+c@example.org` would collapse to
   `https://[redacted: secret value]@example.org`, hiding the host), whereas a password may
-  legitimately contain both. Because widening a matcher is how #432 and #434 each turned a false
+  legitimately contain both. The password run makes the same distinction *conditionally*, on
+  whether a username was present, and the two arms are not interchangeable: `://:` is also how an
+  empty host with a port serializes, so the new empty-username arm had to stop at `?`/`#` — without
+  that, `custom://:8080?email=a@b`, a query string carrying an `@` and no userinfo at all, came out
+  as `custom://:[redacted: secret value]@b`. The username arm keeps admitting both, byte-for-byte
+  as before, because narrowing *it* would stop redacting a password containing a raw `?`, a real
+  loss this change is not allowed to take. Because widening a matcher is how #432 and #434 each turned a false
   negative into a *leak*, the change is pinned by the differential sweep this repo uses for
   redaction work — the previous matcher kept as an oracle that must find nothing left in the new
   pipeline's output. That sweep is explicitly scoped to the branch it can see: its oracle spells

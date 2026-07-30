@@ -87,11 +87,32 @@ LABELLED_VALUE_PATTERN = re.compile(
 # below. Their contract is one-directional — a change may widen what is recognized, never
 # narrow it — and the differential sweep that enforces that has to substitute one of them
 # to prove it can still see a loss. Addressing them by list POSITION is what that test did
-# first, and appending a matcher silently pointed it at the wrong one, so the control went
-# green while testing nothing. A name cannot drift that way.
+# first, and appending a matcher pointed it at the wrong one. A name cannot drift that way.
 #
 # See the comments at each definition below for why each is shaped as it is.
-CONNECTION_STRING_PASSWORD_PATTERN = re.compile(r"(://[^:@\s/]*:)[^@\s/]+(?=@)")
+#
+# The password run's character class is CONDITIONAL on whether a username was present,
+# and the two arms are not interchangeable:
+#
+#   * With a username (`://user:…@`) the run admits `?` and `#`, byte-for-byte as before.
+#     This arm is deliberately untouched. Narrowing it would stop redacting a password
+#     containing a raw `?` or `#` (`x://u:ab?cd@h`), a loss the printable-domain walk in
+#     the tests already forbids, and the one-directional contract above rules out.
+#   * WITHOUT a username (`://:…@`, the branch #440 adds) the run stops at `?` and `#`.
+#     It has to: `://:` is also how an empty host with a port serializes, so admitting
+#     them made `custom://:8080?email=a@b` — a query string carrying an `@`, no userinfo
+#     anywhere — come out as `custom://:[redacted: secret value]@b`. Per RFC 3986 a raw
+#     `?`/`#` cannot appear in userinfo (it must be percent-encoded), so an `@` that
+#     follows one is in the query or fragment and never delimits a credential.
+#
+# Constraining only the NEW arm is what keeps this a pure widening: every input the old
+# pattern matched still matches, identically. The same false positive DOES exist on the
+# username arm (`https://host.example:8443?email=user@example.com` is masked, and was
+# before this change), but fixing that is a narrowing of a documented guarantee rather
+# than a bug in this one, so it is filed separately rather than folded in here.
+CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
+    r"(://(?P<cs_user>[^:@\s/]+)?:)(?(cs_user)[^@\s/]+|[^@\s/?#]+)(?=@)"
+)
 CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
 
 SECRET_VALUE_PATTERNS = [

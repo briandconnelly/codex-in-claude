@@ -423,14 +423,40 @@ def test_empty_username_connection_string_exact_output(text, expected):
     assert redaction.redact_text(text) == expected
 
 
+# The empty-username arm admits everything the named arm does EXCEPT `?` and `#`.
+_EMPTY_USER_NON_MEMBERS = _NON_MEMBERS + "?#"
+
+
 @pytest.mark.parametrize(
-    "char", [c for c in string.printable if c not in _NON_MEMBERS and not c.isspace()]
+    "char",
+    [c for c in string.printable if c not in _EMPTY_USER_NON_MEMBERS and not c.isspace()],
 )
 def test_empty_username_password_class_covers_every_character_it_claims(char):
-    # The password class is unchanged by #440, but it is now reachable through a
-    # SECOND route (empty username). A narrowing of the class on that route alone
-    # would leave the named-username walk above green, so it is walked here too.
+    # The password run is reachable through a SECOND route once the username may be
+    # empty. A narrowing on that route alone would leave the named-username walk above
+    # green, so the domain is walked here too — minus the two characters that route
+    # deliberately excludes, which the next test pins from the other side.
     assert redaction.redact_text(f"x://:ab{char}cd@h") == "x://:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_empty_username_run_stops_at_a_query_or_fragment(char):
+    """`://:` is also an empty host with a port, so this arm must stop at `?`/`#`.
+
+    `custom://:8080?email=a@b` has no userinfo at all — the `@` sits in the query — and
+    admitting these characters masked it as a credential, hiding the host. Per RFC 3986
+    a raw `?`/`#` cannot appear in userinfo, so an `@` after one never delimits one.
+
+    The NAMED arm keeps admitting both (pinned by the walk above): narrowing it would
+    stop redacting a password containing a raw `?`, which is a real loss, and this
+    change is only allowed to widen.
+    """
+    assert redaction.redact_text(f"x://:ab{char}cd@h") == f"x://:ab{char}cd@h"
+    assert redaction.redact_text(f"custom://:8080{char}email=a@b") == (
+        f"custom://:8080{char}email=a@b"
+    )
+    # ...while the same shape WITH a username stays exactly as it was before #440.
+    assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
 
 
 @pytest.mark.parametrize(
@@ -610,6 +636,23 @@ def test_a_colon_in_the_run_makes_it_an_ordinary_password_url():
     # silently stopped redacting here could not hide behind an "unchanged" assertion.
     assert redaction.redact_text("https://abcdefgh:ijklmnopq:@host") == (
         "https://abcdefgh:[redacted: secret value]@host"
+    )
+
+
+def test_username_token_gate_counts_serialized_characters_not_decoded_ones():
+    """Characterization of a known, accepted limit of the 16-character gate.
+
+    The quantifier counts the characters as written, so percent-encoding inflates a
+    short identity past the gate: `anonymous` is 9 and stays, but its `%HH` encoding is
+    27 and is masked. Decoding first would need the matcher to become a callable, which
+    is a disproportionate amount of machinery for an input this rare, and the error runs
+    in the fail-closed direction — an identity is over-masked, no credential is exposed.
+    Pinned so the semantics are a recorded decision rather than an accident, and so that
+    anyone who does add decoding has a test that tells them what they changed.
+    """
+    assert redaction.redact_text("ftp://anonymous:@host/pub") == "ftp://anonymous:@host/pub"
+    assert redaction.redact_text("ftp://%61%6E%6F%6E%79%6D%6F%75%73:@host/pub") == (
+        "ftp://[redacted: secret value]:@host/pub"
     )
 
 
