@@ -252,6 +252,8 @@ _MUST_REDACT = [
     "db.passwd.token = anotherlongvaluehere(y)",
     "app-secret-key = opaquevaluegoeshere12(z)",
     "spring.datasource.password.key = mysecretvaluehere(q)",
+    # ...and a path-style key, where `/` must count as a label character too.
+    "database/password/key = correcthorsebattery(2024)",
     # `=` separator never grants the ` =` follower exemption
     "token = abcd1234abcd1234efgh = leftover",
     # quoted literals are never exempt

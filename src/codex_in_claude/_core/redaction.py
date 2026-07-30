@@ -121,10 +121,14 @@ _CODE_REFERENCE_VALUE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Z
 # `password_key = ...` starts at `_key`, so testing only the matched label misses the
 # `password` entirely and the value leaks.
 _SENSITIVE_LABEL_RE = re.compile(r"(?i)passw(?:or)?d|pwd|passphrase|secret")
-# The label characters running up to the match, so the label is judged whole. `.` and `-`
-# count as label characters, not boundaries: `config.password.key = …` and
-# `app-secret-key = …` are one logical key in properties, Spring, and YAML config.
-_LABEL_LEAD_RE = re.compile(r"[A-Za-z0-9_.\-]*\Z")
+# The label characters running up to the match, so the label is judged whole. Includes the
+# separators one logical key is written with — `.` and `-` (`config.password.key = …`,
+# `app-secret-key = …` in properties, Spring, and YAML) and `/` (path-style keys).
+# Whitespace stays a boundary, so the scan cannot run back across unrelated earlier text.
+# A bracketed key (`cfg["password"]["key"] = …`) needs no handling here: the labelled
+# pattern requires the separator right after the label, so `key"]` never matches at all —
+# a pre-existing false negative of its own, unaffected by this exemption.
+_LABEL_LEAD_RE = re.compile(r"[A-Za-z0-9_.\-/]*\Z")
 # Whitespace after the separator. `api_key=value` — config, env, shell, query string —
 # never gets the exemption; PEP8-style `key = value` and `key: Type` do.
 _SPACED_SEPARATOR_RE = re.compile(r"[:=]\s")
