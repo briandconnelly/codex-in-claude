@@ -246,6 +246,11 @@ _MUST_REDACT = [
     "PASSWD_KEY = somethinglongenoughhere(x)",
     "client_secret_key = opaquevaluehere12345 + more",
     "app_passphrase_token = longvaluegoeshere(x)",
+    # ...including when a further `_`-separated segment sits between the sensitive word and
+    # the segment the pattern matched. These are what make `_` load-bearing in the lead
+    # charset: in the cases above the scan reaches a sensitive word without crossing one.
+    "password_reset_key = correcthorsebattery(2024)",
+    "user_password_reset_token = correcthorsebattery(2024)",
     # ...and a DOTTED or HYPHENATED compound label, as properties/Spring/YAML config
     # writes it, where `.`/`-` must count as label characters rather than boundaries.
     "config.password.key = somethinglongvalue(x)",
