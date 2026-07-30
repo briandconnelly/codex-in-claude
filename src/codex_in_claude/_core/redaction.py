@@ -247,7 +247,15 @@ class DiffRedactor:
     """Incremental, line-oriented secret redactor for a unified diff. Carries the
     per-file skip state across calls so it can be driven over a streamed diff (one
     logical line at a time) without materializing the whole text. ``feed`` returns
-    zero or more output lines for the given input line. Mirrors ``redact`` exactly."""
+    zero or more output lines for the given input line. Mirrors ``redact`` exactly.
+
+    REQUIRES a diff in git's standard format, where every file's body is preceded by its
+    own ``diff --git`` header: the per-file state (whether to skip the hunk, and whether
+    the file is source for the #421 code exemption) is set from that header and persists
+    until the next one. Both start closed on a fresh instance, so a headerless stream is
+    redacted conservatively — but feeding file B's body without B's header would judge it
+    under file A's verdict. Every caller here passes output straight from ``git diff`` or
+    ``git show``, which always emits the headers."""
 
     def __init__(self) -> None:
         self.redacted: list[str] = []
