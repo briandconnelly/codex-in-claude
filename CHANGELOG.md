@@ -7,6 +7,40 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Redacting a long line no longer takes quadratic time** (#438). The connection-string pattern
+  opened with a scheme run, `[a-zA-Z][\w+.-]*://`, whose character class holds everything a scheme
+  is made of. At every start position that run consumed the rest of the surrounding word and then
+  backtracked a character at a time looking for the `://` literal — work repeated at every position
+  of a long unbroken run, so cost grew with the square of the input: 100 KB of text took ~15 s, and
+  a few hundred KB would take minutes. That matters because `redact_text` runs over *untrusted model
+  output* (`raw_response.text`, summaries, finding fields), so the input's size and shape are
+  influenced by what the model returns rather than only by what the caller wrote, and a synchronous
+  call that blows its deadline is terminated with its paid work lost. The slowdown itself disclosed
+  nothing — it was a liveness bug — though the fix for it also closes a separate leak, described
+  below. The issue attributed the cost to the userinfo classes, which measurement
+  did not support — the scheme run alone accounted for 577 ms of a 583 ms match, and the userinfo
+  after a literal `://` for 0.0 ms — so capping the userinfo, the suggested remedy, would have fixed
+  nothing. The scan now simply starts at the `://`. That costs no coverage, because the scheme was
+  never part of the *replaced* span, only of the surrounding match: the old pattern captured it in
+  group 1 and the replacement handed it straight back, while the new one leaves it outside the match
+  altogether. Either way it survives verbatim, so output is byte-identical wherever the old pattern
+  matched. A committed test pins that invariant by keeping the old pattern as an oracle and requiring
+  it to find nothing in the current pipeline's output, over a product of the pattern's grammar slots
+  plus multi-candidate lines; because a negated character class cannot be policed by a corpus of
+  ordinary URLs, two further tests walk the whole printable domain of each userinfo class. Wider
+  differential sweeps run during development (599,040 single-candidate cases and 49,280 per-secret
+  span checks, both exemption modes), each against a deliberately narrowed control to confirm the
+  sweep could see a loss at all, found the same. Neither a possessive quantifier nor a bounded run was the answer: possessive removes the
+  backtrack but not the rescan (still quadratic, measured), and a bound only trades the blowup for a
+  magic constant. Anchoring also recognizes strictly more — userinfo whose `://` no letter-led run
+  reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction for a fail-closed boundary and
+  closes a genuine disclosure gap on the way: the patterns run in order over the same line, and when
+  the labelled-secret pattern had already replaced the text before the `://` with a marker, the
+  letters the scheme run needed were gone with it, so `key=<eaten>://user:pw@host` shipped its
+  password intact. That is a real leak on `main` today, fixed here. A regression test pins the liveness property with a budget ~275x
+  above the fixed timing and ~7x below the broken one. The JWT pattern is quadratic in the same way
+  under a repeated-anchor input and is tracked separately; a sweep of the remaining patterns found
+  no others.
 - **A generic secret under a bracket-subscripted key is now redacted** (#434). The labelled-secret
   pattern learned to step over a key's closing quote in #432, but not over the `"]` that follows it
   in a subscript, so `cfg["password"]["key"] = <secret>` matched nothing at all — in source *and* in

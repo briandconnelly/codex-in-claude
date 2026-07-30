@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
+import re
+import string
+import time
+
 import pytest
 
 from codex_in_claude._core import redaction
@@ -101,6 +106,189 @@ def test_unlabeled_connection_string_password_redacted():
 def test_url_with_port_not_treated_as_credentials():
     # No userinfo `@`, so the port must not be mistaken for a password.
     text = "see https://example.com:8080/path for details"
+    assert redaction.redact_text(text) == text
+
+
+# --- #438: the connection-string scan starts at `://` ------------------------
+# The pattern used to scan the SCHEME with an unbounded greedy `[a-zA-Z][\w+.-]*`
+# ahead of the `://` literal. That run went to the end of every non-`/` stretch at
+# every start position and then backtracked hunting the literal, which is quadratic
+# and reachable from untrusted model output (redact_text/redact_tree). The scheme was
+# never part of the REDACTED span — the old pattern captured it in group 1 and the
+# replacement handed it straight back, and the new one leaves it outside the match
+# entirely — so the scan now begins at `://`. Two consequences are pinned below: no
+# password the old pattern redacted stops being redacted, and userinfo the old pattern
+# could not reach is now covered.
+
+# The pre-#438 pattern, kept as an ORACLE. The invariant that matters for a secret
+# boundary is one-directional — anchoring may recognize MORE, never less — and the only
+# way to test that is against the thing being replaced, so it is spelled out here rather
+# than imported. Comparing against the old PATTERN on the raw line, rather than against
+# the old pipeline's output, is deliberately the stricter check: an earlier pattern in
+# the list may have already consumed the value, and the assertion below holds either way.
+_PRE_438_CONNECTION_PATTERN = re.compile(r"([a-zA-Z][\w+.-]*://[^:@\s/]+:)[^@\s/]+(?=@)")
+
+# Slots of the pattern's own grammar. A structured product over these finds the shapes
+# that matter here; random text essentially never generates a well-formed userinfo.
+_LEADS = ["", "x", "9", "-", "=", '"', "//", "cfg = "]
+_SCHEMES = ["", "a", "postgres", "mongodb+srv", "s" * 40]
+_SEPARATORS = ["://", ":/", "//", ":"]
+_USERS = ["user", "u.s-e+r", "", "u:v"]
+_PASSWORDS = ["pw", "hunter2secret", "", "z" * 40]
+_HOSTS = ["host", "h:5432/db", ""]
+
+# Lines carrying several candidates at once, where substitution order matters: `sub`
+# never revisits consumed text, so a match that lands earlier than the old one did can
+# swallow a later candidate. That is how #434 turned a widening into a leak.
+_MULTI_CANDIDATE_LINES = [
+    "postgres://u:firstpassword@h1 mysql://v:secondpassword@h2",
+    "postgres://u:firstpassword@h1mysql://v:secondpassword@h2",
+    "key=abcdefghijklmnopx://user:hunter2@host",
+    'api_key = "abcdef0123456789abcd" postgres://u:tailpassword@h',
+    "://a:one@h postgres://b:two@h 9://c:three@h",
+    "Authorization: Bearer abcdef0123456789abcd postgres://u:pw12345678@h",
+]
+
+
+def _all_lines():
+    for lead, scheme, sep, user, pw, host in itertools.product(
+        _LEADS, _SCHEMES, _SEPARATORS, _USERS, _PASSWORDS, _HOSTS
+    ):
+        yield f"{lead}{scheme}{sep}{user}:{pw}@{host}"
+        yield f"{lead}{scheme}{sep}{user}:{pw}{host}"  # no `@` — must stay untouched
+    yield from _MULTI_CANDIDATE_LINES
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+def test_no_password_the_old_pattern_redacted_stops_being_redacted(exempt_code):
+    """The #438 anchoring may only widen coverage, never narrow it.
+
+    For every line, the pre-#438 pattern must find NOTHING left in what the current
+    pipeline emits: any span it could still match there is a password the old code
+    would have replaced and the new code did not. Asserting on the leftover span rather
+    than searching the output for the password TEXT is deliberate — the text can occur
+    innocently elsewhere on the line (`v:` is a substring of `mongodb+srv://`), which
+    makes a containment check report failures that are not leaks and, worse, report
+    successes when a real leak happens to repeat harmless text.
+    """
+    oracle_hits = 0
+    for line in _all_lines():
+        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
+        oracle_hits += len(_PRE_438_CONNECTION_PATTERN.findall(line))
+        leftover = _PRE_438_CONNECTION_PATTERN.search(out)
+        assert leftover is None, f"{leftover.group(0)!r} survived redaction of {line!r}"
+    # The sweep is only evidence while the oracle still fires; without this a drifting
+    # slot list would turn the whole test into a tautology that cannot fail.
+    assert oracle_hits > 900, f"oracle matched only {oracle_hits} spans — sweep went vacuous"
+
+
+def test_long_run_redaction_is_not_quadratic():
+    """A long unbroken run must not blow the deadline (#438).
+
+    Measured on the author's machine: 15.0 s before the fix, 7.3 ms after (the
+    remaining cost is the other patterns' linear scans). The 2 s budget therefore
+    sits ~275x above the passing time and ~7x below the failing one, so it is a
+    liveness assertion rather than a timing-sensitive one.
+    """
+    text = "cfg = " + "a" * 100_000 + "x=" + "b" * 40
+    start = time.perf_counter()
+    redaction.redact_text(text)
+    assert time.perf_counter() - start < 2.0
+
+
+def test_connection_string_redaction_unchanged_for_scheme_led_urls():
+    # The exact output for a scheme-led URL is byte-for-byte what it was before #438:
+    # scheme, user, and host survive; only the password is replaced.
+    out = redaction.redact_text("postgres://user:s3cr3tPassw0rd@db.example.com:5432/app")
+    assert out == "postgres://user:[redacted: secret value]@db.example.com:5432/app"
+
+
+# The userinfo classes are NEGATED, so their domain is every character except a handful.
+# The sweep above cannot police that: its slots are built from ordinary URL text, so it
+# only ever probes those classes at a few dozen member characters and a narrowing that
+# excludes some unusual one passes it. Dropping `]` from the password class, for example,
+# leaks `postgres://u:pass]word@h` while leaving every other test in this file green.
+# These two walk the whole printable domain instead, so any character quietly removed
+# from either class fails here.
+_NON_MEMBERS = "@/"  # plus whitespace, handled below
+
+
+@pytest.mark.parametrize(
+    "char", [c for c in string.printable if c not in _NON_MEMBERS and not c.isspace()]
+)
+def test_password_class_covers_every_character_it_claims(char):
+    # `[^@\s/]+` — a password may contain anything but `@`, whitespace, and `/`.
+    assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize(
+    "char", [c for c in string.printable if c not in _NON_MEMBERS + ":" and not c.isspace()]
+)
+def test_username_class_covers_every_character_it_claims(char):
+    # `[^:@\s/]+` — same, and additionally not `:`, which separates user from password.
+    out = redaction.redact_text(f"x://a{char}b:secretpw@h")
+    assert out == f"x://a{char}b:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "://user:hunter2pass@host",  # no scheme at all
+        "9://user:hunter2pass@host",  # a run with no letter to start a scheme match
+        "-://user:hunter2pass@host",
+    ],
+)
+def test_connection_string_password_redacted_without_a_scheme(text):
+    # Anchoring at `://` widens what is recognized: userinfo whose `://` is not
+    # reachable by a letter-led run is now redacted too. Deliberate, and the safe
+    # direction for a fail-closed boundary.
+    #
+    # LOAD-BEARING, not an illustration — do not fold into the sweep above. That sweep
+    # asks whether the OLD pattern can still match the output, so it is blind to a
+    # narrowing whose leftover the old pattern cannot match either. Re-adding a
+    # left-context requirement (`(?<=[\w+.-])`) is exactly that: it leaks, and only this
+    # test and the labelled-marker one below fail.
+    out = redaction.redact_text(text)
+    assert "hunter2pass" not in out
+    assert out.endswith("@host")
+
+
+def test_connection_string_password_with_colons_redacted():
+    # The password class admits `:` — it stops at `@`, `/`, or whitespace — so a
+    # multi-segment password is redacted whole rather than up to its first colon.
+    out = redaction.redact_text("postgres://user:p1:p2:p3@host")
+    assert out == "postgres://user:[redacted: secret value]@host"
+
+
+def test_two_connection_strings_on_one_line_both_redacted():
+    # Substitution never revisits consumed text, so a second URL on the same line
+    # must still be reached after the first match is replaced.
+    out = redaction.redact_text("postgres://u:firstpassword@h1 mysql://v:secondpassword@h2")
+    assert "firstpassword" not in out
+    assert "secondpassword" not in out
+    assert out.count("[redacted: secret value]") == 2
+
+
+def test_password_after_a_labelled_marker_is_redacted():
+    """A connection string whose scheme was eaten by an earlier marker (#438).
+
+    The labelled-secret pattern runs first and its value class includes letters, so
+    it can consume the scheme and leave a marker ending in `]` — after which the old
+    scheme-led pattern could not match, and the password went out intact. Anchoring
+    at `://` is what closes that; this is a leak fix, not only a widening.
+
+    LOAD-BEARING, like the no-scheme case above and for the same reason: the sweep's
+    oracle cannot see a narrowing it also fails to match, and a left-context requirement
+    would reintroduce this leak while leaving that sweep green.
+    """
+    out = redaction.redact_text("key=abcdefghijklmnopx://user:hunter2@host")
+    assert "hunter2" not in out
+
+
+def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
+    # The marker contains spaces and the password class stops at whitespace, so a
+    # second pass cannot re-match and mangle it.
+    text = "postgres://user:[redacted: secret value]@host"
     assert redaction.redact_text(text) == text
 
 
