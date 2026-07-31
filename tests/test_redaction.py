@@ -904,7 +904,7 @@ def test_the_connection_string_matchers_run_before_the_substring_matchers():
     """The ordering itself, stated so a reordering fails with its reason attached.
 
     The sweep above is the real guard; this exists so the failure names the invariant
-    instead of pointing at 5,000 generated lines.
+    instead of pointing at 4,320 generated lines.
     """
     positions = [redaction.SECRET_VALUE_PATTERNS.index(p) for p in _CS_MATCHERS]
     assert max(positions) < len(_CS_MATCHERS), (
