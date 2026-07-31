@@ -7,6 +7,51 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A marker from an earlier pattern no longer strands the rest of a connection-string
+  credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
+  never revisits consumed text. Every matcher except the connection-string pair is
+  *substring-oriented* — it recognizes a credential's shape wherever it appears, including inside a
+  longer value — so when one of them fired within a connection-string password, its replacement
+  marker split the credential in two. The marker contains a space and a colon, and both userinfo
+  runs stop at whitespace, so neither could match what was left, and the tail shipped intact:
+  `redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host` came out as
+  `redis://u:token=[redacted: secret value]%2Ftailsegment@host`, sending `%2Ftailsegment` to the
+  model. It was reachable in all three userinfo shapes, and a second pass did not recover it — the
+  output was stable. The worse of the two harms is not the disclosure: **the output advertised
+  itself as fully redacted.** A reader, human or model, sees `[redacted: secret value]` and
+  reasonably concludes the credential was handled, so a partial redaction that looks complete
+  suppresses the reaction a bare secret would provoke. The fix is an ordering — both
+  connection-string matchers now run first, so the complete userinfo span is consumed before
+  anything can fragment it — because the defect is a property of the pipeline rather than of any
+  one matcher, and no per-pattern tweak reaches it. No regex, marker, or schema changed. Nothing is
+  lost by running them early: a userinfo match either contains a later candidate, whose replacement
+  then covers it, or does not overlap one, and neither run's class admits `:` or `@`, so a match can
+  never straddle the boundary of a span one of these already replaced. Because an old-*pattern*
+  oracle — the instrument #438 and #440 used — is structurally incapable of seeing this bug (the
+  regexes are unchanged, so oracle and matcher agree by construction, and more fundamentally the old
+  pipeline cannot recognize its own partially redacted output, since the marker destroys the syntax
+  the oracle needs), the guard is a **sentinel sweep** instead: every credential in a 4,320-line
+  grammar product carries a unique tail that no matcher recognizes alone, and the assertion is that
+  the tail disappears. It runs in both code-exemption modes, with the pre-#443 ordering kept as a
+  control that must report leaks, and its hand-maintained payload set is *validated against the live
+  pattern list* by a completeness guard, so a matcher added ahead of the pair fails that guard rather
+  than silently going uncovered — the failure mode that made a previous sweep vacuous (#438/#439). Wider checks
+  run during development agreed: an A/B over 72,000 lines in both exemption modes lost no coverage
+  and improved 6,450 lines, against a deliberately broken control that reported 23,487 losses. Two
+  limits are stated rather than implied. This cannot repair input that arrives *already* fragmented,
+  since a marker is not recoverable. And it closes only credentials the userinfo runs can **span**:
+  one carrying a character they exclude (`/`, or `?`/`#` on the arms that stop there) was never
+  matchable at any position in the list, so an earlier matcher firing on its prefix still strands
+  the remainder — order-invariant, unchanged by this fix, characterized by a test and tracked
+  separately. The change also **enlarges the pre-existing false positive filed as #442**: running
+  the connection-string matchers first removes an accidental brake, because a labelled marker
+  landing inside a query used to stop the username arm from matching, so
+  `https://host.example:8443?token=<secret>@x.example` no longer keeps its port and query. That is
+  accepted rather than fixed here — the credential is still redacted either way, and what grows is
+  how much surrounding text is masked with it — because #442's remedy excludes `?`/`#` from that
+  class, which *narrows* a documented guarantee and needs its own false-positive corpus; folding a
+  narrowing into a security fix is the bundling this repo's conventions rule out. It is pinned by a
+  characterization test so #442's eventual fixer reads the current output instead of re-deriving it.
 - **A connection-string credential is now redacted in every userinfo position it can occupy**
   (#440). The matcher required a non-empty username before the password, so `redis://:pass@host`
   went out verbatim — and that is not an edge case but the *canonical* Redis URL, since Redis had

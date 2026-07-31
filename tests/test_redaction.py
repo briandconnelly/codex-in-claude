@@ -695,6 +695,338 @@ def test_identity_urls_in_a_source_diff_record_no_redaction():
     assert paths == []
 
 
+# --- #443: an earlier marker must not fragment a connection-string credential -
+# `SECRET_VALUE_PATTERNS` is applied in order, one `re.sub` pass per pattern, and `sub`
+# never revisits consumed text. When a substring-oriented matcher fired INSIDE a
+# connection-string password, its marker — which contains a space and a colon — split the
+# credential in two, and the connection-string runs stop at whitespace, so they could no
+# longer match it. The tail shipped intact, behind a marker claiming the value was handled:
+#
+#     redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host
+#     -> redis://u:token=[redacted: secret value]%2Ftailsegment@host
+#
+# Both connection-string matchers now run FIRST, so the complete userinfo span is consumed
+# before anything can fragment it. This is a property of the ordered pipeline rather than of
+# any one matcher, which is why no regex changes here.
+#
+# The instrument is a SENTINEL sweep, not the old-pattern oracle the #438/#440 sweeps use.
+# That oracle is structurally incapable of seeing this bug: the regexes are unchanged, so an
+# old-pattern oracle and the live matcher agree by construction, and — the deeper reason —
+# the old pipeline cannot recognize its OWN partially redacted output, because the marker
+# destroys the syntax the oracle needs in order to match. Every credential generated below
+# therefore carries a unique tail that no matcher recognizes on its own; the assertion is
+# that the tail disappears. The pre-#443 ordering is kept as the control.
+
+_CS_MATCHERS = (
+    redaction.CONNECTION_STRING_PASSWORD_PATTERN,
+    redaction.CONNECTION_STRING_USERNAME_TOKEN_PATTERN,
+)
+
+
+def _pre_443_order():
+    """The shipped list with the connection-string matchers moved back to the END.
+
+    DERIVED from the live list rather than spelled out, so a matcher added later is
+    carried into the control automatically and the control keeps testing the one thing
+    #443 changed — the position of these two names. Spelling the old list out would
+    freeze it at today's membership and quietly stop covering anything added after.
+    """
+    return [p for p in redaction.SECRET_VALUE_PATTERNS if p not in _CS_MATCHERS] + list(
+        _CS_MATCHERS
+    )
+
+
+# A tail that no matcher recognizes on its own (pinned below), containing no character a
+# URI authority forbids. `%` is outside `_VALUE_CHARS`, so the labelled run cannot extend
+# across it either — the sentinel can only leave the machine as a stranded fragment.
+_TAIL_SENTINEL = "%2FTAILSENTINEL"
+
+# One payload per matcher that can actually fire inside userinfo. Completeness over the
+# LIVE pattern list is enforced below rather than trusted: a hand-maintained payload list
+# silently stops covering a matcher added after it was written, which is exactly how a
+# sweep goes vacuous while staying green (#438/#439).
+_IN_AUTHORITY_PAYLOADS = [
+    "token=s3cr3tvalue0123456789",
+    "password:s3cr3tvalue0123456789",
+    "ghp_" + "a" * 20,
+    "xoxb-" + "a" * 20,
+    "AKIA" + "ABCDEFGHIJKLMNOP",
+    "eyJabcdefgh.abcdefgh.abcdefgh",
+    "sk-" + "a" * 20,
+    "sk-proj-" + "a" * 20,
+    "sk_live_" + "a" * 16,
+    "AIza" + "a" * 35,
+]
+
+# The matchers exempt from the payload set, because a URI authority cannot contain raw
+# whitespace — both connection-string runs exclude `\s` — so a matcher whose language
+# requires whitespace can never fire inside userinfo and there is no collision to sweep for.
+#
+# An explicit ALLOWLIST keyed on the compiled source, deliberately, rather than a predicate
+# that decides membership by probing. A probe can only show that ONE string this matcher
+# accepts contains whitespace; it cannot show that every string does, so an alternation
+# admitting a whitespace-free credential would be exempted on the strength of its other
+# branch and silently lose its payload. Keying on the source means a new matcher is never
+# swept in by accident and an edit to either of these fails loudly, which is the point:
+# both are claims about the matcher's whole language and deserve a deliberate re-check.
+_WHITESPACE_ONLY_SOURCES = frozenset(
+    {
+        # Assembled rather than written out: the literal is the `detect-private-key`
+        # pre-commit hook's trigger substring, and spelling it whole fails the hook.
+        "-----BEGIN " + r"[A-Z ]*PRIVATE KEY-----",
+        r"(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{16,}",
+    }
+)
+
+# One string each exempt matcher accepts, used to prove the classification below.
+_WHITESPACE_REQUIRING_PROBES = [
+    "-----BEGIN " + "PRIVATE KEY-----",
+    "Authorization: Bearer abcdef0123456789abcd",
+]
+
+
+def _requires_whitespace(pattern) -> bool:
+    """Whether this matcher is on the whitespace-only allowlist above."""
+    return pattern.pattern in _WHITESPACE_ONLY_SOURCES
+
+
+_COLLISION_LEADS = ["", "cfg = ", "DATABASE_URL=", 'api_key = "abcdef0123456789abcd" ']
+_COLLISION_SCHEMES = ["", "redis", "mongodb+srv", "9"]
+_COLLISION_HOSTS = ["host", "h:5432/db", ""]
+# All three userinfo shapes: named username, empty username (#440), and a token in the
+# username slot with an empty password (#440). The bug reaches every one of them.
+_COLLISION_SHAPES = ["{s}://user:{c}@{h}", "{s}://:{c}@{h}", "{s}://{c}:@{h}"]
+_COLLISION_TRAILERS = ["", " postgres://u:secondpassword@h2", "?x=1"]
+
+
+def _collision_lines():
+    for lead, scheme, host, shape, payload, trailer in itertools.product(
+        _COLLISION_LEADS,
+        _COLLISION_SCHEMES,
+        _COLLISION_HOSTS,
+        _COLLISION_SHAPES,
+        _IN_AUTHORITY_PAYLOADS,
+        _COLLISION_TRAILERS,
+    ):
+        yield lead + shape.format(s=scheme, c=payload + _TAIL_SENTINEL, h=host) + trailer
+
+
+def _sentinel_leaks(*, exempt_code):
+    """Every generated line whose emitted output still carries the tail sentinel."""
+    leaks = []
+    for line in _collision_lines():
+        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
+        if _TAIL_SENTINEL in out:
+            leaks.append((line, out))
+    return leaks
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+def test_no_marker_strands_a_connection_string_credential(exempt_code):
+    """No earlier matcher may leave part of a userinfo credential behind (#443)."""
+    leaks = _sentinel_leaks(exempt_code=exempt_code)
+    assert not leaks, f"{leaks[0][1]!r} still carries the tail of {leaks[0][0]!r}"
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+def test_the_collision_sweep_can_actually_see_a_stranded_tail(monkeypatch, exempt_code):
+    """Control: restoring the pre-#443 ordering must make the SAME sweep body report leaks.
+
+    Without this, a sweep whose payloads had drifted out of collision range and a sweep over
+    a correct pipeline are indistinguishable — both simply report nothing.
+    """
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
+    assert _sentinel_leaks(exempt_code=exempt_code), (
+        "the sweep reported no stranded tail against the pre-#443 ordering"
+    )
+
+
+def test_every_matcher_that_can_fire_inside_userinfo_has_a_collision_payload():
+    """The sweep's anti-drift guard, over the LIVE pattern list.
+
+    A matcher added ahead of the connection-string pair reopens #443 for its own shape, and
+    a hardcoded payload list cannot know it exists — every test would stay green. So every
+    pattern must either be exercised by a payload or be exempt for the stated reason.
+    """
+    uncovered = [
+        pattern.pattern
+        for pattern in redaction.SECRET_VALUE_PATTERNS
+        if pattern not in _CS_MATCHERS
+        and not _requires_whitespace(pattern)
+        and not any(pattern.search(payload) for payload in _IN_AUTHORITY_PAYLOADS)
+    ]
+    assert not uncovered, f"no collision payload exercises {uncovered}"
+
+
+def test_the_whitespace_only_exemption_is_earned_by_every_member():
+    """Prove the allowlist above rather than trusting it.
+
+    Each exempt matcher must (1) still be present in the shipped list, (2) accept a probe
+    that contains whitespace, (3) reject that same probe once the whitespace is removed —
+    which is what "requires whitespace" means operationally — and (4) have a probe the
+    connection-string matcher cannot span when it is placed in the password slot, which is
+    the property the exemption actually rests on.
+
+    (4) is asserted against the PROBE, not the pattern source. An earlier version of this
+    test interpolated `pattern.pattern` into the URI, so it asked whether a regex's source
+    text looked like userinfo — a question with no bearing on the exemption, and one that
+    happened to answer "no" for unrelated reasons.
+    """
+    exempt = [p for p in redaction.SECRET_VALUE_PATTERNS if _requires_whitespace(p)]
+    assert len(exempt) == len(_WHITESPACE_ONLY_SOURCES), (
+        "an allowlisted matcher is no longer in SECRET_VALUE_PATTERNS — reclassify it"
+    )
+    for pattern in exempt:
+        matched = [probe for probe in _WHITESPACE_REQUIRING_PROBES if pattern.search(probe)]
+        assert matched, f"no probe exercises the exempt matcher {pattern.pattern!r}"
+        for probe in matched:
+            assert not pattern.search("".join(probe.split())), (
+                f"{pattern.pattern!r} matches a whitespace-free string — it is not exempt"
+            )
+            assert not redaction.CONNECTION_STRING_PASSWORD_PATTERN.search(f"x://u:{probe}@h")
+
+
+def test_every_collision_payload_is_recognized_without_the_connection_matchers():
+    """Liveness: a payload no other matcher fires on creates no collision to detect."""
+    others = [p for p in redaction.SECRET_VALUE_PATTERNS if p not in _CS_MATCHERS]
+    dead = [
+        payload for payload in _IN_AUTHORITY_PAYLOADS if not any(p.search(payload) for p in others)
+    ]
+    assert not dead, f"no matcher recognizes {dead} — those payloads collide with nothing"
+
+
+def test_the_tail_sentinel_is_not_self_redacting():
+    # If the sentinel were redacted on its own, every line would pass for the wrong reason.
+    assert redaction.redact_text(_TAIL_SENTINEL) == _TAIL_SENTINEL
+
+
+def test_the_connection_string_matchers_run_before_the_substring_matchers():
+    """The ordering itself, stated so a reordering fails with its reason attached.
+
+    The sweep above is the real guard; this exists so the failure names the invariant
+    instead of pointing at 5,000 generated lines.
+    """
+    positions = [redaction.SECRET_VALUE_PATTERNS.index(p) for p in _CS_MATCHERS]
+    assert max(positions) < len(_CS_MATCHERS), (
+        "the connection-string matchers must precede every substring-oriented matcher (#443)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The three userinfo shapes from the issue, each with a labelled payload.
+        (
+            "redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host",
+            "redis://u:[redacted: secret value]@host",
+        ),
+        (
+            "redis://:token=s3cr3tvalue0123456789%2Ftailsegment@host",
+            "redis://:[redacted: secret value]@host",
+        ),
+        (
+            "redis://token=s3cr3tvalue0123456789%2Ftailsegment:@host",
+            "redis://[redacted: secret value]:@host",
+        ),
+        # A vendor prefix rather than a label, in each position it can fragment.
+        (
+            "redis://u:ghp_aaaaaaaaaaaaaaaaaaaabbbb%2Ftailsegment@host",
+            "redis://u:[redacted: secret value]@host",
+        ),
+        (
+            "https://sk-aaaaaaaaaaaaaaaaaaaaaaaa%2Ftailsegment:@api.example.com",
+            "https://[redacted: secret value]:@api.example.com",
+        ),
+        # A JWT, whose shape alone is enough to trip the earlier matcher.
+        ("x://u:eyJabcdefgh.abcdefgh.abcdefgh%2Ftail@h", "x://u:[redacted: secret value]@h"),
+    ],
+)
+def test_marker_no_longer_strands_a_connection_string_credential(text, expected):
+    # Exact output, not `not in`: a partial replacement must fail as loudly as a missed one,
+    # and the whole point of #443 is that a partial one LOOKS complete.
+    out = redaction.redact_text(text)
+    assert out == expected
+    # Re-run the emitted line: the fix must not depend on a second pass, and must not
+    # mangle its own output on one.
+    assert redaction.redact_text(out) == out
+
+
+def test_reordering_enlarges_the_query_string_false_positive(monkeypatch):
+    """The accepted cost of #443, recorded as a decision with a test on it.
+
+    #442 is the pre-existing false positive: the named-username password class admits `?`
+    and `#`, which cannot appear raw in userinfo, so an ordinary URL whose query carries an
+    `@` is masked as a credential. Running the connection-string matchers first REMOVES an
+    accidental brake on it — a labelled marker used to land inside the query and stop the
+    connection matcher — so #442 now fires on strings where it previously did not.
+
+    Accepted rather than fixed here: #442's remedy is to exclude `?`/`#` from that class,
+    which NARROWS a documented guarantee (`test_password_class_covers_every_character_it_
+    claims` forbids it) and needs its own false-positive corpus. Folding it in would bundle a
+    narrowing into a security fix. The credential is still redacted in the enlarged case —
+    what grows is how much surrounding host/port/query text is masked with it.
+
+    The pre-#443 output is asserted too, so this test shows the DELTA. Pinning only the new
+    output would leave "this is an enlargement" an unverified claim in a docstring, and a
+    second assertion that the secret is absent would add nothing — the exact-output check
+    already settles it.
+    """
+    text = "https://host.example:8443?token=s3cr3tvalue0123456789@x.example"
+    assert redaction.redact_text(text) == "https://host.example:[redacted: secret value]@x.example"
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
+    assert redaction.redact_text(text) == (
+        "https://host.example:8443?token=[redacted: secret value]@x.example"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # `/` is outside every userinfo run, so the named arm cannot span this password...
+        (
+            "redis://u:token=s3cr3tvalue0123456789%2Fmore/tail@host",
+            "redis://u:token=[redacted: secret value]%2Fmore/tail@host",
+        ),
+        (
+            "redis://u:ghp_aaaaaaaaaaaaaaaaaaaa/tailsegment@host",
+            "redis://u:[redacted: secret value]/tailsegment@host",
+        ),
+        # ...and `?`/`#` are outside the empty-username and username-token runs (#440).
+        (
+            "redis://:token=s3cr3tvalue0123456789?tailsegment@host",
+            "redis://:token=[redacted: secret value]?tailsegment@host",
+        ),
+        ("amqp://sk-abcdefghijklmnopqrst?tail:@host", "amqp://[redacted: secret value]?tail:@host"),
+    ],
+)
+def test_a_credential_the_userinfo_runs_cannot_span_is_only_partly_redacted(
+    text, expected, monkeypatch
+):
+    """Characterization of what #443's reorder does NOT close, so the boundary is explicit.
+
+    The reorder closes every shape the connection-string matchers can SPAN. A credential
+    carrying a character those runs exclude was never matchable by them in the first place —
+    ordering cannot help — so an earlier matcher firing on its prefix still emits a marker
+    with the remainder beside it. Order-invariant: identical before and after #443.
+
+    Recorded because #443's own text claims the bug closes for all three userinfo shapes,
+    and that is true only within the runs' character domain. Tracked separately as #446
+    rather than silently left; a fix there should CONVERT this test, not delete it.
+
+    Exact output rather than a `not in`/`endswith` pair, per this file's convention: those
+    weaker forms pass on any output that merely keeps the tail and a marker somewhere, so
+    they would not notice the redaction moving to the wrong span — including an output that
+    discarded the scheme and delimiters entirely.
+
+    Order invariance is ASSERTED, not just claimed: the same exact output must come back
+    under the pre-#443 ordering. That is what makes this a characterization of a
+    pre-existing limit rather than of something this change introduced.
+    """
+    assert redaction.redact_text(text) == expected
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
+    assert redaction.redact_text(text) == expected
+
+
 # --- free-text redaction (#58) ----------------------------------------------
 def test_redact_text_replaces_inline_secret():
     text = 'The config sets api_key = "abcdef0123456789abcdef0123" for auth.'
