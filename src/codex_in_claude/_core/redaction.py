@@ -214,18 +214,19 @@ SECRET_VALUE_PATTERNS = [
     # Nothing is lost by running them early. A later candidate is either inside the span these
     # replace — where the marker already covers it — or entirely outside it, since `sub` rescans
     # the whole string on each pass. The remaining case is a candidate STRADDLING the span's
-    # boundary, and that cannot arise because the boundary characters are the `:` opening the
-    # password and the `@` closing it, while no other matcher's REPLACED run admits either one:
-    # every value class below is a subset of `[A-Za-z0-9._~+/=-]`. Where a `:` does appear in
-    # another matcher's match — `Authorization:` and a labelled key — it sits in the PRESERVED
-    # group, never the replaced run.
+    # boundary, and that cannot arise: the boundary characters are the `:` opening the password
+    # and the `@` closing it, and no other matcher's REPLACED run contains either. Where a `:`
+    # does appear in another matcher's match — `Authorization:` and a labelled key — it sits in
+    # the PRESERVED group, never the replaced run.
     #
-    # Note the property belongs to the OTHER matchers' runs, not to these two. The password run
-    # here admits `:` deliberately, so a multi-segment password is redacted whole rather than up
-    # to its first colon (`postgres://user:p1:p2:p3@host`); an earlier draft of this comment
-    # claimed otherwise and was wrong. `test_no_other_matcher_can_straddle_a_userinfo_boundary`
-    # pins the real invariant, so a future matcher whose replaced run admits `:` or `@` fails
-    # rather than silently invalidating this argument.
+    # That single property is the whole argument, and it is checked by
+    # `test_no_other_matcher_can_straddle_a_userinfo_boundary` rather than asserted here, so a
+    # future matcher whose replaced run admits `:` or `@` fails a test instead of silently
+    # invalidating this reasoning. Resist restating it as a claim about the character CLASSES:
+    # two successive review rounds caught a broader version of this sentence being false — the
+    # password run below admits `:` on purpose (so `postgres://user:p1:p2:p3@host` redacts
+    # whole), and the PEM matcher's span contains spaces, so neither "these runs exclude `:`"
+    # nor "every value class is a subset of `[A-Za-z0-9._~+/=-]`" is true. The narrow claim is.
     #
     # Two limits are deliberate. This cannot repair input that arrives ALREADY fragmented —
     # a marker is not recoverable, so a second pass over old output does not help. And it only

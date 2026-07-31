@@ -947,8 +947,13 @@ def test_the_connection_string_matchers_run_before_the_substring_matchers():
     """The ordering itself, stated so a reordering fails with its reason attached.
 
     The sweep above is the real guard; this exists so the failure names the invariant
-    instead of pointing at 4,320 generated lines.
+    instead of pointing at 4,320 generated lines. Presence is asserted before position for
+    the same reason: `list.index` on a removed matcher raises a bare
+    `ValueError: re.compile(...) is not in list`, which reports the symptom of a deletion
+    without naming the invariant it broke.
     """
+    missing = [p.pattern for p in _CS_MATCHERS if p not in redaction.SECRET_VALUE_PATTERNS]
+    assert not missing, f"a connection-string matcher was removed from the pipeline: {missing}"
     positions = [redaction.SECRET_VALUE_PATTERNS.index(p) for p in _CS_MATCHERS]
     assert max(positions) < len(_CS_MATCHERS), (
         "the connection-string matchers must precede every substring-oriented matcher (#443)"

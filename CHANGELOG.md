@@ -27,12 +27,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   lost by running them early: a later candidate is either inside the span they replace, where the
   marker already covers it, or wholly outside it, since substitution rescans the whole string on
   each pass. A candidate *straddling* the boundary is the only dangerous case, and it cannot arise,
-  because the boundary characters are the `:` opening the password and the `@` closing it while no
-  other matcher's **replaced** run admits either — every one of those value classes is a subset of
-  `[A-Za-z0-9._~+/=-]`, and where a `:` does appear in another match (`Authorization:`, a labelled
-  key) it sits in the preserved group. The property belongs to those matchers rather than to the
-  connection-string ones, whose password run admits `:` deliberately so that a multi-segment
-  password is redacted whole; it is pinned by a test rather than left as prose. Because an old-*pattern*
+  because the boundary characters are the `:` opening the password and the `@` closing it and no
+  other matcher's **replaced** run contains either — where a `:` does appear in another match
+  (`Authorization:`, a labelled key) it sits in the preserved group. That narrow property is the
+  whole argument, it belongs to those other matchers rather than to the connection-string ones,
+  and it is pinned by a test rather than left as prose — deliberately, because two review rounds
+  each caught a broader version of the claim being false (the password run admits `:` on purpose,
+  so a multi-segment password redacts whole; and the private-key matcher's span contains spaces). Because an old-*pattern*
   oracle — the instrument #438 and #440 used — is structurally incapable of seeing this bug (the
   regexes are unchanged, so oracle and matcher agree by construction, and more fundamentally the old
   pipeline cannot recognize its own partially redacted output, since the marker destroys the syntax
