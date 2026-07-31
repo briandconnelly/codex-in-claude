@@ -886,6 +886,49 @@ def test_the_whitespace_only_exemption_is_earned_by_every_member():
             assert not redaction.CONNECTION_STRING_PASSWORD_PATTERN.search(f"x://u:{probe}@h")
 
 
+def test_no_other_matcher_can_straddle_a_userinfo_boundary():
+    """The invariant the reorder's safety argument actually rests on.
+
+    Running the connection-string matchers first is safe because a later candidate is either
+    inside the span they replace (covered by the marker) or wholly outside it (`sub` rescans
+    the whole string). The only dangerous case is a candidate STRADDLING the boundary — and
+    the boundary characters are the `:` that opens the password run and the `@` that closes
+    it. So the invariant is that no other matcher's REPLACED run may contain either.
+
+    It belongs to the OTHER matchers, not to the connection-string ones: the password run
+    admits `:` on purpose, so `postgres://user:p1:p2:p3@host` is redacted whole (pinned by
+    `test_connection_string_password_with_colons_redacted`). A comment in `redaction.py`
+    asserted the opposite and was corrected after a review caught it; this test exists so the
+    argument is checked rather than narrated, and so a future matcher whose replaced run
+    admits `:` or `@` fails here instead of quietly invalidating it.
+
+    Scope, stated because this is corpus evidence rather than a proof over each matcher's whole
+    language: it can only judge a matcher on the spans it actually produces here. What closes
+    that gap is the per-pattern liveness assertion below — every matcher must FIRE on this
+    corpus — together with the completeness guard, which already forces each one to have a
+    payload embedded in these lines. A matcher that escaped this check would first have to fail
+    that one. (An earlier mutation probe for this test added a matcher that never fired, so the
+    guard passed while inspecting nothing; the liveness assertion is what that probe bought.)
+    """
+    others = [
+        p
+        for p in redaction.SECRET_VALUE_PATTERNS
+        if p not in _CS_MATCHERS and not _requires_whitespace(p)
+    ]
+    offenders, fired = [], set()
+    for line in _collision_lines():
+        for pattern in others:
+            for match in pattern.finditer(line):
+                fired.add(pattern.pattern)
+                whole = match.group(0)
+                replaced = whole[len(match.group(1)) :] if match.lastindex else whole
+                if ":" in replaced or "@" in replaced:
+                    offenders.append((pattern.pattern, replaced))
+    assert not offenders, f"{offenders[0][1]!r} from {offenders[0][0]!r} crosses a boundary"
+    silent = [p.pattern for p in others if p.pattern not in fired]
+    assert not silent, f"these matchers never fired, so nothing was checked for them: {silent}"
+
+
 def test_every_collision_payload_is_recognized_without_the_connection_matchers():
     """Liveness: a payload no other matcher fires on creates no collision to detect."""
     others = [p for p in redaction.SECRET_VALUE_PATTERNS if p not in _CS_MATCHERS]

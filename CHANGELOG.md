@@ -24,9 +24,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   connection-string matchers now run first, so the complete userinfo span is consumed before
   anything can fragment it — because the defect is a property of the pipeline rather than of any
   one matcher, and no per-pattern tweak reaches it. No regex, marker, or schema changed. Nothing is
-  lost by running them early: a userinfo match either contains a later candidate, whose replacement
-  then covers it, or does not overlap one, and neither run's class admits `:` or `@`, so a match can
-  never straddle the boundary of a span one of these already replaced. Because an old-*pattern*
+  lost by running them early: a later candidate is either inside the span they replace, where the
+  marker already covers it, or wholly outside it, since substitution rescans the whole string on
+  each pass. A candidate *straddling* the boundary is the only dangerous case, and it cannot arise,
+  because the boundary characters are the `:` opening the password and the `@` closing it while no
+  other matcher's **replaced** run admits either — every one of those value classes is a subset of
+  `[A-Za-z0-9._~+/=-]`, and where a `:` does appear in another match (`Authorization:`, a labelled
+  key) it sits in the preserved group. The property belongs to those matchers rather than to the
+  connection-string ones, whose password run admits `:` deliberately so that a multi-segment
+  password is redacted whole; it is pinned by a test rather than left as prose. Because an old-*pattern*
   oracle — the instrument #438 and #440 used — is structurally incapable of seeing this bug (the
   regexes are unchanged, so oracle and matcher agree by construction, and more fundamentally the old
   pipeline cannot recognize its own partially redacted output, since the marker destroys the syntax
