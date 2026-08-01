@@ -12,7 +12,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
   position scanned the unbounded first segment to the end of the run hunting a `.` that never
   comes, then backtracked one character at a time before trying the next anchor — measured at
-  `"eyJ"*26666` (80k chars) 1432ms, `"eyJ"*53332` (160k) 5676ms, roughly 4x time per 2x input.
+  `"eyJ"*26666` (80k chars) 1432ms, `"eyJ"*53332` (160k) 5676ms, roughly 4x time per 2x input (the
+  regression test's own rep count was separately calibrated to 35000 on the implementation machine,
+  where the old pattern needed that many reps to demonstrably exceed the test's 2.0s budget).
   `redact_text` runs on untrusted model output via `redact_tree`, so input size and shape are
   attacker-influenced — a liveness/DoS concern, since a sync tool that blows its deadline loses its
   paid work. The fix bounds only the *first* segment, at `{8,512}` post-anchor characters (515

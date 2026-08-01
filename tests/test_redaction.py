@@ -323,10 +323,12 @@ def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
 # completeness guard below loudly instead of silently going unmeasured. ~80k
 # chars is enough to demonstrate liveness for every pattern except JWT: on this
 # machine `"eyJ"*26666` (~80k, the #439 issue's own example) measured 1.56s —
-# under the 2.0s budget — while `"eyJ"*35000` (105k chars) reliably exceeded it
-# (2.75s measured, old pattern) and the bounded pattern held at 0.027s on that
-# same input, a ~74x passing margin. JWT's rep count is therefore raised to
-# 35000 rather than left at the ~80k-char default the other patterns use.
+# under the 2.0s budget — while `"eyJ"*35000` (105k chars) reliably exceeded it.
+# Recorded from the actual RED/GREEN runs: the old pattern took 2.799s on that
+# input (the RED run this test's history was built on), and the bounded pattern
+# takes 0.036s on the same input — a ~55x passing margin. JWT's rep count is
+# therefore raised to 35000 rather than left at the ~80k-char default the other
+# patterns use.
 _QUADRATIC_SEEDS: dict[str, tuple[str, int]] = {
     redaction.CONNECTION_STRING_PASSWORD_PATTERN.pattern: ("://x", 20000),
     redaction.CONNECTION_STRING_USERNAME_TOKEN_PATTERN.pattern: ("://x", 20000),
@@ -504,7 +506,10 @@ def test_first_segment_at_512_post_anchor_chars_is_redacted():
     # The boundary from the matching side: 512 is the last post-anchor length that
     # still fits `{8,512}`.
     text = "eyJ" + "a" * 512 + "." + "b" * 8 + "." + "c" * 8
-    assert redaction.redact_text(text) == "[redacted: secret value]"
+    out = redaction.redact_text(text)
+    assert out == "[redacted: secret value]"
+    # The marker contains no `eyJ...\...\...` shape, so a second pass cannot re-match.
+    assert redaction.redact_text(out) == out
 
 
 def test_over_512_run_with_an_internal_eyj_matches_at_the_later_anchor():
@@ -522,7 +527,11 @@ def test_over_512_run_with_an_internal_eyj_matches_at_the_later_anchor():
     output rather than left as a claim.
     """
     text = "eyJ" + "aaa" + "eyJ" + "a" * 510 + "." + "b" * 8 + "." + "c" * 8
-    assert redaction.redact_text(text) == "eyJaaa[redacted: secret value]"
+    out = redaction.redact_text(text)
+    assert out == "eyJaaa[redacted: secret value]"
+    # The residue (`eyJaaa`) is 6 chars, short of the {8,512} minimum, and the marker
+    # itself carries no `.` to re-anchor on, so a second pass leaves it unchanged.
+    assert redaction.redact_text(out) == out
 
 
 # --- #440: a credential in ANY userinfo position -----------------------------
