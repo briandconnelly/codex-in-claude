@@ -114,10 +114,12 @@ LABELLED_VALUE_PATTERN = re.compile(
 # #443 ENLARGED #442's reach without changing this class. Running these matchers first
 # removed an accidental brake: a labelled marker landing inside the query used to stop
 # the username arm from matching, so `https://host.example:8443?token=<secret>@x.example`
-# kept its port and query. It no longer does. Accepted deliberately — the credential is
-# still redacted either way, what grows is how much surrounding text goes with it — and
-# pinned by a characterization test so #442's eventual fixer sees the current output
-# rather than re-deriving it.
+# kept its port and query. It no longer does — and since #445 that no longer depends on
+# position either: candidates are collected from the ORIGINAL text, so there is no marker
+# in the query to brake on whatever order these matchers sit in. Accepted deliberately —
+# the credential is still redacted either way, what grows is how much surrounding text goes
+# with it — and pinned by a characterization test so #442's eventual fixer sees the current
+# output rather than re-deriving it.
 #
 # ---------------------------------------------------------------------------
 # Connection-string userinfo: redact the password between `://[user]:` and `@host`,
@@ -194,49 +196,86 @@ CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
 CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
 
 SECRET_VALUE_PATTERNS = [
-    # ORDER IS LOAD-BEARING, and the two connection-string matchers come FIRST (#443).
+    # ORDER IS NO LONGER SEMANTICALLY LOAD-BEARING (#445), and `_redact_secret_values` is
+    # what makes that true: it runs every pattern against the ORIGINAL text, collects the
+    # spans they would replace, and merges those before rebuilding the line. The merged span
+    # set is a union computed per pattern independently, so it cannot depend on this list's
+    # order. What the list still decides is which SHAPES are recognized — not which matcher
+    # wins a race. The two connection-string matchers keep their position for readability and
+    # because #443's tests address them by name; moving them now changes no output.
     #
-    # These patterns are applied one `re.sub` pass each, in this order, and `sub` never
-    # revisits consumed text. Every matcher below them is substring-oriented: it recognizes a
-    # credential's SHAPE wherever it appears, including in the middle of a longer value. When
-    # one of them fired inside a connection-string password, its marker — which contains a
-    # space and a colon — split the credential in two, and both runs below stop at whitespace,
-    # so neither could match what was left. The tail shipped intact, behind a marker claiming
-    # the value had been handled:
+    # What follows is the history that shaped this list, then the invariant that replaced it.
+    #
+    # HISTORY (#443). These patterns used to be applied one `re.sub` pass each, in this order,
+    # and `sub` never revisits consumed text. Every matcher below them is substring-oriented:
+    # it recognizes a credential's SHAPE wherever it appears, including in the middle of a
+    # longer value. When one of them fired inside a connection-string password, its marker —
+    # which contains a space and a colon — split the credential in two, and both runs below
+    # stop at whitespace, so neither could match what was left. The tail shipped intact,
+    # behind a marker claiming the value had been handled:
     #
     #     redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host
     #     -> redis://u:token=[redacted: secret value]%2Ftailsegment@host
     #
-    # Matching the COMPLETE userinfo span before anything can fragment it is what closes that,
-    # and it has to be an ordering: the defect is a property of the pipeline, not of any one
-    # matcher, so no per-pattern tweak reaches it.
+    # Matching the COMPLETE userinfo span before anything could fragment it closed that, and
+    # at the time it had to be an ordering: the defect is a property of the pipeline, not of
+    # any one matcher, so no per-pattern tweak reached it. But an ordering only chooses which
+    # member of the interference class bites. #445 was the mirror image — the vendor matchers
+    # ahead of LABELLED_VALUE_PATTERN rather than behind the userinfo runs — with a narrower
+    # value class consuming a PREFIX of a value the labelled pattern covers whole:
     #
-    # Nothing is lost by running them early. A later candidate is either inside the span these
-    # replace — where the marker already covers it — or entirely outside it, since `sub` rescans
-    # the whole string on each pass. The remaining case is a candidate STRADDLING the span's
-    # boundary, and that cannot arise: the boundary characters are the `:` opening the password
-    # and the `@` closing it, and no other matcher's REPLACED run contains either. Where a `:`
-    # does appear in another matcher's match — `Authorization:` and a labelled key — it sits in
-    # the PRESERVED group, never the replaced run.
+    #     token=ghp_<20 chars>-tailsegment -> token=[redacted: secret value]-tailsegment
     #
-    # That single property is the whole argument, and it is checked by
-    # `test_no_other_matcher_can_straddle_a_userinfo_boundary` rather than asserted here, so a
-    # future matcher whose replaced run admits `:` or `@` fails a test instead of silently
-    # invalidating this reasoning. Resist restating it as a claim about the character CLASSES:
-    # two successive review rounds caught a broader version of this sentence being false — the
-    # password run below admits `:` on purpose (so `postgres://user:p1:p2:p3@host` redacts
-    # whole), and the PEM matcher's span contains spaces, so neither "these runs exclude `:`"
-    # nor "every value class is a subset of `[A-Za-z0-9._~+/=-]`" is true. The narrow claim is.
+    # WHY RUNNING THE USERINFO MATCHERS FIRST WAS SAFE, kept because the test it names is
+    # still live. Nothing was lost by running them early: a later candidate was either inside
+    # the span they replace — where the marker already covered it — or entirely outside it,
+    # since `sub` rescanned the whole string on each pass. The remaining case was a candidate
+    # STRADDLING the span's boundary, and that could not arise: the boundary characters are
+    # the `:` opening the password and the `@` closing it, and no other matcher's REPLACED run
+    # contains either. Where a `:` does appear in another matcher's match — `Authorization:`
+    # and a labelled key — it sits in the PRESERVED group, never the replaced run.
     #
-    # Two limits are deliberate. This cannot repair input that arrives ALREADY fragmented —
-    # a marker is not recoverable, so a second pass over old output does not help. And it only
-    # closes credentials these runs can SPAN: one carrying a character they exclude (`/`, or
-    # `?`/`#` on the arms that stop there) was never matchable by them at any position in this
-    # list, so an earlier matcher firing on its prefix still strands the remainder.
+    # That single property was the whole argument, and it is checked by
+    # `test_no_other_matcher_can_straddle_a_userinfo_boundary` rather than asserted here. Under
+    # the merge that test is a pattern-class TRIPWIRE rather than the safety argument — a
+    # straddling candidate is now merged with the span it crosses, not stranded by it — but
+    # resist restating it as a claim about the character CLASSES either way: two successive
+    # review rounds caught a broader version of this sentence being false — the password run
+    # below admits `:` on purpose (so `postgres://user:p1:p2:p3@host` redacts whole), and the
+    # PEM matcher's span contains spaces, so neither "these runs exclude `:`" nor "every value
+    # class is a subset of `[A-Za-z0-9._~+/=-]`" is true. The narrow claim is.
     #
-    # Prepending a matcher here reopens #443 for whatever it recognizes. The sentinel sweep in
-    # tests/test_redaction.py checks its payload set against this list and will fail if you do,
-    # so a new matcher has to be given a payload (or classified as unable to reach userinfo).
+    # THE INVARIANT THAT REPLACED THE ORDERING (#445). Each candidate contributes the span it
+    # would REPLACE — the text after the preserved group 1, or the whole match when there is
+    # no group. Spans are sorted and folded on STRICT overlap, and one marker is emitted per
+    # merged interval. Three consequences are load-bearing:
+    #
+    #   * TOUCHING SPANS DO NOT MERGE. Two candidates that abut emit two markers, which is
+    #     byte-for-byte what two successive `re.sub` passes did.
+    #   * A PRESERVED PREFIX SURVIVES POSITIONALLY, not because a matcher hands it back:
+    #     group 1's text is simply outside every replaced span, so it is copied through from
+    #     the original — and it disappears when some OTHER candidate's span covers it, which
+    #     is exactly how a wider match now absorbs a narrower one's leftovers.
+    #   * THE #421 EXEMPTION IS JUDGED ON THE ORIGINAL LINE, because `finditer` hands
+    #     `_is_code_reference` a `match.string` no earlier substitution has touched. That
+    #     removes exemptions an earlier marker used to manufacture (a marker's `]` stopped
+    #     `_LABEL_LEAD_RE` from reading back to the sensitive word) — the fail-closed
+    #     direction, pinned by
+    #     `test_exemption_is_judged_against_the_original_line_not_the_accumulator`.
+    #
+    # Two limits survive the merge unchanged. It cannot repair input that arrives ALREADY
+    # fragmented — a marker is not recoverable, so a second pass over old output does not
+    # help. And it only closes a credential some single pattern can SPAN: a userinfo value
+    # carrying a character both connection-string runs exclude (`/`, or `?`/`#` on the arms
+    # that stop there) produces no candidate covering it, so an earlier matcher firing on its
+    # prefix still leaves the remainder beside a marker. That residue is #446, tracked
+    # separately. The intra-pattern swallow (#436) is likewise untouched: it is one match's
+    # own span, and merging spans cannot widen a match.
+    #
+    # Adding a matcher here no longer reopens #443 for whatever it recognizes, but the
+    # sentinel sweep in tests/test_redaction.py still checks its payload set against this list
+    # and will fail if you add one, so a new matcher has to be given a payload (or classified
+    # as unable to reach userinfo).
     CONNECTION_STRING_PASSWORD_PATTERN,
     CONNECTION_STRING_USERNAME_TOKEN_PATTERN,
     re.compile(r"AKIA[0-9A-Z]{16}"),
@@ -446,26 +485,68 @@ def _diff_path_from_header(line: str) -> str:
     return spec
 
 
+# The one marker this module emits. A constant rather than two literals, so the string the
+# idempotency arguments throughout this file depend on (it carries a space and a `:`, which
+# every userinfo run stops at) cannot drift between the two emission sites it used to have.
+_SECRET_VALUE_MARKER = "[redacted: secret value]"
+
+
 def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str, bool]:
     """Replace inline secret-looking values. ``exempt_code`` leaves provable code
     references intact — only sound for a line of source (a diff body line), so callers
-    handling arbitrary prose must leave it False (#421)."""
-    redacted = False
-    out = line
+    handling arbitrary prose must leave it False (#421).
+
+    Every pattern is matched against ``line`` ITSELF rather than against the previous
+    pattern's output (#445). A sequential ``re.sub`` pipeline lets an earlier, narrower
+    matcher consume a PREFIX of a value a later one covers whole, and ``sub`` never revisits
+    consumed text, so the tail shipped beside a complete-looking marker. Candidate spans are
+    collected from the original text, merged, and the line rebuilt with one marker per merged
+    interval — ``SECRET_VALUE_PATTERNS``' header has the full semantics and the history.
+
+    ``SECRET_VALUE_PATTERNS`` is read at CALL time rather than bound at import, because the
+    tests substitute it; precompiling the list into one merged automaton would defeat that,
+    and would also lose the per-pattern identity the ``exempt_code`` test below turns on.
+    """
+    spans: list[tuple[int, int]] = []
     for pattern in SECRET_VALUE_PATTERNS:
+        # The #421 exemption belongs to exactly one pattern, compared by identity as always.
         exempting = exempt_code and pattern is LABELLED_VALUE_PATTERN
-
-        def repl(match: re.Match, *, exempting: bool = exempting) -> str:
-            nonlocal redacted
+        for match in pattern.finditer(line):
             if exempting and _is_code_reference(match):
-                return match.group(0)
-            redacted = True
-            if match.lastindex:
-                return f"{match.group(1)}[redacted: secret value]"
-            return "[redacted: secret value]"
+                continue  # an exempted candidate contributes no span
+            # The REPLACED span: what follows the preserved group 1, or the whole match when
+            # the pattern has no group. ``start(0) == start(1)`` holds for all four grouped
+            # patterns here, so this projection loses nothing that sits before the group.
+            spans.append((match.end(1), match.end(0)) if match.lastindex else match.span())
+    if not spans:
+        return line, False
 
-        out = pattern.sub(repl, out)
-    return out, redacted
+    # Fold left over spans sorted by (start, end). STRICT overlap merges; touching does not,
+    # so abutting candidates keep two markers exactly as two `re.sub` passes did. No span can
+    # be empty — every pattern requires literal text after its preserved group — so a
+    # zero-length candidate is noted rather than defended against.
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    start, end = spans[0]
+    for span_start, span_end in spans[1:]:
+        if span_start < end:
+            end = max(end, span_end)
+        else:
+            merged.append((start, end))
+            start, end = span_start, span_end
+    merged.append((start, end))
+
+    # Rebuild from the ORIGINAL text. A preserved prefix survives because it lies outside
+    # every merged interval, not because a replacement emitted it — so a wider candidate
+    # covering it takes it with the secret, which is the whole point of #445.
+    out: list[str] = []
+    cursor = 0
+    for span_start, span_end in merged:
+        out.append(line[cursor:span_start])
+        out.append(_SECRET_VALUE_MARKER)
+        cursor = span_end
+    out.append(line[cursor:])
+    return "".join(out), True
 
 
 def redact_text(text: str | None) -> str | None:

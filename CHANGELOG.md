@@ -7,6 +7,33 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Secret redaction now merges every matcher's candidate spans instead of substituting them one
+  pass at a time, so no matcher can strand part of a secret another one covers whole** (#445). The
+  inline patterns used to be applied as sequential `re.sub` passes, each over the previous pass's
+  output. `re.sub` never revisits consumed text, so an earlier matcher with a NARROWER value class
+  could eat a prefix of a value a later matcher would have covered entirely, leaving the tail
+  beside a marker that looked complete: `token=ghp_<20 chars>-tailsegment` came out as
+  `token=[redacted: secret value]-tailsegment` (the `-` is outside the GitHub-token class but
+  inside the labelled pattern's), and `password=AKIA<16 chars>tailsegment` as
+  `password=[redacted: secret value]tailsegment`. #443 had already paid for one instance of this
+  by reordering the list, but an ordering only chooses which member of the class bites. Every
+  pattern is now run with `finditer` against the ORIGINAL line; each candidate contributes the
+  span it would replace; the spans are merged on strict overlap and the line is rebuilt with one
+  marker per merged interval. Touching spans deliberately stay separate, so abutting candidates
+  emit two markers exactly as two `re.sub` passes did, and a preserved prefix (a labelled key, an
+  `Authorization:` header, a connection string's `://user:`) survives because it lies outside
+  every merged span rather than because a replacement handed it back — which is precisely how a
+  wider candidate now absorbs a narrower one's leftovers. The order of the pattern list no longer
+  affects output at all. One behavioral delta comes with this and runs in the fail-closed
+  direction: the #421 code-reference exemption is now judged against the original line rather than
+  the partially substituted accumulator, so a line where an earlier marker had erased the evidence
+  (`+secretAKIA…_key = helper_function_name(x)`, whose marker hid the word `secret` from the
+  label scan) is redacted instead of exempted. Two neighbouring defects are deliberately NOT fixed
+  here and get their own changes: #436, the intra-pattern swallow, is one match's own span and
+  merging spans cannot widen a match; and #446 — a userinfo credential carrying a character both
+  connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there) — still strands its
+  remainder, because no single pattern produces a candidate spanning it and there is nothing to
+  merge. No agent-visible surface changes, so no `fingerprint` bump.
 - **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
   on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
   ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
