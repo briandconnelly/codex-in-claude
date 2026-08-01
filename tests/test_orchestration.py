@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import anyio
 
 from codex_in_claude import codex, orchestration
+from codex_in_claude._core import redaction
 from codex_in_claude._core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Coverage, Meta
@@ -77,25 +80,37 @@ def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
 
 
 def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
-    """`InvalidArgument` promises the rejected value is never echoed (see its docstring)
-    — it may be a secret, and this path's value is caller-supplied free text. The
-    exception text embeds it (`got {untracked!r}`), so the machine
-    fields are built from the known domain instead of from `str(exc)`.
+    """`InvalidArgument` and `ErrorDetail` promise the rejected value is never echoed (see
+    their docstrings) — it may be a secret, and this path's value is caller-supplied free
+    text. The exception text embeds it (`got {untracked!r}`), so the whole envelope —
+    including the human-readable `message` — must be built without ever reusing `str(exc)`
+    for this branch.
 
-    The probe value is deliberately NOT secret-shaped: `gitdiff_error` runs `str(exc)`
-    through `redact_text`, so an `sk-…` value would be stripped from a reused message
-    regardless, and the test would pass against the very bug it guards. Mutating the
-    implementation to reuse `str(exc)` must make this fail — verified by doing so."""
+    The probe value is deliberately NOT secret-shaped (mirrors the #432 `_PROBES`
+    convention in test_redaction.py): `gitdiff_error` runs `str(exc)` through
+    `redact_text` for the other seven branches, so an `sk-…` value would be stripped from
+    a reused message regardless, and the test would pass against the very bug it guards
+    (the #417 lesson). `test_probe_value_survives_redaction` below keeps that control
+    honest."""
     value = "an-ordinary-value-redaction-ignores"
-    out = orchestration.gitdiff_error(
-        InvalidUntrackedError(f"untracked must be one of [...], got {value!r}"), _make_meta()
-    )
-    err = out["error"]
-    assert value not in str(err["invalid_arguments"])
-    assert value not in str(err["details"])
-    # The instrument works: the same value IS present in the human-readable message,
-    # so its absence above reflects the no-echo rule, not a value that never arrived.
-    assert value in err["message"]
+    exc = InvalidUntrackedError(f"untracked must be one of [...], got {value!r}")
+    out = orchestration.gitdiff_error(exc, _make_meta())
+
+    # Positive control: the probe would have reached the message absent the fix — prove
+    # it actually made it into the exception text `gitdiff_error` receives.
+    assert value in str(exc)
+
+    # Whole-envelope absence: not just the machine fields, the entire serialized
+    # envelope, including `message`.
+    assert value not in json.dumps(out)
+
+
+def test_probe_value_survives_redaction():
+    # Positive control for the test above: without this, the whole-envelope absence
+    # assertion proves nothing about the no-echo rule — `redact_text` could be doing the
+    # work instead (the #417 lesson). The probe must be a value `redact_text` ignores.
+    value = "an-ordinary-value-redaction-ignores"
+    assert redaction.redact_text(value) == value
 
 
 def test_stamp_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):

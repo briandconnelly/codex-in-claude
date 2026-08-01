@@ -7,6 +7,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`gitdiff_error`'s `invalid_arguments` branch no longer echoes the rejected value in its
+  human-readable `message`** (#418). `InvalidArgument` and `ErrorDetail` both promise the rejected
+  value is never echoed — it may be a secret — and the machine fields already honored that for
+  `InvalidUntrackedError` (the branch's `reason`/`allowed_values` are built from `get_args(Untracked)`,
+  the known domain, not from the exception). The `message` alongside them did not: it was built from
+  `redact_text(str(exc))`, and `InvalidUntrackedError`'s text embeds the value verbatim
+  (`got {untracked!r}`), so one envelope both withheld the value in its structured fields and printed
+  it in prose next to them. The fix reuses that same value-free reason as `message` for this branch
+  only; the other seven `gitdiff_error` branches (`invalid_base`, `invalid_commit`, `invalid_paths`,
+  `invalid_scope`, `not_a_git_repo`, the `RuntimeError` fallback) keep echoing `str(exc)` unchanged —
+  their values are refs/paths the caller just supplied, not free text a no-echo guarantee applies to.
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
   never revisits consumed text. Every matcher except the connection-string pair is
