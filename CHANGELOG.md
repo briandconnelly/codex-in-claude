@@ -24,11 +24,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   reaches EOF (a descendant that inherited the fd, or one whose progress resumes only after
   the quiesce bound has already elapsed) still yields a bounded, possibly incomplete tail —
   that boundary is deliberate and unchanged, and is now pinned by tests rather than left
-  implicit. `_terminate` is idempotent against a repeat call on the same process, but the
-  settle step now tracks whether it already ran one so the `finally` skips its own redundant
-  call on every settled path — repeating `_terminate` after the first call has already
-  reaped the leader risked targeting a pid the OS had since recycled for an unrelated
-  process; `finally` remains the sole teardown only for a path that raises instead of
+  implicit. `_terminate` is meant to run exactly once per child, not to be repeat-called:
+  after the first call has already reaped the leader, the OS is free to recycle that pid for
+  an unrelated process before a second call would run, so repeating it is not safe. The
+  settle step now tracks whether it already ran one so `finally` skips its own call on every
+  settled path; `finally` remains the sole teardown only for a path that raises instead of
   returning. No agent-visible surface changed.
 
 - **A marker from an earlier pattern no longer strands the rest of a connection-string

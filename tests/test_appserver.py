@@ -10,7 +10,6 @@ import hashlib
 import io
 import json
 import queue
-import subprocess
 import sys
 import threading
 import time
@@ -1034,27 +1033,6 @@ def test_stop_event_cancellation_runs_the_settle_step(tmp_path, monkeypatch):
     assert not worker.is_alive()
     assert result and result[0].status is TransferStatus.TIMED_OUT
     assert calls, "the cancellation exit must run the settle step"
-
-
-def test_terminate_is_idempotent():
-    """``_terminate`` itself must tolerate being called twice on the SAME process without
-    raising or hanging — pinned directly here. Production code no longer relies on this for
-    the common settled path (see test_terminate_is_called_exactly_once_on_a_settled_path
-    and its read_rate_limits mirror): a second call after the first has already reaped the
-    leader risks targeting a pid the OS has since recycled (#449 external review finding 1),
-    so `finally` now skips its own call once settle already ran one. The property tested
-    here still matters for a path that raises instead of returning, where `finally` is the
-    only teardown and may itself run more than once across nested exception handling."""
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    appserver._terminate(proc)
-    appserver._terminate(proc)  # must not raise or hang
-    assert proc.returncode is not None
 
 
 def test_terminate_is_called_exactly_once_on_a_settled_path(tmp_path, monkeypatch):

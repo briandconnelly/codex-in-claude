@@ -685,11 +685,16 @@ def _settle_and_tail(proc: subprocess.Popen, reader: _Reader, drain: _StderrDrai
 
     1. Release a reader parked in ``put()`` on a full queue — same as the original
        ``finally``, done first so a stopped consumer doesn't strand that thread.
-    2. Terminate the child. ``_terminate`` is idempotent, so a stray extra call stays a
-       safe no-op — but the caller is expected to skip its own redundant call once this
-       function has run (see the ``settled`` pattern in ``transfer_session`` /
-       ``read_rate_limits``): repeating ``_terminate`` after the OS has recycled the pid
-       risks signaling an unrelated process (#449 external review finding 1).
+    2. Terminate the child. ``_terminate`` is meant to be invoked exactly ONCE per child —
+       the suppressed exceptions inside it (``ProcessLookupError``, ``PermissionError``,
+       ``OSError``) cover races within that single invocation (e.g. the process already
+       gone by the time the signal is sent), not tolerance for a repeat call. A second
+       invocation AFTER this one has already reaped the leader is not safe: the OS is free
+       to recycle that pid for an unrelated process before the repeat runs, and
+       ``_terminate``'s suppression would then swallow nothing — it would signal a process
+       it was never meant to touch. This is exactly why the caller (see the ``settled``
+       pattern in ``transfer_session`` / ``read_rate_limits``) skips its own ``finally``
+       call once this function has already run one (#449 external review finding 1).
     3. Join the stdout reader thread, bounded by ``_POLL_SECONDS``.
     4. Quiesce the stderr drain, bounded by the larger ``_QUIESCE_SECONDS``: the child is
        dead by this point, so its pipe closes and the drain reaches EOF almost immediately
@@ -769,11 +774,11 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     reader = _spawn_reader(proc.stdout)
 
     # Tracks whether _settle() (below) already ran the terminate/join/quiesce sequence, so
-    # the `finally` can skip its own redundant _terminate call (#449 external review finding
-    # 1): `_terminate` is idempotent against a double call on the SAME process, but a second
-    # call after the first has already reaped the leader risks targeting a pid the OS has
-    # since recycled for an unrelated process. Every return path below goes through _settle()
-    # instead of _settle_and_tail directly so this flag is never missed.
+    # the `finally` can skip its own _terminate call (#449 external review finding 1):
+    # _terminate is meant to run exactly ONCE per child — a second call after the first has
+    # already reaped the leader is NOT safe, since the OS is free to recycle that pid for an
+    # unrelated process before the repeat call runs. Every return path below goes through
+    # _settle() instead of _settle_and_tail directly so this flag is never missed.
     settled = False
 
     def _settle() -> str:
@@ -811,7 +816,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 # Cooperative cancellation: the caller abandoned this run. The value is
                 # discarded (the caller re-raises), but we still settle before returning so
                 # the child is torn down the same way as every other exit (#449) — the
-                # finally's own call stays a safe no-op behind this one.
+                # finally's own call is skipped behind this one (see `settled` above).
                 _settle()
                 return TransferOutcome(
                     status=TransferStatus.TIMED_OUT,
@@ -1201,8 +1206,8 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             if stop_event is not None and stop_event.is_set():
                 # Cooperative cancellation: the value is discarded (the caller re-raises),
                 # but we still settle before returning so the child is torn down the same
-                # way as every other exit (#449) — the finally's own call stays a safe
-                # no-op behind this one.
+                # way as every other exit (#449) — the finally's own call is skipped
+                # behind this one (see `settled` above).
                 _settle()
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.TIMED_OUT, codex_home=codex_home
