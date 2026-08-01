@@ -22,6 +22,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `invalid_paths`/`invalid_scope`/`not_a_git_repo` do, but `git_unavailable` and the `RuntimeError`
   fallback carry bounded, best-effort-redacted git diagnostics (a missing executable, git stderr, a
   timeout) instead — left unchanged by this fix.
+- **The background worker now guards its own persistence boundary against a nonconformant
+  `invalid_arguments` envelope** (#419). `errors.make_error` enforces the `invalid_arguments`
+  contract for every envelope the server *builds* — a non-empty per-argument list, AND `details`
+  exactly mirroring that list's first entry — but the worker wrote whatever its dispatched producer
+  returned straight to `result.json` with no validation, and replay reconstructs stored records
+  through `ErrorResult.model_validate`, which deliberately bypasses that constructor guard so a
+  pre-existing record stays readable. A worker path that ever produced a listless
+  `invalid_arguments` envelope, or one whose `details` disagreed with its own list, would therefore
+  persist it, and replay would return it stamped with the *current* fingerprint — advertising a
+  conformance it never had. No worker path can mint one today, but nothing tied that property to
+  the invariant. `_worker.main` now normalizes any such envelope to a conformant `internal_error`
+  immediately before the atomic write, preserving the run's own meta; an envelope that satisfies
+  BOTH halves of the contract passes through unchanged, and a failure inside the guard itself falls
+  through to persisting the original payload rather than losing the record. No `FINGERPRINT` or
+  `RESULT_FORMAT` change — this is a runtime normalization on an already-broken path, not a schema
+  or description change.
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
   never revisits consumed text. Every matcher except the connection-string pair is
