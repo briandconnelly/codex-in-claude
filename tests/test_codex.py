@@ -260,6 +260,20 @@ def test_classify_failure_sanitize_redacts_short_path_bearing_secret(tmp_path):
     assert "[redacted: secret value]" in err.message
 
 
+def test_classify_failure_sanitize_replaces_sentence_final_root_with_marker(tmp_path):
+    """#420 review round 3: a raw diagnostic ending in a bare worktree root plus a period
+    (`fatal: failed in <wt>.`, a common git-stderr shape) must not leak the absolute path
+    through classify_failure's sanitize path — this was `sanitize_prose`'s own
+    ambiguous-period carve-out leaking, not something specific to classify_failure."""
+    wt = str(tmp_path / "cic-worktree-m" / "tree")
+    aliases = worktree.path_aliases(wt)
+    stderr = f"fatal: failed in {wt}."
+    run = CommandRun("", stderr, 1, 1, False)
+    err = codex.classify_failure(run, sanitize=lambda t: worktree.sanitize_prose(t, aliases) or "")
+    assert wt not in err.message
+    assert "cic-worktree-" not in err.message
+
+
 def test_classify_uses_error_event_message():
     events = '{"type":"turn.failed","error":{"message":"model overloaded"}}'
     err = codex.classify_failure(CommandRun(events, "", 1, 1, False), events=events)

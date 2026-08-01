@@ -922,6 +922,68 @@ def test_unneutralizable_filter_name_fails_closed(repo, tmp_path):
         worktree.create(str(repo), timeout=30)
 
 
+def test_unneutralizable_filter_name_sanitizes_embedded_worktree_path(repo, monkeypatch):
+    # #420 review finding 2: this raise interpolates the driver NAME raw, and a name is
+    # read from repo-controlled gitattributes/config, so a malformed one can itself embed
+    # the worktree path. Must sanitize when the enumeration ran against a worktree
+    # (aliases threaded), same as the enumeration-failure branch above it.
+    #
+    # A short, hardcoded path (not `tmp_path`, which nests several directories deep under
+    # pytest and can exceed the driver name's own `[:100]` truncation cap unrelated to this
+    # fix — that would make the assertion below pass by accident) so the only thing that
+    # can hide `wt_path` from the message is the sanitize_prose fix. The injected `=` sits
+    # AFTER a `/` (a valid right-delimiter), not immediately after the path — an `=`
+    # immediately abutting the path would itself block alias-matching (same "erring toward
+    # a missed rewrite" rule `<root>+suffix` relies on), which would falsely pass this test
+    # even without the fix.
+    wt_path = "/private/tmp/cic-worktree-u1/tree"
+    aliases = worktree.path_aliases(wt_path)
+    stdout = f"filter.{wt_path}/sub=evil.smudge\n"
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr(worktree.subprocess, "run", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError, match="cannot be safely neutralized") as ei:
+        worktree._configured_filter_drivers(str(repo), 30, aliases=aliases)
+    assert wt_path not in str(ei.value)
+    assert "cic-worktree-" not in str(ei.value)
+
+
+def test_unneutralizable_filter_name_without_aliases_leaks_embedded_worktree_path_positive_control(
+    repo, monkeypatch
+):
+    # Positive control: without aliases (the default, matching a source-repo-scoped
+    # enumeration), the same crafted name DOES leak — proves the assertions above are not
+    # vacuous.
+    wt_path = "/private/tmp/cic-worktree-v1/tree"
+    stdout = f"filter.{wt_path}/sub=evil.smudge\n"
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr(worktree.subprocess, "run", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError, match="cannot be safely neutralized") as ei:
+        worktree._configured_filter_drivers(str(repo), 30)
+    assert wt_path in str(ei.value)
+
+
+def test_capture_diff_unneutralizable_filter_name_sanitized_end_to_end(repo, monkeypatch):
+    # Same finding, exercised through the real create() -> capture_diff() wiring rather
+    # than calling _configured_filter_drivers directly.
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if "--get-regexp" in cmd and kwargs.get("cwd") == wt.path:
+                stdout = f"filter.{wt.path}/sub=evil.smudge\n"
+                return subprocess.CompletedProcess(cmd, 0, stdout, "")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(worktree.subprocess, "run", fake_run)
+        with pytest.raises(worktree.WorktreeError, match="cannot be safely neutralized") as ei:
+            worktree.capture_diff(wt.path, timeout=30)
+        assert wt.path not in str(ei.value)
+        assert "cic-worktree-" not in str(ei.value)
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
 # --- Worktree-path relativization in returned prose (#412) --------------------------
 #
 # Codex runs with cwd = the throwaway worktree, so it writes absolute paths into its
@@ -1031,11 +1093,42 @@ def test_relativize_leaves_root_as_suffix_of_longer_path_alone():
     assert worktree.relativize(text, ALIASES) == text
 
 
-def test_relativize_leaves_sentence_final_bare_root_alone():
-    # KNOWN LIMITATION, deliberate: rewriting `<root>.` would emit `..`, which reads as the
-    # parent directory — strictly more misleading than the dead path it replaced. A `.`
-    # after the root is therefore treated as a path-continuation character.
+def test_relativize_replaces_sentence_final_bare_root_with_a_safe_marker():
+    # #420 review round 3: this used to be a KNOWN LIMITATION that left the text fully
+    # UNCHANGED (rewriting `<root>.` to `..` would misleadingly read as the parent
+    # directory) — but leaving it alone leaked the complete absolute path instead, which
+    # is strictly worse and is exactly the shape a raw git diagnostic takes
+    # (`fatal: failed in <wt>.`). The ambiguous case now gets an unambiguous marker
+    # instead of a bare `.`, so the path never survives either way.
     text = f"the root is {ROOT}."
+    out = worktree.relativize(text, ALIASES)
+    assert out == "the root is [worktree]."
+    assert ROOT not in out
+
+
+def test_relativize_replaces_mid_sentence_root_with_marker_before_the_next_clause():
+    # The ambiguous case is not only string-final: `<root>.` followed by whitespace (a new
+    # sentence) is the same shape.
+    text = f"See {ROOT}. Done."
+    out = worktree.relativize(text, ALIASES)
+    assert out == "See [worktree]. Done."
+    assert ROOT not in out
+
+
+def test_relativize_replaces_root_followed_by_period_then_closing_delimiter():
+    # A period immediately followed by another right-delimiter (not just whitespace/EOF)
+    # is the same "clause-final" shape, e.g. a parenthetical.
+    text = f"(see {ROOT}.)"
+    out = worktree.relativize(text, ALIASES)
+    assert out == "(see [worktree].)"
+    assert ROOT not in out
+
+
+def test_relativize_leaves_a_period_suffixed_sibling_alone():
+    # `<root>.bak` names a DIFFERENT file/extension, not a clause ending — the marker only
+    # applies when the period is followed by a right-delimiter or end of string, so this
+    # stays a missed rewrite (safe) rather than a wrong one (misleading).
+    text = f"{ROOT}.bak"
     assert worktree.relativize(text, ALIASES) == text
 
 
@@ -1142,6 +1235,19 @@ def test_sanitize_prose_survives_a_crafted_partial_alias_consumption():
     crafted = f"api_key={'A' * 16}=file://{ROOT}/abcdefgh"
     out = worktree.sanitize_prose(crafted, ALIASES)
     assert "abcdefgh" not in out
+    assert ROOT not in out
+    assert "cic-worktree-" not in out
+
+
+def test_sanitize_prose_replaces_sentence_final_bare_root_with_a_safe_marker():
+    """#420 review round 3: sanitize_prose's alias-staging shares the ambiguous-period
+    carve-out with `relativize` (both go through `_replace_aliases`), so the same leak
+    applied there too — a raw diagnostic ending in a bare worktree root plus a period (a
+    common git-stderr shape, e.g. `fatal: failed in <wt>.`) passed through completely
+    unrewritten. RED before the `_replace_aliases` fix."""
+    text = f"fatal: failed in {ROOT}."
+    out = worktree.sanitize_prose(text, ALIASES)
+    assert out == "fatal: failed in [worktree]."
     assert ROOT not in out
     assert "cic-worktree-" not in out
 

@@ -164,12 +164,18 @@ def _configured_filter_drivers(
             continue
         seen.add(name)
         if _UNNEUTRALIZABLE_DRIVER_CHARS.search(name):
-            # Cap the echoed name (like the [:200] git-stderr truncation elsewhere) so a
-            # pathologically long driver name can't bloat the client-visible envelope.
-            raise WorktreeError(
-                f"refusing to run: gitattributes filter driver {name[:100]!r} cannot be safely "
-                "neutralized (its name contains '=' or a control character)"
+            # The name is read from repo-controlled gitattributes/config, so a malformed
+            # one can itself embed the worktree path (#420 review finding 2) -- run the
+            # complete message through sanitize_prose (same aliases, same pattern as the
+            # enumeration-failure raise above) before truncating, rather than embedding
+            # `name` raw.
+            aliases = tuple(aliases)
+            raw = (
+                f"refusing to run: gitattributes filter driver {name[:100]!r} cannot be "
+                "safely neutralized (its name contains '=' or a control character)"
             )
+            message = (sanitize_prose(raw, aliases) or "")[:200] if aliases else raw
+            raise WorktreeError(message)
         names.append(name)
     return names
 
@@ -603,11 +609,28 @@ def capture_diff(wt: str, *, timeout: int) -> str:
 # both sides and was a silent no-op on every real case. On the LEFT it would mean the alias
 # is the tail of a longer path (`/other<root>/f.py`), a different file, so it is excluded.
 #
-# `.` is absent from the right-hand set deliberately: allowing it would rewrite a
-# sentence-final `<root>.` to `..`, the parent directory — more misleading than the dead
-# path it replaced. See `relativize`'s documented limitation.
+# `.` is absent from the right-hand set deliberately: allowing it as an ordinary
+# right-delimiter would rewrite a sentence-final `<root>.` to `..`, the parent directory —
+# more misleading than the dead path it replaced. That is NOT the same as leaving it
+# unmatched, though (#420 review round 3): a `.` immediately followed by a right-delimiter
+# or end of string is unambiguously the end of THIS path reference (a clause/sentence
+# boundary), never a continuation like `<root>.bak` (a genuinely different file, where the
+# `.` is followed by more path characters) — so `_replace_aliases` below matches that case
+# too, through a distinct ambiguous-suffix branch, and substitutes an unambiguous marker
+# instead of a bare `.`. Leaving it fully unmatched (the original design) let the complete
+# absolute path leak instead, which is strictly worse than the `..` ambiguity this was
+# meant to avoid, and is exactly the shape a raw git diagnostic takes
+# (`fatal: … in <wt>.`). See `relativize`'s docstring and `_AMBIGUOUS_SUFFIX_MARKER`.
 _LEFT_DELIMS = r"\s(\[{`\"'<=,;:|"
 _RIGHT_DELIMS = r"/\s)\]}`\"'<>,;:!?*|"
+
+# What an alias becomes when it is followed by the ambiguous `.` case above: unlike a bare
+# `.`, concatenating this with the literal period that follows in the source text can never
+# read as `..` (or anything else path-like), so the worktree path is removed without
+# introducing a new misleading path. Never emitted by the normal (non-ambiguous) branch,
+# which keeps using `replacement` (`.` for `relativize`, the staging placeholder for
+# `sanitize_prose`) exactly as before.
+_AMBIGUOUS_SUFFIX_MARKER = "[worktree]"
 
 
 def path_aliases(path: str) -> tuple[str, ...]:
@@ -672,9 +695,10 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
     / ``_RIGHT_DELIMS`` for why that is an allowlist rather than a denylist of path
     characters, and why ``/`` is allowed on only one side.
 
-    Known limitation: a sentence-final bare root (``... in <root>.``) is left alone,
-    because rewriting it would emit ``..`` — the parent directory, which is more
-    misleading than the dead path it replaced.
+    A sentence-final bare root (``... in <root>.``) is a special case: replacing it with a
+    bare ``.`` would emit ``..``, the parent directory, more misleading than the dead path
+    it replaced — so this one shape gets ``_AMBIGUOUS_SUFFIX_MARKER`` (``[worktree]``)
+    instead of ``.``, never a fragment of the original path either way.
 
     Aliases are sorted longest-first HERE rather than trusting the caller's order: with a
     containing alias tried second, a shorter one it contains would match first and name
@@ -694,8 +718,19 @@ def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str)
     if not usable:
         return text
     alternation = "|".join(re.escape(alias) for alias in usable)
-    pattern = re.compile(rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})(?=[{_RIGHT_DELIMS}]|$)")
-    return pattern.sub(replacement, text)
+    # The lookahead has two branches: the ordinary right-delimiter set (unambiguous --
+    # `replacement` applies), and a named `ambiguous` branch for a `.` immediately followed
+    # by a right-delimiter or end of string (a clause/sentence boundary -- see
+    # `_AMBIGUOUS_SUFFIX_MARKER`; `<root>.bak`, where more path characters follow the `.`,
+    # matches NEITHER branch and stays unmatched, same as before). Both are lookaheads, so
+    # neither consumes the `.` itself -- it survives untouched in the output either way.
+    pattern = re.compile(
+        rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})"
+        rf"(?=(?P<ambiguous>\.(?=[{_RIGHT_DELIMS}]|$))|[{_RIGHT_DELIMS}]|$)"
+    )
+    return pattern.sub(
+        lambda m: _AMBIGUOUS_SUFFIX_MARKER if m.group("ambiguous") else replacement, text
+    )
 
 
 # The stand-in an alias wears while the secret redactor runs. Three properties are required,

@@ -449,3 +449,14 @@ def test_run_delegate_classify_failure_redacts_short_path_bearing_secret(monkeyp
     result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
     assert "abcdefgh" not in result["error"]["message"]
     assert "[redacted: secret value]" in result["error"]["message"]
+
+
+def test_run_delegate_classify_failure_sanitizes_sentence_final_root(monkeypatch, tmp_path):
+    """#420 review round 3 end to end: a raw diagnostic ending in a bare worktree root plus
+    a period (`fatal: failed in <wt>.`, a common git-stderr shape) must not leak the
+    absolute path through the full run_delegate stack."""
+    wt = str(tmp_path / "cic-worktree-h" / "tree")
+    stderr = f"fatal: failed in {wt}."
+    result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
+    assert wt not in result["error"]["message"]
+    assert "cic-worktree-" not in result["error"]["message"]
