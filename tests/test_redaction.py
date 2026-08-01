@@ -1476,6 +1476,59 @@ def test_exemption_is_judged_against_the_original_line_not_the_accumulator():
     assert paths == ["app.py"]
 
 
+# --- #445 review / #456: the replaced-span projection must fail closed --------
+# The projection `(end(1), end(0))` is only correct when group 1 is a LEADING, PARTICIPATING
+# prefix of the match. That holds for all four grouped patterns shipped today — and it is a
+# property of those patterns, not of the engine, so a pattern added later (or substituted by a
+# caller) can violate it. Both violation modes leak under an unguarded projection, which is
+# why the engine validates rather than assumes and falls back to the FULL match span.
+#
+# These probes monkeypatch `SECRET_VALUE_PATTERNS` to the malformed matcher ALONE. With the
+# live list present the real `AKIA` matcher would redact the key anyway and the test would
+# pass without exercising the projection at all — the same "passes against the bug it guards"
+# trap `_PROBES` exists for. Each test asserts the malformed pattern really does violate the
+# assumption before asserting the output, so a probe that drifted into well-formedness fails
+# loudly instead of going vacuous.
+
+
+def test_a_group_that_is_not_at_the_match_start_falls_back_to_the_full_span(monkeypatch):
+    """Violation mode 1: group 1 sits in the MIDDLE of the match.
+
+    `end(1)` then lands mid-match, so everything before the group — here an entire AWS access
+    key — is copied through as "preserved" text while the marker covers only the tail.
+    """
+    malformed = re.compile(r"AKIA[0-9A-Z]{16}(_hint:)[A-Za-z0-9]{16,}")
+    text = "AKIAABCDEFGHIJKLMNOP_hint:abcdefghij1234567890"
+    probe = malformed.search(text)
+    assert probe is not None and probe.lastindex and probe.start(1) != probe.start(0), (
+        "the probe no longer violates the leading-group assumption"
+    )
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", [malformed])
+    out, redacted = redaction._redact_secret_values(text)
+    assert out == "[redacted: secret value]"
+    assert redacted is True
+
+
+def test_a_non_participating_group_1_falls_back_to_the_full_span(monkeypatch):
+    """Violation mode 2: `lastindex` is truthy but group 1 never participated.
+
+    An alternation whose SECOND branch matched leaves `span(1) == (-1, -1)` while `lastindex`
+    reports the branch that did match. The projection then carries a negative start, which
+    slices from the wrong end of the line: the secret survives intact and a stray marker
+    appears beside it.
+    """
+    malformed = re.compile(r"(?:(pre:)|(alt:))SECRETVALUE0123456789")
+    text = "xx alt:SECRETVALUE0123456789 yy"
+    probe = malformed.search(text)
+    assert probe is not None and probe.lastindex and probe.span(1) == (-1, -1), (
+        "the probe no longer leaves group 1 non-participating"
+    )
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", [malformed])
+    out, redacted = redaction._redact_secret_values(text)
+    assert out == "xx [redacted: secret value] yy"
+    assert redacted is True
+
+
 # --- free-text redaction (#58) ----------------------------------------------
 def test_redact_text_replaces_inline_secret():
     text = 'The config sets api_key = "abcdef0123456789abcdef0123" for auth.'

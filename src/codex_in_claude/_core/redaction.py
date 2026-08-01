@@ -491,6 +491,37 @@ def _diff_path_from_header(line: str) -> str:
 _SECRET_VALUE_MARKER = "[redacted: secret value]"
 
 
+def _replaced_span(match: re.Match) -> tuple[int, int]:
+    """The span ``match`` would replace: what follows its preserved group 1, or the whole
+    match when the pattern has no group.
+
+    The projection is VALIDATED rather than assumed, and falls back to the full match span on
+    violation. It is only sound when group 1 is a LEADING, PARTICIPATING prefix of the match —
+    true of all four grouped patterns in ``SECRET_VALUE_PATTERNS``, but a property of those
+    patterns rather than of this engine, so a pattern added later (or substituted by a caller)
+    can break it. Both violation modes leak, which is why they are checked rather than
+    documented (the #445 review found them; tracked as #456):
+
+    * **A group that is not at the match start** (``AKIA[0-9A-Z]{16}(_hint:)…``) puts
+      ``end(1)`` in the MIDDLE of the match, so everything before the group — the credential
+      itself — is copied through as preserved text while the marker covers only the tail.
+    * **A truthy ``lastindex`` with a non-participating group 1**
+      (``(?:(pre:)|(alt:))…``, where the second branch matched) gives ``span(1) == (-1, -1)``.
+      The projection then carries a negative start, which slices from the wrong end of the
+      line: the secret survives whole and a stray marker appears beside it.
+
+    Over-redaction is the safe direction for a secret boundary, so a violating candidate takes
+    the WHOLE match rather than being skipped (which would leak) or raising (which would turn
+    a redaction pass into an outage on prose it was only meant to mask).
+    """
+    if not match.lastindex:
+        return match.span()
+    group_start, group_end = match.span(1)
+    if group_start == match.start() and 0 <= group_end < match.end():
+        return group_end, match.end()
+    return match.span()
+
+
 def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str, bool]:
     """Replace inline secret-looking values. ``exempt_code`` leaves provable code
     references intact — only sound for a line of source (a diff body line), so callers
@@ -514,10 +545,7 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
         for match in pattern.finditer(line):
             if exempting and _is_code_reference(match):
                 continue  # an exempted candidate contributes no span
-            # The REPLACED span: what follows the preserved group 1, or the whole match when
-            # the pattern has no group. ``start(0) == start(1)`` holds for all four grouped
-            # patterns here, so this projection loses nothing that sits before the group.
-            spans.append((match.end(1), match.end(0)) if match.lastindex else match.span())
+            spans.append(_replaced_span(match))
     if not spans:
         return line, False
 

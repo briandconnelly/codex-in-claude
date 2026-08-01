@@ -33,7 +33,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   merging spans cannot widen a match; and #446 — a userinfo credential carrying a character both
   connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there) — still strands its
   remainder, because no single pattern produces a candidate spanning it and there is nothing to
-  merge. No agent-visible surface changes, so no `fingerprint` bump.
+  merge. The span projection itself now fails CLOSED: a candidate whose group 1 is not a leading,
+  participating prefix of its match — a pattern added later with a non-leading group, or an
+  alternation that leaves group 1 unmatched while `lastindex` reports another branch — has its
+  WHOLE match redacted rather than the slice the projection would compute, which in the first case
+  would copy the credential through as "preserved" text and in the second would slice from the
+  wrong end of the line and leave the secret intact beside a stray marker. No shipped pattern
+  triggers the fallback (all four grouped matchers are leading-group), so this is a guarantee for
+  future ones. No agent-visible surface changes, so no `fingerprint` bump.
 - **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
   on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
   ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
