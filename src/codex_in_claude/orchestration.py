@@ -321,7 +321,7 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
             )
         ]
         details = None  # derived from the entry by make_error, so the two cannot drift
-        message = reason
+        message = reason[:300]
     else:
         message = (redaction.redact_text(str(exc)) or "")[:300]
     return serialize_error(
