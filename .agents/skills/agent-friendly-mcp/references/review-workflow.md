@@ -20,6 +20,8 @@ A review is grounded when its findings cite evidence from the schema, the respon
 
 ## Audit Procedure
 
+0. **Establish the server's protocol revision target before judging anything.** Determine which revision(s) and extensions the server targets: from its declared summary, or failing that from its wire shapes.
+   `[1.spec-revision]` owns which rules bind regardless of target and which wire mechanics are read through the compat matrix for a declared-legacy server; a finding that flags a legacy shape on a declared-legacy surface is itself a review defect.
 1. **Read or generate the server capability summary.** If the server publishes one, start there.
    If it does not, record that absence as a Major finding against §2 and §1 by default; escalate to Critical when the server surface is broad or ambiguous enough that agents predictably fail without it.
    Record the finding and continue by reading the discovery surface (tool list, resource catalog, prompts) to reconstruct what the summary should have said.
@@ -50,6 +52,7 @@ Each should be answerable from concrete evidence — schema text, response paylo
   Look for tools whose descriptions you cannot tell apart at a glance. *(maps to §3; see `examples.md` §10 for the failure-mode shape)*
 - **First repair.** When the agent makes an invalid call, does the error response tell it specifically how to retry — which field, which allowed values, which tool to call instead?
   Force one invalid call per error code documented for the tool and read the payload, not just the message. *(maps to §6; see `examples.md` §6 for the target payload shape)*
+  When `details.value` is absent, check the agent-visible surfaces for a disclosed omission policy before charging `[6.offending-value]` — a disclosed blanket omission is conformant, and "echo the value, redacted" is not a valid remediation where sensitivity is undeterminable (that pushes toward the secrets-leaked Critical above).
 - **Advertised vs. actual.** Inspect captured responses or isolated fixtures for at least one success and one forced error per tool; use live calls only where the Safety rule permits.
   Verify that every required and claimed-always-present field is populated, that conditional fields appear under their documented conditions, and that the error carrier matches the wire — `isError: true`, envelope location, envelope shape.
   Prefer schema-invalid requests known to fail before handler execution; do not probe mutating tools with guessed placeholder values.
@@ -60,11 +63,11 @@ Each should be answerable from concrete evidence — schema text, response paylo
   Credit `search_tools` / `describe_tool` only against clients that actually withhold native definitions; on a preloading client they add cost (§2).
   A bloated definition or an inflated catalog with no client-independent reduction is the finding.
   Common bloat mechanisms to check: generated output schemas dominating bytes, framework `$defs` inlining that duplicates shared envelopes per tool, echo field descriptions that restate the field name, and identical boilerplate blocks repeated across docstrings. *(maps to §2, §8; see `examples.md` §8 for one host-managed-disclosure shape)*
-- **Capability gating.** Which optional MCP capabilities does the server rely on after initialization?
-  Verify that roots, completions, resource subscriptions, elicitation, tasks, and list-change notifications are advertised before use, and that weaker clients get a structured fallback instead of a mysterious method failure.
+- **Capability gating.** Which optional MCP capabilities does the server rely on?
+  Verify that completions, resource subscriptions, elicitation modes, the tasks extension, and list-change notifications are declared (per-request `clientCapabilities` or `server/discover`) before use, and that weaker clients get a structured fallback — the native `-32021` with `data.requiredCapabilities` — instead of a mysterious method failure.
   *(maps to §1, §2, §4, §6, §7, §9)*
 - **Resource freshness.** If the agent holds a resource URI across turns, can it tell whether the catalog changed vs. the resource body changed?
-  Check `listChanged`, `resources/subscribe`, `notifications/resources/updated`, and `annotations.lastModified` behavior where available.
+  Check `listChanged`, the `resourceSubscriptions` filter of `subscriptions/listen`, `notifications/resources/updated`, `ttlMs`/`cacheScope` on `resources/read`, and `annotations.lastModified` behavior where available.
   *(maps to §4, §9)*
 - **Long-running operation.** Does a 2-minute operation give useful progress, and can the client cancel it or recover the result later? *(maps to §7; see `examples.md` §11 for one valid shape)*
   Exercise the status and cancellation surface, not only the initial call.

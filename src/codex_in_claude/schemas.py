@@ -748,8 +748,12 @@ CoverageStatus = Literal["complete", "partial"]
 #                                already-modified file — so its ABSENCE is not proof the tree
 #                                held still (#336).
 #   truncated                  — the gathered diff hit the byte cap and was cut off.
-#   redacted                   — a secret-looking file's hunk was dropped from the diff, so
-#                                the model saw a marker instead of its content.
+#   redacted                   — secret redaction hid content from the model. EITHER a
+#                                secret-looking file's whole hunk was dropped (the model saw
+#                                a marker instead of its content) OR a secret-looking value
+#                                inside an otherwise-sent file was masked inline. The two are
+#                                not distinguished here — `meta.redacted_paths` names the
+#                                files either way (#421).
 CoverageOmissionReason = Literal[
     "untracked_omitted", "tree_changed_during_gather", "truncated", "redacted"
 ]
