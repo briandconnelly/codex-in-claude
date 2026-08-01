@@ -100,6 +100,77 @@ def _atomic_write(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+def _invalid_arguments_conformant(error: dict) -> bool:
+    """True when an `invalid_arguments` error dict satisfies BOTH halves of the contract
+    `errors.make_error` enforces at construction (errors.py, the `code ==
+    "invalid_arguments"` branch): a non-empty `invalid_arguments` list, AND `details`
+    exactly mirroring entry [0]'s `field`/`reason`/`allowed_values`. A list-only check
+    would pass a list-bearing envelope whose `details` is absent or disagrees with
+    entry [0] — the exact drift this guard exists to catch, just moved into `details`
+    instead of the list (#419 follow-up)."""
+    invalid_arguments = error.get("invalid_arguments")
+    if not isinstance(invalid_arguments, list) or not invalid_arguments:
+        return False
+    first = invalid_arguments[0]
+    if not isinstance(first, dict):
+        return False
+    details = error.get("details")
+    if not isinstance(details, dict):
+        return False
+    return all(details.get(key) == first.get(key) for key in ("field", "reason", "allowed_values"))
+
+
+def _guard_invalid_arguments(payload: dict, spec: dict) -> dict:
+    """Structural guard at the persistence boundary (#419).
+
+    `errors.make_error` enforces the `invalid_arguments` contract (a non-empty
+    per-argument list, with `details` mirroring entry [0]) for every envelope the SERVER
+    builds, but a worker-executed path writes whatever `_run` returns straight to
+    result.json with no validation — and replay (server.py) reconstructs stored records
+    via `ErrorResult.model_validate`, deliberately bypassing that constructor guard so
+    pre-existing records stay readable (see errors.make_error's docstring). So a worker
+    path that ever produced a nonconformant `invalid_arguments` envelope would persist
+    it, and replay would return it stamped with the CURRENT fingerprint — advertising a
+    conformance it does not have. This catches that here, the last point before the
+    bytes are written.
+
+    Replaces a nonconformant `invalid_arguments` envelope (see
+    `_invalid_arguments_conformant`) with a conformant `internal_error` one, preserving
+    the job meta the original payload already carried (mirrors the crash sink above:
+    `serialize_error(ErrorResult(error=make_error(...), meta=...))`). Any other payload
+    passes through unchanged.
+
+    Never raises: the payload's shape is of unknown provenance by the time it reaches
+    here, so this navigates it defensively (`.get` chains, no indexing) and wraps the
+    whole check in a broad `except Exception` — a broken guard must not be worse than no
+    guard, since the crash sink above and this call both exist to guarantee a job always
+    leaves *some* record. Any failure here falls through to the original payload as-is.
+    """
+    try:
+        if payload.get("ok") is not False:
+            return payload
+        error = payload.get("error")
+        if not isinstance(error, dict) or error.get("code") != "invalid_arguments":
+            return payload
+        if _invalid_arguments_conformant(error):
+            return payload
+        meta_payload = payload.get("meta")
+        meta = Meta.model_validate(meta_payload) if isinstance(meta_payload, dict) else None
+        if meta is None:
+            meta = _meta_from_spec(spec)
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "internal_error",
+                    "background worker produced a nonconformant invalid_arguments envelope",
+                ),
+                meta=meta,
+            )
+        )
+    except Exception:
+        return payload
+
+
 def _write_cleanup_manifest(job_dir: Path, parent: str) -> None:
     """Record the temp worktree parent so the JobStore can remove it if this worker
     is hard-killed before its own cleanup runs (see jobs.JobStore cleanup_root)."""
@@ -222,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
                 meta=_meta_from_spec(spec),
             )
         )
-    _atomic_write(job_dir / "result.json", payload)
+    _atomic_write(job_dir / "result.json", _guard_invalid_arguments(payload, spec))
     return 0
 
 

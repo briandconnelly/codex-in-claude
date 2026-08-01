@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
@@ -44,6 +45,67 @@ def _command(scenario: str, codex_home: Path) -> list[str]:
 
 def _command_logged(scenario: str, codex_home: Path, log_path: Path) -> list[str]:
     return [sys.executable, FAKE, scenario, str(codex_home), str(log_path)]
+
+
+class _GatedStream:
+    """A stderr-like binary stream whose first ``read1()`` blocks on ``gate`` before
+    yielding ``line``, then reports EOF. Lets a test deterministically starve (or later
+    release) a ``_StderrDrain`` background thread instead of racing real subprocess/OS-pipe
+    timing — #449 notes CPU load alone did not reproduce the race."""
+
+    def __init__(self, gate: threading.Event, line: bytes) -> None:
+        self._gate = gate
+        self._line = line
+        self._served = False
+
+    def read1(self, size: int = -1) -> bytes:
+        if self._served:
+            return b""
+        self._gate.wait()
+        self._served = True
+        return self._line
+
+
+class _LateStream:
+    """A stderr-like binary stream whose first ``read1()`` sleeps ``delay`` seconds — always
+    longer than ``_QUIESCE_SECONDS`` — before yielding ``line``, then reports EOF. Unlike
+    ``_GatedStream`` (released on the test's schedule), this always resumes progress AFTER
+    the quiesce bound has elapsed, deterministically pinning that a caller does not wait
+    past its bound for it (#449 external review finding 2)."""
+
+    def __init__(self, delay: float, line: bytes) -> None:
+        self._delay = delay
+        self._line = line
+        self._served = False
+
+    def read1(self, size: int = -1) -> bytes:
+        if self._served:
+            return b""
+        time.sleep(self._delay)
+        self._served = True
+        return self._line
+
+
+class _ForcedLoopError(RuntimeError):
+    """Distinctive exception raised by ``_RaisingQueue``, so a test can assert THIS
+    exception — and not some other bug — propagated out of transfer_session /
+    read_rate_limits."""
+
+
+class _RaisingQueue:
+    """A ``reader.messages`` stand-in whose ``get()`` always raises ``_ForcedLoopError``
+    instead of blocking, returning a message, or raising ``queue.Empty``. Forces the
+    JSON-RPC loop into its exception path — BEFORE any ``_settle()`` call — so the
+    `finally`'s guarded teardown (the ``if not settled:`` branch, #449 external review
+    finding 1) is exercised by a real test rather than left unverified. ``put()`` is a
+    silent no-op so the real stdout-reader daemon thread (still running underneath — only
+    ``.messages`` is swapped out) can tear down cleanly without a secondary exception."""
+
+    def get(self, timeout: float | None = None) -> Any:
+        raise _ForcedLoopError("forced exception before any settle() call")
+
+    def put(self, item: Any, timeout: float | None = None) -> None:
+        pass
 
 
 def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: str) -> None:
@@ -847,6 +909,305 @@ def test_stop_event_cancels_promptly(tmp_path):
     assert result and result[0].status is TransferStatus.TIMED_OUT
 
 
+# --- #449: settle the stderr drain before building the outcome ------------------
+
+
+def test_stderr_tail_survives_a_starved_drain_thread(tmp_path, monkeypatch):
+    """#449 regression: the drain thread must be given a chance to catch up before the
+    outcome's stderr_tail is built. A gated stub blocks the drain's read until released —
+    a deterministic starve, unlike relying on CPU load (the issue notes that did not
+    reproduce it). Release is synchronized to happen only once ``_terminate`` has actually
+    run, which also pins the ordering guarantee: a line that only becomes available once
+    the producer is being torn down must still be captured (terminate -> join -> quiesce ->
+    snapshot)."""
+    gate = threading.Event()
+    terminated = threading.Event()
+    real_stderr_drain = appserver._StderrDrain
+    real_terminate = appserver._terminate
+
+    def _gated_drain(stderr):
+        return real_stderr_drain(_GatedStream(gate, b"FINAL-SENTINEL\n"))
+
+    def _terminate_and_signal(proc):
+        real_terminate(proc)
+        # Release the stderr line from the SAME thread, immediately after termination —
+        # no cross-thread handshake, so there is no window in which the drain thread could
+        # already be past its bounded quiesce() before the line becomes available.
+        gate.set()
+        terminated.set()
+
+    monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
+    monkeypatch.setattr(appserver, "_terminate", _terminate_and_signal)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    result: list = []
+
+    def _run() -> None:
+        result.append(
+            transfer_session(
+                transcript_realpath=str(t.resolve()),
+                cwd=str(tmp_path),
+                command=_command("eof_after_init", home),
+                timeout_seconds=15,
+            )
+        )
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    worker.join(timeout=5)
+    assert terminated.is_set(), "the child was never terminated"
+    assert not worker.is_alive()
+    outcome = result[0]
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    tail = outcome.stderr_tail or ""
+    assert "FINAL-SENTINEL" in tail, "the drain thread was starved before the tail was built"
+
+
+def test_settle_returns_within_bound_when_drain_never_reaches_eof(tmp_path, monkeypatch):
+    """#449: a producer that never lets the drain reach EOF (e.g. a descendant that
+    inherited the stderr fd and kept it open) must not hang the run forever. quiesce's
+    bound caps the wait; the outcome is still produced, just without the unread tail."""
+    gate = threading.Event()  # never set — the drain's read1 blocks forever
+    real_stderr_drain = appserver._StderrDrain
+
+    def _gated_drain(stderr):
+        return real_stderr_drain(_GatedStream(gate, b"NEVER-SEEN\n"))
+
+    monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    try:
+        start = time.monotonic()
+        outcome = transfer_session(
+            transcript_realpath=str(t.resolve()),
+            cwd=str(tmp_path),
+            command=_command("eof_after_init", home),
+            timeout_seconds=15,
+        )
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "settle must be bounded, not hang on a permanently blocked stream"
+        assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    finally:
+        gate.set()  # release the daemon thread still parked in read1()
+
+
+def test_stop_event_cancellation_runs_the_settle_step(tmp_path, monkeypatch):
+    """#449: even though the cancellation outcome carries no stderr_tail (the value is
+    discarded — the caller re-raises), the settle step (terminate -> join -> quiesce) must
+    still run on this exit so the child is torn down the same way as every other path."""
+    calls: list = []
+    real_settle = appserver._settle_and_tail
+
+    def _spy(proc, reader, drain):
+        calls.append(True)
+        return real_settle(proc, reader, drain)
+
+    monkeypatch.setattr(appserver, "_settle_and_tail", _spy)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    stop = threading.Event()
+    result: list = []
+
+    def _run() -> None:
+        result.append(
+            transfer_session(
+                transcript_realpath=str(t.resolve()),
+                cwd=str(tmp_path),
+                command=_command("timeout", home),  # hangs, never completes
+                timeout_seconds=30,
+                stop_event=stop,
+            )
+        )
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    time.sleep(0.5)  # let it reach the read loop
+    stop.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert result and result[0].status is TransferStatus.TIMED_OUT
+    assert calls, "the cancellation exit must run the settle step"
+
+
+def test_terminate_is_called_exactly_once_on_a_settled_path(tmp_path, monkeypatch):
+    """#449 external review finding 1: repeating `_terminate` after the first call has
+    already reaped the leader risks targeting a pid the OS has since recycled for an
+    unrelated process. Every return in transfer_session now goes through `_settle()` before
+    building its outcome, and the `finally` skips its own `_terminate` call once settled —
+    so on a normal (settled) return, the terminate wrapper must fire exactly once, not
+    twice."""
+    calls: list = []
+    real_terminate = appserver._terminate
+
+    def _spy(proc):
+        calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_terminate", _spy)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("eof_after_init", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert len(calls) == 1, "finally must not call _terminate again after settle already did"
+
+
+def test_rate_limits_terminate_is_called_exactly_once_on_a_settled_path(tmp_path, monkeypatch):
+    """Mirrors test_terminate_is_called_exactly_once_on_a_settled_path for read_rate_limits."""
+    calls: list = []
+    real_terminate = appserver._terminate
+
+    def _spy(proc):
+        calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_terminate", _spy)
+
+    outcome = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
+    assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
+    assert len(calls) == 1, "finally must not call _terminate again after settle already did"
+
+
+def test_finally_terminates_exactly_once_on_an_exception_before_settle(tmp_path, monkeypatch):
+    """#449 external review follow-up: the `if not settled:` branch in transfer_session's
+    `finally` — the exception-path teardown — was previously unexercised by any test (it was
+    implicitly covered before this branch existed, because the old unconditional `finally`
+    body ran on every test regardless of outcome). Force an exception AFTER the child is
+    spawned but BEFORE any `_settle()` call, by swapping the reader's message queue for one
+    whose `get()` always raises instead of ever returning a message or `queue.Empty`. Assert
+    both halves of the contract: the exception propagates (transfer_session does not swallow
+    it — unrelated to and predating #449), and `_terminate` fires exactly once, via the
+    finally's guarded call, since `settled` never got set."""
+    real_spawn_reader = appserver._spawn_reader
+    real_terminate = appserver._terminate
+    terminate_calls: list = []
+
+    def _spawn_reader_that_raises(*args, **kwargs):
+        reader = real_spawn_reader(*args, **kwargs)
+        reader.messages = _RaisingQueue()
+        return reader
+
+    def _terminate_spy(proc):
+        terminate_calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_spawn_reader", _spawn_reader_that_raises)
+    monkeypatch.setattr(appserver, "_terminate", _terminate_spy)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    with pytest.raises(_ForcedLoopError):
+        transfer_session(
+            transcript_realpath=str(t.resolve()),
+            cwd=str(tmp_path),
+            command=_command("timeout", home),  # hangs on its own; irrelevant, we raise first
+            timeout_seconds=15,
+        )
+    assert len(terminate_calls) == 1, "finally must terminate exactly once on the exception path"
+
+
+def test_rate_limits_finally_terminates_exactly_once_on_an_exception_before_settle(
+    tmp_path, monkeypatch
+):
+    """Mirrors test_finally_terminates_exactly_once_on_an_exception_before_settle for
+    read_rate_limits."""
+    real_spawn_reader = appserver._spawn_reader
+    real_terminate = appserver._terminate
+    terminate_calls: list = []
+
+    def _spawn_reader_that_raises(*args, **kwargs):
+        reader = real_spawn_reader(*args, **kwargs)
+        reader.messages = _RaisingQueue()
+        return reader
+
+    def _terminate_spy(proc):
+        terminate_calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_spawn_reader", _spawn_reader_that_raises)
+    monkeypatch.setattr(appserver, "_terminate", _terminate_spy)
+
+    with pytest.raises(_ForcedLoopError):
+        read_rate_limits(command=_command("rl_timeout", tmp_path / "ch"), timeout_seconds=15)
+    assert len(terminate_calls) == 1, "finally must terminate exactly once on the exception path"
+
+
+def test_late_progress_past_the_quiesce_bound_is_not_captured(tmp_path, monkeypatch):
+    """#449 external review finding 2: quiesce's bound is real, not advisory. A stream whose
+    drain thread only resumes progress AFTER `_QUIESCE_SECONDS` has already elapsed is not
+    retroactively folded into the snapshot `_settle_and_tail` already took by the time its
+    bound expired — the tail is bounded and may be incomplete.
+
+    This is the accepted, deliberately decided boundary, not a bug: the alternative (an
+    unbounded quiesce, or one that keeps extending on progress) would let a stuck-then-
+    trickling descendant hang the caller indefinitely. `_QUIESCE_SECONDS` trades a small,
+    bounded chance of a truncated diagnostic for a hard ceiling on teardown time."""
+    real_stderr_drain = appserver._StderrDrain
+    late = _LateStream(appserver._QUIESCE_SECONDS + 3.0, b"TOO-LATE-SENTINEL\n")
+
+    def _gated_drain(stderr):
+        return real_stderr_drain(late)
+
+    monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    start = time.monotonic()
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("eof_after_init", home),
+        timeout_seconds=15,
+    )
+    elapsed = time.monotonic() - start
+    # Returned once the quiesce bound elapsed, not once the (much later) line arrived.
+    assert appserver._QUIESCE_SECONDS - 0.1 <= elapsed < appserver._QUIESCE_SECONDS + 1.5
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    tail = outcome.stderr_tail or ""
+    assert "TOO-LATE-SENTINEL" not in tail, "progress past the quiesce bound must not be captured"
+
+
+def test_quiesce_returns_promptly_on_a_finished_stream():
+    """Unit case for ``_StderrDrain.quiesce``: a stream that already hit EOF lets the join
+    return almost immediately, well inside a generous bound."""
+    drain = appserver._StderrDrain(io.BytesIO(b"already-done\n"))
+    start = time.monotonic()
+    drain.quiesce(5.0)
+    assert time.monotonic() - start < 1.0
+    assert "already-done" in drain.snapshot()
+
+
+def test_quiesce_is_bounded_on_a_stream_that_never_reaches_eof():
+    """Unit case for ``_StderrDrain.quiesce``: a stream that never yields EOF must not
+    extend the wait past the given bound — never raises, never hangs on a stuck producer.
+    The lower edge matters as much as the upper one: without it a no-op ``quiesce`` (one
+    that never actually joins the thread) would pass this test just as well as a real
+    bounded join would."""
+    gate = threading.Event()  # never set
+    drain = appserver._StderrDrain(_GatedStream(gate, b"unused\n"))
+    try:
+        start = time.monotonic()
+        drain.quiesce(0.2)
+        elapsed = time.monotonic() - start
+        assert 0.2 <= elapsed < 2.0, "must actually wait out the bound, not return early or hang"
+    finally:
+        gate.set()  # release the daemon thread still parked in read1()
+
+
 # --- completed-notification resolver unit cases ---------------------------------
 
 
@@ -1336,6 +1697,109 @@ def test_rate_limits_init_non_json_is_protocol_error(tmp_path):
 def test_rate_limits_init_error_is_protocol_error(tmp_path):
     out = read_rate_limits(command=_command("init_error", tmp_path / "ch"), timeout_seconds=10)
     assert out.status is RateLimitReadStatus.PROTOCOL_ERROR
+
+
+# --- #449: read_rate_limits gets the identical settle-ordering fix --------------
+
+
+def test_rate_limits_stderr_tail_survives_a_starved_drain_thread(tmp_path, monkeypatch):
+    """Mirrors test_stderr_tail_survives_a_starved_drain_thread for the sibling one-shot
+    path (#449): the same settle ordering (terminate -> join -> quiesce -> snapshot) must
+    rescue a stderr line that only becomes available once the producer is torn down."""
+    gate = threading.Event()
+    terminated = threading.Event()
+    real_stderr_drain = appserver._StderrDrain
+    real_terminate = appserver._terminate
+
+    def _gated_drain(stderr):
+        return real_stderr_drain(_GatedStream(gate, b"FINAL-SENTINEL\n"))
+
+    def _terminate_and_signal(proc):
+        real_terminate(proc)
+        # Release the stderr line from the SAME thread, immediately after termination —
+        # no cross-thread handshake, so there is no window in which the drain thread could
+        # already be past its bounded quiesce() before the line becomes available.
+        gate.set()
+        terminated.set()
+
+    monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
+    monkeypatch.setattr(appserver, "_terminate", _terminate_and_signal)
+
+    result: list = []
+
+    def _run() -> None:
+        result.append(
+            read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
+        )
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    worker.join(timeout=5)
+    assert terminated.is_set(), "the child was never terminated"
+    assert not worker.is_alive()
+    outcome = result[0]
+    assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
+    tail = outcome.stderr_tail or ""
+    assert "FINAL-SENTINEL" in tail, "the drain thread was starved before the tail was built"
+
+
+def test_rate_limits_settle_returns_within_bound_when_drain_never_reaches_eof(
+    tmp_path, monkeypatch
+):
+    """Mirrors test_settle_returns_within_bound_when_drain_never_reaches_eof for
+    read_rate_limits: a permanently blocked stderr stream must not hang the run."""
+    gate = threading.Event()  # never set
+    real_stderr_drain = appserver._StderrDrain
+
+    def _gated_drain(stderr):
+        return real_stderr_drain(_GatedStream(gate, b"NEVER-SEEN\n"))
+
+    monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
+
+    try:
+        start = time.monotonic()
+        outcome = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "settle must be bounded, not hang on a permanently blocked stream"
+        assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
+    finally:
+        gate.set()  # release the daemon thread still parked in read1()
+
+
+def test_rate_limits_stop_event_cancellation_runs_the_settle_step(tmp_path, monkeypatch):
+    """Mirrors test_stop_event_cancellation_runs_the_settle_step for read_rate_limits: the
+    cancellation exit must run the shared settle step too, even though its outcome carries
+    no stderr_tail."""
+    calls: list = []
+    real_settle = appserver._settle_and_tail
+
+    def _spy(proc, reader, drain):
+        calls.append(True)
+        return real_settle(proc, reader, drain)
+
+    monkeypatch.setattr(appserver, "_settle_and_tail", _spy)
+
+    home = tmp_path / "ch"
+    stop = threading.Event()
+    result: list = []
+
+    def _run() -> None:
+        result.append(
+            read_rate_limits(
+                command=_command("rl_timeout", home),  # hangs, never completes
+                timeout_seconds=30,
+                stop_event=stop,
+            )
+        )
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    time.sleep(0.5)  # let it reach the read loop
+    stop.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert result and result[0].status is RateLimitReadStatus.TIMED_OUT
+    assert calls, "the cancellation exit must run the settle step"
 
 
 # --- _parse_rate_limits (discriminated pure mapping) ----------------------------

@@ -7,6 +7,57 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A transfer or rate-limit read's `stderr_tail` no longer races the drain thread that
+  fills it for a terminated child** (#449). `_StderrDrain` reads a child's stderr on its own
+  daemon thread and kept no reference to it, so `transfer_session` and `read_rate_limits`
+  could build their outcome — snapshotting the drain — with zero synchronization against
+  that thread. On a loaded runner the scheduler could exit the child and let the outcome be
+  assembled before the last, most diagnostic line ever reached the capture, and a quiesce
+  placed in the `finally` could not fix it: Python evaluates a `return` expression before
+  `finally` runs, so the outcome was already built. The fix is a shared settle step
+  (`_settle_and_tail`) that every post-spawn exit in both functions now runs before
+  constructing its outcome — terminate the child, join the stdout reader, then give the
+  newly-tracked drain thread a bounded `quiesce()` (~2s, comfortably above the milliseconds
+  EOF normally takes once the child is dead) to catch up, and only then take the final
+  snapshot. This removes the race for the common case — a child that has actually
+  terminated. It does **not** promise a complete tail unconditionally: a stream that never
+  reaches EOF (a descendant that inherited the fd, or one whose progress resumes only after
+  the quiesce bound has already elapsed) still yields a bounded, possibly incomplete tail —
+  that boundary is deliberate and unchanged, and is now pinned by tests rather than left
+  implicit. `_terminate` is meant to run exactly once per child, not to be repeat-called:
+  after the first call has already reaped the leader, the OS is free to recycle that pid for
+  an unrelated process before a second call would run, so repeating it is not safe. The
+  settle step now tracks whether it already ran one so `finally` skips its own call on every
+  settled path; `finally` remains the sole teardown only for a path that raises instead of
+  returning. No agent-visible surface changed.
+
+- **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
+  on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
+  ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
+  position scanned the unbounded first segment to the end of the run hunting a `.` that never
+  comes, then backtracked one character at a time before trying the next anchor — measured at
+  `"eyJ"*26666` (80k chars) 1432ms, `"eyJ"*53332` (160k) 5676ms, roughly 4x time per 2x input (the
+  regression test's own rep count was separately raised to 90000 on the implementation machine, so
+  the old pattern lands at least 8x over the test's 2.0s budget rather than merely exceeding it).
+  `redact_text` runs on untrusted model output via `redact_tree`, so input size and shape are
+  attacker-influenced — a liveness/DoS concern, since a sync tool that blows its deadline loses its
+  paid work. The fix bounds only the *first* segment, at `{8,512}` post-anchor characters (515
+  total including the `eyJ` anchor itself): capping seg1 caps per-anchor work *and* caps how many
+  anchors ever reach seg2, which is what kills the quadratic blowup rather than merely capping one
+  match's cost — the same two measurements after the fix: 18ms and 37ms, roughly linear. 512 is
+  deliberately generous: real JOSE headers are base64url of compact JSON, typically 20-60
+  characters and ~120 with `kid`/`jku`, so 512 is about 8x that; the `x5c`
+  certificate-chain-in-header outlier that can exceed it is the accepted, pinned boundary, and such
+  a token is still caught when labelled (`token=…`) or on an `Authorization: Bearer` line by those
+  patterns. seg2 and seg3 stay unbounded — payloads are legitimately KBs, seg3 has no follower to
+  backtrack against, and seg2's backtracking is transitively bounded once seg1 is capped. A
+  possessive quantifier (`{8,}+`) and an atomic group (`(?>...)`) both compile on this repo's
+  supported Pythons (3.11+), but neither fixes this: both only suppress backtracking *within one
+  match attempt*, not the fresh scan repeated at every successive anchor position, which is the
+  actual source of the quadratic blowup; a
+  `(?<![A-Za-z0-9_-])` left-context lookbehind does kill the blowup too but costs coverage of an
+  embedded `xxxeyJ…` match that redacts today, so it was rejected as the fix and used instead as
+  the differential sweep's sensitivity control.
 - **`gitdiff_error`'s `invalid_arguments` branch no longer echoes the rejected value in its
   human-readable `message`** (#418). `InvalidArgument` and `ErrorDetail` both promise the rejected
   value is never echoed — it may be a secret — and the machine fields already honored that for
@@ -51,6 +102,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   renders as `[worktree].` instead of surviving as the dead absolute path. Internal API only:
   no result `fingerprint` or `RESULT_FORMAT` change.
 
+- **The background worker now guards its own persistence boundary against a nonconformant
+  `invalid_arguments` envelope** (#419). `errors.make_error` enforces the `invalid_arguments`
+  contract for every envelope the server *builds* — a non-empty per-argument list, AND `details`
+  exactly mirroring that list's first entry — but the worker wrote whatever its dispatched producer
+  returned straight to `result.json` with no validation, and replay reconstructs stored records
+  through `ErrorResult.model_validate`, which deliberately bypasses that constructor guard so a
+  pre-existing record stays readable. A worker path that ever produced a listless
+  `invalid_arguments` envelope, or one whose `details` disagreed with its own list, would therefore
+  persist it, and replay would return it stamped with the *current* fingerprint — advertising a
+  conformance it never had. No worker path can mint one today, but nothing tied that property to
+  the invariant. `_worker.main` now normalizes any such envelope to a conformant `internal_error`
+  immediately before the atomic write, preserving the run's own meta; an envelope that satisfies
+  BOTH halves of the contract passes through unchanged, and a failure inside the guard itself falls
+  through to persisting the original payload rather than losing the record. No `FINGERPRINT` or
+  `RESULT_FORMAT` change — this is a runtime normalization on an already-broken path, not a schema
+  or description change.
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
   never revisits consumed text. Every matcher except the connection-string pair is
