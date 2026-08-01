@@ -66,6 +66,26 @@ class _GatedStream:
         return self._line
 
 
+class _LateStream:
+    """A stderr-like binary stream whose first ``read1()`` sleeps ``delay`` seconds — always
+    longer than ``_QUIESCE_SECONDS`` — before yielding ``line``, then reports EOF. Unlike
+    ``_GatedStream`` (released on the test's schedule), this always resumes progress AFTER
+    the quiesce bound has elapsed, deterministically pinning that a caller does not wait
+    past its bound for it (#449 external review finding 2)."""
+
+    def __init__(self, delay: float, line: bytes) -> None:
+        self._delay = delay
+        self._line = line
+        self._served = False
+
+    def read1(self, size: int = -1) -> bytes:
+        if self._served:
+            return b""
+        time.sleep(self._delay)
+        self._served = True
+        return self._line
+
+
 def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: str) -> None:
     codex_home.mkdir(parents=True, exist_ok=True)
     (codex_home / "external_agent_session_imports.json").write_text(
@@ -994,9 +1014,14 @@ def test_stop_event_cancellation_runs_the_settle_step(tmp_path, monkeypatch):
 
 
 def test_terminate_is_idempotent():
-    """#449: ``_settle_and_tail`` and the ``finally`` safety net both call ``_terminate``
-    on the same process — a second call on an already-terminated process must be a safe
-    no-op, never raise, never hang."""
+    """``_terminate`` itself must tolerate being called twice on the SAME process without
+    raising or hanging — pinned directly here. Production code no longer relies on this for
+    the common settled path (see test_terminate_is_called_exactly_once_on_a_settled_path
+    and its read_rate_limits mirror): a second call after the first has already reaped the
+    leader risks targeting a pid the OS has since recycled (#449 external review finding 1),
+    so `finally` now skips its own call once settle already ran one. The property tested
+    here still matters for a path that raises instead of returning, where `finally` is the
+    only teardown and may itself run more than once across nested exception handling."""
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
         stdin=subprocess.PIPE,
@@ -1007,6 +1032,87 @@ def test_terminate_is_idempotent():
     appserver._terminate(proc)
     appserver._terminate(proc)  # must not raise or hang
     assert proc.returncode is not None
+
+
+def test_terminate_is_called_exactly_once_on_a_settled_path(tmp_path, monkeypatch):
+    """#449 external review finding 1: repeating `_terminate` after the first call has
+    already reaped the leader risks targeting a pid the OS has since recycled for an
+    unrelated process. Every return in transfer_session now goes through `_settle()` before
+    building its outcome, and the `finally` skips its own `_terminate` call once settled —
+    so on a normal (settled) return, the terminate wrapper must fire exactly once, not
+    twice."""
+    calls: list = []
+    real_terminate = appserver._terminate
+
+    def _spy(proc):
+        calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_terminate", _spy)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("eof_after_init", home),
+        timeout_seconds=15,
+    )
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    assert len(calls) == 1, "finally must not call _terminate again after settle already did"
+
+
+def test_rate_limits_terminate_is_called_exactly_once_on_a_settled_path(tmp_path, monkeypatch):
+    """Mirrors test_terminate_is_called_exactly_once_on_a_settled_path for read_rate_limits."""
+    calls: list = []
+    real_terminate = appserver._terminate
+
+    def _spy(proc):
+        calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_terminate", _spy)
+
+    outcome = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
+    assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
+    assert len(calls) == 1, "finally must not call _terminate again after settle already did"
+
+
+def test_late_progress_past_the_quiesce_bound_is_not_captured(tmp_path, monkeypatch):
+    """#449 external review finding 2: quiesce's bound is real, not advisory. A stream whose
+    drain thread only resumes progress AFTER `_QUIESCE_SECONDS` has already elapsed is not
+    retroactively folded into the snapshot `_settle_and_tail` already took by the time its
+    bound expired — the tail is bounded and may be incomplete.
+
+    This is the accepted, deliberately decided boundary, not a bug: the alternative (an
+    unbounded quiesce, or one that keeps extending on progress) would let a stuck-then-
+    trickling descendant hang the caller indefinitely. `_QUIESCE_SECONDS` trades a small,
+    bounded chance of a truncated diagnostic for a hard ceiling on teardown time."""
+    real_stderr_drain = appserver._StderrDrain
+    late = _LateStream(appserver._QUIESCE_SECONDS + 3.0, b"TOO-LATE-SENTINEL\n")
+
+    def _gated_drain(stderr):
+        return real_stderr_drain(late)
+
+    monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    start = time.monotonic()
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command("eof_after_init", home),
+        timeout_seconds=15,
+    )
+    elapsed = time.monotonic() - start
+    # Returned once the quiesce bound elapsed, not once the (much later) line arrived.
+    assert appserver._QUIESCE_SECONDS - 0.1 <= elapsed < appserver._QUIESCE_SECONDS + 1.5
+    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    tail = outcome.stderr_tail or ""
+    assert "TOO-LATE-SENTINEL" not in tail, "progress past the quiesce bound must not be captured"
 
 
 def test_quiesce_returns_promptly_on_a_finished_stream():

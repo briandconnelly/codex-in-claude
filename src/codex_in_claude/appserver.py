@@ -60,6 +60,13 @@ _STDERR_LINE_CAP = 2 * _MAX_STDERR_BYTES
 # Max blocking-read slice: caps how long the loop waits before re-checking the deadline
 # and the cooperative-cancellation stop flag, so a cancelled call tears down promptly.
 _POLL_SECONDS = 0.25
+# Bound for _settle_and_tail's post-terminate drain.quiesce (#449 external review finding 2).
+# Deliberately larger than _POLL_SECONDS, which the reader join keeps: after the child is
+# SIGKILLed, its stderr pipe closes and the drain thread normally reaches EOF within
+# milliseconds, so this bound is rarely spent in full. ~100x that headroom absorbs scheduler
+# jitter on a loaded runner (the actual #449 failure mode) while staying bounded — a
+# descendant that inherited the fd and never lets go still can't hang the caller past it.
+_QUIESCE_SECONDS = 2.0
 # Aggregate cap on messages buffered ahead of the single-consumer loop. Small on purpose:
 # the valid burst is initialize -> import response and/or completed, so a handful is ample
 # slack. A drifting app-server that floods faster than the loop drains then blocks the
@@ -678,18 +685,20 @@ def _settle_and_tail(proc: subprocess.Popen, reader: _Reader, drain: _StderrDrai
 
     1. Release a reader parked in ``put()`` on a full queue — same as the original
        ``finally``, done first so a stopped consumer doesn't strand that thread.
-    2. Terminate the child. ``_terminate`` is idempotent, so the ``finally``'s own call
-       (which still runs after every return, exception paths included) stays a safe no-op
-       here.
+    2. Terminate the child. ``_terminate`` is idempotent, so a stray extra call stays a
+       safe no-op — but the caller is expected to skip its own redundant call once this
+       function has run (see the ``settled`` pattern in ``transfer_session`` /
+       ``read_rate_limits``): repeating ``_terminate`` after the OS has recycled the pid
+       risks signaling an unrelated process (#449 external review finding 1).
     3. Join the stdout reader thread, bounded by ``_POLL_SECONDS``.
-    4. Quiesce the stderr drain, also bounded by ``_POLL_SECONDS``: the child is dead by
-       this point, so its pipe closes and the drain reaches EOF almost immediately — the
-       bound exists for the pathological case (a surviving descendant holding the fd), not
-       the common one."""
+    4. Quiesce the stderr drain, bounded by the larger ``_QUIESCE_SECONDS``: the child is
+       dead by this point, so its pipe closes and the drain reaches EOF almost immediately
+       in the common case — the bound exists for the pathological one (a surviving
+       descendant holding the fd), not to cap ordinary teardown."""
     reader.stop.set()
     _terminate(proc)
     reader.thread.join(timeout=_POLL_SECONDS)
-    drain.quiesce(_POLL_SECONDS)
+    drain.quiesce(_QUIESCE_SECONDS)
     return drain.snapshot()
 
 
@@ -759,6 +768,19 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     drain = _StderrDrain(proc.stderr)
     reader = _spawn_reader(proc.stdout)
 
+    # Tracks whether _settle() (below) already ran the terminate/join/quiesce sequence, so
+    # the `finally` can skip its own redundant _terminate call (#449 external review finding
+    # 1): `_terminate` is idempotent against a double call on the SAME process, but a second
+    # call after the first has already reaped the leader risks targeting a pid the OS has
+    # since recycled for an unrelated process. Every return path below goes through _settle()
+    # instead of _settle_and_tail directly so this flag is never missed.
+    settled = False
+
+    def _settle() -> str:
+        nonlocal settled
+        settled = True
+        return _settle_and_tail(proc, reader, drain)
+
     def _send(obj: dict[str, Any]) -> None:
         if proc.stdin is None:  # pragma: no cover
             return
@@ -790,7 +812,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 # discarded (the caller re-raises), but we still settle before returning so
                 # the child is torn down the same way as every other exit (#449) — the
                 # finally's own call stays a safe no-op behind this one.
-                _settle_and_tail(proc, reader, drain)
+                _settle()
                 return TransferOutcome(
                     status=TransferStatus.TIMED_OUT,
                     import_id=import_id,
@@ -802,7 +824,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     status=TransferStatus.TIMED_OUT,
                     import_id=import_id,
                     codex_home=codex_home,
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             try:
                 # Cap each wait so the deadline and the stop flag are re-checked promptly.
@@ -815,14 +837,14 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     import_id=import_id,
                     codex_home=codex_home,
                     message="codex app-server exited before the import completed.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg is _BAD_LINE:
                 return TransferOutcome(
                     status=TransferStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
                     message="codex app-server emitted a non-JSON or oversized line.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if not isinstance(msg, dict):
                 continue
@@ -835,7 +857,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     message=f"codex app-server initialize failed: {_display_text(detail)}"
                     if detail
                     else "codex app-server rejected initialize.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             # initialize response → capture codexHome, then send initialized + import.
             if msg.get("id") == 1 and "result" in msg and not import_sent:
@@ -865,7 +887,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
                         message=detail,
-                        stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                        stderr_tail=_display_stderr_tail(_settle()),
                     )
                 codex_home = home
                 _send(
@@ -892,7 +914,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.UNSUPPORTED,
                         codex_home=codex_home,
-                        stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                        stderr_tail=_display_stderr_tail(_settle()),
                     )
                 if status is TransferStatus.PROTOCOL_ERROR:
                     return TransferOutcome(
@@ -902,7 +924,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                         f"{_display_text(detail)}"
                         if detail
                         else "codex app-server rejected the import request.",
-                        stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                        stderr_tail=_display_stderr_tail(_settle()),
                     )
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
@@ -910,7 +932,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     message=_display_text(detail)
                     if detail
                     else "codex app-server rejected the import.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == 2 and "result" in msg:
                 result = msg.get("result")
@@ -934,20 +956,24 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     transcript_realpath=transcript_realpath,
                     codex_home=codex_home,
                     import_id=import_id,
-                    stderr_tail=_settle_and_tail(proc, reader, drain),
+                    stderr_tail=_settle(),
                 )
             # Everything else (progress notifications, unknown methods, extra fields):
             # ignore and keep reading (tolerant decoding).
     finally:
         # A safety net, not the primary teardown (#449): every return above already ran
-        # _settle_and_tail, which did this same sequence before the outcome was built, so
-        # this is normally an idempotent no-op (_terminate tolerates a repeat call). It
-        # still matters for a path that raises instead of returning — release a reader
-        # parked in put() on a full queue BEFORE killing the child, then tear down and make
-        # a bounded join so we don't strand a daemon thread per transfer.
-        reader.stop.set()
-        _terminate(proc)
-        reader.thread.join(timeout=_POLL_SECONDS)
+        # _settle() and set `settled`, which ran this same sequence before the outcome was
+        # built. Skip it here when settled — a second _terminate call is NOT a safe no-op in
+        # general (#449 external review finding 1): the first call already reaped the leader,
+        # and the OS is free to recycle that pid for an unrelated process before this second
+        # call would run, so `_terminate` could SIGKILL a process it was never meant to touch.
+        # This branch still matters for a path that raises instead of returning — release a
+        # reader parked in put() on a full queue BEFORE killing the child, then tear down and
+        # make a bounded join so we don't strand a daemon thread per transfer.
+        if not settled:
+            reader.stop.set()
+            _terminate(proc)
+            reader.thread.join(timeout=_POLL_SECONDS)
 
 
 # --- account/rateLimits/read (0.144+): live quota, no model spend -------------------
@@ -1139,6 +1165,16 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
         lambda m: isinstance(m, dict) and (m.get("id") == 1 or m.get("id") == read_id),
     )
 
+    # See transfer_session's identical `settled` flag: lets the `finally` skip its own
+    # redundant _terminate call once _settle() has already run one (#449 external review
+    # finding 1) — a second call risks targeting a pid the OS has since recycled.
+    settled = False
+
+    def _settle() -> str:
+        nonlocal settled
+        settled = True
+        return _settle_and_tail(proc, reader, drain)
+
     def _send(obj: dict[str, Any]) -> None:
         if proc.stdin is None:  # pragma: no cover
             return
@@ -1167,7 +1203,7 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 # but we still settle before returning so the child is torn down the same
                 # way as every other exit (#449) — the finally's own call stays a safe
                 # no-op behind this one.
-                _settle_and_tail(proc, reader, drain)
+                _settle()
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.TIMED_OUT, codex_home=codex_home
                 )
@@ -1176,7 +1212,7 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.TIMED_OUT,
                     codex_home=codex_home,
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             try:
                 msg = reader.messages.get(timeout=min(remaining, _POLL_SECONDS))
@@ -1187,14 +1223,14 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     status=RateLimitReadStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
                     message="codex app-server exited before the rate-limit read completed.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg is _BAD_LINE:
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
                     message="codex app-server emitted a non-JSON or oversized line.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if not isinstance(msg, dict):
                 continue
@@ -1206,7 +1242,7 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     message=f"codex app-server initialize failed: {_display_text(detail)}"
                     if detail
                     else "codex app-server rejected initialize.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == 1 and "result" in msg and not read_sent:
                 result = msg.get("result")
@@ -1243,7 +1279,7 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return RateLimitReadOutcome(
                         status=RateLimitReadStatus.UNSUPPORTED,
                         codex_home=codex_home,
-                        stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                        stderr_tail=_display_stderr_tail(_settle()),
                     )
                 detail = error.get("message")
                 return RateLimitReadOutcome(
@@ -1253,7 +1289,7 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     f"{_display_text(detail)}"
                     if detail
                     else "codex app-server rejected the rate-limit read.",
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == read_id and "result" in msg:
                 status, snapshot = _parse_rate_limits(msg.get("result"))
@@ -1262,20 +1298,22 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                         status=RateLimitReadStatus.PROTOCOL_ERROR,
                         codex_home=codex_home,
                         message="codex app-server returned a malformed rate-limit result.",
-                        stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                        stderr_tail=_display_stderr_tail(_settle()),
                     )
                 return RateLimitReadOutcome(
                     status=status,
                     snapshot=snapshot,
                     codex_home=codex_home,
-                    stderr_tail=_display_stderr_tail(_settle_and_tail(proc, reader, drain)),
+                    stderr_tail=_display_stderr_tail(_settle()),
                 )
             # Everything else (interleaved notifications, unknown/unsolicited ids): tolerant ignore.
     finally:
         # A safety net, not the primary teardown (#449): every return above already ran
-        # _settle_and_tail, which did this same sequence before the outcome was built, so
-        # this is normally an idempotent no-op (_terminate tolerates a repeat call). It
-        # still matters for a path that raises instead of returning.
-        reader.stop.set()
-        _terminate(proc)
-        reader.thread.join(timeout=_POLL_SECONDS)
+        # _settle() and set `settled`, which ran this same sequence before the outcome was
+        # built. Skip it here when settled — see transfer_session's identical finally for why
+        # a second _terminate call is not a safe no-op in general (#449 external review
+        # finding 1). This branch still matters for a path that raises instead of returning.
+        if not settled:
+            reader.stop.set()
+            _terminate(proc)
+            reader.thread.join(timeout=_POLL_SECONDS)
