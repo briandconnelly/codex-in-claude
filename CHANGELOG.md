@@ -7,6 +7,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A transfer or rate-limit read's `stderr_tail` no longer races the drain thread that
+  fills it for a terminated child** (#449). `_StderrDrain` reads a child's stderr on its own
+  daemon thread and kept no reference to it, so `transfer_session` and `read_rate_limits`
+  could build their outcome — snapshotting the drain — with zero synchronization against
+  that thread. On a loaded runner the scheduler could exit the child and let the outcome be
+  assembled before the last, most diagnostic line ever reached the capture, and a quiesce
+  placed in the `finally` could not fix it: Python evaluates a `return` expression before
+  `finally` runs, so the outcome was already built. The fix is a shared settle step
+  (`_settle_and_tail`) that every post-spawn exit in both functions now runs before
+  constructing its outcome — terminate the child, join the stdout reader, then give the
+  newly-tracked drain thread a bounded `quiesce()` (~2s, comfortably above the milliseconds
+  EOF normally takes once the child is dead) to catch up, and only then take the final
+  snapshot. This removes the race for the common case — a child that has actually
+  terminated. It does **not** promise a complete tail unconditionally: a stream that never
+  reaches EOF (a descendant that inherited the fd, or one whose progress resumes only after
+  the quiesce bound has already elapsed) still yields a bounded, possibly incomplete tail —
+  that boundary is deliberate and unchanged, and is now pinned by tests rather than left
+  implicit. `_terminate` is meant to run exactly once per child, not to be repeat-called:
+  after the first call has already reaped the leader, the OS is free to recycle that pid for
+  an unrelated process before a second call would run, so repeating it is not safe. The
+  settle step now tracks whether it already ran one so `finally` skips its own call on every
+  settled path; `finally` remains the sole teardown only for a path that raises instead of
+  returning. No agent-visible surface changed.
+
 - **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
   on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
   ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
