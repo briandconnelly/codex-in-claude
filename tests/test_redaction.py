@@ -309,6 +309,235 @@ def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
     assert redaction.redact_text(text) == text
 
 
+# --- #439: the JWT pattern is quadratic on repeated-anchor text --------------
+# Same shape as #438's scheme run: an unbounded greedy class ahead of a literal
+# (`\.`) that never arrives. On text built from repeated `eyJ`, every anchor
+# position scans the unbounded first segment to the end of the run and
+# backtracks hunting a `.` that is never there — quadratic, and reachable from
+# untrusted model output the same way #438 was (`redact_text` via `redact_tree`,
+# both called from `orchestration.py`).
+#
+# One repeated-anchor (seed, reps) pair per LIVE pattern, keyed on the pattern's
+# own compiled source (the `_WHITESPACE_ONLY_SOURCES` keying discipline) rather
+# than list position, so a pattern added later fails the
+# completeness guard below loudly instead of silently going unmeasured. ~80k
+# chars is enough to demonstrate liveness for every pattern except JWT: on this
+# machine `"eyJ"*26666` (~80k, the #439 issue's own example) measured 1.56s —
+# under the 2.0s budget. A smaller JWT rep count (35000, ~2.8s old) was tried
+# first and rejected: only ~1.4x over the 2.0s budget, so a moderately faster
+# runner could pass the quadratic implementation and the test would stop
+# demonstrating the property its name claims. `"eyJ"*90000` (270k chars) was
+# measured instead (old pattern swapped in temporarily, never committed;
+# three runs: 17.887s/17.220s/18.196s old, 0.0949s/0.0884s/0.0924s fixed) —
+# the old pattern lands at ~8.6-9.1x over budget on every run, comfortably
+# above an 8x floor, while the fixed pattern stays at ~21-23x margin under it.
+# JWT's rep count is therefore raised to 90000 rather than left at the ~80k-char
+# default the other patterns use.
+_QUADRATIC_SEEDS: dict[str, tuple[str, int]] = {
+    redaction.CONNECTION_STRING_PASSWORD_PATTERN.pattern: ("://x", 20000),
+    redaction.CONNECTION_STRING_USERNAME_TOKEN_PATTERN.pattern: ("://x", 20000),
+    r"AKIA[0-9A-Z]{16}": ("AKIA", 20000),
+    r"gh[pousr]_[A-Za-z0-9_]{20,}": ("ghp_", 20000),
+    r"xox[baprs]-[A-Za-z0-9-]{20,}": ("xoxb-", 16000),
+    r"(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{16,}": (
+        "Authorization: Bearer ",
+        3500,
+    ),
+    redaction.LABELLED_VALUE_PATTERN.pattern: ("key=", 20000),
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----": ("-----BEGIN ", 7300),
+    r"eyJ[A-Za-z0-9_-]{8,512}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}": ("eyJ", 90000),
+    r"sk-proj-[A-Za-z0-9_-]{20,}": ("sk-proj-", 10000),
+    r"sk-[A-Za-z0-9]{20,}": ("sk-", 26666),
+    r"sk_(?:live|test)_[A-Za-z0-9]{16,}": ("sk_live_", 10000),
+    r"AIza[0-9A-Za-z_-]{35,}": ("AIza", 20000),
+}
+
+
+def test_repeated_anchor_input_is_not_quadratic_for_any_pattern():
+    """No live pattern may blow the deadline on a long run of its own anchor (#439).
+
+    Mirrors #438's liveness-not-timing philosophy (:202-213): the 2.0s budget is an
+    absolute ceiling, not a timing-sensitive one — for the one pattern this issue is
+    about it sits far below the old pattern's measured failing time and far above the
+    fixed pattern's measured passing time (see the module comment above for both).
+    The anti-drift guard runs first so a pattern added later without a seed fails
+    loudly here instead of silently going unmeasured by this test.
+    """
+    live = list(redaction.SECRET_VALUE_PATTERNS)
+    missing = [p.pattern for p in live if p.pattern not in _QUADRATIC_SEEDS]
+    assert not missing, f"no repeated-anchor seed for {missing}"
+
+    for pattern in live:
+        seed, reps = _QUADRATIC_SEEDS[pattern.pattern]
+        text = seed * reps
+        start = time.perf_counter()
+        redaction._redact_secret_values(text)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 2.0, (
+            f"{pattern.pattern!r} took {elapsed:.3f}s on {len(text)}-char {seed!r}*{reps}"
+        )
+
+
+# The pre-#439 pattern, kept as an ORACLE (the discipline the #438/#440 oracles above
+# follow, :123-129): the invariant that matters for a secret boundary is one-directional
+# — bounding the first segment may recognize fewer FIRST-SEGMENT lengths, but every
+# actual JWT shape it used to catch must still be caught — and the only way to test that
+# is against the thing being replaced, so it is spelled out here rather than imported.
+_PRE_439_JWT_PATTERN = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+
+# Grammar slots for the sweep, built from the fix's own terms (#439): seg1 lengths
+# straddle the new 512 (post-anchor) cap from both sides, seg2/seg3 vary independently
+# since they stay unbounded, two charset variants probe the class's `-_` members, and
+# leads/trailers probe the anchor in and out of surrounding text (including inside a
+# connection string, `://u:`, since the JWT shape can appear as a userinfo credential).
+_JWT_SEG1_LENGTHS = [8, 20, 36, 60, 120, 300, 511, 512]
+_JWT_SEG2_LENGTHS = [8, 43, 300, 5000]
+_JWT_SEG3_LENGTHS = [8, 43, 86, 342]
+_JWT_CHARSETS = [string.ascii_letters + string.digits, string.ascii_letters + string.digits + "-_"]
+_JWT_LEADS = ["", "Cookie: ", "x", "token=", "://u:"]
+_JWT_TRAILERS = ["", " tail", "@host"]
+
+
+def _jwt_segment(charset: str, length: int) -> str:
+    """A segment of the given length, cycling through ``charset`` deterministically."""
+    return "".join(charset[i % len(charset)] for i in range(length))
+
+
+def _jwt_lines():
+    for seg1_len, seg2_len, seg3_len, charset, lead, trailer in itertools.product(
+        _JWT_SEG1_LENGTHS,
+        _JWT_SEG2_LENGTHS,
+        _JWT_SEG3_LENGTHS,
+        _JWT_CHARSETS,
+        _JWT_LEADS,
+        _JWT_TRAILERS,
+    ):
+        seg1 = _jwt_segment(charset, seg1_len)
+        seg2 = _jwt_segment(charset, seg2_len)
+        seg3 = _jwt_segment(charset, seg3_len)
+        yield f"{lead}eyJ{seg1}.{seg2}.{seg3}{trailer}"
+
+
+def _jwt_sweep_leftovers(oracle, *, exempt_code=False):
+    """Drive every generated JWT-grammar line through the CURRENT pipeline against ``oracle``.
+
+    Same shape as `_sweep_leftovers` above, over the JWT grammar instead of the
+    connection-string one: returns how many spans the oracle matched on the RAW input
+    (the sweep's own liveness signal) and every span it can still match in the emitted
+    output — each one a JWT the pre-#439 pattern redacted and this one did not. Factored
+    out so the sensitivity control below exercises byte-identical sweep logic.
+    """
+    hits = 0
+    leftovers = []
+    for line in _jwt_lines():
+        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
+        hits += len(oracle.findall(line))
+        found = oracle.search(out)
+        if found is not None:
+            leftovers.append((line, found.group(0)))
+    return hits, leftovers
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+def test_no_jwt_the_old_pattern_redacted_stops_being_redacted(exempt_code):
+    """Bounding seg1 at 512 (#439) may only narrow how LONG a first segment may be —
+    every JWT shape the pre-#439 pattern redacted must still be redacted.
+
+    For every generated line, the pre-#439 pattern must find NOTHING left in what the
+    current pipeline emits: any span it could still match there is a JWT the old code
+    would have replaced and the new code did not. Asserted per-secret (the leftover
+    SPAN, via `oracle.search`), not per-line, for the same reason as the #438 sweep:
+    a per-line containment check cannot tell a real leak from harmless repeated text.
+    """
+    hits, leftovers = _jwt_sweep_leftovers(_PRE_439_JWT_PATTERN, exempt_code=exempt_code)
+    assert not leftovers, f"{leftovers[0][1]!r} survived redaction of {leftovers[0][0]!r}"
+    # The sweep is only evidence while the oracle still fires; without this a drifting
+    # grammar would turn the whole test into a tautology that cannot fail. Every one of
+    # the 3,840 generated lines carries exactly one JWT-shaped span (measured), so the
+    # floor is set with headroom below that rather than at it.
+    assert hits > 3000, f"oracle matched only {hits} spans — sweep went vacuous"
+
+
+def test_the_jwt_sweep_can_actually_see_a_lost_redaction(monkeypatch):
+    """Control: prove the sweep above is a working instrument, not a green rubber stamp.
+
+    Narrows the LIVE JWT matcher to the `(?<![A-Za-z0-9_-])` left-context variant the
+    fix's own comment rejects (redaction.py:248-250) — the alternative that also kills
+    the quadratic blowup but costs coverage of an embedded `xxxeyJ…` match. The SAME
+    sweep body must report leftovers against it, on the `lead="x"` lines.
+
+    Substituting by the matcher's own compiled SOURCE, not list position, mirrors the
+    :363-376 discipline. There is no module-level name for the JWT pattern to key on
+    (unlike `CONNECTION_STRING_PASSWORD_PATTERN`) — the fix keeps it anonymous in the
+    list, per the brief's file scope — so the source string IS the name here, the same
+    keying `_WHITESPACE_ONLY_SOURCES` already uses for the other anonymous patterns.
+    """
+    narrowed = re.compile(
+        r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    )
+    live_jwt_source = r"eyJ[A-Za-z0-9_-]{8,512}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    patched = [
+        narrowed if p.pattern == live_jwt_source else p for p in redaction.SECRET_VALUE_PATTERNS
+    ]
+    # The guard below is a diagnostic, not extra rigor: if the substitution silently
+    # no-op'd (e.g. `live_jwt_source` drifted from the shipped pattern), the final
+    # assertion would fail anyway — this just says why.
+    assert patched != list(redaction.SECRET_VALUE_PATTERNS), "the control narrowed nothing"
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", patched)
+    _, leftovers = _jwt_sweep_leftovers(_PRE_439_JWT_PATTERN)
+    assert leftovers, "the sweep reported no loss against a deliberately narrowed matcher"
+
+
+# --- #439: boundary characterizations, counted in the regex's OWN terms ------
+# `{8,512}` counts characters AFTER the literal `eyJ` anchor, so the longest matchable
+# first segment is 515 total chars (`eyJ` + 512 post-anchor). Both cases below count
+# post-anchor, per the brief: 513 is the first unmatchable length with no internal
+# `eyJ` to retry from, and 513+ WITH an internal `eyJ` still matches — at the LATER
+# anchor — leaving the true prefix as unredacted residue ahead of the marker.
+
+
+def test_first_segment_over_512_post_anchor_chars_is_not_redacted():
+    # 513 post-anchor chars, no internal `eyJ` anywhere in the run: the outer anchor's
+    # first segment can never reach the `.` within the 512 cap, and there is no later
+    # `eyJ` for the engine to retry from, so nothing matches at all. Byte-identical
+    # output, not just "no marker" — the accepted x5c-certificate-chain boundary #439's
+    # comment documents (redaction.py:248-250).
+    text = "eyJ" + "a" * 513 + "." + "b" * 8 + "." + "c" * 8
+    assert redaction.redact_text(text) == text
+
+
+def test_first_segment_at_512_post_anchor_chars_is_redacted():
+    # The boundary from the matching side: 512 is the last post-anchor length that
+    # still fits `{8,512}`.
+    text = "eyJ" + "a" * 512 + "." + "b" * 8 + "." + "c" * 8
+    out = redaction.redact_text(text)
+    assert out == "[redacted: secret value]"
+    # The marker contains no `eyJ...\...\...` shape, so a second pass cannot re-match.
+    assert redaction.redact_text(out) == out
+
+
+def test_over_512_run_with_an_internal_eyj_matches_at_the_later_anchor():
+    """A first segment over the 512 cap, but carrying its own `eyJ` 6 chars in.
+
+    The OUTER `eyJ` (position 0) can never reach a `.` within its 512-char budget —
+    the run to the first `.` is 516 chars, over the cap — so that anchor fails, exactly
+    like the no-internal-`eyJ` case above. But the embedded `eyJ` at position 6 (an
+    internal-`eyJ` offset well past the boundary's own ">=3 chars from position 0")
+    starts its OWN attempt, whose first segment is only 510 post-anchor chars — under
+    the cap — so it succeeds. The true prefix (`eyJaaa`, the outer anchor plus the
+    three characters before the embedded one) is not part of that match, so it survives
+    as leading residue ahead of the marker: exactly the mid-header match #439's comment
+    describes as the accepted cost of the 512 boundary, pinned here with its exact
+    output rather than left as a claim.
+    """
+    text = "eyJ" + "aaa" + "eyJ" + "a" * 510 + "." + "b" * 8 + "." + "c" * 8
+    out = redaction.redact_text(text)
+    assert out == "eyJaaa[redacted: secret value]"
+    # The residue (`eyJaaa`) is 6 chars, short of the {8,512} minimum, and the marker
+    # itself carries no `.` to re-anchor on, so a second pass leaves it unchanged.
+    assert redaction.redact_text(out) == out
+
+
 # --- #440: a credential in ANY userinfo position -----------------------------
 # The matcher required a NON-EMPTY username before the password, so `://:pw@host`
 # — the canonical Redis URL, since Redis had no usernames before ACLs in 6.0 —

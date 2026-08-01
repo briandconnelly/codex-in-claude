@@ -31,6 +31,33 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   settled path; `finally` remains the sole teardown only for a path that raises instead of
   returning. No agent-visible surface changed.
 
+- **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
+  on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
+  ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
+  position scanned the unbounded first segment to the end of the run hunting a `.` that never
+  comes, then backtracked one character at a time before trying the next anchor — measured at
+  `"eyJ"*26666` (80k chars) 1432ms, `"eyJ"*53332` (160k) 5676ms, roughly 4x time per 2x input (the
+  regression test's own rep count was separately raised to 90000 on the implementation machine, so
+  the old pattern lands at least 8x over the test's 2.0s budget rather than merely exceeding it).
+  `redact_text` runs on untrusted model output via `redact_tree`, so input size and shape are
+  attacker-influenced — a liveness/DoS concern, since a sync tool that blows its deadline loses its
+  paid work. The fix bounds only the *first* segment, at `{8,512}` post-anchor characters (515
+  total including the `eyJ` anchor itself): capping seg1 caps per-anchor work *and* caps how many
+  anchors ever reach seg2, which is what kills the quadratic blowup rather than merely capping one
+  match's cost — the same two measurements after the fix: 18ms and 37ms, roughly linear. 512 is
+  deliberately generous: real JOSE headers are base64url of compact JSON, typically 20-60
+  characters and ~120 with `kid`/`jku`, so 512 is about 8x that; the `x5c`
+  certificate-chain-in-header outlier that can exceed it is the accepted, pinned boundary, and such
+  a token is still caught when labelled (`token=…`) or on an `Authorization: Bearer` line by those
+  patterns. seg2 and seg3 stay unbounded — payloads are legitimately KBs, seg3 has no follower to
+  backtrack against, and seg2's backtracking is transitively bounded once seg1 is capped. A
+  possessive quantifier (`{8,}+`) and an atomic group (`(?>...)`) both compile on this repo's
+  supported Pythons (3.11+), but neither fixes this: both only suppress backtracking *within one
+  match attempt*, not the fresh scan repeated at every successive anchor position, which is the
+  actual source of the quadratic blowup; a
+  `(?<![A-Za-z0-9_-])` left-context lookbehind does kill the blowup too but costs coverage of an
+  embedded `xxxeyJ…` match that redacts today, so it was rejected as the fix and used instead as
+  the differential sweep's sensitivity control.
 - **`gitdiff_error`'s `invalid_arguments` branch no longer echoes the rejected value in its
   human-readable `message`** (#418). `InvalidArgument` and `ErrorDetail` both promise the rejected
   value is never echoed — it may be a secret — and the machine fields already honored that for
