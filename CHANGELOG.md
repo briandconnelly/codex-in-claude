@@ -16,8 +16,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (`got {untracked!r}`), so one envelope both withheld the value in its structured fields and printed
   it in prose next to them. The fix reuses that same value-free reason as `message` for this branch
   only; the other seven `gitdiff_error` branches (`invalid_base`, `invalid_commit`, `invalid_paths`,
-  `invalid_scope`, `not_a_git_repo`, the `RuntimeError` fallback) keep echoing `str(exc)` unchanged —
-  their values are refs/paths the caller just supplied, not free text a no-echo guarantee applies to.
+  `invalid_scope`, `not_a_git_repo`, `git_unavailable`, and the `RuntimeError` fallback) keep echoing
+  `str(exc)` unchanged — only the `invalid_arguments` branch's guarantee text promises no echo. Those
+  seven don't uniformly carry caller-supplied refs/paths: `invalid_base`/`invalid_commit`/
+  `invalid_paths`/`invalid_scope`/`not_a_git_repo` do, but `git_unavailable` and the `RuntimeError`
+  fallback carry bounded, best-effort-redacted git diagnostics (a missing executable, git stderr, a
+  timeout) instead — left unchanged by this fix.
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
   never revisits consumed text. Every matcher except the connection-string pair is

@@ -60,6 +60,13 @@ def test_gitdiff_error_redacts_secret():
 # direct Python call that bypasses the Literal param (see
 # test_dry_run_invalid_untracked_returns_structured_error in test_server.py).
 
+# Probe for the no-echo test below (#418): deliberately NOT secret-shaped (mirrors the
+# #432 `_PROBES` convention in test_redaction.py), so `redact_text` wouldn't strip it from
+# a reused message regardless — an sk-...-shaped probe would pass against the very bug this
+# guards (the #417 lesson). Shared by both tests below so the survives-redaction control
+# can't silently drift from the value the no-echo test actually probes.
+_UNTRACKED_PROBE = "an-ordinary-value-redaction-ignores"
+
 
 def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
     out = orchestration.gitdiff_error(
@@ -86,19 +93,21 @@ def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
     including the human-readable `message` — must be built without ever reusing `str(exc)`
     for this branch.
 
-    The probe value is deliberately NOT secret-shaped (mirrors the #432 `_PROBES`
-    convention in test_redaction.py): `gitdiff_error` runs `str(exc)` through
-    `redact_text` for the other seven branches, so an `sk-…` value would be stripped from
-    a reused message regardless, and the test would pass against the very bug it guards
-    (the #417 lesson). `test_probe_value_survives_redaction` below keeps that control
-    honest."""
-    value = "an-ordinary-value-redaction-ignores"
+    See `_UNTRACKED_PROBE` above for why the probe is shaped the way it is;
+    `test_probe_value_survives_redaction` below keeps that control honest, and this test
+    additionally asserts the same property inline so the control can't drift from the
+    exact value probed here."""
+    value = _UNTRACKED_PROBE
     exc = InvalidUntrackedError(f"untracked must be one of [...], got {value!r}")
     out = orchestration.gitdiff_error(exc, _make_meta())
 
-    # Positive control: the probe would have reached the message absent the fix — prove
+    # Positive control 1: the probe would have reached the message absent the fix — prove
     # it actually made it into the exception text `gitdiff_error` receives.
     assert value in str(exc)
+
+    # Positive control 2 (inline, not just the sibling test): the absence assertion below
+    # proves the no-echo rule only if `redact_text` isn't the one removing the probe.
+    assert redaction.redact_text(value) == value
 
     # Whole-envelope absence: not just the machine fields, the entire serialized
     # envelope, including `message`.
@@ -106,11 +115,11 @@ def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
 
 
 def test_probe_value_survives_redaction():
-    # Positive control for the test above: without this, the whole-envelope absence
-    # assertion proves nothing about the no-echo rule — `redact_text` could be doing the
-    # work instead (the #417 lesson). The probe must be a value `redact_text` ignores.
-    value = "an-ordinary-value-redaction-ignores"
-    assert redaction.redact_text(value) == value
+    # Positive control for the test above, using the SAME probe constant so this control
+    # cannot drift from the value the no-echo test actually asserts absence of: without
+    # this, that assertion proves nothing about the no-echo rule — `redact_text` could be
+    # doing the work instead (the #417 lesson).
+    assert redaction.redact_text(_UNTRACKED_PROBE) == _UNTRACKED_PROBE
 
 
 def test_stamp_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):

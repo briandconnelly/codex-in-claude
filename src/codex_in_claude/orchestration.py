@@ -300,8 +300,14 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
     # promises never to echo one — it may be a secret, and this path's value is
     # caller-supplied free text. The human-readable `message` below reuses that same
     # value-free reason instead of `str(exc)` (#418): a message built from `str(exc)`
-    # would print exactly the value the machine fields withhold. Every other branch keeps
-    # echoing `str(exc)` — their values are refs/paths the caller just sent.
+    # would print exactly the value the machine fields withhold. The other seven branches
+    # (invalid_base, invalid_commit, invalid_paths, invalid_scope, not_a_git_repo,
+    # git_unavailable, and the RuntimeError fallback) keep echoing `str(exc)` unchanged —
+    # only this branch's guarantee text promises no echo. Their messages are not uniformly
+    # caller-supplied refs/paths: five are (invalid_base/invalid_commit/invalid_paths/
+    # invalid_scope/not_a_git_repo), but git_unavailable and the RuntimeError fallback
+    # carry bounded, best-effort-redacted git diagnostics (a missing executable, stderr, a
+    # timeout) that this fix leaves alone.
     args: list[InvalidArgument] | None = None
     if code == "invalid_arguments" and offending:
         reason = (
