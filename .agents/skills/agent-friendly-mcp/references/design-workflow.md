@@ -9,6 +9,7 @@ The checkpoint links at each step point at the relevant `contract-checklist.md` 
 
 **On this page:**
 
+- [Step 0: Fix the protocol revision target](#step-0-fix-the-protocol-revision-target)
 - [Step 1: Enumerate user/agent tasks](#step-1-enumerate-useragent-tasks)
 - [Step 2: Choose the right primitive per task](#step-2-choose-the-right-primitive-per-task)
 - [Step 3: Decide tool granularity](#step-3-decide-tool-granularity)
@@ -18,6 +19,13 @@ The checkpoint links at each step point at the relevant `contract-checklist.md` 
 - [Step 7: Design long-running behavior](#step-7-design-long-running-behavior)
 - [Step 8: Build evaluations grounded in real tasks](#step-8-build-evaluations-grounded-in-real-tasks)
 - [Step 9: Iterate against the eval, including transcript review](#step-9-iterate-against-the-eval-including-transcript-review)
+
+## Step 0: Fix the protocol revision target
+
+Decide which protocol revision(s) and which extensions the target clients speak, and record the decision per `[1.spec-revision]`, which owns the declaration's required content.
+Every later step designs against that target.
+
+Output: a one-line revision-and-extensions target that the capability summary (Step 5) will carry.
 
 ## Step 1: Enumerate user/agent tasks
 
@@ -94,9 +102,9 @@ Decide how an agent finds the right primitive at the lowest cost its clients all
 - Index resources; do not inline bodies.
   Catalog entries carry triage metadata only.
 - Publish `resources/templates/list` for URI-shaped resources that cannot or should not be fully enumerated.
-- Implement `completion/complete` for prompt arguments and resource-template variables with dynamic value sets when `server.capabilities.completions` is negotiated.
+- Implement `completion/complete` for prompt arguments and resource-template variables with dynamic value sets when the server advertises the `completions` capability.
   Document that completion does not cover arbitrary tool arguments.
-- For workspace-scoped servers, request `roots/list` from clients that negotiate roots and declare how root changes are handled.
+- For workspace-scoped servers, take workspace scope as ordinary tool arguments; for clients that still declare the deprecated `roots` capability, obtain roots via MRTR and declare how changes are handled (`[1.roots]`).
 - If resource discoverability matters, provide a tool fallback for clients that do not expose resources well — self-sufficient from `tools/list` alone (§4).
 - Set a serialized-size budget for `tools/list` — the wire response as a client receives it — and enforce it in CI (Step 8).
 
@@ -108,12 +116,12 @@ Checkpoint: §1, §2, §4. See `examples.md` §7 for a server capability summary
 Design the error surface as deliberately as the success surface.
 
 - Define stable, symbolic error codes (`not_found`, `rate_limited`, `invalid_field`) and document per-tool which codes can occur.
-- Field-level validation feedback: which field, why invalid, allowed values; include the offending value when safe.
+- Field-level validation feedback: which field, why invalid, allowed values; include the offending value per `[6.offending-value]`.
 - Retryability and rate-limit signals: `retry_after_ms`, `temporary`, `rate_limit_remaining` where applicable.
 - Tool semantic errors return as tool result errors with `isError: true`.
-- Resource failures return JSON-RPC errors with structured `error.data` repair fields.
+- Resource failures return JSON-RPC errors with structured `error.data` repair fields; allocate their numeric `error.code` per `[6.jsonrpc-code-allocation]`.
 - Repair hints reference real callable surfaces — tool names, parameter names, valid enum values — not free-form prose.
-- Capability failures name the missing negotiated capability and the fallback path (`capability_not_negotiated`, `required_capability`, `fallback`).
+- Capability failures use the native error (`MissingRequiredClientCapability`, `-32021`, with `data.requiredCapabilities`) and name the fallback path in the same `error.data` (`[6.capability-missing]`).
 - If the server can use elicitation for missing input or sensitive external flows, define both the elicitation path and the non-elicitation fallback error.
 - Draft a worked JSON payload for each top failure mode — not just a field inventory.
   Concrete payloads expose contradictions a field list hides.
@@ -125,12 +133,13 @@ Checkpoint: §6. See `examples.md` §6 for an actionable error payload.
 
 For each operation that may outlive a normal request/response turn, decide how the agent monitors and recovers it.
 
-- Choose blocking `tools/call`, progress notifications, or task-augmented requests.
-- Declare expected duration, timeout behavior, and whether partial progress is observable.
-- Support `progressToken` and recover through native task operations where applicable — poll `tasks/get` (respect `pollInterval`), fetch with `tasks/result`, cancel with `tasks/cancel` — using the spec's task fields and statuses (`working`, `input_required`, `completed`, `failed`, `cancelled`).
-- For `input_required`, design around the native path — the requestor preemptively calls `tasks/result` and holds it open; the pending input request arrives as a separate receiver-to-requestor request while the call is pending, and the held call returns the terminal result once input is supplied — and say whether the input mechanism is elicitation, URL-mode elicitation, or a domain-specific status/repair tool (§7).
-- Enable tasks at both levels: declare the server `server.capabilities.tasks.requests.tools.call` and the tool's `execution.taskSupport` (see §7 for its values and the omission default).
-  Tasks are experimental, so add a domain-specific status/cancel fallback only as a labeled stand-in for clients without task support.
+- Choose blocking `tools/call`, progress notifications, or a task returned under the negotiated tasks extension.
+- Declare expected duration, timeout behavior, whether partial progress is observable — and, because task creation is server-directed, when a tool may answer with `resultType: "task"` (`[7.declare-duration]`).
+- Support `progressToken` for request-bound progress, and recover continuing work through native task operations — poll `tasks/get` (respect `pollIntervalMs`; terminal payloads arrive inline), supply input with `tasks/update`, cancel with `tasks/cancel` — using the extension's task fields and statuses (`working`, `input_required`, `completed`, `failed`, `cancelled`).
+- For `input_required`, design around the native path — `tasks/get` carries the outstanding `inputRequests`, the client answers via `tasks/update` `inputResponses` — and say whether the input mechanism is form elicitation, URL-mode elicitation, or a domain-specific status/repair tool for clients without the capability (§7).
+- Gate tasks on the extension at both ends: the client's per-request `clientCapabilities.extensions` declaration of `io.modelcontextprotocol/tasks` and the server's `server/discover` advertisement (`[7.task-support]`).
+  Add a domain-specific status/cancel fallback as a labeled stand-in for clients that never declare the extension.
+- Remember `completed` is a delivery statement: a tool error still lands as a `completed` task whose `result.isError` is true (`[7.failed-task]`).
 
 Output: long-running behavior contract for each affected tool, including progress, cancellation, retrieval, and terminal-state semantics.
 Checkpoint: §7.
@@ -179,6 +188,9 @@ Each fixture pairs a prompt with an assertion the harness can check against the 
 
 Score each run for first-call correctness (did `expect_first_call` match?), first-repair correctness (did the injected error resolve in one hop?), and the two budgets.
 A fixture that no current transcript can satisfy is a finding against the schema, not a flaky test.
+
+`expect_first_call`, `inject_error`, `expect_repair`, and `metrics` are **harness declarations, deliberately abbreviated** — they tell the runner what to do, and `inject_error.repair` names only the fields the assertion turns on.
+Wire conformance is judged on the serialized payloads a fixture records, not on these declarations; keep a fixture's wire section for anything that must satisfy the §3 output contract or the §6 envelope.
 
 Output: at least one eval task suite covering the high-value tasks from Step 1, with metrics for first-call correctness, first-repair correctness, token consumption, and tool-call count.
 Checkpoint: §2, §3, §6, §7, §8, §9 — the eval should exercise discovery, tool selection, error repair, long-running behavior, token consumption, and upgrade behavior.
