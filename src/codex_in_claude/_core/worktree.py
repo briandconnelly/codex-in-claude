@@ -810,17 +810,74 @@ def _staged_placeholder(text: str) -> str:
 # instead of `.`.
 _AMBIGUOUS_PLACEHOLDER_PREFIX = "cicwt0ambig0"
 
+# Every character _guard_char_absent_from can hand out, in a fixed search order. Spelled out
+# literally (not `string.ascii_letters + string.digits`) so this file adds no new import for
+# it. Uppercase first: legitimate placeholder content here is always lowercase-hex-and-prefix
+# (see `_placeholder_seed`/`_PLACEHOLDER_PREFIX`/`_AMBIGUOUS_PLACEHOLDER_PREFIX`), so the
+# common case resolves on the very first candidate.
+_GUARD_CHAR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def _guard_char_absent_from(other: str) -> str:
+    """A single alphanumeric character verified absent from ``other``. Exists so
+    ``_staged_ambiguous_placeholder`` can build a token structurally incapable of
+    containing ``other`` as a substring (see there) instead of trying to fix that by
+    appending, which cannot work once ``other`` already occurs in the token. Searches the
+    full 62-character alphanumeric alphabet in a fixed order, so it terminates even in the
+    pathological case a test constructs ``other`` to contain most of it — this module's own
+    callers only ever pass a prefixed hex digest, so this returns on one of the first few
+    candidates in practice."""
+    for candidate in _GUARD_CHAR_ALPHABET:
+        if candidate not in other:
+            return candidate
+    # Every alphanumeric character appears in `other` -- unreachable through this module's
+    # own callers, only through a test deliberately constructing such a string. Fail loudly
+    # rather than loop forever with nothing left to try.
+    raise AssertionError("_guard_char_absent_from: `other` exhausts the alphanumeric alphabet")
+
 
 def _staged_ambiguous_placeholder(text: str, other: str) -> str:
     """Sibling of ``_staged_placeholder`` for the ambiguous-suffix branch: alphanumeric,
-    longer than the redaction floor, and verified absent from BOTH ``text`` and ``other``
-    (the ordinary placeholder already staged for this same call). The two tokens coexist in
-    the same staged text and are unstaged by two separate literal ``.replace()`` calls, so
-    one containing the other as a substring would corrupt both unstagings; the loop checks
-    that too, not just absence from ``text``."""
+    longer than the redaction floor, and disjoint from BOTH ``text`` and ``other`` (the
+    ordinary placeholder already staged for this same call) in both directions — the two
+    tokens coexist in the same staged text and are unstaged by two separate literal
+    ``.replace()`` calls, so one containing the other as a substring would corrupt both.
+
+    Three termination arguments, one per ``while`` clause, because they are NOT
+    interchangeable:
+
+    - ``token in text``: ``text`` is fixed and finite, so appending a character each pass
+      eventually makes ``token`` longer than ``text`` — at most ``len(text)`` iterations.
+    - ``token in other``: same argument, bounded by ``len(other)``.
+    - ``other in token``: appending CANNOT fix this. Once ``other`` occurs anywhere in
+      ``token``, every further extension only adds characters AFTER the existing (already
+      matching) content, so the match survives no matter how long ``token`` grows — a loop
+      that only appends here never terminates (#420 review round 5's NEW-2 finding). Fixed
+      structurally instead of loop-repaired: ``token`` is rebuilt from a single character
+      chosen to be absent from ``other`` (``_guard_char_absent_from``) and repeated. A
+      string built entirely from a character that ``other`` does not itself contain CANNOT
+      have ``other`` as a substring — a property of the CONTENT, not the length — so this
+      clause cannot re-trigger for the rebuilt token, and any further extension (for the
+      ``token in text`` clause) keeps appending that same guard character to preserve the
+      guarantee rather than reverting to ``"0"``.
+
+    ``other`` must be non-empty: the empty string is a substring of every string, which
+    would make the ``other in token`` clause permanently, unfixably true no matter what
+    ``token`` becomes — ``_staged_placeholder``'s own output is never empty, so this is a
+    caller-contract check on a case that cannot arise from this module's own callers, not a
+    real-world scenario."""
+    if not other:
+        raise ValueError("_staged_ambiguous_placeholder needs a non-empty `other`")
     token = _AMBIGUOUS_PLACEHOLDER_PREFIX + _placeholder_seed(text)
+    guard: str | None = None
     while token in text or token in other or other in token:
-        token += "0"
+        if guard is None and other in token:
+            guard = _guard_char_absent_from(other)
+            token = guard * max(len(token), 32)
+        elif guard is not None:
+            token += guard
+        else:
+            token += "0"
     return token
 
 

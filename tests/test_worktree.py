@@ -1415,6 +1415,56 @@ def test_staged_placeholder_rechecks_each_extension(monkeypatch):
     assert token == base + "00"
 
 
+def _call_with_timeout(fn, seconds):
+    """Run `fn()` under a SIGALRM deadline so a regression in a loop's termination argument
+    FAILS this test rather than hanging the whole suite (#420 review round 5)."""
+    import signal
+
+    def _handler(signum, frame):
+        raise TimeoutError(f"did not terminate within {seconds}s")
+
+    old_handler = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(seconds)
+    try:
+        return fn()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+def test_staged_ambiguous_placeholder_terminates_when_other_is_a_prefix_of_token(monkeypatch):
+    """#420 review round 5 (NEW-2): the loop's `other in token` clause cannot be fixed by
+    appending -- once `other` occurs anywhere in `token`, every further extension only adds
+    characters AFTER the existing match, so a loop that only appends there never terminates.
+    Forced via the same seam `_staged_placeholder`'s own collision tests use
+    (`_placeholder_seed` stubbed to a fixed value): choose `other` to equal `token`'s
+    un-extended form exactly (a prefix match -- the realistic shape, since both derive from
+    the same `_placeholder_seed(text)` and differ only in their fixed literal prefix).
+    Wrapped in a SIGALRM deadline so a reintroduced regression fails loudly instead of
+    hanging the suite."""
+    monkeypatch.setattr(worktree, "_placeholder_seed", lambda _text: "deadbeef")
+    other = worktree._AMBIGUOUS_PLACEHOLDER_PREFIX + "deadbeef"  # == token's initial form
+    text = "some prose that never mentions the forced token"
+
+    token = _call_with_timeout(
+        lambda: worktree._staged_ambiguous_placeholder(text, other), seconds=5
+    )
+
+    assert token not in text
+    assert token not in other
+    assert other not in token
+    assert token != other
+    assert len(token) > 16  # clears the labelled-secret length floor
+
+
+def test_staged_ambiguous_placeholder_rejects_empty_other():
+    # The empty string is a substring of everything, which would make `other in token`
+    # permanently, unfixably true -- `_staged_placeholder`'s own output is never empty, so
+    # this is a caller-contract check, not a real-world case.
+    with pytest.raises(ValueError, match="non-empty"):
+        worktree._staged_ambiguous_placeholder("text", "")
+
+
 def test_alias_replacement_cannot_abut_an_alphanumeric():
     """Why alias -> `.` cannot synthesize a covered secret, stated as a test rather than left
     to a comment. Every shape the redactor covers needs its structural characters flanked by
