@@ -315,11 +315,11 @@ def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
 # position scans the unbounded first segment to the end of the run and
 # backtracks hunting a `.` that is never there — quadratic, and reachable from
 # untrusted model output the same way #438 was (`redact_text` via `redact_tree`,
-# orchestration.py:127/:234).
+# both called from `orchestration.py`).
 #
 # One repeated-anchor (seed, reps) pair per LIVE pattern, keyed on the pattern's
-# own compiled source (the `_WHITESPACE_ONLY_SOURCES` keying discipline,
-# :772-779) rather than list position, so a pattern added later fails the
+# own compiled source (the `_WHITESPACE_ONLY_SOURCES` keying discipline) rather
+# than list position, so a pattern added later fails the
 # completeness guard below loudly instead of silently going unmeasured. ~80k
 # chars is enough to demonstrate liveness for every pattern except JWT: on this
 # machine `"eyJ"*26666` (~80k, the #439 issue's own example) measured 1.56s —
