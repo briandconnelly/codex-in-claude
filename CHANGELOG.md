@@ -7,6 +7,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A transfer or rate-limit read's `stderr_tail` no longer races the drain thread that
+  fills it** (#449). `_StderrDrain` reads a child's stderr on its own daemon thread and kept
+  no reference to it, so `transfer_session` and `read_rate_limits` could build their outcome
+  — snapshotting the drain — before that thread had consumed the pipe's backlog. On a loaded
+  runner the child could exit and the outcome be assembled before the last, most diagnostic
+  line ever reached the capture, and a quiesce placed in the `finally` could not fix it: Python
+  evaluates a `return` expression before `finally` runs, so the outcome was already built. The
+  fix is a shared settle step (`_settle_and_tail`) that every post-spawn exit in both
+  functions now runs before constructing its outcome — terminate the child, join the stdout
+  reader, then give the newly-tracked drain thread a bounded `quiesce()` to catch up, and only
+  then take the final snapshot. The bound matters both ways: with the child already dead its
+  pipe closes and the drain reaches EOF almost immediately, but the same bound keeps a
+  producer that never lets go of stderr (an inherited fd) from hanging the run. `_terminate`
+  is idempotent, so the `finally` that used to be the only teardown now safely runs a second
+  time on exception paths only. No agent-visible surface changed.
+
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
   never revisits consumed text. Every matcher except the connection-string pair is
