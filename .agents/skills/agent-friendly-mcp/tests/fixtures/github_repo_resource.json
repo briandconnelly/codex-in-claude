@@ -1,0 +1,171 @@
+{
+  "task": "Read the repository overview resource, then recover from an unknown repository URI.",
+  "resource_uri": "github://repos/octo/demo/overview",
+  "note": "Exercises the JSON-RPC carrier of the §6 envelope (the other half of 'one envelope, two carriers') plus a resources/read success result. inject_error / expect_repair below are abbreviated harness declarations, not wire payloads; only the `wire` object is contract-checked.",
+  "inject_error": {
+    "machine_code": "resource_not_found",
+    "repair": {
+      "next_step": "list_repositories_to_find_valid_uri"
+    }
+  },
+  "metrics": {
+    "max_tool_calls": 3,
+    "max_tokens": 4000
+  },
+  "wire": {
+    "tools": [
+      {
+        "name": "github_list_repositories",
+        "description": "List repositories visible to the caller.",
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "owner"
+          ],
+          "properties": {
+            "owner": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "error_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "temporary",
+        "retry_after_ms"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "temporary": {
+          "type": "boolean"
+        },
+        "retry_after_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fields": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "rate_limit_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repair": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "next_step",
+            "tool",
+            "arguments"
+          ],
+          "properties": {
+            "next_step": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "object"
+            },
+            "alternative": {
+              "type": "string"
+            }
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "resource_uri": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        }
+      }
+    },
+    "resource_read_result": {
+      "jsonrpc": "2.0",
+      "id": "7",
+      "result": {
+        "resultType": "complete",
+        "ttlMs": 60000,
+        "cacheScope": "private",
+        "contents": [
+          {
+            "uri": "github://repos/octo/demo/overview",
+            "mimeType": "application/json",
+            "text": "{\"repo\":\"octo/demo\",\"open_issues\":42,\"default_branch\":\"main\"}"
+          }
+        ]
+      }
+    },
+    "resource_error": {
+      "jsonrpc": "2.0",
+      "id": "8",
+      "error": {
+        "code": 1001,
+        "message": "Resource not found.",
+        "data": {
+          "machine_code": "resource_not_found",
+          "human_message": "No repository overview at github://repos/octo/nope/overview.",
+          "temporary": false,
+          "retry_after_ms": null,
+          "details": {
+            "field": "uri",
+            "value": "github://repos/octo/nope/overview",
+            "reason": "no such repository visible to this credential"
+          },
+          "repair": {
+            "next_step": "list_repositories_to_find_valid_uri",
+            "tool": "github_list_repositories",
+            "arguments": {
+              "owner": "octo"
+            },
+            "alternative": "Ask the user which repository they meant when the owner is also unknown."
+          },
+          "request_id": "req-def456",
+          "resource_uri": "github://repos/octo/nope/overview"
+        }
+      }
+    }
+  }
+}

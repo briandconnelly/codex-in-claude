@@ -37,6 +37,9 @@ This file is the single home for these rules — other files point at ids and do
 
 - `[1.transport]` **Choose transport explicitly.** Use `stdio` for local single-client; use streamable HTTP for shared or remote.
   Document the choice in the capability summary.
+  Streamable HTTP has three required headers with distinct applicability: `MCP-Protocol-Version` on every POST (and it MUST match the body's `_meta` `io.modelcontextprotocol/protocolVersion`), `Mcp-Method` on every request, and `Mcp-Name` only on `tools/call`, `resources/read`, and `prompts/get` (the tasks extension adds task methods, where it carries the `taskId`); a header/body mismatch is `HeaderMismatch` (`-32020`).
+  A tool may pass custom headers via the `x-mcp-header` parameter convention — design for gateways that route, authorize, and meter on these headers without parsing bodies.
+  See `native-wire-shapes.md` for the header shapes.
 
 - `[1.stdout]` **`stdio` servers MUST NOT log to stdout.** Stdout is the JSON-RPC channel; mixing log output corrupts the protocol stream.
   Send logs to stderr or a file.
@@ -52,6 +55,7 @@ This file is the single home for these rules — other files point at ids and do
 
 - `[1.state-handles]` **Declare state-handle discipline.** Handles for jobs, cursors, sessions, or server-side state are opaque IDs with readable labels where useful, declared lifetime, expiry behavior, auth checked on every use, and bounded retention.
   Opaque means client-opaque; the §3 security rule defines the two permitted handle modes (server-side reference or integrity-protected stateless token).
+  This is now the protocol's own position: the stateless core (SEP-2567) removes sessions entirely and directs servers to carry cross-call state as explicit, server-minted identifiers passed as ordinary arguments — the model can see the handle and thread it between tools.
 
 - `[1.observability]` **Surface observability in responses, not dashboards.** Rate limits, timeouts, retry hints, deprecation notices, and the capability fingerprint (where published, §9) belong in the response payload an agent reads.
   Operator dashboards are out of scope here.
@@ -63,18 +67,22 @@ This file is the single home for these rules — other files point at ids and do
 - `[1.display-metadata]` **Declare display metadata where humans choose capabilities.** Use native `title` and `icons` on tools, resources, resource templates, prompts, and implementation info when a client has a human-facing picker.
   These fields are not a substitute for precise names and descriptions, but they reduce wrong selection in mixed human/agent workflows.
 
-- `[1.negotiated-caps]` **Record negotiated capabilities as part of the contract.** During initialization, client and server exchange protocol versions and capabilities; optional features are usable only if negotiated.
-  A design or audit must say which fully qualified paths it depends on (for example, `server.capabilities.completions`, `server.capabilities.resources.subscribe`, `client.capabilities.roots`, `client.capabilities.elicitation`, or `server.capabilities.tasks.requests.tools.call`) and what fallback weaker clients receive.
-  *Forward-compat:* the negotiation carrier is a likely migration point in the 2026-07-28 RC (see `SKILL.md` Spec Baseline); the obligation itself — declare what you depend on and what weaker clients get — is stable.
+- `[1.negotiated-caps]` **Record negotiated capabilities as part of the contract.** There is no initialization handshake: every request carries the client's protocol version and capabilities in `_meta` (`io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities`, both required), and the server advertises its own capabilities via the mandatory `server/discover` method; optional features are usable only when the relevant capability travels on the request or appears in discovery.
+  A design or audit must say which capability paths it depends on — for example the server's `completions` or `resources.subscribe` capability, the client's `elicitation` modes (`form`, `url`), or an extension entry such as `io.modelcontextprotocol/tasks` in `clientCapabilities.extensions` — and what fallback weaker clients receive.
+  A server MUST NOT rely on a capability the request did not declare; the native failure is `MissingRequiredClientCapability` (`-32021`) with `data.requiredCapabilities` (see `[6.capability-missing]`).
 
-- `[1.roots]` **Handle roots deliberately for workspace-scoped servers.** If a server reads or writes local project content, request `roots/list` from clients that advertise `roots`, stay within those declared roots unless the tool contract explicitly says otherwise, and handle `notifications/roots/list_changed`.
+- `[1.spec-revision]` **Declare the target protocol revision, and judge the contract against it.** State in the capability summary which revision(s) and which extensions the server targets — modern (2026-07-28), legacy (2025-11-25), or dual-era — naming extensions individually (e.g. `io.modelcontextprotocol/tasks`), because they version independently of the core revision.
+  Revision-independent rules — naming, descriptions, granularity, annotations, failure envelopes, token efficiency, security — bind regardless of the declared target; only revision-sensitive wire mechanics (the negotiation carrier, subscription delivery, the task lifecycle, MRTR/elicitation delivery, cache hints, numeric codes) are read through the informative [mcp-2025-11-25-compat.md](mcp-2025-11-25-compat.md) matrix for a declared-legacy target, so a legacy wire shape on a declared-legacy surface is baseline conformance, not a finding.
+  What such a server can still earn here: an undeclared revision target, and — for each deprecated feature it uses — the lack of a migration plan inside that feature's deprecation window.
+
+- `[1.roots]` **Express workspace scope as ordinary tool arguments; treat roots as a deprecated compatibility path.** Roots is deprecated in 2026-07-28 (twelve-month window): new designs pass directories and files via tool parameters, resource URIs, or server configuration.
+  Where a target client still declares the `roots` capability, obtain roots via MRTR (`ListRootsRequest` inside `InputRequiredResult.inputRequests` — `notifications/roots/list_changed` no longer exists), stay within them unless the tool contract explicitly says otherwise, and document the migration.
   Roots guide server behavior and reduce path ambiguity; they are not access control, so still enforce filesystem permissions independently.
-  *Forward-compat:* roots is slated for deprecation in the 2026-07-28 RC (see `SKILL.md` Spec Baseline); keep workspace scope expressible as ordinary tool arguments so it survives roots' removal.
 
 - `[1.auth-repair]` **Expose auth mechanics that affect repair.** For HTTP authorization, document the canonical server URI and resource indicator used for token audience binding, never pass through tokens issued for a different resource, and surface incremental or step-up scope challenges as structured repair (`required_scopes`, `resource`, `authorization_url` or elicitation URL where appropriate).
   For stdio, document where credentials come from only when the agent can act on it.
-  For client registration, the baseline makes Client ID Metadata Documents the SHOULD and Dynamic Client Registration a MAY "included for backwards compatibility"; the client priority order is pre-registered credentials, then CIMD, then DCR, then prompting the user.
-  Target CIMD and keep DCR only as the fallback for authorization servers that do not advertise `client_id_metadata_document_supported`.
+  For client registration, Dynamic Client Registration is formally deprecated in favor of Client ID Metadata Documents (twelve-month window); the client priority order is pre-registered credentials, then CIMD, then DCR, then prompting the user.
+  Target CIMD and keep DCR only as the backward-compatibility fallback for authorization servers that do not advertise `client_id_metadata_document_supported`.
 
 Audit prompt: Can an agent learn what this server does, what it doesn't, and which prerequisites affect use, in a single read?
 
@@ -86,6 +94,10 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
 
 - `[2.summary]` **Provide a server capability summary.** A concise overview of what the server does, what it does not do, and any prerequisites that affect whether or how an agent should use it.
   Expose it via a resource, discovery tool, or instructions field, whichever the client honors.
+
+- `[2.discover-first]` **Treat `server/discover` as the discovery surface's native first read.** Its mandate and required content are `[1.negotiated-caps]`'s concern; this rule owns the discovery consequence: the identity, supported versions, and capability advertisement it returns are what a modern client can read before any house surface, so the capability summary, the catalogs, and any fingerprint claim must agree with what it advertises.
+  The optional `instructions` field rides this result under 2026-07-28 — it is no longer carried by an `initialize` response — and remains advisory wherever it travels (`[2.instructions-advisory]`).
+  Say in the capability summary how an agent gets from `server/discover` to the house surfaces, because a capability advertisement does not carry the task-level guidance `[2.summary]` requires.
 
 - `[2.instructions-advisory]` **Treat server `instructions` as advisory, never as the sole carrier.** Some clients never surface the `instructions` field to the model, so behavior that exists only there is invisible to those agents.
   Essential selection, prerequisite, safety, and repair behavior must also reach the agent through a surface it is guaranteed to see — the tool and resource schemas, or a discovery tool or resource the client does honor.
@@ -117,8 +129,8 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
     On a host that still preloads `tools/list`, these are extra tools and round trips with no disclosure benefit, so document the host integration it assumes.
     On hosts that retrieve tools by lexical search over names and descriptions before the model sees any definitions, each description doubles as a retrieval document: include the natural-language task phrases an agent would plausibly query, as readable prose rather than keyword dumps.
     Add retrieval phrasing only where captured evidence and evals show retrieval improves (design-workflow Step 8), and charge it against the compact-definition budget — retrieval text inflates every `tools/list` byte a preloading client pays.
-  - `[2.pd-server]` **Server-managed catalog disclosure** — expose a small initial catalog and reveal more as *declared* state changes (authorization, configuration, workspace, or external state), emitting `notifications/tools/list_changed`.
-    `listChanged` is cache *invalidation*, not discovery: it tells a client to refetch, communicates no relevance, and strands tools on clients that ignore it.
+  - `[2.pd-server]` **Server-managed catalog disclosure** — expose a small initial catalog and reveal more as *declared* state changes (authorization, configuration, workspace, or external state), emitting `notifications/tools/list_changed` to clients that opted in via `subscriptions/listen` and bounding staleness for everyone else with an honest `ttlMs` (see `[8.cacheable-results]`).
+    `listChanged` is cache *invalidation*, not discovery: it tells a client to refetch, communicates no relevance, and reaches only opted-in listeners — a client that never opens a listen stream learns of the change no sooner than its `ttlMs` expiry.
     Tie every reveal to such a declared change rather than to unrelated calls, so the surface still satisfies the stability rule below; a catalog that mutates as a hidden side effect of ordinary calls violates it.
     Requires verified host refresh behavior, a stable fallback catalog for non-refreshing clients, and deterministic snapshot semantics so a change mid-pagination cannot drop or duplicate tools (see §9).
   - `[2.pd-reduction]` **Client-independent surface reduction** — shrink the catalog *every* client sees.
@@ -130,7 +142,7 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
   But native `tools/list` accepts only an opaque pagination cursor: it has no query, namespace, detail, or summary parameter.
   Provide filtering and summary/detail modes through a discovery tool, a resource catalog, configuration, or authorization-scoped catalogs, and label them as such — never as a portable `tools/list` capability.
 
-- `[2.completion]` **Use native completion for hard-to-guess prompt and resource-template arguments.** If the server has prompt arguments or resource-template variables with large, dynamic, or enum-like value sets, advertise `server.capabilities.completions` and implement `completion/complete`.
+- `[2.completion]` **Use native completion for hard-to-guess prompt and resource-template arguments.** If the server has prompt arguments or resource-template variables with large, dynamic, or enum-like value sets, advertise the `completions` capability (via `server/discover`) and implement `completion/complete`.
   Use it proactively to reduce invalid IDs, paths, project keys, channel names, and URI components; keep tool-argument repair in normal tool errors because MCP completion does not complete arbitrary tool arguments.
 
 - `[2.token-rules]` **Discovery obeys token-efficiency rules.** Keep each definition compact (the baseline above); where a discovery tool or resource catalog returns its own list-shaped payload, paginate it, support filtering, and return concise summaries by default with an opt-in detailed mode (see §8).
@@ -148,7 +160,7 @@ Audit prompt: Can an agent learn what this server does, what it doesn't, and whi
   Clients can short-circuit a re-walk if nothing has changed.
 
 - `[2.auth-scoped-stable]` **Discovery may vary by authorization context, but never by hidden side effects.** The tool and resource lists an agent sees may legitimately differ across auth scopes — an unauthorized scope simply does not see a capability.
-  They MUST NOT drift as a side effect of unrelated calls within a connection: the same authorized client gets the same surface in the same order (see §9), so a cached client can trust it.
+  They MUST NOT drift as a hidden side effect of unrelated calls: the protocol is stateless, list results no longer vary per-connection, and the permissible inputs to catalog shape are the request's own metadata, the authorization context, and declared server-global state — the same authorized client presenting the same request metadata gets the same surface in the same order (see §9), so a cached client can trust it within the advertised `ttlMs`.
   Make differences auth-scoped, declared, and stable, not per-request surprises.
 
 Audit prompt: On the clients this server actually targets, what must an agent load before its first useful call — and is that the smallest surface those clients allow, given that the least-capable realistic client preloads every tool definition?
@@ -187,7 +199,7 @@ Audit prompt: On the clients this server actually targets, what must an agent lo
 
 - `[3.dialect]` **Declare schema dialect where supported.** A schema without a dialect forces clients and validators to infer semantics.
 
-- `[3.portable-schema]` **Prefer simple, portable schema constructs.** Prefer flat closed objects, enums, and discriminated modes over deep `anyOf`/`oneOf` unions, recursive `$ref`s, `patternProperties`, and dependent constraints — clients, validators, and model planners mishandle these, producing validation drift, broken argument forms, and wrong-shape first calls.
+- `[3.portable-schema]` **Prefer simple, portable schema constructs — a deliberate preference, not a protocol limit.** The protocol accepts any JSON Schema 2020-12 keywords in `inputSchema`/`outputSchema` (SEP-2106); this skill still prefers flat closed objects, enums, and discriminated modes over deep `anyOf`/`oneOf` unions, recursive `$ref`s, `patternProperties`, and dependent constraints — clients, validators, and model planners mishandle these, producing validation drift, broken argument forms, and wrong-shape first calls.
   When a parameter's shape genuinely varies by mode, use a discriminator field with per-mode documentation, or split tools per the granularity rule — not a union.
   Use a complex construct only when every target host's handling of it is verified by captured evidence (design-workflow Step 8 `host_capture` fixture, or equivalent captured responses in a review).
 
@@ -205,6 +217,7 @@ Audit prompt: On the clients this server actually targets, what must an agent lo
   Document the error envelope per tool — or union it into `outputSchema` — so validators never have to guess which shape applies; do not leave the two contracts in silent conflict.
 
 - `[3.structured-default]` **Default to structured output.** Structured data is authoritative; text or markdown is supplemental rendering for human-facing clients.
+  `structuredContent` may carry any JSON value under 2026-07-28, but an object shape remains this skill's default because `outputSchema`-validated objects are what field-level repair (§6) and detail toggles (§8) attach to.
   Token-efficiency rules for responses live in §8.
 
 - `[3.advertised-fields]` **Advertise only response fields you populate.** Every required field and every documented always-present field appears on the wire; conditional fields document and satisfy their appearance conditions.
@@ -357,8 +370,9 @@ Audit prompt: For each tool, can an agent decide to use it, call it correctly, a
 
 - `[4.description-constraints]` **Resource `description` prose follows the §3 constraint-separation rule.** Any binding constraint in a resource or resource-template description is its own explicit-strength sentence, kept apart from background — same discipline, compact form.
 
-- `[4.subscriptions]` **Support resource subscriptions for mutable resources.** If a resource can change during a long-lived agent session and stale reads matter, advertise `resources.subscribe`, accept `resources/subscribe`, and emit `notifications/resources/updated` for subscribed URIs.
-  Use `notifications/resources/list_changed` for catalog membership changes; use per-resource updates for body changes.
+- `[4.subscriptions]` **Support resource subscriptions for mutable resources.** If a resource can change during a long-lived agent session and stale reads matter, advertise `resources.subscribe` and serve the `resourceSubscriptions` filter of `subscriptions/listen` — the client names the URIs it watches on the listen request (`resources/subscribe`/`unsubscribe` no longer exist) — emitting `notifications/resources/updated` on that stream, tagged with `io.modelcontextprotocol/subscriptionId`.
+  Use the `resourcesListChanged` filter type for catalog membership changes; use per-resource updates for body changes.
+  Subscriptions are opt-in streams a client may never open, so also bound staleness for non-listening clients with an honest `ttlMs` on `resources/read` (see `[8.cacheable-results]`).
 
 - `[4.failure-contract]` **Resources share the failure-recovery contract.** Missing-credential, not-found, gone, and rate-limit signals must be machine-readable (see §6).
 
@@ -382,7 +396,7 @@ Audit prompt: Can an agent decide whether to fetch a resource — and which chun
 - `[5.prerequisites]` **List prerequisites.** Which tools, which resources, and which permission or context assumptions the prompt relies on.
   Missing prerequisites surface as confusing failures partway through execution.
 
-- `[5.completion]` **Offer completion for prompt arguments with dynamic value sets.** If a prompt argument asks for a project, workspace, repository, environment, channel, or similar value the agent should not guess, support `completion/complete` when `server.capabilities.completions` is negotiated.
+- `[5.completion]` **Offer completion for prompt arguments with dynamic value sets.** If a prompt argument asks for a project, workspace, repository, environment, channel, or similar value the agent should not guess, support `completion/complete` when the server advertises the `completions` capability.
 
 - `[5.name-followups]` **Reference expected follow-on tools and resources by name.** A prompt that doesn't tell the agent what to invoke next is half a scaffold.
 
@@ -411,6 +425,12 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 - `[6.symbolic-codes]` **Use stable, machine-readable error codes.** Codes are symbolic strings (e.g., `not_found`, `rate_limited`, `invalid_field`), not numeric exit codes.
   The symbolic code is the authoritative branch key for agents.
 
+- `[6.jsonrpc-code-allocation]` **Allocate numeric JSON-RPC `error.code` values per the spec's partition of the reserved range.** This rule governs only the numeric code on JSON-RPC failures (`[6.resource-errors]`, and the admissibility exceptions in `[6.tool-errors]`); the symbolic branch key stays with `[6.symbolic-codes]`.
+  `-32020` to `-32099` is reserved for the MCP specification: emit a code from this band only when the spec defines it, and only with its specified meaning — the assigned codes are cited where their conditions live (`[1.transport]`, `[6.capability-missing]`, `[6.tool-errors]`).
+  `-32000` to `-32019` is a closed legacy band: new codes MUST NOT be allocated there, new implementations SHOULD NOT use it at all, and receivers MUST NOT assume a specific meaning for codes received from it.
+  A server-defined error purpose the spec does not cover SHOULD take a code outside the JSON-RPC reserved range (`-32768` to `-32000`); the rest of the integer space is open for application-defined codes.
+  Codes retired by earlier revisions stay reserved: never emit the retired `-32002` (folded into `-32602`; clients SHOULD still accept it from 2025-11-25 servers) or the removed `-32042`.
+
 - `[6.document-codes]` **Document every error code per tool — without bloating every definition.** An undocumented code is an undiscoverable code; agents cannot branch on it reliably.
   But a full error catalog embedded in every `tools/list` entry inflates the definition each preloading client pays for (see §2), so choose placement by cost: keep only selection- and repair-critical codes inline in the definition, and serve the complete per-tool catalog through an on-demand surface (`describe_tool`, a resource, or the capability summary) that repair hints can reference.
 
@@ -419,8 +439,12 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 
 - `[6.field-feedback]` **Provide field-level validation feedback.** Which field, why it's invalid, and which values are allowed. "Invalid input" without a field name forces the agent to guess.
 
-- `[6.offending-value]` **Include the offending value when safe.** The agent's repair attempt depends on knowing what it sent.
-  Redact when sensitive; never omit silently.
+- `[6.offending-value]` **Include the offending value when known-safe; omit it only with disclosure, never silently.** The agent's repair attempt depends on knowing what the server actually received.
+  Emit `details.value` when the received value itself is known-safe: the server minted it (a handle or URI it issued), or it is one of the schema's published enum members arriving where it is invalid.
+  A received value that failed a format check is not known-safe however innocent the parameter — any free-form parameter can receive a mispasted secret, so safety is a property of the value, not of the schema field.
+  Reliable redaction is a precondition for echoing a potentially sensitive value; best-effort pattern matching does not qualify, because a plain secret matches no pattern.
+  For parameters whose received values' sensitivity the server cannot reliably determine, a blanket omission of `value` is conformant when the policy is disclosed on an agent-visible surface (the error-envelope schema/resource or the capability summary) — that disclosure is what "never omit silently" requires.
+  An undisclosed omission is the defect.
 
 - `[6.retryability]` **Signal retryability and rate limits explicitly.** Use `retry_after_ms`, `temporary: true|false`, and `rate_limit_remaining` where applicable.
   Agents need to distinguish "wait and retry" from "stop and reconsider."
@@ -436,49 +460,57 @@ Audit prompt: If every prompt on this server were removed, would any tool or res
 - `[6.repair-callable]` **Repair hints reference real, callable surfaces.** Tool names, parameter names, valid enum values — not free-form prose.
   `repair.arguments` holds literally callable values, never placeholders such as `"<one of the listed slugs>"`; when a required value must be discovered first, make the primary repair call the lookup or enumeration tool that returns it.
 
-- `[6.capability-missing]` **Surface capability-missing failures explicitly.** If a path needs an optional feature the client did not negotiate, return a structured error such as `capability_not_negotiated` with `required_capability`, the affected operation, and the fallback tool/resource/prompt when one exists.
+- `[6.capability-missing]` **Surface capability-missing failures explicitly — the native way.** If a request needs a capability its `_meta` `clientCapabilities` did not declare, the spec's answer is `MissingRequiredClientCapability` (`-32021`, HTTP 400) with `data.requiredCapabilities` naming what is missing; return it rather than inventing a house code for the same fact.
+  Where a weaker-client fallback exists (a tool, resource, or prompt that covers the path without the capability), name it in the same `error.data` alongside the native fields so the agent can reroute instead of stopping.
 
-- `[6.elicitation]` **Use elicitation only behind negotiated support and clear fallback.** When a server needs missing user input, user confirmation, or sensitive external interaction during a call, prefer MCP elicitation for clients that advertise it.
-  URL-mode elicitation is the safe path for passwords, API keys, payment credentials, OAuth, or other sensitive exchanges.
-  For clients without elicitation, return an actionable error or task `input_required` status that names the next callable surface or external action.
-  When a call cannot proceed until a URL-mode elicitation completes, the spec assigns a native code — `-32042` (`URLElicitationRequiredError`), carrying the required elicitations in `error.data` — and it is the correct answer even from `tools/call`.
-  Use it rather than an `isError: true` house envelope for that one case, so clients that already implement the native consent path recognize it.
+- `[6.elicitation]` **Use elicitation only behind declared support and clear fallback.** When a server needs missing user input, user confirmation, or sensitive external interaction during a call, prefer MCP elicitation for clients whose per-request `clientCapabilities` declare it — and only the modes they declare (`form`, `url`; an empty capabilities object means form-only).
+  Elicitation is delivered via MRTR: the call returns `resultType: "input_required"` with the `ElicitRequest` inside `inputRequests`, and the client retries the original call with `inputResponses` (plus any server `requestState`, echoed verbatim); server-initiated `elicitation/create` no longer exists, and `InputRequiredResult` is permitted only on `tools/call`, `resources/read`, and `prompts/get`.
+  Form mode MUST NOT collect passwords, API keys, payment credentials, or other secrets; URL mode is the safe path for those, with cross-retry correlation carried in `requestState` (integrity-protected per the MRTR rules — it is attacker-controlled input; `elicitationId` and `notifications/elicitation/complete` no longer exist).
+  Servers MUST NOT assume the client will fulfill the requests or retry; for clients without elicitation, return an actionable error or task `input_required` status that names the next callable surface or external action.
 
 - `[6.tool-errors]` **Tool semantic errors return as tool result errors.** Set `isError: true` on the tool result.
   JSON-RPC errors are reserved for transport, protocol, and non-tool RPC methods (such as `resources/read` and `resources/list`); raising a JSON-RPC error from `tools/call` strips the structured-response contract from the failure path.
-  The exceptions are protocol-level conditions the spec assigns a code to, which stay JSON-RPC even on `tools/call`: `-32042` when a URL-mode elicitation must complete first (above), and the task-augmentation mismatch codes in §7.
+  The exceptions are protocol-level conditions the spec assigns a code to, which stay JSON-RPC even on `tools/call`: malformed or version-mismatched per-request `_meta` (`-32602`, `-32022`), header mismatch (`-32020`), and a required-but-undeclared client capability (`-32021`, §6 above) — including the tasks extension's "cannot proceed without tasking" case (§7).
   These are conditions about the call's admissibility, not about the tool's semantics — the rule is that *semantic* failures never leave the tool-result carrier.
+  A `resultType: "input_required"` interim result is neither carrier: it is not a failure, and it never substitutes for one (see `[6.elicitation]`).
   See `examples.md` §6 for an actionable tool-result error payload.
 
-- `[6.resource-errors]` **Resource semantic errors return as JSON-RPC errors.** `resources/read` and `resources/list` are non-tool RPC methods, so failures surface through the JSON-RPC envelope; carry the same unified error envelope (below) in structured `error.data`, renaming only `code`→`machine_code` and `message`→`human_message`.
+- `[6.resource-errors]` **Resource semantic errors return as JSON-RPC errors.** `resources/read` and `resources/list` are non-tool RPC methods, so failures surface through the JSON-RPC envelope; carry the same unified error envelope (below) in structured `error.data`, renaming only `code`→`machine_code` and `message`→`human_message` (`[6.rename]`).
+  The numeric `error.code` on that envelope is allocated per `[6.jsonrpc-code-allocation]`.
 
 - `[6.name-carrier]` **Name the error carrier in the capability summary.** State where the envelope travels — `structuredContent` on the tool result, JSON-RPC `error.data`, and any disclosed degraded mode (below) — so agents know where to parse a failure before the first one occurs.
 
 - `[6.correlation]` **Errors include correlation context.** A `request_id`, the offending parameter, and (where applicable) the resource URI.
   Agents need to correlate failures with the requests that caused them.
+  The OpenTelemetry `_meta` keys (`traceparent`, `tracestate`, `baggage`) are operator-side trace plumbing; they complement `request_id` but do not replace it, because `_meta` may never be surfaced to the model.
 
 ### One error envelope, two carriers
 
 The failure-recovery contract is **one envelope** with identical field semantics regardless of where it surfaces.
 Tool-result errors carry it in `structuredContent` (alongside `isError: true`); resource and other non-tool RPC failures carry it in JSON-RPC `error.data`.
-The *only* permitted divergence is renaming `code`/`message` on the JSON-RPC side, because the native `code`/`message` already occupy those keys — every other field is the same name, shape, and cardinality on both surfaces.
+The *only* permitted divergence is renaming `code`/`message` to `machine_code`/`human_message` on the JSON-RPC side (`[6.rename]` below) — every other field is the same name, shape, and cardinality on both surfaces.
 Do not invent surface-specific aliases (e.g. `repair_hints`) or surface-specific flags (e.g. `recoverable`).
 
 | Field | Tool result (`structuredContent`) | JSON-RPC (`error.data`) | Required? | Notes |
 | --- | --- | --- | --- | --- |
-| symbolic code | `code` | `machine_code` | yes | Stable symbolic string; the authoritative branch key. Renamed on JSON-RPC only to avoid shadowing native `code`. |
-| human text | `message` | `human_message` | yes | Short human-readable summary. Renamed on JSON-RPC only to avoid shadowing native `message`. |
-| field detail | `details` | `details` | where applicable | `{field, value, reason}` for one parameter, `{fields, reason}` for a cross-parameter constraint (see below); redact `value` when sensitive, never omit silently. |
+| symbolic code | `code` | `machine_code` | yes | Stable symbolic string; the authoritative branch key. Renamed on the JSON-RPC side (`[6.rename]`). |
+| human text | `message` | `human_message` | yes | Short human-readable summary. Renamed on the JSON-RPC side (`[6.rename]`). |
+| field detail | `details` | `details` | where applicable | `{field, value, reason}` for one parameter, `{fields, reason}` for a cross-parameter constraint (see below); emit, redact, or omit `value` per `[6.offending-value]`. |
 | transient? | `temporary` | `temporary` | yes | See retryability invariants above. |
 | retry delay | `retry_after_ms` | `retry_after_ms` | yes (nullable) | Always present alongside `temporary`; a non-negative integer when a delay is known, else `null` (and always `null` when `temporary: false`). Always emit the key so agents distinguish `null` from a number without special-casing a missing field. |
 | rate budget | `rate_limit_remaining` | `rate_limit_remaining` | on rate-limit errors | Non-negative integer of remaining calls in the current window, where the surface exposes one. |
 | repair | `repair` | `repair` | where a corrective path exists | A single object `{next_step, tool, arguments, alternative}` — see below. Omit the field entirely when no repair exists (never emit `null` or an empty array). |
 | correlation | `request_id`, `resource_uri`, `fingerprint` | `request_id`, `resource_uri`, `fingerprint` | where applicable | `resource_uri` where the failure is tied to a resource. |
 
+- `[6.rename]` **The JSON-RPC-side rename is mandatory, and disclosure does not waive it.** The rename is not about key collision — inside `error.data` nothing collides with the native `error.code`/`error.message`.
+  It serves two readers instead: an agent reading the *serialized* error object, where a second `"code"` key (a symbolic string beside the numeric JSON-RPC code) invites grabbing the wrong one; and a parser written once against this contract, which finds the branch key under the same spelling on every conforming server.
+  A capability summary that discloses keeping `code`/`message` inside `error.data` repairs neither: the model reading a failure payload may not have the summary in context at that moment, and per-server spellings break the portable parser.
+  Contrast `[6.degraded-carrier]`, where disclosure sanctions a deviation only because a framework *cannot* comply — a preferred spelling is not an inability.
+
 - `[6.details-field]` **`details.field` names a published parameter.** For a tool argument-validation failure, `field` is a single property path from the failing tool's published `inputSchema` (dotted for nested properties); for a constraint spanning several parameters, use `fields` — a non-empty array of unique published property paths — and emit exactly one of `field` or `fields`, never both.
   For a non-tool RPC failure, `field` names the offending request parameter of that method (`uri` for `resources/read`), under the same one-of rule.
   Translate internal names at the MCP boundary; never expose internal or synthetic names the surface does not accept (an internal `office_id` for a tool that takes `office`, a synthetic `bbox` for tools that take `south`/`west`/`north`/`east`).
-  Include `value` only when safe and meaningful; error-code-specific detail keys (such as `required_scopes` on an `insufficient_scope` error) are permitted alongside `reason` when documented with the code.
+  Emit, redact, or omit `value` per `[6.offending-value]`; error-code-specific detail keys (such as `required_scopes` on an `insufficient_scope` error) are permitted alongside `reason` when documented with the code.
 
 - `[6.presence]` **Presence convention.** Fields marked *yes* are always emitted on both surfaces — `retry_after_ms` is the one nullable required field (it is bound to the always-present `temporary`, and `null` meaningfully signals "no known delay").
   Every other field is omitted entirely when it does not apply; do not send a placeholder `null` or empty array for an absent optional field.
@@ -503,45 +535,45 @@ And does the same failure carry the identical envelope whether it surfaces as a 
 
 *(Cross-cutting; rules apply when an operation may outlive a normal request/response turn.)*
 
-- `[7.execution-mode]` **Choose the execution mode deliberately.** Use blocking `tools/call` for short operations, progress notifications for bounded multi-step work, and task-augmented requests when clients need later status or result recovery.
+- `[7.execution-mode]` **Choose the execution mode deliberately.** Use blocking `tools/call` for short operations, progress notifications for bounded multi-step work, and a task (via the negotiated tasks extension) when clients need later status or result recovery.
   A blocking call that returns dispatched-but-unconfirmed follows the §3 dispatched-vs-applied rule; escalate to progress or tasks only when confirmation itself is long-running.
 
 - `[7.declare-duration]` **Declare long-running behavior in the tool contract.** Tool descriptions or schemas include expected duration, timeout behavior, and whether partial progress is observable.
+  Because task creation is server-directed (the client never requests it), the description also says when the tool may answer with a task instead of a direct result, so an agent is not surprised by `resultType: "task"`.
 
 - `[7.progress-token]` **Support `progressToken` where progress exists.** Send rate-limited `notifications/progress` updates that identify current phase, completed work, and remaining work when knowable.
+  Progress is request-scoped: it flows on the originating request's response stream, never on a `subscriptions/listen` stream — once the call has returned (including with a task), progress for the continuing work is carried by task status (`statusMessage`) instead.
 
-- `[7.cancellation]` **Support cancellation where work can continue after the call starts.** Honor `notifications/cancelled` for request-bound work and `tasks/cancel` for task-capable tools.
+- `[7.cancellation]` **Support cancellation where work can continue after the call starts.** Request-bound cancellation is transport-specific: on Streamable HTTP the client closes the request's response stream (a disconnect MUST be treated as cancellation; no notification is sent), while on stdio the client sends `notifications/cancelled`.
+  Tasks cancel only via `tasks/cancel` — `notifications/cancelled` MUST NOT be used for a task — and the ack is an empty result signalling received intent, not stopped work: cancellation is cooperative and eventually consistent, so the task MAY still finish in another terminal status, observed via `tasks/get`.
 
-- `[7.task-support]` **Declare task support at both levels.** Native task augmentation requires the server to advertise the `tasks` capability (`server.capabilities.tasks.requests.tools.call`) AND the tool to declare `execution.taskSupport` as `optional`, `required`, or `forbidden`.
-  The per-tool flag alone is insufficient — without the server capability, clients must not attempt task augmentation.
-  `forbidden` is the default: an omitted `execution.taskSupport` is not "unspecified," it declares the tool non-task-capable, and clients MUST NOT task-augment it.
-  Declare it explicitly on every task-capable tool, exactly as §3 requires for annotation defaults — silence here silently disables the design.
-  Both tool-level mismatches answer `-32601` (Method not found): SHOULD when a client task-augments a `forbidden` tool, MUST when it fails to augment a `required` one.
-  The distinct capability-level case — a receiver that requires task augmentation for a whole request type and receives an unaugmented request — MAY answer `-32600`.
-  Both stay JSON-RPC errors even when the affected method is `tools/call`, because they concern the call's admissibility rather than the tool's semantics; §6 owns that carrier rule, this section owns the codes.
+- `[7.task-support]` **Gate tasks on the negotiated extension, at both ends of the exchange.** Tasks are the `io.modelcontextprotocol/tasks` extension (SEP-2663; see `SKILL.md` Spec Baseline for its status caveat): the client declares it in each request's `clientCapabilities.extensions`, and the server advertises it in its `server/discover` capabilities.
+  Task creation is server-directed and per-request — there is no per-tool task flag and the client never signals task preference; a negotiated client MUST be prepared for either the standard result or a `CreateTaskResult` on any supported request.
+  A server MUST NOT return a task to a client whose request did not declare the extension, regardless of earlier requests; if it cannot serve such a request without tasking, it returns the missing-capability error (`MissingRequiredClientCapability`, `-32021` — the ext-tasks draft still prints the pre-renumbering `-32003`) naming the extension in `data.requiredCapabilities`.
+  That error stays JSON-RPC even on `tools/call` because it concerns the call's admissibility, not the tool's semantics (§6 owns the carrier rule).
 
-- `[7.task-operations]` **Use native task operations for status and result retrieval.** Poll with `tasks/get` (respecting the returned `pollInterval`), retrieve the result with `tasks/result`, and cancel with `tasks/cancel`.
-  `tasks/result` blocks until the task reaches a terminal status and its response is always the underlying result, never an intermediate payload; an agent may keep polling `tasks/get` in parallel while it waits.
-  Task objects use the spec's fields and casing — `taskId`, `status`, optional `statusMessage`, `createdAt`, `lastUpdatedAt`, `ttl`, `pollInterval` — and `status` is one of `working`, `input_required`, `completed`, `failed`, `cancelled`.
-  A `CreateTaskResult` may carry `io.modelcontextprotocol/model-immediate-response` in `_meta` — a string the host can hand the model immediately while the task runs; provide it so task-accepting calls do not go silent.
-  Carry `io.modelcontextprotocol/related-task` in `_meta` on task-associated messages whose payload does not already name the task: `tasks/result` responses MUST include it, while `tasks/get`, `tasks/list`, and `tasks/cancel` SHOULD NOT, because the `taskId` already travels in the message itself.
+- `[7.task-operations]` **Use native task operations for status and result retrieval.** Poll with `tasks/get` (respecting `pollIntervalMs`, which MAY change between polls), supply requested input with `tasks/update`, and cancel with `tasks/cancel`; `tasks/result` and `tasks/list` no longer exist — terminal payloads arrive inline on `tasks/get`.
+  Task objects use the extension's fields and casing — `taskId`, `status`, optional `statusMessage`, `createdAt`, `lastUpdatedAt`, `ttlMs` (nullable; MAY change), optional `pollIntervalMs` — and `status` is one of `working`, `input_required`, `completed`, `failed`, `cancelled`.
+  A `CreateTaskResult` is the request's `Result` with the task fields inline and `resultType: "task"`, and MUST NOT be sent before the task is durably created — a `tasks/get` for the returned `taskId` must already resolve.
+  Resolve any MRTR exchange synchronously before creating the task; over Streamable HTTP, task methods carry the `taskId` in the `Mcp-Name` header so intermediaries can route to the instance holding the state.
+  Give agents durable footing: encourage persisting `taskId`s so polling survives a crash, and keep `statusMessage` meaningful at every status.
 
-- `[7.failed-task]` **A failed tool call fails its task.** When a task wraps a `tools/call` and the tool returns `isError: true`, the task reaches the terminal `failed` status — not `completed` — and `tasks/get` SHOULD carry diagnostic text in `statusMessage`.
-  `tasks/result` then returns exactly what the unwrapped call would have: the same `isError: true` result with the same §6 envelope, so the failure is readable from either surface.
-  Without this coupling an agent polling task status sees `completed` and never inspects the payload that says otherwise.
+- `[7.failed-task]` **`failed` means protocol failure; a tool error completes the task.** The terminal statuses split by fault domain: `completed` carries the underlying `result` — *including* a `tools/call` result with `isError: true` and its §6 envelope — while `failed` is reserved for JSON-RPC errors during execution and carries the JSON-RPC `error` object (`statusMessage` SHOULD summarize it).
+  `failed` MUST NOT be used for a tool-result error, so an agent MUST inspect the `result` payload of a `completed` task before declaring success — `completed` is a delivery statement, not a success statement.
+  State this loudly in the server's capability summary; agents trained on the 2025-11-25 coupling (tool error ⇒ `failed`) will otherwise misread `completed`.
 
-- `[7.status-notification]` **Treat `notifications/tasks/status` as optional push, not contract.** Receivers MAY emit it on status changes with the full task state; requestors MUST NOT rely on receiving it.
+- `[7.status-notification]` **Treat `notifications/tasks` as optional push, not contract.** Servers MAY emit it with the full task state to clients that opted in by naming the task in the `taskIds` filter of `subscriptions/listen` — the server's acknowledgement reports which `taskIds` it accepted; requestors MUST NOT rely on receiving it.
   Keep polling `tasks/get` as the authoritative status path, and use the notification only to poll sooner.
 
-- `[7.input-required]` **Define `input_required` recovery.** The native path is fixed: when polling shows `input_required`, the requestor SHOULD preemptively call `tasks/result` and hold it open.
-  The pending input request is not the `tasks/result` response — it arrives as a separate receiver-to-requestor request (an `elicitation/create` carrying the related-task `_meta`) while the call is pending; once input arrives the task returns to `working`, and the same held call completes with the terminal result (re-call only if the call itself fails).
-  Say which input mechanism rides that channel — native elicitation (`elicitation/create`), URL-mode elicitation, or a domain-specific fallback for clients without the negotiated capability.
+- `[7.input-required]` **Define `input_required` recovery.** The native path is fixed: when polling (or a `notifications/tasks` push) shows `input_required`, the `tasks/get` response carries the outstanding `inputRequests`; the client fulfills them with one or more `tasks/update` calls carrying `inputResponses`, then keeps observing until a terminal status.
+  `inputRequests` obeys the MRTR capability rule — only request kinds and elicitation modes the client declared may appear — and the server MUST NOT assume the client will answer.
+  Say which input mechanism the task uses — form elicitation, URL-mode elicitation, or a domain-specific fallback surface for clients without the capability — and what happens to the task when input never arrives (timeout to `failed`, `ttlMs` expiry, or a documented default).
   The task status alone is not enough; the agent needs the next operation and the capabilities required to perform it.
 
-- `[7.task-handles]` **Task handles are state handles.** Apply the §1 state-handle discipline to `taskId`s: high-entropy opaque ids, authorization checked on every `tasks/get`, `tasks/result`, and `tasks/cancel`, bounded retention via `ttl` — and do not advertise `tasks/list` where requestor isolation cannot be enforced, because it enumerates other requestors' handles.
+- `[7.task-handles]` **Task handles are state handles.** Apply the §1 state-handle discipline to `taskId`s: high-entropy opaque ids, authorization checked on every `tasks/get`, `tasks/update`, and `tasks/cancel`, bounded retention via `ttlMs` (a server MAY fail and then delete a task once its TTL elapses, so document the window).
 
-- `[7.task-fallback]` **Tasks are experimental; degrade deliberately.** Tasks were introduced in MCP 2025-11-25 and are still experimental, so a server MAY also expose a domain-specific status/cancel tool as a labeled fallback for clients without task support — but it should mirror the native signals (current status, when to poll again, result location, expiry), not replace `tasks/*`.
-  *Forward-compat:* the 2026-07-28 RC is expected to move tasks out of core into a negotiated extension (see `SKILL.md` Spec Baseline); this labeled fallback is the hedge that survives that move — keep status/result/cancel expressible as ordinary tools.
+- `[7.task-fallback]` **Degrade deliberately for clients without the extension.** Tasks are an extension, not core: a client that never declares `io.modelcontextprotocol/tasks` can neither receive nor operate on tasks, so a server whose work is genuinely long-running MAY expose a domain-specific status/cancel tool as a labeled fallback — mirroring the native signals (current status, when to poll again, result location, expiry), not replacing `tasks/*`.
+  Keep status/result/cancel expressible as ordinary tools; that is also what code-execution clients compose best (§3).
 
 Audit prompt: Can an agent monitor, cancel, and recover a long-running operation without guessing at server state?
 
@@ -568,6 +600,11 @@ Audit prompt: Can an agent monitor, cancel, and recover a long-running operation
 - `[8.native-pagination]` **Native list methods use the protocol pagination shape, not a house convention.** `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` accept an optional opaque `cursor` request param and return an optional `nextCursor` in the result; **absence of `nextCursor` signals completion**.
   There is no native `has_more`, `next_cursor`, `estimated_total`, or `limit` on these methods, and page size is server-selected — do not rename `nextCursor` to snake_case or bolt a house convention onto a native list.
   See [native-wire-shapes.md](native-wire-shapes.md).
+
+- `[8.cacheable-results]` **Populate the native cache hints honestly.** `server/discover`, the four list methods, and `resources/read` MUST carry `ttlMs` (integer ≥ 0 milliseconds of freshness) and `cacheScope` (`"public"` or `"private"`) on every `resultType: "complete"` result.
+  Choose the values from the data's actual volatility: `0` for surfaces that change per call, a real window for stable catalogs, and `"private"` whenever the response varies by authorization context (§2) — a `"public"` scope on an auth-scoped catalog leaks one principal's surface into another's shared cache.
+  `ttlMs` is a freshness hint, not a polling schedule; the paging `cursor` is part of the cache key.
+  Never cache the MRTR path: interim `input_required` results carry no hints, and a completed result produced by a retry carrying `inputResponses` or `requestState` MUST NOT be cached either — its content depends on inputs outside the cache key.
 
 - `[8.house-pagination]` **A tool's own result payload MAY carry a documented house pagination convention.** When a `tools/call` result paginates domain data (not a native list method), `has_more` is acceptable: if `has_more` is true, include a navigation token (`next_cursor`) and, where available, `estimated_total`.
   These are declared domain output and belong in `structuredContent` under the tool's `outputSchema` so the agent can observe them — not under `_meta`, which clients may not surface to the model.
@@ -616,21 +653,24 @@ Audit prompt: Could an agent complete a typical task on this server in a single 
   See `examples.md` §9 for fingerprint evolution across deprecation and removal.
 
 - `[9.list-changed]` **Advertise and emit protocol-native list-changed notifications.** Declare the `listChanged` capability where supported, and emit `notifications/tools/list_changed`, `notifications/resources/list_changed`, and `notifications/prompts/list_changed` when the corresponding list changes.
+  Delivery is opt-in: these notifications reach only clients that subscribed to the matching type (`toolsListChanged`, `resourcesListChanged`, `promptsListChanged`) on a `subscriptions/listen` stream, so pair them with an honest `ttlMs` (`[8.cacheable-results]`) that bounds staleness for clients that never listen.
 
 - `[9.list-vs-update]` **Distinguish list changes from resource updates.** `listChanged` means the catalog changed; `notifications/resources/updated` means a subscribed resource's contents changed.
   Emit both only when both facts are true.
 
 - `[9.deterministic-order]` **Keep list ordering deterministic.** `tools/list` and resource catalogs use stable ordering so clients can diff and cache predictably.
+  This is now native guidance: the spec says servers SHOULD return `tools/list` in a deterministic order to enable client caching and stable upstream prompt caches.
 
-- `[9.fingerprint-additive]` **Treat fingerprints as additive signals.** A capability fingerprint helps clients short-circuit discovery, but it does not replace native change notifications or stable list ordering.
+- `[9.fingerprint-additive]` **Treat fingerprints as additive signals.** A capability fingerprint helps clients short-circuit discovery, but it does not replace native change notifications, native cache hints (`ttlMs`/`cacheScope`), or stable list ordering.
 
 - `[9.fingerprint-coverage]` **The fingerprint covers the full agent-visible surface.** Tool definitions, resource catalogs, resource templates, prompt scaffolds, completion support, subscription behavior, negotiated-capability expectations, error codes, and the server capability summary.
   Anything an agent can plan against is part of the fingerprint input — tool descriptions included, because they are the primary input to tool selection (§3).
   Where a fingerprint is published, disclose its coverage in documented agent-readable metadata such as a `covers` field (see `examples.md` §9); the disclosure does not permit excluding any agent-visible surface.
   A separately named schema-only hash, if published, is per-capability diagnostic metadata; it must not be used to decide that discovery can be skipped, and it never narrows or replaces the fingerprint.
 
-- `[9.deprecation-semantics]` **Define deprecation semantics.** How a tool, resource, or prompt is marked deprecated, how long it remains available, and what replaces it.
-  Deprecation is a contract, not a sticky note.
+- `[9.deprecation-semantics]` **Define deprecation semantics.** Commit to how long a deprecated capability remains available before removal, and publish that window where agents and integrators can read it.
+  Deprecation is a contract, not a sticky note: a marker with no committed window is an announcement, not a deprecation.
+  The marker's own field set — including what replaces the capability — is `[9.deprecation-marker]`; state the window once here rather than restating the shape.
 
 - `[9.deprecated-discoverable]` **Deprecated capabilities remain discoverable.** They continue to appear in discovery (see §2) until removal, with a deprecation marker and a pointer to the replacement.
   Silently dropping them breaks cached clients.
@@ -639,16 +679,27 @@ Audit prompt: Could an agent complete a typical task on this server in a single 
   Document the migration in the deprecation marker.
   Additions are not symmetric: a new optional *input* property is additive, because existing calls that omit it stay valid.
   A new *output* property is additive only for tolerant consumers — this skill closes object schemas with `additionalProperties: false` (§3), and clients SHOULD validate `structuredContent` against the published `outputSchema` (§3), so a client still holding a cached closed schema rejects the very field you added.
-  Ship output additions behind a rediscovery signal: bump the fingerprint where you publish one and emit `notifications/tools/list_changed`, so caching and pinning clients — the ones this section exists to protect — refetch before they see the new field.
+  Ship output additions behind a rediscovery signal: bump the fingerprint where you publish one, emit `notifications/tools/list_changed` for listening clients, and keep `ttlMs` short enough that non-listening cachers refetch before they see the new field.
 
 - `[9.rename]` **Treat tool rename as remove-plus-add.** Renaming a tool is a discovery-surface change (see §2) — clients that cached the old surface will break silently otherwise.
   Keep the old name with a deprecation pointer for the documented window.
   A rename sweeps every agent-visible reference atomically with the alias window: repair hints (`repair.tool`), server `instructions`, the capability summary, prompts, and other tools' descriptions.
 
-- `[9.stability-tiers]` **Declare stability tiers if used.** `stable`, `preview`, `experimental`.
-  Mixing tiers without labels makes every capability look stable, which is worse than labeling some as risky.
+- `[9.stability-tiers]` **Declare stability tiers if used, from a closed set: `stable`, `preview`, `experimental`.** Mixing tiers without labels makes every capability look stable, which is worse than labeling some as risky.
+  The set is closed because `stability` answers one question — how much the contract may still change — and agents filter on it directly.
+  **Deprecation is an orthogonal axis and never a tier value.** A deprecated capability keeps the maturity tier it earned and carries the deprecation marker beside it (`[9.deprecation-marker]`), so `stability: "deprecated"` is not a legal value.
+  An agent deciding whether to adopt a capability reads both fields: `stability` for churn risk, the deprecation marker for remaining life.
 
-- `[9.tier-metadata]` **Stability tier is discovery metadata.** Each capability's tier is part of its discovery record so agents can filter by tier (see §2).
+- `[9.deprecation-marker]` **The deprecation marker is one object with a fixed field set.** `since` (the version the deprecation took effect), `removal_at_or_after` (the earliest version the capability may disappear), `replaced_by` (the successor, or `null` when there is none), and `migration` (concrete prose telling an agent what to change).
+  Presence of the marker *is* the deprecation signal; absence means not deprecated.
+  `replaced_by` identifies the successor in the terms of the record it sits on — a tool `name`, a resource `uri`, a resource template `uriTemplate`, or a prompt `name` — because those identifier spaces are not interchangeable.
+  This is a convention extension, not a native MCP structure.
+
+- `[9.tier-metadata]` **Stability and deprecation ride each capability's own discovery record.** Each capability's tier (`[9.stability-tiers]`) and deprecation marker (`[9.deprecation-marker]`) are part of its discovery record so agents can filter by tier and spot a dying capability without a second lookup (see §2).
+  Native `Tool`, `Resource`, `ResourceTemplate`, and `Prompt` records have no `stability` or `deprecation` field, so both ride under one namespaced `_meta` key — `<reverse-dns>/lifecycle` — on all four record types, per the native-vs-convention rule in `SKILL.md`.
+  Publishing them only on a house surface such as a fingerprint or a `search_tools` envelope does not satisfy this rule: a client reading native `tools/list` would see no tier at all.
+  Because `_meta` is a convention extension, an off-the-shelf client ignores it unless it was built to read that key — so the same facts stay available through the capability summary and the fingerprint where one is published.
+  See `examples.md` §9a for the worked native record.
 
 - `[9.error-codes]` **Error codes are part of the versioned surface (see §6).** Changing a code's meaning is a breaking change; introducing a new code is additive but still recorded in the fingerprint where one is published.
 
