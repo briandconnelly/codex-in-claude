@@ -7,6 +7,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`Meta.timeout_seconds` published a bare, undescribed field** — the only semantically-loaded
+  member of `Meta` with no description, unlike its neighbours `roots_source` and `tier` (#413). It
+  now documents which deadline the value is, by envelope: a synchronous call that runs Codex
+  (`codex_consult`/`codex_review_changes`/`codex_delegate`) reports that call's own resolved
+  deadline, post-clamp (10-600s; an out-of-range value is coerced to the nearest bound, not
+  rejected). A background job — a `*_async` call's job-start handle, or a later
+  `codex_job_result`/`codex_job_consume_result` fetch of that job's ORIGINATING run — reports the
+  job's own deadline instead: the job-lifecycle ceiling (`config.job_max_seconds()`, default 1800,
+  clamped 60-7200), since a background job runs to that ceiling, not the sync clamp. A
+  `codex_job_*` call's own handler-generated lifecycle error (`job_not_found` and its siblings)
+  reports that same ceiling, present even when no job was resolved (`job_not_found`, where
+  `meta.job_kind` is omitted from the envelope, not null). Call-boundary argument validation
+  (`invalid_arguments`) and an unexpected `internal_error` — on any tool, not only `codex_job_*` —
+  instead report the server's configured sync deadline, still post-clamp; neither is tied to any
+  run or resolved job. A regression test now pins an async handle's `meta.timeout_seconds` to
+  `config.job_max_seconds()`, the one documented sub-case with no prior coverage. Wording only, so
+  it bumps `FINGERPRINT` (`schema-67` → `schema-68`) without moving `RESULT_FORMAT`; not breaking.
 - **`gitdiff_error`'s `invalid_arguments` branch no longer echoes the rejected value in its
   human-readable `message`** (#418). `InvalidArgument` and `ErrorDetail` both promise the rejected
   value is never echoed — it may be a secret — and the machine fields already honored that for
