@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import anyio
 
 from codex_in_claude import codex, orchestration
+from codex_in_claude._core import redaction
 from codex_in_claude._core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Coverage, Meta
@@ -57,6 +60,13 @@ def test_gitdiff_error_redacts_secret():
 # direct Python call that bypasses the Literal param (see
 # test_dry_run_invalid_untracked_returns_structured_error in test_server.py).
 
+# Probe for the no-echo test below (#418): deliberately NOT secret-shaped (mirrors the
+# #432 `_PROBES` convention in test_redaction.py), so `redact_text` wouldn't strip it from
+# a reused message regardless — an sk-...-shaped probe would pass against the very bug this
+# guards (the #417 lesson). Shared by both tests below so the survives-redaction control
+# can't silently drift from the value the no-echo test actually probes.
+_UNTRACKED_PROBE = "an-ordinary-value-redaction-ignores"
+
 
 def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
     out = orchestration.gitdiff_error(
@@ -77,25 +87,39 @@ def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
 
 
 def test_gitdiff_error_invalid_untracked_never_echoes_the_rejected_value():
-    """`InvalidArgument` promises the rejected value is never echoed (see its docstring)
-    — it may be a secret, and this path's value is caller-supplied free text. The
-    exception text embeds it (`got {untracked!r}`), so the machine
-    fields are built from the known domain instead of from `str(exc)`.
+    """`InvalidArgument` and `ErrorDetail` promise the rejected value is never echoed (see
+    their docstrings) — it may be a secret, and this path's value is caller-supplied free
+    text. The exception text embeds it (`got {untracked!r}`), so the whole envelope —
+    including the human-readable `message` — must be built without ever reusing `str(exc)`
+    for this branch.
 
-    The probe value is deliberately NOT secret-shaped: `gitdiff_error` runs `str(exc)`
-    through `redact_text`, so an `sk-…` value would be stripped from a reused message
-    regardless, and the test would pass against the very bug it guards. Mutating the
-    implementation to reuse `str(exc)` must make this fail — verified by doing so."""
-    value = "an-ordinary-value-redaction-ignores"
-    out = orchestration.gitdiff_error(
-        InvalidUntrackedError(f"untracked must be one of [...], got {value!r}"), _make_meta()
-    )
-    err = out["error"]
-    assert value not in str(err["invalid_arguments"])
-    assert value not in str(err["details"])
-    # The instrument works: the same value IS present in the human-readable message,
-    # so its absence above reflects the no-echo rule, not a value that never arrived.
-    assert value in err["message"]
+    See `_UNTRACKED_PROBE` above for why the probe is shaped the way it is;
+    `test_probe_value_survives_redaction` below keeps that control honest, and this test
+    additionally asserts the same property inline so the control can't drift from the
+    exact value probed here."""
+    value = _UNTRACKED_PROBE
+    exc = InvalidUntrackedError(f"untracked must be one of [...], got {value!r}")
+    out = orchestration.gitdiff_error(exc, _make_meta())
+
+    # Positive control 1: the probe would have reached the message absent the fix — prove
+    # it actually made it into the exception text `gitdiff_error` receives.
+    assert value in str(exc)
+
+    # Positive control 2 (inline, not just the sibling test): the absence assertion below
+    # proves the no-echo rule only if `redact_text` isn't the one removing the probe.
+    assert redaction.redact_text(value) == value
+
+    # Whole-envelope absence: not just the machine fields, the entire serialized
+    # envelope, including `message`.
+    assert value not in json.dumps(out)
+
+
+def test_probe_value_survives_redaction():
+    # Positive control for the test above, using the SAME probe constant so this control
+    # cannot drift from the value the no-echo test actually asserts absence of: without
+    # this, that assertion proves nothing about the no-echo rule — `redact_text` could be
+    # doing the work instead (the #417 lesson).
+    assert redaction.redact_text(_UNTRACKED_PROBE) == _UNTRACKED_PROBE
 
 
 def test_stamp_meta_leaves_rate_limit_none_even_with_legacy_events(monkeypatch):

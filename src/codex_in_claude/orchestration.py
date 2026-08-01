@@ -298,24 +298,37 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
     # reason is BUILT from the known domain rather than reused from `str(exc)`: the
     # exception text embeds the rejected value (`got {untracked!r}`), and InvalidArgument
     # promises never to echo one — it may be a secret, and this path's value is
-    # caller-supplied free text. The human-readable `message` below is unchanged.
+    # caller-supplied free text. The human-readable `message` below reuses that same
+    # value-free reason instead of `str(exc)` (#418): a message built from `str(exc)`
+    # would print exactly the value the machine fields withhold. The other seven branches
+    # (invalid_base, invalid_commit, invalid_paths, invalid_scope, not_a_git_repo,
+    # git_unavailable, and the RuntimeError fallback) keep echoing `str(exc)` unchanged —
+    # only this branch's guarantee text promises no echo. Their messages are not uniformly
+    # caller-supplied refs/paths: five are (invalid_base/invalid_commit/invalid_paths/
+    # invalid_scope/not_a_git_repo), but git_unavailable and the RuntimeError fallback
+    # carry bounded, best-effort-redacted git diagnostics (a missing executable, stderr, a
+    # timeout) that this fix leaves alone.
     args: list[InvalidArgument] | None = None
     if code == "invalid_arguments" and offending:
+        reason = (
+            f"{offending} must be one of "
+            + ", ".join(repr(v) for v in sorted(get_args(Untracked)))
+            + "."
+        )
         args = [
             InvalidArgument(
-                field=offending,
-                reason=f"{offending} must be one of "
-                + ", ".join(repr(v) for v in sorted(get_args(Untracked)))
-                + ".",
-                allowed_values=list(get_args(Untracked)),
+                field=offending, reason=reason, allowed_values=list(get_args(Untracked))
             )
         ]
         details = None  # derived from the entry by make_error, so the two cannot drift
+        message = reason[:300]
+    else:
+        message = (redaction.redact_text(str(exc)) or "")[:300]
     return serialize_error(
         ErrorResult(
             error=make_error(
                 cast("ErrorCode", code),
-                (redaction.redact_text(str(exc)) or "")[:300],
+                message,
                 details=details,
                 invalid_arguments=args,
             ),
