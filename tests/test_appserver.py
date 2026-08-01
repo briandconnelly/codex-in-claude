@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
@@ -84,6 +85,28 @@ class _LateStream:
         time.sleep(self._delay)
         self._served = True
         return self._line
+
+
+class _ForcedLoopError(RuntimeError):
+    """Distinctive exception raised by ``_RaisingQueue``, so a test can assert THIS
+    exception — and not some other bug — propagated out of transfer_session /
+    read_rate_limits."""
+
+
+class _RaisingQueue:
+    """A ``reader.messages`` stand-in whose ``get()`` always raises ``_ForcedLoopError``
+    instead of blocking, returning a message, or raising ``queue.Empty``. Forces the
+    JSON-RPC loop into its exception path — BEFORE any ``_settle()`` call — so the
+    `finally`'s guarded teardown (the ``if not settled:`` branch, #449 external review
+    finding 1) is exercised by a real test rather than left unverified. ``put()`` is a
+    silent no-op so the real stdout-reader daemon thread (still running underneath — only
+    ``.messages`` is swapped out) can tear down cleanly without a secondary exception."""
+
+    def get(self, timeout: float | None = None) -> Any:
+        raise _ForcedLoopError("forced exception before any settle() call")
+
+    def put(self, item: Any, timeout: float | None = None) -> None:
+        pass
 
 
 def _write_ledger(codex_home: Path, source: str, content_sha: str, thread_id: str) -> None:
@@ -1077,6 +1100,71 @@ def test_rate_limits_terminate_is_called_exactly_once_on_a_settled_path(tmp_path
     outcome = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
     assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
     assert len(calls) == 1, "finally must not call _terminate again after settle already did"
+
+
+def test_finally_terminates_exactly_once_on_an_exception_before_settle(tmp_path, monkeypatch):
+    """#449 external review follow-up: the `if not settled:` branch in transfer_session's
+    `finally` — the exception-path teardown — was previously unexercised by any test (it was
+    implicitly covered before this branch existed, because the old unconditional `finally`
+    body ran on every test regardless of outcome). Force an exception AFTER the child is
+    spawned but BEFORE any `_settle()` call, by swapping the reader's message queue for one
+    whose `get()` always raises instead of ever returning a message or `queue.Empty`. Assert
+    both halves of the contract: the exception propagates (transfer_session does not swallow
+    it — unrelated to and predating #449), and `_terminate` fires exactly once, via the
+    finally's guarded call, since `settled` never got set."""
+    real_spawn_reader = appserver._spawn_reader
+    real_terminate = appserver._terminate
+    terminate_calls: list = []
+
+    def _spawn_reader_that_raises(*args, **kwargs):
+        reader = real_spawn_reader(*args, **kwargs)
+        reader.messages = _RaisingQueue()
+        return reader
+
+    def _terminate_spy(proc):
+        terminate_calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_spawn_reader", _spawn_reader_that_raises)
+    monkeypatch.setattr(appserver, "_terminate", _terminate_spy)
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    with pytest.raises(_ForcedLoopError):
+        transfer_session(
+            transcript_realpath=str(t.resolve()),
+            cwd=str(tmp_path),
+            command=_command("timeout", home),  # hangs on its own; irrelevant, we raise first
+            timeout_seconds=15,
+        )
+    assert len(terminate_calls) == 1, "finally must terminate exactly once on the exception path"
+
+
+def test_rate_limits_finally_terminates_exactly_once_on_an_exception_before_settle(
+    tmp_path, monkeypatch
+):
+    """Mirrors test_finally_terminates_exactly_once_on_an_exception_before_settle for
+    read_rate_limits."""
+    real_spawn_reader = appserver._spawn_reader
+    real_terminate = appserver._terminate
+    terminate_calls: list = []
+
+    def _spawn_reader_that_raises(*args, **kwargs):
+        reader = real_spawn_reader(*args, **kwargs)
+        reader.messages = _RaisingQueue()
+        return reader
+
+    def _terminate_spy(proc):
+        terminate_calls.append(proc)
+        return real_terminate(proc)
+
+    monkeypatch.setattr(appserver, "_spawn_reader", _spawn_reader_that_raises)
+    monkeypatch.setattr(appserver, "_terminate", _terminate_spy)
+
+    with pytest.raises(_ForcedLoopError):
+        read_rate_limits(command=_command("rl_timeout", tmp_path / "ch"), timeout_seconds=15)
+    assert len(terminate_calls) == 1, "finally must terminate exactly once on the exception path"
 
 
 def test_late_progress_past_the_quiesce_bound_is_not_captured(tmp_path, monkeypatch):
