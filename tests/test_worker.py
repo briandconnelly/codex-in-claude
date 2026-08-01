@@ -12,6 +12,8 @@ import threading
 import pytest
 
 from codex_in_claude import _worker, delegate
+from codex_in_claude.errors import make_error
+from codex_in_claude.schemas import ErrorResult, InvalidArgument, Meta
 
 _SPEC = {
     "kind": "codex_delegate",
@@ -431,3 +433,309 @@ def test_worker_crash_error_omits_roots_source_for_legacy_spec(tmp_path, monkeyp
     assert _worker.main([str(jd)]) == 0
     out = json.loads((jd / "result.json").read_text())
     assert "roots_source" not in out["meta"]
+
+
+# --- Persistence-boundary guard against nonconformant invalid_arguments envelopes (#419) --
+# errors.make_error enforces a non-empty invalid_arguments list for every SERVER-BUILT
+# invalid_arguments envelope, but nothing stops a worker-executed path from writing a
+# malformed one straight to result.json, and replay (server.py) reconstructs stored
+# records via ErrorResult.model_validate, deliberately bypassing that constructor guard.
+# The worker's own persistence boundary is the last place that can catch this.
+
+_GOOD_META = {
+    "cwd": "/tmp/repo",
+    "tier": "consult",
+    "sandbox": "read-only",
+    "isolation": "inherit",
+    "timeout_seconds": 60,
+    "elapsed_ms": 42,
+}
+
+
+@pytest.mark.parametrize(
+    "error_fields",
+    [
+        pytest.param({}, id="missing-key"),
+        pytest.param({"invalid_arguments": []}, id="empty-list"),
+    ],
+)
+def test_worker_guards_nonconformant_invalid_arguments_envelope(
+    tmp_path, monkeypatch, error_fields
+):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    malformed = {
+        "ok": False,
+        "error": {
+            "code": "invalid_arguments",
+            "message": "bad args",
+            "temporary": False,
+            "retry_after_ms": None,
+            # The nonconformant shape #419 guards: either the list key is missing
+            # entirely, or present but empty — both are "no list" per the contract.
+            **error_fields,
+        },
+        "meta": {**_GOOD_META, "cwd": str(tmp_path)},
+    }
+    called = {"count": 0}
+
+    async def fake_run_review(cwd, meta, **kw):
+        called["count"] += 1
+        return malformed
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+    # Mutation-check: the malformed payload actually reached the persistence boundary,
+    # so this test can't pass vacuously if the dispatch plumbing changes underneath it.
+    assert called["count"] == 1
+
+    out = json.loads((jd / "result.json").read_text())
+    invalid_arguments = out.get("error", {}).get("invalid_arguments")
+    is_conformant = bool(invalid_arguments) or out["error"]["code"] != "invalid_arguments"
+    assert is_conformant
+    # Pin the actual normalization the guard performs.
+    assert out["ok"] is False
+    assert out["error"]["code"] == "internal_error"
+    assert "nonconformant invalid_arguments" in out["error"]["message"]
+
+    # Replay leg: the persisted record round-trips through the same model replay uses.
+    replayed = ErrorResult.model_validate(out)
+    assert replayed.error.code == "internal_error"
+    assert not replayed.error.invalid_arguments
+
+
+def test_worker_conformant_invalid_arguments_envelope_passes_through_unchanged(
+    tmp_path, monkeypatch
+):
+    from codex_in_claude import orchestration
+    from codex_in_claude.errors import serialize_error
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    conformant = serialize_error(
+        ErrorResult(
+            error=make_error(
+                "invalid_arguments",
+                "bad scope",
+                invalid_arguments=[InvalidArgument(field="scope", reason="must be a known enum")],
+            ),
+            meta=Meta.model_validate({**_GOOD_META, "cwd": str(tmp_path)}),
+        )
+    )
+
+    async def fake_run_review(cwd, meta, **kw):
+        return conformant
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+
+    out = json.loads((jd / "result.json").read_text())
+    assert out == conformant  # untouched — no false positives on an already-conformant envelope
+    assert out["error"]["invalid_arguments"]
+    # The fixture's details is make_error's own auto-derived mirror of entry [0] — the
+    # exact shape the guard's conformance check requires alongside the non-empty list.
+    assert out["error"]["details"] == {"field": "scope", "reason": "must be a known enum"}
+
+
+@pytest.mark.parametrize(
+    "error_overrides",
+    [
+        pytest.param({}, id="details-absent"),  # base malformed dict has no "details" key
+        pytest.param(
+            {"details": {"field": "other_field", "reason": "must be a known enum"}},
+            id="details-mismatched-field",
+        ),
+    ],
+)
+def test_worker_guards_invalid_arguments_with_nonmirrored_details(
+    tmp_path, monkeypatch, error_overrides
+):
+    # A list-only conformance check would pass these through: the list is non-empty, but
+    # `details` either doesn't mirror entry [0] or is missing entirely — the exact drift
+    # the guard exists to catch, just moved from the list into `details` (Codex review
+    # follow-up on #419).
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    malformed = {
+        "ok": False,
+        "error": {
+            "code": "invalid_arguments",
+            "message": "bad scope",
+            "temporary": False,
+            "retry_after_ms": None,
+            "invalid_arguments": [{"field": "scope", "reason": "must be a known enum"}],
+            **error_overrides,
+        },
+        "meta": {**_GOOD_META, "cwd": str(tmp_path)},
+    }
+    called = {"count": 0}
+
+    async def fake_run_review(cwd, meta, **kw):
+        called["count"] += 1
+        return malformed
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+    assert called["count"] == 1  # mutation-check: the malformed payload reached the boundary
+
+    out = json.loads((jd / "result.json").read_text())
+    assert out["ok"] is False
+    assert out["error"]["code"] == "internal_error"
+    assert "nonconformant invalid_arguments" in out["error"]["message"]
+
+    replayed = ErrorResult.model_validate(out)
+    assert replayed.error.code == "internal_error"
+
+
+def test_worker_guard_falls_through_on_pathological_error_shape(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    # `error` is not a dict at all — the guard must navigate this defensively and never
+    # raise; a broken guard must not be worse than no guard, so it falls through to
+    # persisting the original payload unchanged.
+    pathological = {
+        "ok": False,
+        "error": "not-a-dict",
+        "meta": {**_GOOD_META, "cwd": str(tmp_path)},
+    }
+
+    async def fake_run_review(cwd, meta, **kw):
+        return pathological
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+
+    out = json.loads((jd / "result.json").read_text())
+    assert out == pathological
+
+
+def test_worker_guard_falls_through_when_meta_validation_raises(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    # `meta` is a dict (passes the isinstance check) but missing every required field, so
+    # Meta.model_validate raises inside the guard's try block — exercising the actual
+    # except-and-fall-through path, not just an early isinstance return.
+    malformed = {
+        "ok": False,
+        "error": {"code": "invalid_arguments", "message": "bad args"},
+        "meta": {"not_a_real_field": True},
+    }
+
+    async def fake_run_review(cwd, meta, **kw):
+        return malformed
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+
+    out = json.loads((jd / "result.json").read_text())
+    assert out == malformed
+
+
+def test_worker_guard_normalizes_with_spec_meta_when_meta_missing(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        scope="working_tree",
+        base=None,
+        commit=None,
+        paths=None,
+        tier="consult",
+        sandbox="read-only",
+        max_bytes=200000,
+        cwd=str(tmp_path),
+    )
+
+    # No `meta` key at all: the guard still normalizes, falling back to a meta built
+    # from the job spec (mirroring the crash sink) rather than losing the record.
+    malformed = {
+        "ok": False,
+        "error": {"code": "invalid_arguments", "message": "bad args"},
+    }
+
+    async def fake_run_review(cwd, meta, **kw):
+        return malformed
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    rc = _worker.main([str(jd)])
+    assert rc == 0
+
+    out = json.loads((jd / "result.json").read_text())
+    assert out["ok"] is False
+    assert out["error"]["code"] == "internal_error"
+    assert out["meta"]["cwd"] == str(tmp_path)
