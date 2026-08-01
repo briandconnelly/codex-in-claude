@@ -44,7 +44,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   sanitizer built from the same aliases the success-path rewrite already uses. A
   create-failure (`WorktreeError` before a worktree path even exists to bind to) needs no
   caller-side change — `_core/worktree.py`'s own construction sites now sanitize at the
-  source. Internal API only: no result `fingerprint` or `RESULT_FORMAT` change.
+  source. Fixing a leak in the shared `sanitize_prose`/`_replace_aliases` machinery along
+  the way (a `.` immediately ending a worktree-path reference, e.g. `... in <wt>.`, used to
+  be left completely unrewritten rather than relativized) also changes the #412 success-path
+  `summary`/`raw_response.text` rendering for that shape: a sentence-final worktree root now
+  renders as `[worktree].` instead of surviving as the dead absolute path. Internal API only:
+  no result `fingerprint` or `RESULT_FORMAT` change.
 
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`

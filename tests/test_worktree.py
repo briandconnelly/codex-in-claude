@@ -962,6 +962,25 @@ def test_unneutralizable_filter_name_without_aliases_leaks_embedded_worktree_pat
     assert wt_path in str(ei.value)
 
 
+def test_unneutralizable_filter_name_without_aliases_still_redacts_secret_shaped_name(
+    repo, monkeypatch
+):
+    # #420 review finding 3 (round 4): the no-aliases branch previously applied NEITHER
+    # redact_text NOR a length cap, unlike its sibling (the enumeration-failure raise just
+    # above it in the source). A driver name that happens to be secret-shaped (the `=` that
+    # makes it "unneutralizable" is also what a labelled secret pattern keys on) must still
+    # be redacted even when this enumeration is source-repo-scoped (no aliases).
+    secret = "z" * 40
+    name = f"api_key={secret}"
+    stdout = f"filter.{name}.smudge\n"
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr(worktree.subprocess, "run", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError, match="cannot be safely neutralized") as ei:
+        worktree._configured_filter_drivers(str(repo), 30)
+    assert secret not in str(ei.value)
+    assert "[redacted: secret value]" in str(ei.value)
+
+
 def test_capture_diff_unneutralizable_filter_name_sanitized_end_to_end(repo, monkeypatch):
     # Same finding, exercised through the real create() -> capture_diff() wiring rather
     # than calling _configured_filter_drivers directly.
@@ -1250,6 +1269,36 @@ def test_sanitize_prose_replaces_sentence_final_bare_root_with_a_safe_marker():
     assert out == "fatal: failed in [worktree]."
     assert ROOT not in out
     assert "cic-worktree-" not in out
+
+
+def test_sanitize_prose_ambiguous_marker_does_not_reopen_ordering_attack_b():
+    """#420 review round 4: the round-3 fix substituted `_AMBIGUOUS_SUFFIX_MARKER`
+    (`[worktree]`, containing `[`/`]`) directly in the ambiguous branch — but during
+    `sanitize_prose`'s staging pass that breaks the labelled-value run right where the
+    marker starts: `api_key=<root>./<16-char secret>` staged as
+    `api_key=[worktree]./<16-char secret>` never reads as one long value, so the 16-char
+    tail ships completely unredacted — ordering attack (b) reopened for exactly the
+    ambiguous shape. The ambiguous branch must stage behind an equally-alphanumeric,
+    equally-verified-absent placeholder during redaction, exactly like the ordinary branch,
+    and only become the literal marker in the final unstaging step. RED before the fix."""
+    secret_tail = "abcdefghijklmnop"  # 16 chars, exactly the redaction floor
+    attack = f"api_key={ROOT}./{secret_tail}"
+    out = worktree.sanitize_prose(attack, ALIASES) or ""
+    assert secret_tail not in out
+    assert ROOT not in out
+    assert "cic-worktree-" not in out
+    assert "[redacted: secret value]" in out
+    # Idempotency: re-running sanitize_prose on the already-sanitized output must be a
+    # no-op — no staged token should ever survive into the emitted text for a second pass
+    # to find and mangle.
+    assert worktree.sanitize_prose(out, ALIASES) == out
+
+
+def test_sanitize_prose_never_leaks_either_placeholder():
+    # Sibling of the placeholder-leak guard below, covering the ambiguous-branch token too.
+    for text in (f"{ROOT}.", f"api_key={ROOT}./abcdefghijklmnop", f"see {ROOT}. here"):
+        out = worktree.sanitize_prose(text, ALIASES) or ""
+        assert worktree._AMBIGUOUS_PLACEHOLDER_PREFIX not in out
 
 
 def test_sanitize_prose_never_leaks_the_placeholder():

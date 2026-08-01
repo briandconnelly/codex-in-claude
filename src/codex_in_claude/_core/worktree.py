@@ -168,13 +168,24 @@ def _configured_filter_drivers(
             # one can itself embed the worktree path (#420 review finding 2) -- run the
             # complete message through sanitize_prose (same aliases, same pattern as the
             # enumeration-failure raise above) before truncating, rather than embedding
-            # `name` raw.
+            # `name` raw. The `aliases=()` branch mirrors that sibling raise too (#420
+            # review round 4 finding 3): it previously embedded the name completely raw,
+            # with neither redaction nor a length cap, even though the very `=` that makes
+            # a name "unneutralizable" is also what a labelled secret pattern keys on
+            # (`api_key=<40 z's>` both triggers this branch AND is redactable).
             aliases = tuple(aliases)
-            raw = (
-                f"refusing to run: gitattributes filter driver {name[:100]!r} cannot be "
-                "safely neutralized (its name contains '=' or a control character)"
-            )
-            message = (sanitize_prose(raw, aliases) or "")[:200] if aliases else raw
+            if aliases:
+                raw = (
+                    f"refusing to run: gitattributes filter driver {name[:100]!r} cannot "
+                    "be safely neutralized (its name contains '=' or a control character)"
+                )
+                message = (sanitize_prose(raw, aliases) or "")[:200]
+            else:
+                detail = (redact_text(repr(name[:100])) or "")[:200]
+                message = (
+                    f"refusing to run: gitattributes filter driver {detail} cannot be "
+                    "safely neutralized (its name contains '=' or a control character)"
+                )
             raise WorktreeError(message)
         names.append(name)
     return names
@@ -711,7 +722,13 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
     return _replace_aliases(text, aliases, ".")
 
 
-def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str) -> str | None:
+def _replace_aliases(
+    text: str | None,
+    aliases: Iterable[str],
+    replacement: str,
+    *,
+    ambiguous_replacement: str = _AMBIGUOUS_SUFFIX_MARKER,
+) -> str | None:
     if not text:
         return text
     usable = sorted({alias for alias in aliases if alias.strip()}, key=len, reverse=True)
@@ -724,12 +741,18 @@ def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str)
     # `_AMBIGUOUS_SUFFIX_MARKER`; `<root>.bak`, where more path characters follow the `.`,
     # matches NEITHER branch and stays unmatched, same as before). Both are lookaheads, so
     # neither consumes the `.` itself -- it survives untouched in the output either way.
+    #
+    # `ambiguous_replacement` defaults to the literal marker (what `relativize` wants, since
+    # it never redacts). `sanitize_prose` overrides it with a STAGED alphanumeric stand-in
+    # instead -- substituting the bracketed marker directly here, during the staging pass,
+    # would break the labelled-value character run right at the `[`, letting an adjacent
+    # secret ship unredacted (#420 review round 4). See `_staged_ambiguous_placeholder`.
     pattern = re.compile(
         rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})"
         rf"(?=(?P<ambiguous>\.(?=[{_RIGHT_DELIMS}]|$))|[{_RIGHT_DELIMS}]|$)"
     )
     return pattern.sub(
-        lambda m: _AMBIGUOUS_SUFFIX_MARKER if m.group("ambiguous") else replacement, text
+        lambda m: ambiguous_replacement if m.group("ambiguous") else replacement, text
     )
 
 
@@ -774,6 +797,33 @@ def _staged_placeholder(text: str) -> str:
     return token
 
 
+# Sibling of `_PLACEHOLDER_PREFIX` for `_replace_aliases`'s ambiguous-suffix branch (#420
+# review round 4): that branch cannot stage behind `_AMBIGUOUS_SUFFIX_MARKER` (`[worktree]`)
+# directly during `sanitize_prose`'s redaction pass -- `[`/`]` sit outside the redactor's
+# inline-value character class, so `api_key=<root>./<16-char secret>` would stage as
+# `api_key=[worktree]./<16-char secret>`, breaking the labelled-value run right at the `[`
+# and shipping the secret tail unredacted (reopening ordering attack (b) for exactly this
+# shape). This prefix stages that branch behind an EQUALLY alphanumeric, equally
+# verified-absent token instead, carrying the same "swallowed whole or not at all"
+# guarantee as the ordinary placeholder; only the final unstaging step in `sanitize_prose`
+# tells the two branches apart, mapping survivors of this one to `_AMBIGUOUS_SUFFIX_MARKER`
+# instead of `.`.
+_AMBIGUOUS_PLACEHOLDER_PREFIX = "cicwt0ambig0"
+
+
+def _staged_ambiguous_placeholder(text: str, other: str) -> str:
+    """Sibling of ``_staged_placeholder`` for the ambiguous-suffix branch: alphanumeric,
+    longer than the redaction floor, and verified absent from BOTH ``text`` and ``other``
+    (the ordinary placeholder already staged for this same call). The two tokens coexist in
+    the same staged text and are unstaged by two separate literal ``.replace()`` calls, so
+    one containing the other as a substring would corrupt both unstagings; the loop checks
+    that too, not just absence from ``text``."""
+    token = _AMBIGUOUS_PLACEHOLDER_PREFIX + _placeholder_seed(text)
+    while token in text or token in other or other in token:
+        token += "0"
+    return token
+
+
 def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
     """Relativize worktree paths AND redact secrets — the one order safe for both (#412).
 
@@ -793,7 +843,12 @@ def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
     So each alias is first staged behind a token from ``_staged_placeholder`` — which the
     redactor can neither partially consume nor confuse with pre-existing text (see there for
     all three required properties); redaction runs against that; then any token that survived
-    — i.e. was not part of a redacted secret — becomes ``.``.
+    — i.e. was not part of a redacted secret — becomes ``.``. The sentence-final ambiguous
+    case (see ``_replace_aliases``) is staged behind a SEPARATE token
+    (``_staged_ambiguous_placeholder``) with the same properties, so it carries the same
+    redaction guarantee; a survivor there becomes ``_AMBIGUOUS_SUFFIX_MARKER`` instead of
+    ``.`` — never the bracketed marker directly, which would break the labelled-value run
+    the redactor needs to see (#420 review round 4).
 
     Redaction remains best-effort by contract (see ``redaction``): an adversarial model can
     always emit an unlabelled secret that no pattern matches. This closes the interaction
@@ -801,11 +856,16 @@ def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
     if not text:
         return text
     placeholder = _staged_placeholder(text)
-    staged = _replace_aliases(text, aliases, placeholder)
+    ambiguous_placeholder = _staged_ambiguous_placeholder(text, placeholder)
+    staged = _replace_aliases(
+        text, aliases, placeholder, ambiguous_replacement=ambiguous_placeholder
+    )
     redacted = redact_text(staged)
     if not redacted:
         return redacted
-    return redacted.replace(placeholder, ".")
+    return redacted.replace(placeholder, ".").replace(
+        ambiguous_placeholder, _AMBIGUOUS_SUFFIX_MARKER
+    )
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:
