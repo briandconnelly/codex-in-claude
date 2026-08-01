@@ -1544,6 +1544,10 @@ def test_rate_limits_stderr_tail_survives_a_starved_drain_thread(tmp_path, monke
 
     def _terminate_and_signal(proc):
         real_terminate(proc)
+        # Release the stderr line from the SAME thread, immediately after termination —
+        # no cross-thread handshake, so there is no window in which the drain thread could
+        # already be past its bounded quiesce() before the line becomes available.
+        gate.set()
         terminated.set()
 
     monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
@@ -1558,9 +1562,8 @@ def test_rate_limits_stderr_tail_survives_a_starved_drain_thread(tmp_path, monke
 
     worker = threading.Thread(target=_run)
     worker.start()
-    assert terminated.wait(timeout=5), "the child was never terminated"
-    gate.set()
     worker.join(timeout=5)
+    assert terminated.is_set(), "the child was never terminated"
     assert not worker.is_alive()
     outcome = result[0]
     assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
