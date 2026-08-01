@@ -247,7 +247,42 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     # Unlabeled secrets caught by shape alone (#73), independent of an adjacent label.
     # JWT: three base64url segments after the `eyJ` ("{" base64) header marker.
-    re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    #
+    # The FIRST segment alone is bounded (#439): it used to be `{8,}`, unbounded like
+    # the other two, which made this quadratic on repeated-anchor text. On input made
+    # of nothing but `eyJ`, every anchor position scanned the unbounded run to the end
+    # of the string hunting a `.` that never comes, then backtracked one character at a
+    # time before giving up and trying the next anchor — the same shape #438's scheme
+    # run had. Measured: `"eyJ"*26666` (80k chars) 1432ms, `"eyJ"*53332` (160k) 5676ms,
+    # ~4x per 2x input — quadratic, and reachable from untrusted model output the same
+    # way #438 was (`redact_text` runs on it via `redact_tree`, orchestration.py:127,
+    # :234), so a liveness/DoS concern: a sync tool that blows its deadline loses its
+    # paid work.
+    #
+    # Bounding seg1 at 512 caps per-anchor work AND caps how many anchors ever reach
+    # seg2, which is what kills the quadratic blowup rather than just capping one
+    # match's cost: `"eyJ"*26666` 1432ms -> 18ms, `"eyJ"*53332` 5676ms -> 37ms (~2x per
+    # 2x = linear). Real JWTs, a 5000-char-payload JWT, an embedded (`xxx`+JWT) match,
+    # and a JWT with a nested `eyJ` inside its payload all still match, and the embedded
+    # match's span is unchanged.
+    #
+    # 512 (post-`eyJ` characters, so 515 total for the first segment) rather than a
+    # tighter bound: real JOSE headers are base64url of compact JSON — typically 20-60
+    # chars, ~120 with `kid`/`jku` — so 512 is ~8x generous. The `x5c`
+    # certificate-chain-in-header outlier exceeds any sane bound and is the accepted,
+    # pinned boundary; such a token is still caught when labelled (`token=…`) or on an
+    # `Authorization: Bearer` line by those patterns.
+    #
+    # seg2/seg3 stay unbounded on purpose: payloads are legitimately KBs, seg3 is
+    # greedy with no follower so it has no backtrack pressure, and seg2's backtracking
+    # is transitively bounded once seg1 is capped. A possessive quantifier isn't
+    # available in Python `re`, and emulating one with an atomic group only drops the
+    # backtrack, not the rescan at every anchor position, so it doesn't fix this. A
+    # `(?<![A-Za-z0-9_-])` left-context lookbehind was also rejected: it does kill the
+    # quadratic blowup, but it is a coverage NARROWING — it stops matching an embedded
+    # `xxxeyJ…` token that today redacts — so it became the sweep's sensitivity control
+    # instead of the fix.
+    re.compile(r"eyJ[A-Za-z0-9_-]{8,512}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
     # Vendor key prefixes: OpenAI (sk-, sk-proj-), Stripe (sk_live_/sk_test_),
     # Google (AIza). `{n,}` rather than a fixed length so a longer/variant token
     # can't leave a trailing suffix unredacted.
