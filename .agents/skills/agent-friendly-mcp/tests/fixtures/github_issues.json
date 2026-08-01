@@ -3,75 +3,243 @@
   "tool": "github_get_issue",
   "expect_first_call": {
     "tool": "github_get_issue",
-    "args_match": { "repo": "octo/demo", "issue_number": 42 }
+    "args_match": {
+      "repo": "octo/demo",
+      "issue_number": 42
+    }
   },
   "inject_error": {
     "code": "issue_not_found",
-    "repair": { "next_step": "list_issues_to_find_valid_number", "tool": "github_list_issues" }
+    "repair": {
+      "next_step": "list_issues_to_find_valid_number",
+      "tool": "github_list_issues"
+    }
   },
   "expect_repair": {
     "tool": "github_list_issues",
-    "args_match": { "repo": "octo/demo", "state": "open" }
+    "args_match": {
+      "repo": "octo/demo",
+      "state": "open"
+    }
   },
-  "metrics": { "max_tool_calls": 3, "max_tokens": 4000 },
+  "metrics": {
+    "max_tool_calls": 3,
+    "max_tokens": 4000
+  },
   "wire": {
+    "tools": [
+      {
+        "name": "github_get_issue",
+        "description": "Fetch one issue by number.",
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo",
+            "issue_number"
+          ],
+          "properties": {
+            "repo": {
+              "type": "string"
+            },
+            "issue_number": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "name": "github_list_issues",
+        "description": "List issues in a repository.",
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo"
+          ],
+          "properties": {
+            "repo": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "all"
+              ]
+            },
+            "cursor": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
     "output_schema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["number", "title", "state"],
+      "required": [
+        "number",
+        "title",
+        "state"
+      ],
       "properties": {
-        "number": { "type": "integer" },
-        "title": { "type": "string" },
-        "state": { "type": "string", "enum": ["open", "closed"] },
-        "labels": { "type": "array", "items": { "type": "string" } }
+        "number": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "error_schema": {
       "type": "object",
-      "additionalProperties": true,
-      "required": ["code", "message", "temporary", "retry_after_ms"],
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "temporary",
+        "retry_after_ms"
+      ],
       "properties": {
-        "code": { "type": "string", "minLength": 1 },
-        "message": { "type": "string", "minLength": 1 },
-        "temporary": { "type": "boolean" },
-        "retry_after_ms": { "type": ["integer", "null"] },
-        "details": { "type": "object" },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "temporary": {
+          "type": "boolean"
+        },
+        "retry_after_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fields": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "rate_limit_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resource_uri": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
         "repair": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["next_step"],
+          "required": [
+            "next_step",
+            "tool",
+            "arguments"
+          ],
           "properties": {
-            "next_step": { "type": "string", "minLength": 1 },
-            "tool": { "type": "string" },
-            "arguments": { "type": "object" },
-            "alternative": { "type": "string" }
+            "next_step": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "object"
+            },
+            "alternative": {
+              "type": "string"
+            }
           }
         },
-        "request_id": { "type": "string" }
+        "request_id": {
+          "type": "string"
+        }
       }
     },
     "success_result": {
-      "content": [{ "type": "text", "text": "Issue #42: Login button misaligned (open)" }],
+      "resultType": "complete",
+      "content": [
+        {
+          "type": "text",
+          "text": "Issue #42: Login button misaligned (open)"
+        }
+      ],
       "structuredContent": {
         "number": 42,
         "title": "Login button misaligned",
         "state": "open",
-        "labels": ["bug"]
+        "labels": [
+          "bug"
+        ]
       },
       "isError": false
     },
     "error_result": {
-      "content": [{ "type": "text", "text": "No issue #99999 in octo/demo." }],
+      "resultType": "complete",
+      "content": [
+        {
+          "type": "text",
+          "text": "No issue #99999 in octo/demo."
+        }
+      ],
       "structuredContent": {
         "code": "issue_not_found",
         "message": "Issue #99999 does not exist in octo/demo.",
         "temporary": false,
         "retry_after_ms": null,
-        "details": { "field": "issue_number", "value": 99999, "reason": "no such issue in repository" },
+        "details": {
+          "field": "issue_number",
+          "value": 99999,
+          "reason": "no such issue in repository"
+        },
         "repair": {
           "next_step": "list_issues_to_find_valid_number",
           "tool": "github_list_issues",
-          "arguments": { "repo": "octo/demo", "state": "open" },
+          "arguments": {
+            "repo": "octo/demo",
+            "state": "open"
+          },
           "alternative": "Call github_search_issues with a text query when the number is unknown."
         },
         "request_id": "req-abc123"

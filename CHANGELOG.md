@@ -7,6 +7,260 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A marker from an earlier pattern no longer strands the rest of a connection-string
+  credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
+  never revisits consumed text. Every matcher except the connection-string pair is
+  *substring-oriented* — it recognizes a credential's shape wherever it appears, including inside a
+  longer value — so when one of them fired within a connection-string password, its replacement
+  marker split the credential in two. The marker contains a space and a colon, and both userinfo
+  runs stop at whitespace, so neither could match what was left, and the tail shipped intact:
+  `redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host` came out as
+  `redis://u:token=[redacted: secret value]%2Ftailsegment@host`, sending `%2Ftailsegment` to the
+  model. It was reachable in all three userinfo shapes, and a second pass did not recover it — the
+  output was stable. The worse of the two harms is not the disclosure: **the output advertised
+  itself as fully redacted.** A reader, human or model, sees `[redacted: secret value]` and
+  reasonably concludes the credential was handled, so a partial redaction that looks complete
+  suppresses the reaction a bare secret would provoke. The fix is an ordering — both
+  connection-string matchers now run first, so the complete userinfo span is consumed before
+  anything can fragment it — because the defect is a property of the pipeline rather than of any
+  one matcher, and no per-pattern tweak reaches it. No regex, marker, or schema changed. Nothing is
+  lost by running them early: a later candidate is either inside the span they replace, where the
+  marker already covers it, or wholly outside it, since substitution rescans the whole string on
+  each pass. A candidate *straddling* the boundary is the only dangerous case, and it cannot arise,
+  because the boundary characters are the `:` opening the password and the `@` closing it and no
+  other matcher's **replaced** run contains either — where a `:` does appear in another match
+  (`Authorization:`, a labelled key) it sits in the preserved group. That narrow property is the
+  whole argument, it belongs to those other matchers rather than to the connection-string ones,
+  and it is pinned by a test rather than left as prose — deliberately, because two review rounds
+  each caught a broader version of the claim being false (the password run admits `:` on purpose,
+  so a multi-segment password redacts whole; and the private-key matcher's span contains spaces). Because an old-*pattern*
+  oracle — the instrument #438 and #440 used — is structurally incapable of seeing this bug (the
+  regexes are unchanged, so oracle and matcher agree by construction, and more fundamentally the old
+  pipeline cannot recognize its own partially redacted output, since the marker destroys the syntax
+  the oracle needs), the guard is a **sentinel sweep** instead: every credential in a 4,320-line
+  grammar product carries a unique tail that no matcher recognizes alone, and the assertion is that
+  the tail disappears. It runs in both code-exemption modes, with the pre-#443 ordering kept as a
+  control that must report leaks, and its hand-maintained payload set is *validated against the live
+  pattern list* by a completeness guard, so a matcher added ahead of the pair fails that guard rather
+  than silently going uncovered — the failure mode that made a previous sweep vacuous (#438/#439). Wider checks
+  run during development agreed: an A/B over 72,000 lines in both exemption modes lost no coverage
+  and improved 6,450 lines, against a deliberately broken control that reported 23,487 losses. Two
+  limits are stated rather than implied. This cannot repair input that arrives *already* fragmented,
+  since a marker is not recoverable. And it closes only credentials the userinfo runs can **span**:
+  one carrying a character they exclude (`/`, or `?`/`#` on the arms that stop there) was never
+  matchable at any position in the list, so an earlier matcher firing on its prefix still strands
+  the remainder — order-invariant, unchanged by this fix, characterized by a test and tracked
+  separately. The change also **enlarges the pre-existing false positive filed as #442**: running
+  the connection-string matchers first removes an accidental brake, because a labelled marker
+  landing inside a query used to stop the username arm from matching, so
+  `https://host.example:8443?token=<secret>@x.example` no longer keeps its port and query. That is
+  accepted rather than fixed here — the credential is still redacted either way, and what grows is
+  how much surrounding text is masked with it — because #442's remedy excludes `?`/`#` from that
+  class, which *narrows* a documented guarantee and needs its own false-positive corpus; folding a
+  narrowing into a security fix is the bundling this repo's conventions rule out. It is pinned by a
+  characterization test so #442's eventual fixer reads the current output instead of re-deriving it.
+- **A connection-string credential is now redacted in every userinfo position it can occupy**
+  (#440). The matcher required a non-empty username before the password, so `redis://:pass@host`
+  went out verbatim — and that is not an edge case but the *canonical* Redis URL, since Redis had
+  no usernames before ACLs in 6.0, so it is the shape most `REDIS_URL` values still take. Widening
+  the username class to `*` closes it. Reviewing that widening surfaced a second live gap in the
+  same syntax: the replacement preserves the username, so a token stored *there* with an empty
+  password (`https://<token>:@host`, the token-as-username idiom) was never redacted either. That
+  is now matched too, at 16+ characters — not a new constant, but the credential threshold this
+  module already uses for labelled values. The password side stays required: an empty password
+  holds no secret, and matching it would emit a marker claiming to have hidden a blank value.
+  The **bare** `://token@host` form is deliberately left alone at any threshold, because length
+  cannot establish credential semantics in that position — a 16+ rule masks
+  `git+ssh://deployment-automation@git.example.com/repo` (a documented pip VCS URL),
+  `ssh://continuous-integration@build...`, `https://first.last+alerts@example.com`, and
+  `docker://prometheus-operator@sha256:…` (a `NAME@DIGEST` reference, not userinfo at all), every
+  one an identity rather than a secret, and raising the threshold only changes which identities get
+  destroyed. That position already carries every credential shape this module *recognizes*, since
+  the vendor patterns match `ghp_`/`AKIA`/`sk-`/`xoxb-` wherever they appear; what remains is a
+  generic opaque string, which is exactly what cannot be told apart from a long username, so it
+  stays inside the module's documented best-effort boundary. `?` and `#` are excluded from the new
+  run although the password class admits them, because the two play different roles: this run is
+  the text being *replaced* and must stop at the end of the authority, or a query carrying an `@`
+  is masked as userinfo (`https://example.com?email=a.b+c@example.org` would collapse to
+  `https://[redacted: secret value]@example.org`, hiding the host), whereas a password may
+  legitimately contain both. The password run makes the same distinction *conditionally*, on
+  whether a username was present, and the two arms are not interchangeable: `://:` is also how an
+  empty host with a port serializes, so the new empty-username arm had to stop at `?`/`#` — without
+  that, `custom://:8080?email=a@b`, a query string carrying an `@` and no userinfo at all, came out
+  as `custom://:[redacted: secret value]@b`. The username arm keeps admitting both, byte-for-byte
+  as before, because narrowing *it* would stop redacting a password containing a raw `?`, a real
+  loss this change is not allowed to take. Because widening a matcher is how #432 and #434 each turned a false
+  negative into a *leak*, the change is pinned by the differential sweep this repo uses for
+  redaction work — the previous matcher kept as an oracle that must find nothing left in the new
+  pipeline's output. That sweep is explicitly scoped to the branch it can see: its oracle spells
+  the old `+`, so it never matches an empty username at all (0 oracle hits across every
+  empty-username line in its own grammar product, against 360 on the named ones), and shipping it
+  alone would have looked like coverage of the fix while being vacuous on precisely the fix. The
+  new branches are pinned by exact-output tests instead, which also catch the defect no oracle
+  sweep can see — a *partial* replacement, whose marker contains spaces and so destroys the URL
+  syntax the oracle needs in order to match. Wider checks run during development agreed: a
+  97,200-line sweep over the pattern's grammar slots lost nothing, against a deliberately narrowed
+  control that lost 816 spans to prove the sweep could see a loss at all, and an A/B over 60,000
+  real files changed only the target Redis shape. One control deliberately *fails* to fire and is
+  documented as such: dropping `]` from the password class leaks `postgres://u:pass]word@h` while
+  the sweep stays green, which is why the printable-domain walks are not redundant with it.
+- **Redacting a long line no longer takes quadratic time** (#438). The connection-string pattern
+  opened with a scheme run, `[a-zA-Z][\w+.-]*://`, whose character class holds everything a scheme
+  is made of. At every start position that run consumed the rest of the surrounding word and then
+  backtracked a character at a time looking for the `://` literal — work repeated at every position
+  of a long unbroken run, so cost grew with the square of the input: 100 KB of text took ~15 s, and
+  a few hundred KB would take minutes. That matters because `redact_text` runs over *untrusted model
+  output* (`raw_response.text`, summaries, finding fields), so the input's size and shape are
+  influenced by what the model returns rather than only by what the caller wrote, and a synchronous
+  call that blows its deadline is terminated with its paid work lost. The slowdown itself disclosed
+  nothing — it was a liveness bug — though the fix for it also closes a separate leak, described
+  below. The issue attributed the cost to the userinfo classes, which measurement
+  did not support — the scheme run alone accounted for 577 ms of a 583 ms match, and the userinfo
+  after a literal `://` for 0.0 ms — so capping the userinfo, the suggested remedy, would have fixed
+  nothing. The scan now simply starts at the `://`. That costs no coverage, because the scheme was
+  never part of the *replaced* span, only of the surrounding match: the old pattern captured it in
+  group 1 and the replacement handed it straight back, while the new one leaves it outside the match
+  altogether. Either way it survives verbatim, so output is byte-identical wherever the old pattern
+  matched. A committed test pins that invariant by keeping the old pattern as an oracle and requiring
+  it to find nothing in the current pipeline's output, over a product of the pattern's grammar slots
+  plus multi-candidate lines; because a negated character class cannot be policed by a corpus of
+  ordinary URLs, two further tests walk the whole printable domain of each userinfo class. Wider
+  differential sweeps run during development (599,040 single-candidate cases and 49,280 per-secret
+  span checks, both exemption modes), each against a deliberately narrowed control to confirm the
+  sweep could see a loss at all, found the same. Neither a possessive quantifier nor a bounded run was the answer: possessive removes the
+  backtrack but not the rescan (still quadratic, measured), and a bound only trades the blowup for a
+  magic constant. Anchoring also recognizes strictly more — userinfo whose `://` no letter-led run
+  reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction for a fail-closed boundary and
+  closes a genuine disclosure gap on the way: the patterns run in order over the same line, and when
+  the labelled-secret pattern had already replaced the text before the `://` with a marker, the
+  letters the scheme run needed were gone with it, so `key=<eaten>://user:pw@host` shipped its
+  password intact. That is a real leak on `main` today, fixed here. A regression test pins the liveness property with a budget ~275x
+  above the fixed timing and ~7x below the broken one. The JWT pattern is quadratic in the same way
+  under a repeated-anchor input and is tracked separately; a sweep of the remaining patterns found
+  no others.
+- **A generic secret under a bracket-subscripted key is now redacted** (#434). The labelled-secret
+  pattern learned to step over a key's closing quote in #432, but not over the `"]` that follows it
+  in a subscript, so `cfg["password"]["key"] = <secret>` matched nothing at all — in source *and* in
+  data files, where no code exemption is even in play. Like the quoted-key gap before it, this hit
+  the carrier the pattern exists for: a credential with no recognizable vendor shape, which every
+  other pattern misses by design. #434 was filed arguing the obvious widening was unsafe on its own —
+  that the match would then be *exempted* as a code reference, turning a false negative into a leak,
+  and so had to be paired with teaching the label scan to read across `"]["`. That premise did not
+  survive checking: it predates #432's own fail-closed guard. Putting the bracket **inside** the
+  `key_quote` group means reaching a `]` requires consuming a quote first, so a bracketed match
+  always populates that group and is rejected for the exemption before the label scan is consulted —
+  verified structurally (no match can consume a `]` while leaving `key_quote` empty) and pinned by an
+  invariant test, so moving the bracket out of the group fails CI even if every behavioral test still
+  passes. No `_LABEL_LEAD_RE` change was needed. The group also tolerates whitespace before the
+  bracket (`cfg["key" ] = …`), which costs nothing measurable and is valid syntax in every language
+  the source whitelist covers. A bracketed match matches *earlier* than the old pattern did, which
+  needed a second guard: substitution never revisits consumed text, so a bracketed candidate could
+  swallow a **later** sensitive label as its own value, sending out a secret the old pattern had
+  redacted — `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]` and left
+  the real value intact. A bracketed match now refuses to start when its own value would contain a
+  further label and separator. Getting that guard right took two corrections, both found by review
+  rather than by the corpus A/B or an unstructured fuzz — random generation essentially never
+  produces the shapes involved. It has to look *inside* the value rather than past its end, because
+  the value character class contains `=`, so an unspaced `label=value` chain is absorbed whole. And
+  its label-to-separator step has to be the *same shape* as the pattern's own, including the closing
+  quote: a guard written as a bare separator cannot see a swallowed key wearing a `"`, which leaked
+  `cfg["token"] = "aws_secret_access_key": "<secret>"` — the exact input family #432 was written for,
+  and with the redaction marker landing on the harmless key name so the output read as successfully
+  redacted. That step is now written once and the guard's copy derived from it, so the two can differ
+  in capture groups but not in shape. Every form is pinned by a test, and each guard was
+  mutation-tested to confirm the test that claims to hold it actually fails without it. The
+  equivalent weakness for *non*-bracket matches is pre-existing — reachable on the pre-#434 pattern
+  too — and is tracked separately as #436 rather than widened into this change. The accepted cost is the mirror of the guarantee: a bracketed match
+  can never take the #421 exemption, so ordinary source assigning to a `key`/`token`-ish subscript is
+  masked out of a reviewed diff — and because the label alternatives are unanchored, that reaches
+  innocent suffixes such as `obj["monkey"]` too. Measured rather than assumed: an A/B of the old and
+  new redactors over 3124 real source files found **no** line that stopped being redacted and three
+  newly redacted, two of which the unsubscripted form (`client_secret = …`) already redacts today, so
+  only one is a genuinely new class. That trade is pinned by a test so it stays a deliberate policy
+  choice. Both places that had recorded the disproven analysis — this file's #432 entry and the
+  comment block in `_core/redaction.py` — are corrected, since left alone they would have sent the
+  next maintainer down the discarded two-part design.
+
+- **Secret redaction no longer scrubs ordinary source out of reviewed diffs** (#421). The
+  labelled-secret pattern matches any 16-or-more-character identifier run after a `key`/`token`-ish
+  label, so plain code tripped it: `token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)` reached
+  Codex as `token = [redacted: secret value] + _placeholder_seed(text)`. Sweeping this repository's
+  own tracked files found 35 lines matching that pattern and no other, about half of them innocuous —
+  including all six `idempotency_key: IdempotencyKeyParam = None,` handler signatures. Two harms
+  compounded: the reviewer could not see the code it was asked to review (in the reported case the
+  masked lines *were* the mechanism under review, so a "no findings" verdict rested on much less
+  evidence than it appeared to), and because any inline mask makes `coverage.status` partial, the
+  never-false-pass rule turned a model `pass` into `unknown` citing `redacted` — which reads as "this
+  file had secrets" when one innocuous assignment tripped a heuristic. A labelled match inside a diff
+  body line is now left intact when it is provably a code reference rather than a credential: the
+  separator must be followed by whitespace (so `api_key=value` in config, env, shell, or a query
+  string is never exempt), the label must not be from the password family (a human password may
+  legitimately end right before `(`), the value must be unquoted and a bare dotted identifier path
+  (no `+ / = ~ -`, which real base64-ish secrets carry), and it must be followed by a call, an
+  operand, or — only with a `:` separator — an annotation default. The password-family test reads the
+  whole logical label rather than the matched one, because the pattern can match a compound label's
+  tail: `password_key = …` matches only at `_key`, so testing the match alone would miss the
+  `password` and leak the value. `.` and `-` count as label characters there rather than boundaries,
+  so a properties/Spring/YAML key such as `config.password.key = …` or `app-secret-key = …` is judged
+  whole too. The exemption also applies only within a **recognized source file** — a whitelist of
+  code extensions, so an unknown extension keeps redaction. That gate is load-bearing rather than
+  belt-and-braces: every condition above is a claim about *code* syntax, and in YAML, properties, or
+  Markdown the identical text is a plain scalar, where `key: correcthorsebatterystaple(2024)` is a
+  password containing parentheses. Worse, YAML nests the sensitive label on a *preceding* line
+  (`secrets:` then `  key: …`), out of reach of any same-line test, so no label-scanning refinement
+  could have covered it. Redaction is not weakened: the exemption applies only to diff body lines and
+  never to `redact_text`'s arbitrary prose, where no syntax guarantee holds; a bare `Authorization:`
+  header is treated as prose too; and every vendor/JWT/PEM/connection-string pattern still runs on an
+  exempted line, so a value carrying a recognized secret shape is caught regardless. Verified against
+  19 realistic credential-bearing lines — including `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, and
+  `NPM_TOKEN` values with no vendor prefix, which this pattern is the last line of defense for — none
+  of which the exemption reaches. Two design traps are pinned by tests: the check runs in the
+  substitution callback rather than as a trailing lookahead, because a greedy value can match one
+  character short to satisfy an assertion (redacting `_placeholder_seed` and leaving `d(text)`), and
+  the annotation-default case is restricted to the `:` separator, because allowing it after `=` would
+  exempt `token = abcd1234abcd1234efgh = leftover`. Nine of the nineteen affected lines under `src/`
+  stop being redacted; the rest remain: quoted
+  identifier-ish constants such as `RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"`, which are
+  structurally identical to `API_KEY = "ghp_…"`. Shannon entropy does not separate them (innocuous
+  values measured 3.35–4.44 bits/char, realistic generic secrets 2.81–4.32, with an MD5-shaped secret
+  *below* several innocuous constants), so no cheap heuristic is safe there. Two residuals are
+  disclosed rather than fixed: a data or prose fragment *inside* a source file — a config blob in a
+  docstring, an example in a comment — is judged as code; and the sensitive-label list covers the
+  password family and `secret` but not `auth`/`private`/`session`, because widening it would re-break
+  exactly the code this change fixes (`auth_token = _build_token(session)`). The `redacted` omission
+  reason's documented meaning is also corrected: it claimed a whole file's hunk was dropped, but the
+  same disclosure has always covered inline masking too.
+
+- **A generic secret under a quoted JSON key is now redacted** (#432). The labelled-secret pattern
+  required its `:`/`=` separator immediately after the label, but JSON puts the key's closing quote
+  there first, so `"api_key": "…"` never matched while the unquoted `api_key: "…"` did. That silently
+  exempted the carrier this pattern exists for. It is the last line of defense for credentials with
+  no recognizable vendor shape — `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, `NPM_TOKEN`, an internal
+  HMAC secret — and JSON is a very common carrier for exactly those: `.json` config, fixtures,
+  captured API responses, and the `raw_response.text` this redactor is applied to. A value carrying a
+  vendor prefix was caught anyway by its own pattern, which is why `"token": "ghp_…"` looked fine and
+  masked the gap. `redacted_paths` reported nothing in the missed cases, so `coverage` read
+  `complete`. The label group now accepts an optional closing quote, backslash-escaped or not, so a
+  JSON blob embedded in an unparsed string is covered on both sides — previously only the value's
+  opening quote was. Redaction is documented best-effort, so this was a gap rather than a broken
+  promise, but a gap in the pattern's core purpose. Crucially, a match that consumed a key quote is
+  never eligible for the code-reference exemption added in #421, so every newly reached form fails
+  closed. Widening the pattern without that guard would have converted the gap into a leak: a quoted
+  key marks data rather than an assignment the exemption can reason about, and source files carry
+  data freely, so `# captured: {"password": {"key": correcthorsebatterystaple(2024)}}` in a `.py`
+  file would have been exempted as a call. The nested form also defeats the sensitive-label guard
+  outright, since the label scan stops at the `"` and never sees `password` — the same compound-label
+  weakness #421's own review found, reappearing. Measured rather than assumed: across this
+  repository's 235 tracked files the change adds exactly two false positives (both benign
+  `"idempotency_key": "…"` literals, structurally indistinguishable from a real `"api_key":
+  "<generic secret>"`), the fail-closed guard adds none beyond those, and an A/B of the old and new
+  redactors over every tracked line found no line that stopped being redacted. Bracketed subscripts
+  (`cfg["password"]["key"] = …`) remained a known false negative here, deferred to #434 on the
+  reasoning that matching one would require reading the label across `"]["` — so `password` would go
+  unseen and the match would be exempted, turning a false negative into a leak. That reasoning was
+  wrong, and #434 (below) records why: the fail-closed guard described above already covers the
+  bracketed form, so no label-scan change was needed.
+
 - **`codex_delegate`'s prose no longer points into the deleted worktree** (#412). Codex runs with its
   working directory set to the throwaway worktree, and that worktree is torn down before the caller
   reads the result — so every absolute path Codex wrote into its summary was dead on arrival. A
