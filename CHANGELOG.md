@@ -27,8 +27,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   a token is still caught when labelled (`token=…`) or on an `Authorization: Bearer` line by those
   patterns. seg2 and seg3 stay unbounded — payloads are legitimately KBs, seg3 has no follower to
   backtrack against, and seg2's backtracking is transitively bounded once seg1 is capped. A
-  possessive quantifier isn't available in Python's `re`, and an atomic-group emulation only drops
-  the backtrack, not the rescan at every anchor position, so neither fixes this alone; a
+  possessive quantifier (`{8,}+`) and an atomic group (`(?>...)`) both compile on this repo's
+  supported Pythons (3.11+), but neither fixes this: both only suppress backtracking *within one
+  match attempt*, not the fresh scan repeated at every successive anchor position, which is the
+  actual source of the quadratic blowup; a
   `(?<![A-Za-z0-9_-])` left-context lookbehind does kill the blowup too but costs coverage of an
   embedded `xxxeyJ…` match that redacts today, so it was rejected as the fix and used instead as
   the differential sweep's sensitivity control.

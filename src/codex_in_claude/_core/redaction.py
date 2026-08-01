@@ -275,9 +275,11 @@ SECRET_VALUE_PATTERNS = [
     #
     # seg2/seg3 stay unbounded on purpose: payloads are legitimately KBs, seg3 is
     # greedy with no follower so it has no backtrack pressure, and seg2's backtracking
-    # is transitively bounded once seg1 is capped. A possessive quantifier isn't
-    # available in Python `re`, and emulating one with an atomic group only drops the
-    # backtrack, not the rescan at every anchor position, so it doesn't fix this. A
+    # is transitively bounded once seg1 is capped. A possessive quantifier (`{8,}+`)
+    # and an atomic group (`(?>...)`) are both available on this repo's supported
+    # Pythons (3.11+), but neither fixes this: both only suppress backtracking
+    # *within one match attempt*, not the fresh scan repeated at every successive
+    # anchor position, which is the actual source of the quadratic blowup. A
     # `(?<![A-Za-z0-9_-])` left-context lookbehind was also rejected: it does kill the
     # quadratic blowup, but it is a coverage NARROWING — it stops matching an embedded
     # `xxxeyJ…` token that today redacts — so it became the sweep's sensitivity control

@@ -323,12 +323,16 @@ def test_redaction_of_an_already_redacted_connection_string_is_idempotent():
 # completeness guard below loudly instead of silently going unmeasured. ~80k
 # chars is enough to demonstrate liveness for every pattern except JWT: on this
 # machine `"eyJ"*26666` (~80k, the #439 issue's own example) measured 1.56s —
-# under the 2.0s budget — while `"eyJ"*35000` (105k chars) reliably exceeded it.
-# Recorded from the actual RED/GREEN runs: the old pattern took 2.799s on that
-# input (the RED run this test's history was built on), and the bounded pattern
-# takes 0.036s on the same input — a ~55x passing margin. JWT's rep count is
-# therefore raised to 35000 rather than left at the ~80k-char default the other
-# patterns use.
+# under the 2.0s budget. A smaller JWT rep count (35000, ~2.8s old) was tried
+# first and rejected: only ~1.4x over the 2.0s budget, so a moderately faster
+# runner could pass the quadratic implementation and the test would stop
+# demonstrating the property its name claims. `"eyJ"*90000` (270k chars) was
+# measured instead (old pattern swapped in temporarily, never committed;
+# three runs: 17.887s/17.220s/18.196s old, 0.0949s/0.0884s/0.0924s fixed) —
+# the old pattern lands at ~8.6-9.1x over budget on every run, comfortably
+# above an 8x floor, while the fixed pattern stays at ~21-23x margin under it.
+# JWT's rep count is therefore raised to 90000 rather than left at the ~80k-char
+# default the other patterns use.
 _QUADRATIC_SEEDS: dict[str, tuple[str, int]] = {
     redaction.CONNECTION_STRING_PASSWORD_PATTERN.pattern: ("://x", 20000),
     redaction.CONNECTION_STRING_USERNAME_TOKEN_PATTERN.pattern: ("://x", 20000),
@@ -341,7 +345,7 @@ _QUADRATIC_SEEDS: dict[str, tuple[str, int]] = {
     ),
     redaction.LABELLED_VALUE_PATTERN.pattern: ("key=", 20000),
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----": ("-----BEGIN ", 7300),
-    r"eyJ[A-Za-z0-9_-]{8,512}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}": ("eyJ", 35000),
+    r"eyJ[A-Za-z0-9_-]{8,512}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}": ("eyJ", 90000),
     r"sk-proj-[A-Za-z0-9_-]{20,}": ("sk-proj-", 10000),
     r"sk-[A-Za-z0-9]{20,}": ("sk-", 26666),
     r"sk_(?:live|test)_[A-Za-z0-9]{16,}": ("sk_live_", 10000),
