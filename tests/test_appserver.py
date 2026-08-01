@@ -888,6 +888,10 @@ def test_stderr_tail_survives_a_starved_drain_thread(tmp_path, monkeypatch):
 
     def _terminate_and_signal(proc):
         real_terminate(proc)
+        # Release the stderr line from the SAME thread, immediately after termination —
+        # no cross-thread handshake, so there is no window in which the drain thread could
+        # already be past its bounded quiesce() before the line becomes available.
+        gate.set()
         terminated.set()
 
     monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
@@ -910,9 +914,8 @@ def test_stderr_tail_survives_a_starved_drain_thread(tmp_path, monkeypatch):
 
     worker = threading.Thread(target=_run)
     worker.start()
-    assert terminated.wait(timeout=5), "the child was never terminated"
-    gate.set()
     worker.join(timeout=5)
+    assert terminated.is_set(), "the child was never terminated"
     assert not worker.is_alive()
     outcome = result[0]
     assert outcome.status is TransferStatus.PROTOCOL_ERROR
@@ -935,16 +938,19 @@ def test_settle_returns_within_bound_when_drain_never_reaches_eof(tmp_path, monk
     home = tmp_path / "codex_home"
     home.mkdir()
     t = _transcript(tmp_path)
-    start = time.monotonic()
-    outcome = transfer_session(
-        transcript_realpath=str(t.resolve()),
-        cwd=str(tmp_path),
-        command=_command("eof_after_init", home),
-        timeout_seconds=15,
-    )
-    elapsed = time.monotonic() - start
-    assert elapsed < 5.0, "settle must be bounded, not hang on a permanently blocked stream"
-    assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    try:
+        start = time.monotonic()
+        outcome = transfer_session(
+            transcript_realpath=str(t.resolve()),
+            cwd=str(tmp_path),
+            command=_command("eof_after_init", home),
+            timeout_seconds=15,
+        )
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "settle must be bounded, not hang on a permanently blocked stream"
+        assert outcome.status is TransferStatus.PROTOCOL_ERROR
+    finally:
+        gate.set()  # release the daemon thread still parked in read1()
 
 
 def test_stop_event_cancellation_runs_the_settle_step(tmp_path, monkeypatch):
@@ -1015,13 +1021,19 @@ def test_quiesce_returns_promptly_on_a_finished_stream():
 
 def test_quiesce_is_bounded_on_a_stream_that_never_reaches_eof():
     """Unit case for ``_StderrDrain.quiesce``: a stream that never yields EOF must not
-    extend the wait past the given bound — never raises, never hangs on a stuck producer."""
+    extend the wait past the given bound — never raises, never hangs on a stuck producer.
+    The lower edge matters as much as the upper one: without it a no-op ``quiesce`` (one
+    that never actually joins the thread) would pass this test just as well as a real
+    bounded join would."""
     gate = threading.Event()  # never set
     drain = appserver._StderrDrain(_GatedStream(gate, b"unused\n"))
-    start = time.monotonic()
-    drain.quiesce(0.2)
-    elapsed = time.monotonic() - start
-    assert elapsed < 2.0, "must respect the bound, not hang"
+    try:
+        start = time.monotonic()
+        drain.quiesce(0.2)
+        elapsed = time.monotonic() - start
+        assert 0.2 <= elapsed < 2.0, "must actually wait out the bound, not return early or hang"
+    finally:
+        gate.set()  # release the daemon thread still parked in read1()
 
 
 # --- completed-notification resolver unit cases ---------------------------------
@@ -1569,11 +1581,14 @@ def test_rate_limits_settle_returns_within_bound_when_drain_never_reaches_eof(
 
     monkeypatch.setattr(appserver, "_StderrDrain", _gated_drain)
 
-    start = time.monotonic()
-    outcome = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
-    elapsed = time.monotonic() - start
-    assert elapsed < 5.0, "settle must be bounded, not hang on a permanently blocked stream"
-    assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
+    try:
+        start = time.monotonic()
+        outcome = read_rate_limits(command=_command("rl_eof", tmp_path / "ch"), timeout_seconds=15)
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "settle must be bounded, not hang on a permanently blocked stream"
+        assert outcome.status is RateLimitReadStatus.PROTOCOL_ERROR
+    finally:
+        gate.set()  # release the daemon thread still parked in read1()
 
 
 def test_rate_limits_stop_event_cancellation_runs_the_settle_step(tmp_path, monkeypatch):
