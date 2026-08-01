@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -49,15 +50,111 @@ def test_git_ok_redacts_secret_straddling_truncation_boundary(repo, monkeypatch)
     assert "sk-aaaaaaa" not in str(ei.value)
 
 
+# --- _git_ok: optional `aliases` sanitizes argv + stderr together (#420) ------------
+#
+# `_git_ok`'s message interpolates argv verbatim (`git {' '.join(args)}`), so a worktree
+# path can appear there even with empty stderr. Default `aliases=()` is today's behavior
+# (argv untouched, only stderr redacted) for non-worktree callers; a caller that knows the
+# destination path passes `aliases=path_aliases(wt)` and gets the WHOLE raw message
+# (argv + stderr) run through `sanitize_prose` before truncation.
+
+
+def test_git_ok_without_aliases_leaks_worktree_path_positive_control(repo, monkeypatch):
+    """Positive control: proves the assertions in the sibling tests below can actually
+    fail. Without `aliases`, a worktree path embedded in argv is NOT sanitized — that is
+    today's documented default for non-worktree callers (e.g. the rev-parse in `plan()`)."""
+    fake = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+    monkeypatch.setattr(worktree, "_git", lambda *a, **k: fake)
+    wt_path = "/private/tmp/cic-worktree-zzz/tree"
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree._git_ok(str(repo), ["worktree", "add", "--detach", "--quiet", wt_path, "HEAD"], 30)
+    assert wt_path in str(ei.value)
+
+
+def test_git_ok_with_aliases_sanitizes_worktree_path_in_argv(repo, monkeypatch):
+    fake = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+    monkeypatch.setattr(worktree, "_git", lambda *a, **k: fake)
+    wt_path = "/private/tmp/cic-worktree-zzz/tree"
+    aliases = worktree.path_aliases(wt_path)
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree._git_ok(
+            str(repo),
+            ["worktree", "add", "--detach", "--quiet", wt_path, "HEAD"],
+            30,
+            aliases=aliases,
+        )
+    msg = str(ei.value)
+    assert wt_path not in msg
+    assert "cic-worktree-" not in msg
+
+
+def test_git_ok_ordering_attack_b_relativize_first_would_shorten_secret_below_floor(
+    repo, monkeypatch, tmp_path
+):
+    """Attack B: naive relativize-then-redact shortens `api_key=<root>/abcdefgh` to
+    `api_key=./abcdefgh`, below the redactor's 16-char floor, so the secret escapes.
+    Must still redact."""
+    wt_path = str(tmp_path / "cic-worktree-b" / "tree")
+    aliases = worktree.path_aliases(wt_path)
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr=f"api_key={wt_path}/abcdefgh"
+    )
+    monkeypatch.setattr(worktree, "_git", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree._git_ok(str(repo), ["status"], 30, aliases=aliases)
+    msg = str(ei.value)
+    assert "abcdefgh" not in msg
+    assert wt_path not in msg
+    assert "[redacted: secret value]" in msg
+
+
+def test_git_ok_ordering_attack_a_redact_first_would_fragment_the_alias(
+    repo, monkeypatch, tmp_path
+):
+    """Attack A: naive redact-then-relativize lets the redactor consume PART of the
+    `file://` alias, leaving an un-relativizable dead-path remainder. Must still
+    relativize (or, as here, fully redact the value the alias rides on)."""
+    wt_path = str(tmp_path / "cic-worktree-a" / "tree")
+    aliases = worktree.path_aliases(wt_path)
+    crafted = f"api_key={'A' * 16}=file://{wt_path}/abcdefgh"
+    fake = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=crafted)
+    monkeypatch.setattr(worktree, "_git", lambda *a, **k: fake)
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree._git_ok(str(repo), ["status"], 30, aliases=aliases)
+    msg = str(ei.value)
+    assert "abcdefgh" not in msg
+    assert wt_path not in msg
+    assert "cic-worktree-" not in msg
+
+
+def test_create_sanitizes_worktree_path_in_worktree_add_failure(repo, monkeypatch):
+    """Covers the `create()` call site's `aliases=path_aliases(wt)` wiring specifically
+    (worktree.py's `_git_ok(repo, ["worktree", "add", …, wt, "HEAD"], timeout, aliases=…)`).
+    `wt` is destination argv, not stderr, so even an EMPTY stderr must not leak it. If the
+    `aliases` kwarg were dropped from that call site, `_git_ok` would fall back to its
+    aliases=() default (argv untouched), and this test would fail."""
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if "worktree" in cmd and "add" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(worktree.subprocess, "run", fake_run)
+    with pytest.raises(worktree.WorktreeError) as ei:
+        worktree.create(str(repo), timeout=30)
+    assert "cic-worktree-" not in str(ei.value)
+
+
 def test_create_cleans_parent_on_worktree_add_timeout(repo, monkeypatch):
     # A git hang during `worktree add` raises TimeoutExpired (not WorktreeError); the
     # cleanup must still fire so the temp parent dir does not leak.
     real_git_ok = worktree._git_ok
 
-    def fake_git_ok(repo_arg, args, timeout):
+    def fake_git_ok(repo_arg, args, timeout, **kwargs):
         if args[:2] == ["worktree", "add"]:
             raise subprocess.TimeoutExpired(cmd="git worktree add", timeout=timeout)
-        return real_git_ok(repo_arg, args, timeout)
+        return real_git_ok(repo_arg, args, timeout, **kwargs)
 
     monkeypatch.setattr(worktree, "_git_ok", fake_git_ok)
     seen: list[str] = []
@@ -406,10 +503,26 @@ def _fail_git_on(monkeypatch, predicate, stderr="simulated git failure"):
     """Wrap worktree._git so calls matching predicate(args) fail; others run real."""
     real = worktree._git
 
-    def fake(repo, args, timeout):
+    def fake(repo, args, timeout, **kwargs):
         if predicate(args):
             return subprocess.CompletedProcess(["git", *args], 1, "", stderr)
-        return real(repo, args, timeout)
+        return real(repo, args, timeout, **kwargs)
+
+    monkeypatch.setattr(worktree, "_git", fake)
+
+
+def _fail_git_on_with_path(monkeypatch, predicate):
+    """Like `_fail_git_on`, but the injected stderr embeds the exact path git was invoked
+    against — `_git`'s `repo` argument IS the worktree path for every call `_seed_uncommitted`
+    / `capture_diff` make against `wt`, so this mirrors a real diagnostic naming it."""
+    real = worktree._git
+
+    def fake(repo, args, timeout, **kwargs):
+        if predicate(args):
+            return subprocess.CompletedProcess(
+                ["git", *args], 1, "", f"fatal: could not do it in {repo}"
+            )
+        return real(repo, args, timeout, **kwargs)
 
     monkeypatch.setattr(worktree, "_git", fake)
 
@@ -440,6 +553,45 @@ def test_seed_add_failure_raises(repo, monkeypatch):
     assert _worktree_count(repo) == 1
 
 
+def test_seed_commit_failure_sanitizes_worktree_path(repo, monkeypatch):
+    # #420: the commit-failure message must not leak the worktree's absolute path.
+    (repo / "a.py").write_text("x = 2\n")
+    _fail_git_on_with_path(monkeypatch, lambda args: "commit" in args)
+    with pytest.raises(worktree.WorktreeError, match="baseline") as ei:
+        worktree.create(str(repo), timeout=30)
+    assert "cic-worktree-" not in str(ei.value)
+
+
+def test_seed_add_failure_sanitizes_worktree_path(repo, monkeypatch):
+    (repo / "a.py").write_text("x = 2\n")
+    _fail_git_on_with_path(monkeypatch, lambda args: args[:2] == ["add", "-A"])
+    with pytest.raises(worktree.WorktreeError, match="baseline") as ei:
+        worktree.create(str(repo), timeout=30)
+    assert "cic-worktree-" not in str(ei.value)
+
+
+def test_seed_filter_driver_enumeration_failure_sanitized(repo, monkeypatch):
+    # Round-3 review finding: `_hardening_flags(wt)` runs from inside `_seed_uncommitted`
+    # (the `git apply` call), so a filter-enumeration failure there can also carry the
+    # worktree path — not just the more obvious staging/commit failures above.
+    (repo / "a.py").write_text("x = 2\n")  # uncommitted change -> the seeding path is used
+    parents: list[str] = []
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        wt_guess = str(Path(parents[0]) / "tree") if parents else None
+        if "--get-regexp" in cmd and kwargs.get("cwd") == wt_guess:
+            return subprocess.CompletedProcess(
+                cmd, 2, "", f"fatal: cannot enumerate filters in {kwargs['cwd']}"
+            )
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(worktree.subprocess, "run", fake_run)
+    with pytest.raises(worktree.WorktreeError, match="filter drivers") as ei:
+        worktree.create(str(repo), timeout=30, on_parent=parents.append)
+    assert "cic-worktree-" not in str(ei.value)
+
+
 def test_seed_dirty_after_commit_raises(repo, monkeypatch):
     # commit reports success but is a no-op, leaving staged changes behind. The
     # porcelain-status guard must catch the partial seed rather than let the agent
@@ -447,10 +599,10 @@ def test_seed_dirty_after_commit_raises(repo, monkeypatch):
     (repo / "a.py").write_text("x = 2\n")
     real = worktree._git
 
-    def fake(r, args, timeout):
+    def fake(r, args, timeout, **kwargs):
         if "commit" in args:
             return subprocess.CompletedProcess(["git", *args], 0, "", "")
-        return real(r, args, timeout)
+        return real(r, args, timeout, **kwargs)
 
     monkeypatch.setattr(worktree, "_git", fake)
     with pytest.raises(worktree.WorktreeError, match="dirty"):
@@ -476,6 +628,53 @@ def test_capture_diff_add_failure_raises(repo, monkeypatch):
         _fail_git_on(monkeypatch, lambda args: args[:2] == ["add", "-A"])
         with pytest.raises(worktree.WorktreeError):
             worktree.capture_diff(wt.path, timeout=30)
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_capture_diff_add_failure_sanitizes_worktree_path(repo, monkeypatch):
+    # #420: the worktree is torn down before this text reaches the caller — it must not
+    # carry the (already-dead) absolute path.
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        _fail_git_on_with_path(monkeypatch, lambda args: args[:2] == ["add", "-A"])
+        with pytest.raises(worktree.WorktreeError) as ei:
+            worktree.capture_diff(wt.path, timeout=30)
+        assert wt.path not in str(ei.value)
+        assert os.path.realpath(wt.path) not in str(ei.value)
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_capture_diff_diff_failure_sanitizes_worktree_path(repo, monkeypatch):
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        _fail_git_on_with_path(monkeypatch, lambda args: args[:1] == ["diff"])
+        with pytest.raises(worktree.WorktreeError) as ei:
+            worktree.capture_diff(wt.path, timeout=30)
+        assert wt.path not in str(ei.value)
+    finally:
+        worktree.remove(str(repo), wt, timeout=30)
+
+
+def test_capture_diff_filter_driver_enumeration_failure_sanitized(repo, monkeypatch):
+    # Round-3 review finding: `capture_diff` runs `_git(wt, …)`, so a filter-enumeration
+    # failure during its `git add`/`git diff` can also carry the worktree path.
+    wt = worktree.create(str(repo), timeout=30)
+    try:
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if "--get-regexp" in cmd and kwargs.get("cwd") == wt.path:
+                return subprocess.CompletedProcess(
+                    cmd, 2, "", f"fatal: cannot enumerate filters in {kwargs['cwd']}"
+                )
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(worktree.subprocess, "run", fake_run)
+        with pytest.raises(worktree.WorktreeError, match="filter drivers") as ei:
+            worktree.capture_diff(wt.path, timeout=30)
+        assert wt.path not in str(ei.value)
     finally:
         worktree.remove(str(repo), wt, timeout=30)
 

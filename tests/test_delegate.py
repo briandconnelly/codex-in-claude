@@ -370,3 +370,82 @@ def test_run_delegate_survives_crafted_partial_alias_consumption(monkeypatch, tm
     assert "abcdefgh" not in result["summary"]
     assert wt not in result["summary"]
     assert "cic-worktree-" not in result["summary"]
+
+
+# --- classify_failure error path: worktree paths in delegate error envelopes (#420) --
+#
+# #412 fixed only the success path (last_message -> summary/raw_response.text). A non-zero
+# exit's error.message comes from codex.classify_failure's `event_error or stderr or
+# stdout`, which is equally cwd=worktree prose and equally dead once the worktree is torn
+# down. delegate.run_delegate must wire the same worktree-aware sanitizer into
+# classify_failure's `sanitize` parameter.
+
+
+def _run_delegate_with_failure(monkeypatch, stderr: str, *, wt_path: str, exit_code: int = 1):
+    """Drive run_delegate through a failing codex exec (classify_failure's nonzero_exit
+    branch) with a canned stderr and worktree path; return the result envelope."""
+    from types import SimpleNamespace
+
+    import anyio
+
+    from codex_in_claude import delegate
+    from codex_in_claude._core import worktree
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(
+            run=CommandRun("", stderr, exit_code, 1, False), last_message=None
+        )
+
+    monkeypatch.setattr(
+        worktree, "create", lambda *a, **k: SimpleNamespace(path=wt_path, baseline_warning=None)
+    )
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+
+    return anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/repo",
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+
+
+def test_run_delegate_sanitizes_worktree_path_in_classify_failure_message(monkeypatch, tmp_path):
+    """The classify_failure path test (#420): a nonzero-exit run whose stderr names the
+    worktree (Codex runs with cwd=worktree) must come back relativized, with no absolute
+    worktree path, once the worktree is torn down. RED before delegate.py wires
+    `sanitize=` into the classify_failure call."""
+    wt = str(tmp_path / "cic-worktree-e" / "tree")
+    stderr = f"error writing {wt}/out.txt (also file://{wt}/out.txt)"
+    result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "nonzero_exit"
+    assert wt not in result["error"]["message"]
+    assert os.path.realpath(wt) not in result["error"]["message"]
+    assert "./out.txt" in result["error"]["message"]
+
+
+def test_run_delegate_classify_failure_survives_partial_alias_consumption(monkeypatch, tmp_path):
+    """Ordering attack A end to end through the error path."""
+    wt = str(tmp_path / "cic-worktree-f" / "tree")
+    stderr = f"api_key={'A' * 16}=file://{wt}/abcdefgh"
+    result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
+    assert "abcdefgh" not in result["error"]["message"]
+    assert wt not in result["error"]["message"]
+    assert "cic-worktree-" not in result["error"]["message"]
+
+
+def test_run_delegate_classify_failure_redacts_short_path_bearing_secret(monkeypatch, tmp_path):
+    """Ordering attack B end to end through the error path."""
+    wt = str(tmp_path / "cic-worktree-g" / "tree")
+    stderr = f"api_key={wt}/abcdefgh"
+    result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
+    assert "abcdefgh" not in result["error"]["message"]
+    assert "[redacted: secret value]" in result["error"]["message"]

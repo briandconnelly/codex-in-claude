@@ -113,7 +113,9 @@ def _base_hardening_flags() -> list[str]:
     return ["-c", f"core.hooksPath={_empty_hooks_dir()}", "-c", "core.fsmonitor=false"]
 
 
-def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
+def _configured_filter_drivers(
+    repo: str, timeout: int, *, aliases: Iterable[str] = ()
+) -> list[str]:
     """Every gitattributes filter driver name configured for ``repo`` -- from system and
     repo-local config, but NOT the user's global ``~/.gitconfig``. This runs under
     ``_base_env()``, which every other git call here also uses; because that is a
@@ -124,7 +126,12 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
     Read with a raw subprocess carrying only ``_base_hardening_flags`` -- NOT ``_git``,
     which would recurse back through ``_hardening_flags`` -> here. Raises WorktreeError
     if enumeration fails, or if a driver name cannot be safely expressed as a ``-c``
-    override (fail closed; see ``_UNNEUTRALIZABLE_DRIVER_CHARS``)."""
+    override (fail closed; see ``_UNNEUTRALIZABLE_DRIVER_CHARS``).
+
+    ``aliases`` (default ``()``, byte-identical to before) sanitizes the enumeration-failure
+    message through ``sanitize_prose`` when ``repo`` is a throwaway worktree -- this is NOT
+    pre-worktree-only: `_seed_uncommitted` and `capture_diff` both call ``_hardening_flags``
+    (hence here) against ``wt`` (#420)."""
     proc = subprocess.run(
         ["git", *_base_hardening_flags(), "config", "--name-only", "--get-regexp", r"^filter\."],
         cwd=repo,
@@ -136,9 +143,16 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
     )
     # returncode 1 is git's "no matching keys" (no filters configured), not an error.
     if proc.returncode not in (0, 1):
-        raise WorktreeError(
-            f"enumerating filter drivers failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
-        )
+        aliases = tuple(aliases)
+        if aliases:
+            raw = f"enumerating filter drivers failed: {proc.stderr.strip()}"
+            message = (sanitize_prose(raw, aliases) or "")[:200]
+        else:
+            message = (
+                f"enumerating filter drivers failed: "
+                f"{(redact_text(proc.stderr.strip()) or '')[:200]}"
+            )
+        raise WorktreeError(message)
     names: list[str] = []
     seen: set[str] = set()
     for line in proc.stdout.splitlines():
@@ -160,15 +174,19 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
     return names
 
 
-def _filter_neutralization_flags(repo: str, timeout: int) -> list[str]:
+def _filter_neutralization_flags(
+    repo: str, timeout: int, *, aliases: Iterable[str] = ()
+) -> list[str]:
     """``-c`` overrides that disable every configured gitattributes filter driver so no
     ``clean``/``smudge``/``process`` command executes. For each driver we blank the three
     command hooks (an empty command is a no-op, leaving git to use the raw blob bytes)
     and force ``required=false`` so a now-disabled ``required`` filter is non-fatal
     instead of aborting checkout. ``process`` must be blanked explicitly: it takes
-    precedence over ``smudge``/``clean``, so overriding only those would still run it."""
+    precedence over ``smudge``/``clean``, so overriding only those would still run it.
+
+    ``aliases`` is forwarded to ``_configured_filter_drivers`` -- see there (#420)."""
     flags: list[str] = []
-    for name in _configured_filter_drivers(repo, timeout):
+    for name in _configured_filter_drivers(repo, timeout, aliases=aliases):
         flags += [
             "-c",
             f"filter.{name}.process=",
@@ -182,7 +200,7 @@ def _filter_neutralization_flags(repo: str, timeout: int) -> list[str]:
     return flags
 
 
-def _hardening_flags(repo: str, timeout: int) -> list[str]:
+def _hardening_flags(repo: str, timeout: int, *, aliases: Iterable[str] = ()) -> list[str]:
     """``git -c`` overrides prepended to every git call here, to neutralize
     repo-configured code execution in the *server process* (these git ops run here, not
     in Codex's sandbox): repo hooks and fsmonitor (``_base_hardening_flags``) plus every
@@ -196,8 +214,16 @@ def _hardening_flags(repo: str, timeout: int) -> list[str]:
     since 2.31 and would fail *open* on an older binary) at the highest config
     precedence, so it overrides the repo's own local config and reaches even the
     standalone ``git apply``. The filter set is enumerated fresh per call (uncached) so a
-    driver added between operations in a long-lived server process is never missed."""
-    return [*_base_hardening_flags(), *_filter_neutralization_flags(repo, timeout)]
+    driver added between operations in a long-lived server process is never missed.
+
+    ``aliases`` is forwarded to ``_filter_neutralization_flags`` -- pass ``path_aliases(wt)``
+    whenever ``repo`` IS the throwaway worktree, so a filter-enumeration failure it triggers
+    is sanitized rather than naming a path that is dead by the time the caller reads it
+    (#420). Leave it default when ``repo`` is the source repo (structurally worktree-path-free)."""
+    return [
+        *_base_hardening_flags(),
+        *_filter_neutralization_flags(repo, timeout, aliases=aliases),
+    ]
 
 
 def _base_env() -> dict[str, str]:
@@ -207,9 +233,13 @@ def _base_env() -> dict[str, str]:
     return gitdiff._base_git_env()
 
 
-def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProcess:
+def _git(
+    repo: str, args: list[str], timeout: int, *, aliases: Iterable[str] = ()
+) -> subprocess.CompletedProcess:
+    """``aliases`` is forwarded to ``_hardening_flags`` -- pass ``path_aliases(wt)`` when
+    ``repo`` is the throwaway worktree (#420); see there."""
     return subprocess.run(
-        ["git", *_hardening_flags(repo, timeout), *args],
+        ["git", *_hardening_flags(repo, timeout, aliases=aliases), *args],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -219,12 +249,24 @@ def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProces
     )
 
 
-def _git_ok(repo: str, args: list[str], timeout: int) -> str:
+def _git_ok(repo: str, args: list[str], timeout: int, *, aliases: Iterable[str] = ()) -> str:
+    """Run a git command in ``repo``, raising WorktreeError with the (redacted) stderr on
+    failure. The message interpolates argv verbatim, so a worktree path can appear there
+    even with empty stderr; ``aliases`` (default ``()``, byte-identical to before) sanitizes
+    the WHOLE raw message -- argv and stderr together -- through ``sanitize_prose`` when the
+    caller knows ``args`` can name a worktree (#420). ``_git``'s own internal hardening-flags
+    call is NOT threaded with these aliases: that call operates on ``repo``, decoupled from
+    whatever path the caller's ``args`` happen to reference."""
     proc = _git(repo, args, timeout)
     if proc.returncode != 0:
-        raise WorktreeError(
-            f"git {' '.join(args)} failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
-        )
+        aliases = tuple(aliases)
+        if aliases:
+            raw = f"git {' '.join(args)} failed: {proc.stderr.strip()}"
+            message = (sanitize_prose(raw, aliases) or "")[:200]
+        else:
+            detail = (redact_text(proc.stderr.strip()) or "")[:200]
+            message = f"git {' '.join(args)} failed: {detail}"
+        raise WorktreeError(message)
     return proc.stdout
 
 
@@ -266,7 +308,22 @@ def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None =
             raise
     wt = str(Path(parent) / "tree")
     try:
-        _git_ok(repo, ["worktree", "add", "--detach", "--quiet", wt, "HEAD"], timeout)
+        # argv names `wt` (the destination) even though this call runs against `repo` (the
+        # source), so the failure message needs `wt`'s aliases -- not `_hardening_flags`'s
+        # own repo-scoped enumeration, which stays default (#420). `path_aliases(wt)` here
+        # runs BEFORE `wt` itself exists (only `parent`, from `mkdtemp` above, does) --
+        # safe despite `path_aliases`'s own "capture while it still exists" docstring
+        # caveat, because that caveat is about symlinked ANCESTORS (macOS's /tmp ->
+        # /private/tmp): `os.path.realpath` resolves those against `parent`, which already
+        # exists, and the leaf `wt` adds is a plain directory `git worktree add` creates
+        # fresh -- never itself a symlink -- so its absence at alias-computation time
+        # changes nothing `realpath` needs to resolve.
+        _git_ok(
+            repo,
+            ["worktree", "add", "--detach", "--quiet", wt, "HEAD"],
+            timeout,
+            aliases=path_aliases(wt),
+        )
     except BaseException:
         # A git hang (TimeoutExpired) or spawn failure (OSError) is not a WorktreeError,
         # so catch broadly and match the sibling _seed_uncommitted block: best-effort
@@ -428,14 +485,25 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     leave the worktree at HEAD and return a warning. But once the patch HAS applied,
     the baseline commit must fully succeed — otherwise ``capture_diff`` would later
     report the caller's live changes as the agent's work. Any failure finalizing the
-    baseline raises ``WorktreeError`` (the caller maps it to a zero-spend error)."""
+    baseline raises ``WorktreeError`` (the caller maps it to a zero-spend error). Every
+    git call against ``wt`` below carries ``wt``'s aliases, so any WorktreeError it raises
+    (a staging/commit failure, or a filter-enumeration failure surfaced through
+    ``_hardening_flags`` -- round-3 review finding, #420) is sanitized rather than naming
+    the worktree, which is dead by the time the caller reads the result."""
+    aliases = path_aliases(wt)
     diff = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"], timeout)
     if diff.returncode != 0:
         return "could not read live uncommitted changes; worktree based on HEAD only"
     if not diff.stdout.strip():
         return None  # clean tree; HEAD is already the live state
     apply = subprocess.run(
-        ["git", *_hardening_flags(wt, timeout), "apply", "--whitespace=nowarn", "-"],
+        [
+            "git",
+            *_hardening_flags(wt, timeout, aliases=aliases),
+            "apply",
+            "--whitespace=nowarn",
+            "-",
+        ],
         cwd=wt,
         input=diff.stdout,
         capture_output=True,
@@ -446,11 +514,10 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     )
     if apply.returncode != 0:
         return "uncommitted changes could not be replayed; worktree based on HEAD only"
-    add = _git(wt, ["add", "-A"], timeout)
+    add = _git(wt, ["add", "-A"], timeout, aliases=aliases)
     if add.returncode != 0:
-        raise WorktreeError(
-            f"staging the baseline failed: {(redact_text(add.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"staging the baseline failed: {add.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     commit = _git(
         wt,
         [
@@ -466,14 +533,16 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
             "baseline: live uncommitted state",
         ],
         timeout,
+        aliases=aliases,
     )
     if commit.returncode != 0:
-        raise WorktreeError(
-            f"committing the baseline failed: {(redact_text(commit.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"committing the baseline failed: {commit.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     # The baseline commit must leave the worktree clean; any residue means the live
     # changes were not fully captured and would leak into the agent's diff.
-    status = _git(wt, ["status", "--porcelain=v1", "--untracked-files=all"], timeout)
+    status = _git(
+        wt, ["status", "--porcelain=v1", "--untracked-files=all"], timeout, aliases=aliases
+    )
     if status.returncode != 0 or status.stdout.strip():
         raise WorktreeError("baseline commit left the worktree dirty; aborting before spend")
     return None
@@ -499,20 +568,25 @@ def capture_diff(wt: str, *, timeout: int) -> str:
     Staging first means new and deleted files appear in the diff, so the returned
     patch is a complete, git-appliable representation of the agent's work. Common
     build artifacts (``__pycache__``, ``.pyc``, caches) are excluded so the patch
-    holds only meaningful source changes."""
+    holds only meaningful source changes. Every git call carries ``wt``'s aliases, so a
+    staging/diff failure -- or a filter-enumeration failure surfaced through
+    ``_hardening_flags`` -- round-3 review finding, #420 -- is sanitized rather than naming
+    the worktree, which is dead by the time the caller reads the result."""
+    aliases = path_aliases(wt)
     pathspec = [".", *_ARTIFACT_EXCLUDES]
-    add = _git(wt, ["add", "-A", "--", *pathspec], timeout)
+    add = _git(wt, ["add", "-A", "--", *pathspec], timeout, aliases=aliases)
     if add.returncode != 0:
-        raise WorktreeError(
-            f"staging the worktree diff failed: {(redact_text(add.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"staging the worktree diff failed: {add.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     proc = _git(
-        wt, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec], timeout
+        wt,
+        ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec],
+        timeout,
+        aliases=aliases,
     )
     if proc.returncode != 0:
-        raise WorktreeError(
-            f"capturing the worktree diff failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"capturing the worktree diff failed: {proc.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     return proc.stdout
 
 

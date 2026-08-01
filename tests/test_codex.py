@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 
 import anyio
 import pytest
 
 from codex_in_claude import cli_contract, codex
+from codex_in_claude._core import worktree
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.preflight import FlagSupport
 
@@ -188,6 +190,74 @@ def test_classify_failure_redacts_secret_straddling_truncation_boundary():
     err = codex.classify_failure(CommandRun("", stderr, 1, 1, False))
     assert err.code == "nonzero_exit"
     assert "sk-aaaaaaa" not in err.message
+
+
+# --- classify_failure(sanitize=...): worktree-path-safe delegate errors (#420) ------
+#
+# `sanitize`, when given, REPLACES the `nonzero_exit` branch's `redact_text` call (the
+# sanitizer already includes redaction). Omitted, behavior must be byte-identical to
+# before this parameter existed.
+
+
+def test_classify_failure_sanitize_none_is_byte_identical():
+    """Pin: `sanitize=None` (the default, and omitting the kwarg entirely) must match
+    today's redact_text-only behavior exactly."""
+    secret = "sk-" + "a" * 32
+    run = CommandRun("", f"auth failed token={secret}", 1, 1, False)
+    omitted = codex.classify_failure(run)
+    explicit_none = codex.classify_failure(run, sanitize=None)
+    assert omitted.message == explicit_none.message
+    assert "[redacted: secret value]" in explicit_none.message
+
+
+def test_classify_failure_sanitize_none_leaks_worktree_path_positive_control(tmp_path):
+    """Positive control: without a `sanitize` callable, a worktree path in the raw
+    diagnostic DOES leak into the message — proves the assertions below are not vacuous."""
+    wt = str(tmp_path / "cic-worktree-p" / "tree")
+    run = CommandRun("", f"error at {wt}/f.py", 1, 1, False)
+    err = codex.classify_failure(run)
+    assert wt in err.message
+
+
+def test_classify_failure_sanitize_relativizes_and_redacts(tmp_path):
+    """The classify_failure path test (#420): a delegate-error stderr embedding the
+    worktree path AND its file:// alias comes back relativized, with no absolute path,
+    when a sanitize callable is supplied. RED before the `sanitize` parameter exists."""
+    wt = str(tmp_path / "cic-worktree-x" / "tree")
+    aliases = worktree.path_aliases(wt)
+    stderr = f"error at {wt}/f.py (also file://{wt}/f.py)"
+    run = CommandRun("", stderr, 1, 1, False)
+    err = codex.classify_failure(run, sanitize=lambda t: worktree.sanitize_prose(t, aliases) or "")
+    assert wt not in err.message
+    assert os.path.realpath(wt) not in err.message
+    assert "./f.py" in err.message
+
+
+def test_classify_failure_sanitize_survives_partial_alias_consumption(tmp_path):
+    """Ordering attack A: naive redact-then-relativize lets the redactor consume PART of
+    the file:// alias, leaving an un-relativizable dead-path remainder. sanitize_prose
+    stages the alias first, so it never fragments."""
+    wt = str(tmp_path / "cic-worktree-c" / "tree")
+    aliases = worktree.path_aliases(wt)
+    stderr = f"api_key={'A' * 16}=file://{wt}/abcdefgh"
+    run = CommandRun("", stderr, 1, 1, False)
+    err = codex.classify_failure(run, sanitize=lambda t: worktree.sanitize_prose(t, aliases) or "")
+    assert "abcdefgh" not in err.message
+    assert wt not in err.message
+    assert "cic-worktree-" not in err.message
+
+
+def test_classify_failure_sanitize_redacts_short_path_bearing_secret(tmp_path):
+    """Ordering attack B: naive relativize-then-redact shortens
+    `api_key=<root>/abcdefgh` below the redactor's 16-char floor, letting the secret
+    escape. sanitize_prose defeats this by redacting the staged (still-long) value."""
+    wt = str(tmp_path / "cic-worktree-s" / "tree")
+    aliases = worktree.path_aliases(wt)
+    stderr = f"api_key={wt}/abcdefgh"
+    run = CommandRun("", stderr, 1, 1, False)
+    err = codex.classify_failure(run, sanitize=lambda t: worktree.sanitize_prose(t, aliases) or "")
+    assert "abcdefgh" not in err.message
+    assert "[redacted: secret value]" in err.message
 
 
 def test_classify_uses_error_event_message():
