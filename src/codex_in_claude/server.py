@@ -24,6 +24,7 @@ from uuid import uuid4
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
+from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import DisabledError, NotFoundError, ResourceError
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import Middleware
@@ -247,18 +248,24 @@ mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=_
 # #424 (audit): FastMCP's LowLevelServer.get_capabilities also unconditionally
 # advertises the io.modelcontextprotocol/ui extension (MCP Apps) — it lands in
 # ServerCapabilities.model_extra since that model is extra="allow". This server has
-# no UI/Apps implementation, so null out extensions too. Today ui is the only
-# extension FastMCP injects, so nulling the whole key is equivalent to stripping it;
-# if a legitimate extension is ever added, this must change to strip only the ui key
-# and keep the rest. Guarded by test_initialize_does_not_advertise_the_ui_extension,
-# so a FastMCP upgrade that changes this seam fails loudly.
+# no UI/Apps implementation, so filter that one entry out of the extensions mapping
+# (leaving any other, legitimately-implemented extension a future FastMCP version
+# adds untouched) and only null the whole key when nothing is left. Guarded by
+# test_initialize_does_not_advertise_the_ui_extension, so a FastMCP upgrade that
+# changes this seam fails loudly.
 _lowlevel_server = mcp._mcp_server
 _orig_get_capabilities = _lowlevel_server.get_capabilities
 
 
 def _get_capabilities_without_prompts_or_extensions(*args: Any, **kwargs: Any) -> Any:
     caps = _orig_get_capabilities(*args, **kwargs)
-    return caps.model_copy(update={"prompts": None, "extensions": None})
+    extensions = (caps.model_extra or {}).get("extensions")
+    filtered_extensions = (
+        {ext_id: value for ext_id, value in extensions.items() if ext_id != UI_EXTENSION_ID}
+        if isinstance(extensions, dict)
+        else None
+    )
+    return caps.model_copy(update={"prompts": None, "extensions": filtered_extensions or None})
 
 
 _lowlevel_server.get_capabilities = _get_capabilities_without_prompts_or_extensions  # ty: ignore[invalid-assignment]

@@ -4545,6 +4545,31 @@ async def test_initialize_does_not_advertise_the_ui_extension(clean_env):
     assert "extensions" not in wire
 
 
+async def test_initialize_ui_extension_filter_preserves_other_extensions(clean_env):
+    """The seam must filter only the ui extension out of the extensions mapping, not
+    null the whole key — a future FastMCP version may legitimately add a different
+    extension, and this server must not silently suppress that one too (#424 review)."""
+    from fastmcp import Client
+    from fastmcp.apps import UI_EXTENSION_ID
+
+    sentinel_id = "io.example/sentinel"
+    real_orig_get_capabilities = server._orig_get_capabilities
+
+    def fake_orig_get_capabilities(*args: object, **kwargs: object) -> object:
+        caps = real_orig_get_capabilities(*args, **kwargs)
+        return caps.model_copy(
+            update={"extensions": {UI_EXTENSION_ID: {}, sentinel_id: {"foo": "bar"}}}
+        )
+
+    clean_env.setattr(server, "_orig_get_capabilities", fake_orig_get_capabilities)
+
+    async with Client(server.mcp) as client:
+        caps = client.initialize_result.capabilities
+
+    wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert wire["extensions"] == {sentinel_id: {"foo": "bar"}}
+
+
 # --- advertised error codes must be MCP-reachable (#92) -----------------------
 # A code whose only production path is an out-of-enum value on a Literal-typed param
 # is rejected by FastMCP validation before the handler runs, so a real MCP caller can
