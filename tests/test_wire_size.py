@@ -61,7 +61,12 @@ from codex_in_claude.server import mcp
 # schema `minLength`, so these descriptions are the ONLY place a client can discover it before
 # spending. It buys back a whole class of wasted paid calls — the reported repro burned 23,120
 # tokens on a whitespace-only question.
-TOOLS_LIST_BYTE_BUDGET = 84_500
+# Measured again 2026-08-01 (#414: the three sync tools' Progress & recovery paragraphs now name
+# `codex_job_status` as the recovery chain's polling step and state that some MCP clients
+# background a long call before the server's own deadline, so `timeout_seconds` bounds the run,
+# not necessarily the client's inline wait — the job record covers that case too): 84,740 bytes —
+# budget raised to the next 500 above the measured value.
+TOOLS_LIST_BYTE_BUDGET = 85_000
 
 
 @pytest.mark.anyio
