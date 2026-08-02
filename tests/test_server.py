@@ -1509,10 +1509,10 @@ async def test_delegate_baseline_commit_failure_no_spend(monkeypatch, clean_env,
 
     real_git = worktree._git
 
-    def fake_git(repo, args, timeout):
+    def fake_git(repo, args, timeout, **kwargs):
         if "commit" in args:
             return subprocess.CompletedProcess(["git", *args], 1, "", "simulated commit failure")
-        return real_git(repo, args, timeout)
+        return real_git(repo, args, timeout, **kwargs)
 
     monkeypatch.setattr(worktree, "_git", fake_git)
 
