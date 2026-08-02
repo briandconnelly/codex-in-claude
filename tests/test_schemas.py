@@ -802,6 +802,10 @@ def _wire_catalog_bytes() -> int:
 # Measured again 2026-08-01 (#426: `annotations_reading`, another bare `{"type":"string"}`
 # property on the same outputSchema — its description is stripped the same way
 # `protocol_revision`'s is): 84,835 bytes — still within budget, no further change.
+# Measured again 2026-08-02 (#427: the six egress tool docstrings converged onto one shared
+# skills-discovery sentence pair — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET/TARGET
+# history for the tightening story, which applies identically here): 84,835 -> 84,992 bytes
+# (+157 B) — fits under the existing cap, no raise.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
 CATALOG_BYTE_CAP = 85_000
@@ -963,7 +967,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-72"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-73"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

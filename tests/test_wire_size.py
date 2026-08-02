@@ -74,7 +74,49 @@ from codex_in_claude.server import mcp
 # `protocol_revision` above, a second bare `{"type":"string"}` property on `codex_capabilities`'
 # outputSchema; its description is likewise stripped from the advertised schema): 84,818 bytes
 # (+40 B) — still within budget, no further change.
+# Measured again 2026-08-02 (#427: the six egress tool docstrings converged onto one shared
+# skills-discovery sentence pair — `cli_contract.SKILLS_DISCOVERY_FACT`/
+# `SKILLS_DISCOVERY_FACT_FULL`. First pass (before tightening) grew this to 85,299 bytes, over
+# budget — a
+# tighter canonical pair (dropped "both"/"that workspace's"/redundant "your", kept
+# "resolved") plus a minimal per-delegate addendum (the pre-existing "throwaway worktree
+# seeded from tracked state" sentence earlier in each docstring already disclosed
+# tracked/seeded; the only genuinely new fact needed here is that delegate's workspace IS
+# the worktree, and that scrubbing it doesn't exclude $CODEX_HOME/skills/) recovered the
+# rest): 84,818 -> 84,975 bytes (+157 B, closing wording gaps between sites without adding
+# net new disclosure bulk) — fits under the existing budget, no raise.
 TOOLS_LIST_BYTE_BUDGET = 85_000
+
+# The measured tools/list size as of the last deliberate review above — NOT a second gate.
+# The budget assertion below is the only hard failure; this exists purely so the assertion's
+# failure message can show how far a later change has drifted from the last reviewed
+# measurement, without requiring a diff against this file's comment history. Revisit this
+# value (re-measure and update it in the same commit) whenever a DELIBERATE change to
+# tools/list's measured size lands — i.e. whenever a new row is added to the budget-history
+# comment above, whether or not that row also moves TOOLS_LIST_BYTE_BUDGET (most of the
+# history above is "still within budget, no further change" rows that grew the measured size
+# without touching the budget; the target must track every one of those too, or it silently
+# goes stale between the raises).
+TOOLS_LIST_BYTE_TARGET = 84_975
+
+
+def _budget_failure_message(measured: int) -> str:
+    return (
+        f"tools/list is {measured} bytes (target {TOOLS_LIST_BYTE_TARGET}), over the "
+        f"{TOOLS_LIST_BYTE_BUDGET} budget. Compact a description or schema, or raise "
+        "the budget deliberately."
+    )
+
+
+def test_budget_failure_message_reports_measured_budget_and_target():
+    """The budget assertion's failure message must surface all three figures — measured,
+    BUDGET, and TARGET — so the delta from the last deliberate measurement is visible on
+    every run, not just on a failure. TARGET is informational only: the budget assertion
+    below stays the ONLY hard gate."""
+    msg = _budget_failure_message(99_999)
+    assert "99999" in msg
+    assert str(TOOLS_LIST_BYTE_BUDGET) in msg
+    assert str(TOOLS_LIST_BYTE_TARGET) in msg
 
 
 @pytest.mark.anyio
@@ -83,7 +125,4 @@ async def test_tools_list_wire_size_budget():
         tools = await c.list_tools()
     payload = [t.model_dump(mode="json", exclude_none=True) for t in tools]
     size = len(json.dumps(payload, separators=(",", ":")))
-    assert size <= TOOLS_LIST_BYTE_BUDGET, (
-        f"tools/list is {size} bytes, over the {TOOLS_LIST_BYTE_BUDGET} budget. "
-        "Compact a description or schema, or raise the budget deliberately."
-    )
+    assert size <= TOOLS_LIST_BYTE_BUDGET, _budget_failure_message(size)
