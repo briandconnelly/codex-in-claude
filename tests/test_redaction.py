@@ -388,6 +388,33 @@ def test_repeated_anchor_input_is_not_quadratic_for_any_pattern():
         )
 
 
+def test_repeated_bracketed_anchor_input_is_not_quadratic():
+    """#436's dual swallow guard adds a SECOND unbounded probe run — guard 1, the
+    `(?(key_bracket)...)` conditional in `LABELLED_VALUE_PATTERN` — that
+    `_QUADRATIC_SEEDS`' one-seed-per-pattern map above cannot exercise: `"key="*N`
+    (that map's seed for this pattern) carries no bracket anywhere, so `key_bracket` is
+    false at every anchor and guard 1 never evaluates there. This is the seed that DOES
+    reach it: a text built from repeated BRACKETED anchors.
+
+    Flat for a structural reason, not a numeric one (see `_SWALLOW_GUARD_PEEK`'s module
+    comment): `key_bracket` requires consuming a quote and a `]`, both outside
+    `_VALUE_CHARS`, so guard 1's unbounded probe run from one bracketed anchor is always
+    terminated before the next bracketed anchor begins — no probe run can span two
+    anchors, so per-anchor cost cannot compound. Measured on this machine:
+    5000 reps (50k chars) 0.007s, 10000 (100k) 0.014s, 20000 (200k) 0.029s, 40000
+    (400k) 0.057s — linear, ~2x per 2x input, comfortably under the 2.0s budget with
+    room to spare (Codex's own prototype measured 0.032s/0.043s at ~220k/270k chars on a
+    differently-shaped bracketed seed, same order of magnitude).
+    """
+    seed = 'x["key"]= '
+    for reps in (20000, 40000):
+        text = seed * reps
+        start = time.perf_counter()
+        redaction._redact_secret_values(text)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 2.0, f"{seed!r}*{reps} ({len(text)} chars) took {elapsed:.3f}s"
+
+
 # The pre-#439 pattern, kept as an ORACLE (the discipline the #438/#440 oracles above
 # follow, :123-129): the invariant that matters for a secret boundary is one-directional
 # — bounding the first segment may recognize fewer FIRST-SEGMENT lengths, but every
@@ -2358,6 +2385,20 @@ def test_bracket_match_does_not_swallow_a_later_sensitive_label():
         assert _any_marker_in(out)
 
 
+def test_bracketed_swallow_with_a_short_inner_label_is_now_redacted_whole():
+    # Verified on `main` (pre-#436): the bracketed guard's tail-less form REFUSES the
+    # outer the moment it merely sees the later `key` label, whether or not that label's
+    # own value clears the redaction threshold — and since `key=short`'s value is only 5
+    # chars, the inner candidate can't match either, so `main` leaks this chain WHOLE
+    # (`cfg["token"] = aaaaaaaaaaaakey=short` comes out byte-identical, untouched). #436's
+    # `{_MIN_SECRET_VALUE_LEN}` tail on guard 1 (the bracketed branch) fixes this as a
+    # side effect of the refinement both guards share: the outer stays eligible whenever
+    # the inner alone could never have been redacted, so the whole chain is now masked.
+    assert redaction.redact_text('cfg["token"] = aaaaaaaaaaaakey=short') == (
+        'cfg["token"] = [redacted: secret value]'
+    )
+
+
 def test_neutral_bracket_key_is_untouched():
     # The widening still keys on the LABEL. An ordinary subscript keeps its value, so this
     # does not degrade into "redact every subscripted assignment in a source file".
@@ -2368,19 +2409,135 @@ def test_neutral_bracket_key_is_untouched():
     assert paths == []
 
 
-def test_swallow_guard_leaves_non_bracket_matches_alone():
-    # The guard is CONDITIONED on `key_bracket`, and nothing else pinned that: making it
-    # unconditional passed every other test in this file. It is not a leak either way —
-    # both forms redact the secret — but an unconditional guard silently changes which SPAN
-    # a non-bracket chain redacts, and that class is pre-existing (reachable on the
-    # pre-#434 pattern too), so it belongs to #436 rather than to this change.
-    #
-    # Conditional (correct here): the whole chain is masked, exactly as before #434.
-    # Unconditional: `key:api_key=[redacted…]`, a narrower span and a behavior change to
-    # inputs this issue never touched.
-    assert redaction.redact_text("key:api_key=leftovervalue123456789") == (
-        "key:[redacted: secret value]"
+def test_labelled_match_does_not_swallow_a_later_sensitive_label():
+    # #436: the #434 guard was CONDITIONED on `key_bracket`, so it protected only bracketed
+    # matches. The same swallow reaches ANY labelled match — `_VALUE_CHARS` is greedy and
+    # `re.sub` never revisits consumed text, so an earlier WEAK label's value run can absorb
+    # a LATER sensitive label whole, and the real secret after that second separator went
+    # out unmasked: the pre-fix engine turned this into
+    # `cfg "key": [redacted: secret value] = realsecret1234567890` — a leak.
+    out = redaction.redact_text('cfg "key": aaaaaaaaaaaaaaaaapassword = realsecret1234567890')
+    # Exact output. The guard now refuses the OUTER candidate (`"key": ...`) because its own
+    # value run would reach the later `password` label with a redactable value behind it, so
+    # its value run — `aaaaaaaaaaaaaaaaapassword` — is left on the page; the engine advances
+    # and matches the INNER `password = ` label instead, which has no later label inside ITS
+    # OWN value and so redacts clean. The surviving `aaaa…password`-ish run of the refused
+    # outer match is the accepted trade, generalized from #434: a refused outer match's own
+    # value run survives whenever the inner label's value is itself redactable.
+    assert out == 'cfg "key": aaaaaaaaaaaaaaaaapassword = [redacted: secret value]'
+
+    # Quoted / JSON-escaped / no-space variants mirroring the bracket suite above
+    # (:2300-2358) but WITHOUT brackets — the swallow is not a bracket-only defect.
+    for line, secret in [
+        (
+            'cfg "key": "aws_secret_access_key": "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY"',
+            "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY",
+        ),
+        (
+            "key: my_application_password='opaquevaluewithnoprefix123'",
+            "opaquevaluewithnoprefix123",
+        ),
+        # Unspaced chain — the value class contains `=`, so `label=value` is absorbed
+        # whole and a guard that only inspects PAST the value's end misses it entirely
+        # (the same trap the bracketed guard's first attempt hit, :2316-2319).
+        (
+            "key:application_specific_api_key=abcdefghij1234567890",
+            "abcdefghij1234567890",
+        ),
+    ]:
+        out = redaction.redact_text(line)
+        assert secret not in out, out
+        assert _any_marker_in(out)
+
+    # Probe controls (must stay green before AND after #436).
+    # No swallowed inner label: the guard's lookahead never engages, so ordinary
+    # single-label redaction is byte-identical.
+    assert redaction.redact_text("password = realsecret1234567890") == (
+        "password = [redacted: secret value]"
     )
+    # The length tail on the guard's inner value is load-bearing: without it, the outer
+    # candidate would refuse to start whenever it merely SEES a later label, whether or
+    # not that label's own value is itself redactable. Here the inner label's value
+    # (`short`, 5 chars) is below the redaction threshold, so a naive guard would refuse
+    # the outer AND leave the inner unmatched — a total miss on a value the pre-#436
+    # pattern still caught whole. The tail keeps the outer eligible whenever the inner
+    # alone could never have been redacted, so this chain stays FULLY redacted.
+    assert redaction.redact_text("token = aaaaaaaaaaaakey=short") == (
+        "token = [redacted: secret value]"
+    )
+
+
+def test_generalized_guard_redacts_the_tail_of_an_unspaced_chain():
+    # #436 generalizes the swallow guard to be UNCONDITIONAL (previously conditioned on
+    # `key_bracket`, #434). It is not a leak either way — both forms redact the secret —
+    # but the unconditional guard changes which SPAN a non-bracket chain redacts: this
+    # input's own value run reaches the later `api_key` label with a redactable value
+    # behind it, so it refuses too, same as a bracketed candidate would.
+    #
+    # Before #436 (conditional, pinned by this test's prior form): the whole chain was
+    # masked — `key:[redacted: secret value]`. After (unconditional, by design): only the
+    # tail — `key:api_key=[redacted: secret value]`, a narrower span and a deliberate
+    # behavior change to inputs #434 never touched.
+    assert redaction.redact_text("key:api_key=leftovervalue123456789") == (
+        "key:api_key=[redacted: secret value]"
+    )
+
+
+def test_bracketed_swallow_guard_has_no_distance_limit():
+    # Guard 1 (the `(?(key_bracket)...)` conditional in LABELLED_VALUE_PATTERN) is
+    # deliberately UNBOUNDED — it restores #434's shipped protection exactly, at ANY
+    # distance, with no peek cap. Only guard 2 (unconditional, the NEW #436 coverage) is
+    # bounded at `_SWALLOW_GUARD_PEEK`. This pins that guard 1's reach has no cliff at
+    # all: a bracketed swallow is still caught far past where the non-bracket boundary
+    # test below stops protecting the non-bracket shape, and even far past
+    # `_SWALLOW_GUARD_PEEK` itself.
+    secret = "Zq7realsecret1234567890"
+
+    def bracket_swallow_line(gap: int) -> str:
+        return 'cfg["token"] = ' + "a" * gap + "api_key = " + secret
+
+    for gap in (redaction._SWALLOW_GUARD_PEEK + 1, 100_000):
+        out = redaction.redact_text(bracket_swallow_line(gap))
+        assert secret not in out, (gap, out)
+
+
+def test_non_bracket_swallow_guard_peek_boundary_is_pinned():
+    # `_SWALLOW_GUARD_PEEK` bounds ONLY the non-bracket swallow guard (guard 2) — the NEW
+    # coverage #436 adds, which `main` never had at any distance for this shape. This is
+    # NOT a regression versus `main` (see the module comment and
+    # test_bracketed_swallow_guard_has_no_distance_limit for the bracketed shape, which
+    # keeps its shipped unbounded protection); it is the LIMIT OF THE NEW COVERAGE this
+    # cap buys back from the #439-shaped quadratic risk an unbounded peek would reopen.
+    # This pins the exact cliff so a future change to the constant is a conscious,
+    # reviewed edit, not a silent shift.
+    #
+    # A literal 1024, not only a comparison against the constant: a test that reads its
+    # own expected value from `_SWALLOW_GUARD_PEEK` can never fail when THAT constant is
+    # the thing that regressed (repo lesson: derived expectations are tautological).
+    assert redaction._SWALLOW_GUARD_PEEK == 1024
+
+    cap = redaction._SWALLOW_GUARD_PEEK
+    secret = "Zq7realsecret1234567890"
+
+    def non_bracket_swallow_line(gap: int) -> str:
+        return "key: " + "a" * gap + "api_key = " + secret
+
+    # gap == cap: the inner `api_key` label still falls within the peek, so guard 2 still
+    # refuses the outer non-bracket candidate and the engine advances to redact the inner
+    # one instead — same shape as
+    # test_labelled_match_does_not_swallow_a_later_sensitive_label, at the boundary
+    # distance.
+    at_cap = redaction.redact_text(non_bracket_swallow_line(cap))
+    assert secret not in at_cap, at_cap
+
+    # gap == cap + 1: the inner label falls one character past the peek, guard 2's
+    # lookahead never reaches it, the outer non-bracket candidate is accepted, and it
+    # swallows the inner label (and the real secret behind it) whole — the accepted,
+    # pinned limit of the new coverage the module comment documents. This assertion is
+    # the one that must FAIL if the boundary arithmetic is flipped (an off-by-one that
+    # makes the peek reach one character too far, or stop one character short).
+    past_cap = redaction.redact_text(non_bracket_swallow_line(cap + 1))
+    assert secret in past_cap, past_cap
 
 
 def test_bracket_key_redacts_ordinary_code_by_design():
