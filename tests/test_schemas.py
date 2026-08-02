@@ -781,9 +781,13 @@ def _wire_catalog_bytes() -> int:
 # cursor). → ~84,309 (#411: QuestionParam/TaskParam/TaskDryRunParam state that a blank
 # `question`/`task` is rejected before any model call; the rule is enforced at runtime, not by a
 # schema `minLength`, so the description is the only place a client can discover it pre-spend).
+# → ~84,757 (#414: the three sync tools' Progress & recovery paragraphs name `codex_job_status`
+# as the recovery chain's polling step and state that some MCP clients background a long call
+# before the server's own deadline, so `timeout_seconds` bounds the run, not necessarily the
+# client's inline wait — the job record covers that case too).
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 84_500
+CATALOG_BYTE_CAP = 85_000
 
 
 def test_wire_catalog_under_cap():
@@ -942,7 +946,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-68"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-69"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

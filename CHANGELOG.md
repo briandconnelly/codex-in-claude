@@ -41,6 +41,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   wrong end of the line and leave the secret intact beside a stray marker. No shipped pattern
   triggers the fallback (all four grouped matchers are leading-group), so this is a guarantee for
   future ones. No agent-visible surface changes, so no `fingerprint` bump.
+- **The three sync tools' Progress & recovery paragraphs undersold job-record recovery**
+  (#414). `codex_consult`/`codex_review_changes`/`codex_delegate` already recorded every sync
+  call as a job, but the paragraph's recovery sentence named only `codex_job_list`→
+  `codex_job_result`, omitting `codex_job_status` as the polling step in between. It also framed
+  recovery as a fallback for a dropped connection, when some MCP clients background a long tool
+  call before the server's own deadline — `timeout_seconds` bounds the run, not necessarily the
+  client's inline wait, and the job record is recoverable either way. Wording only, so it bumps
+  `FINGERPRINT` (`schema-68` → `schema-69`) without moving `RESULT_FORMAT`; not breaking.
 - **`Meta.timeout_seconds` published a bare, undescribed field** — the only semantically-loaded
   member of `Meta` with no description, unlike its neighbours `roots_source` and `tier` (#413). It
   now documents which deadline the value is, by envelope: a synchronous call that runs Codex

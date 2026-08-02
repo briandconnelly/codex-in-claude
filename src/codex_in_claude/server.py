@@ -2797,8 +2797,9 @@ async def codex_consult(
     high-`reasoning_effort` or broad repo-grounded consult that may exceed it, prefer
     `codex_consult_async` (a background job, built-in default 1800s deadline; poll
     `codex_job_status`). Coarse `notifications/progress` streams while it blocks when your client
-    requests it; the detached run (`meta.job_id`) is recoverable via
-    `codex_job_list`→`codex_job_result` if the connection drops."""
+    requests it; some MCP clients background a long call before the deadline, so
+    `timeout_seconds` bounds the run, not necessarily the inline wait — either way the detached run
+    (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_status`→`codex_job_result`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2895,9 +2896,10 @@ async def codex_review_changes(
     expires the run is terminated and its partial output is not recoverable or resumable, so for a
     multi-file or whole-branch review that may exceed it, prefer `codex_review_changes_async` (a
     background job, built-in default 1800s deadline; poll `codex_job_status`). Coarse
-    `notifications/progress` streams while it blocks when your client requests it; the detached run
-    (`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_result` if the connection
-    drops."""
+    `notifications/progress` streams while it blocks when your client requests it; some MCP
+    clients background a long call before the deadline, so `timeout_seconds` bounds the run, not
+    necessarily the inline wait — either way the detached run (`meta.job_id`) is recoverable via
+    `codex_job_list`→`codex_job_status`→`codex_job_result`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
@@ -2984,8 +2986,10 @@ async def codex_delegate(
     expires the run is terminated and its partial output is not recoverable or resumable, so for a
     substantial or multi-file task that may exceed it, prefer `codex_delegate_async` (a background
     job, built-in default 1800s deadline; poll `codex_job_status`). Coarse `notifications/progress`
-    streams while it blocks when your client requests it; the detached run (`meta.job_id`) is
-    recoverable via `codex_job_list`→`codex_job_result` if the connection drops."""
+    streams while it blocks when your client requests it; some MCP clients background a long call
+    before the deadline, so `timeout_seconds` bounds the run, not necessarily the inline wait —
+    either way the detached run (`meta.job_id`) is recoverable via
+    `codex_job_list`→`codex_job_status`→`codex_job_result`."""
     d = config.defaults()
     timeout = config.clamp_timeout(
         timeout_seconds if timeout_seconds is not None else d.timeout_seconds
