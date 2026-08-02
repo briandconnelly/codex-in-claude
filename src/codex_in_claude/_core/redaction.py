@@ -490,6 +490,37 @@ def _diff_path_from_header(line: str) -> str:
 # every userinfo run stops at) cannot drift between the two emission sites it used to have.
 _SECRET_VALUE_MARKER = "[redacted: secret value]"
 
+# Emitted instead of `_SECRET_VALUE_MARKER` when the rebuild step (below) determines a merged
+# interval may not cover the whole credential (#446): a userinfo credential carrying a
+# character the connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there)
+# can never be SPANNED by those matchers, so an earlier matcher firing on its prefix leaves the
+# remainder beside a marker that otherwise claims completeness it does not have. Deliberately
+# NOT a substring of `_SECRET_VALUE_MARKER` — pinned by
+# `test_partial_marker_does_not_contain_the_plain_marker` — so an `in`-style assertion
+# elsewhere cannot mistake one for the other.
+_PARTIAL_SECRET_VALUE_MARKER = "[redacted: possibly partial secret value]"
+
+# The trailing-check safe set (#446): a character right after a merged interval that is NOT
+# one of these means the replaced text may be a truncated fragment of a longer secret rather
+# than the whole of it, since none of these can plausibly continue a credential's own value
+# run. Whitespace plus the punctuation a credential is conventionally followed by: a closing
+# quote/bracket/brace, a userinfo `@`, a query/header/list separator (`&`, `,`, `;`), or a
+# comparison/closing angle bracket (`>`). Settled by three plan-review rounds; do not
+# "simplify" it.
+_SAFE_TERMINATORS = frozenset(" \t\n\r\v\f" + "\"'\\@&,;)]}>")
+
+# The leading-continuation class (#446, a round-2 plan-review finding): `_VALUE_CHARS` MINUS
+# `=`. Derived from `_VALUE_CHARS` — not retyped — so the two classes cannot silently diverge
+# if `_VALUE_CHARS` ever changes; `_VALUE_CHARS` is `[A-Za-z0-9._~+/=-]`, so stripping its
+# brackets and removing `=` leaves exactly this set. `=` is excluded on purpose (a round-3
+# finding): it is an assignment delimiter that legitimately abuts a COMPLETE vendor token
+# (`token=ghp_...`), so treating it as a leading-continuation character would wrongly mark
+# that credential partial. Every other member of `_VALUE_CHARS` can be an interior character
+# of a longer secret, so one of THOSE sitting immediately before a whole-match candidate means
+# the match may have started mid-token — the #439-bounded JWT's mid-token match
+# (`xxxeyJ…`) is the case this exists for.
+_LEADING_CONTINUATION_RE = re.compile("[" + _VALUE_CHARS[1:-1].replace("=", "") + "]")
+
 
 def _replaced_span(match: re.Match) -> tuple[int, int]:
     """The span ``match`` would replace: what follows its preserved group 1, or the whole
@@ -522,6 +553,32 @@ def _replaced_span(match: re.Match) -> tuple[int, int]:
     return match.span()
 
 
+def _interval_is_partial(line: str, start: int, end: int, leading_whole: bool) -> bool:
+    """Whether the merged interval ``line[start:end]`` may be a truncated fragment of a
+    longer secret rather than the whole of it (#446), so the emitted marker must not claim
+    completeness. Either check alone is sufficient.
+
+    **Trailing**: the character right after the interval exists and is not one of the
+    safe-terminator characters — a follower that could plausibly be more of the same value.
+    An absent follower (end of string) is unconditionally complete.
+
+    **Leading**: the interval's earliest-starting covered candidate is a whole-match one
+    (``leading_whole`` — see the fold in ``_redact_secret_values`` for how that is derived
+    across a tie) AND the character right before the interval exists and is in the
+    leading-continuation class. A whole-match candidate's span start is the true start of
+    what the pattern matched, so a continuation character sitting right before it means the
+    match itself may have begun mid-token. A candidate whose span was instead pinned at a
+    preserved group's end (a label, `://user:`, `Bearer `) does not carry this risk — that
+    boundary is deliberate, not an artifact of the pattern's own reach — which is why a
+    prefix-preserving candidate is excluded rather than merely deprioritized.
+    """
+    trailing = end < len(line) and line[end] not in _SAFE_TERMINATORS
+    leading = (
+        leading_whole and start > 0 and _LEADING_CONTINUATION_RE.match(line[start - 1]) is not None
+    )
+    return trailing or leading
+
+
 def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str, bool]:
     """Replace inline secret-looking values. ``exempt_code`` leaves provable code
     references intact — only sound for a line of source (a diff body line), so callers
@@ -534,44 +591,72 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
     collected from the original text, merged, and the line rebuilt with one marker per merged
     interval — ``SECRET_VALUE_PATTERNS``' header has the full semantics and the history.
 
+    Neither the merge NOR the marker choice can repair a value no single pattern's candidate
+    ever covered — a userinfo credential carrying `/` (or, on the arms that stop there,
+    `?`/`#`) still ends up only partly replaced (#446). What ``_interval_is_partial`` adds is
+    honesty about that: the emitted marker says so instead of claiming completeness it does
+    not have.
+
     ``SECRET_VALUE_PATTERNS`` is read at CALL time rather than bound at import, because the
     tests substitute it; precompiling the list into one merged automaton would defeat that,
     and would also lose the per-pattern identity the ``exempt_code`` test below turns on.
     """
-    spans: list[tuple[int, int]] = []
+    # Each candidate carries whether it is a "whole-match" one (``not match.lastindex``) —
+    # the marker-choice input the merge below threads alongside the span itself (#446).
+    candidates: list[tuple[int, int, bool]] = []
     for pattern in SECRET_VALUE_PATTERNS:
         # The #421 exemption belongs to exactly one pattern, compared by identity as always.
         exempting = exempt_code and pattern is LABELLED_VALUE_PATTERN
         for match in pattern.finditer(line):
             if exempting and _is_code_reference(match):
                 continue  # an exempted candidate contributes no span
-            spans.append(_replaced_span(match))
-    if not spans:
+            span_start, span_end = _replaced_span(match)
+            candidates.append((span_start, span_end, not match.lastindex))
+    if not candidates:
         return line, False
 
-    # Fold left over spans sorted by (start, end). STRICT overlap merges; touching does not,
-    # so abutting candidates keep two markers exactly as two `re.sub` passes did. No span can
-    # be empty: every pattern in SECRET_VALUE_PATTERNS requires literal characters after its
-    # preserved group, so a zero-length candidate cannot occur and nothing here handles one.
-    spans.sort()
-    merged: list[tuple[int, int]] = []
-    start, end = spans[0]
-    for span_start, span_end in spans[1:]:
+    # Fold left over candidates sorted by (start, end). STRICT overlap merges; touching does
+    # not, so abutting candidates keep two markers exactly as two `re.sub` passes did. No span
+    # can be empty: every pattern in SECRET_VALUE_PATTERNS requires literal characters after
+    # its preserved group, so a zero-length candidate cannot occur and nothing here handles
+    # one.
+    #
+    # ``leading_whole`` tracks whether EVERY candidate tied for the merged interval's leftmost
+    # start is a whole-match one. A tie is not hypothetical — a vendor pattern with no group
+    # (`gh[pousr]_...`) and the labelled pattern's group-bounded candidate
+    # (`token=gh[pousr]_...`) commonly start at the identical position — and resolving it by
+    # AND-ing rather than by picking whichever candidate happened to sort first keeps the
+    # marker choice independent of ``SECRET_VALUE_PATTERNS``' list order, matching the
+    # order-invariance #445 already established for the span set itself. Only a candidate
+    # that starts at that same leftmost position can affect it; one merged in later (because
+    # its span overlaps the interval already grown by a wider candidate) says nothing about
+    # how the interval's LEFT edge arose.
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    merged: list[tuple[int, int, bool]] = []
+    start, end, leading_whole = candidates[0]
+    for span_start, span_end, whole_match in candidates[1:]:
         if span_start < end:
             end = max(end, span_end)
+            if span_start == start:
+                leading_whole = leading_whole and whole_match
         else:
-            merged.append((start, end))
-            start, end = span_start, span_end
-    merged.append((start, end))
+            merged.append((start, end, leading_whole))
+            start, end, leading_whole = span_start, span_end, whole_match
+    merged.append((start, end, leading_whole))
 
     # Rebuild from the ORIGINAL text. A preserved prefix survives because it lies outside
     # every merged interval, not because a replacement emitted it — so a wider candidate
     # covering it takes it with the secret, which is the whole point of #445.
     out: list[str] = []
     cursor = 0
-    for span_start, span_end in merged:
+    for span_start, span_end, interval_leading_whole in merged:
         out.append(line[cursor:span_start])
-        out.append(_SECRET_VALUE_MARKER)
+        marker = (
+            _PARTIAL_SECRET_VALUE_MARKER
+            if _interval_is_partial(line, span_start, span_end, interval_leading_whole)
+            else _SECRET_VALUE_MARKER
+        )
+        out.append(marker)
         cursor = span_end
     out.append(line[cursor:])
     return "".join(out), True

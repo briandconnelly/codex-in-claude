@@ -12,6 +12,15 @@ import pytest
 from codex_in_claude._core import redaction
 
 
+def _any_marker_in(text: str) -> bool:
+    """Whether EITHER redaction marker — the plain one or #446's partial variant — appears
+    in ``text``. For tests whose contract is "this value must stay redacted", not which of
+    the two markers it gets; the trailing/leading checks that pick between them are pinned
+    separately (`test_complete_redactions_keep_the_plain_marker` and the `(`-follower cases
+    throughout this file)."""
+    return redaction._SECRET_VALUE_MARKER in text or redaction._PARTIAL_SECRET_VALUE_MARKER in text
+
+
 def test_secret_file_hunks_dropped():
     diff = "\n".join(
         [
@@ -529,10 +538,16 @@ def test_over_512_run_with_an_internal_eyj_matches_at_the_later_anchor():
     as leading residue ahead of the marker: exactly the mid-header match #439's comment
     describes as the accepted cost of the 512 boundary, pinned here with its exact
     output rather than left as a claim.
+
+    This is also the canonical case #446's leading check exists for: the match is a
+    whole-match candidate (the JWT pattern has no group), and the character right before
+    its start (`a`, the last of the `eyJaaa` residue) is in the leading-continuation
+    class, so the marker now says so rather than claiming the JWT was matched from its
+    true start.
     """
     text = "eyJ" + "aaa" + "eyJ" + "a" * 510 + "." + "b" * 8 + "." + "c" * 8
     out = redaction.redact_text(text)
-    assert out == "eyJaaa[redacted: secret value]"
+    assert out == "eyJaaa[redacted: possibly partial secret value]"
     # The residue (`eyJaaa`) is 6 chars, short of the {8,512} minimum, and the marker
     # itself carries no `.` to re-anchor on, so a second pass leaves it unchanged.
     assert redaction.redact_text(out) == out
@@ -624,10 +639,14 @@ def test_the_differential_sweep_can_actually_see_a_lost_redaction(monkeypatch):
         ),
         # No scheme at all — the `://` anchor is what the match hangs on (#438).
         ("://:hunter2pass@host", "://:[redacted: secret value]@host"),
-        # A scheme the labelled pattern already ate, leaving a marker (#438's leak).
+        # A scheme the labelled pattern already ate, leaving a marker (#438's leak). The
+        # labelled value stops at the first `:` (not in `_VALUE_CHARS`), so its follower is
+        # that `:` — not a safe terminator (#446), since a `:` can legitimately continue a
+        # LABELLED value elsewhere (`key=user:p1:p2:p3`) even though here it is a URL scheme
+        # separator the trailing check cannot tell apart from that.
         (
             "key=abcdefghijklmnopx://:hunter2@host",
-            "key=[redacted: secret value]://:[redacted: secret value]@host",
+            "key=[redacted: possibly partial secret value]://:[redacted: secret value]@host",
         ),
         # Two empty-username candidates: `sub` must reach the second.
         (
@@ -768,45 +787,60 @@ _TOKEN_15 = "s3cr3tOpaqueTok"  # 15 — must NOT match
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        # The boundary itself, from both sides.
-        (f"https://{_TOKEN_16}:@host/path", "https://[redacted: secret value]:@host/path"),
+        # The boundary itself, from both sides. This shape's replaced span always ends
+        # right at the literal `:` of its own `:@` closing lookahead (#446): that `:` is
+        # not a safe terminator (it can legitimately continue a LABELLED value elsewhere,
+        # `key=user:p1:p2:p3`), so every match of THIS pattern gets the partial marker even
+        # though the token itself is always matched whole — a known, accepted
+        # over-caution of a trailing check that cannot see per-pattern guarantees.
+        (
+            f"https://{_TOKEN_16}:@host/path",
+            "https://[redacted: possibly partial secret value]:@host/path",
+        ),
         (f"https://{_TOKEN_15}:@host/path", f"https://{_TOKEN_15}:@host/path"),
         # A longer opaque token.
         (
             "https://s3cr3tOpaqueToken123456789:@api.example.com/v1",
-            "https://[redacted: secret value]:@api.example.com/v1",
+            "https://[redacted: possibly partial secret value]:@api.example.com/v1",
         ),
         # Percent-encoding and punctuation inside the admitted class.
         (
             "https://tok%2Fen.with-punct_123~+=:@host",
-            "https://[redacted: secret value]:@host",
+            "https://[redacted: possibly partial secret value]:@host",
         ),
         # No scheme at all — the `://` anchor carries the match (#438).
-        (f"://{_TOKEN_16}:@host", "://[redacted: secret value]:@host"),
-        # A scheme already eaten by the labelled pattern's marker.
+        (f"://{_TOKEN_16}:@host", "://[redacted: possibly partial secret value]:@host"),
+        # A scheme already eaten by the labelled pattern's marker. Both markers flip: the
+        # labelled value also stops at a `:` (the scheme separator), for the same reason.
         (
             f"key=abcdefghijklmnopx://{_TOKEN_16}:@host",
-            "key=[redacted: secret value]://[redacted: secret value]:@host",
+            "key=[redacted: possibly partial secret value]"
+            "://[redacted: possibly partial secret value]:@host",
         ),
         # Two candidates of this shape: `sub` must reach the second.
         (
             f"https://{_TOKEN_16}:@h1 https://s3cr3tOtherToken99:@h2",
-            "https://[redacted: secret value]:@h1 https://[redacted: secret value]:@h2",
+            "https://[redacted: possibly partial secret value]:@h1 "
+            "https://[redacted: possibly partial secret value]:@h2",
         ),
-        # Mixed with the existing password shape, in BOTH orders — neither match
-        # may swallow the other.
+        # Mixed with the existing password shape, in BOTH orders — neither match may
+        # swallow the other. Only the username-token marker flips: the password shape's
+        # replaced span ends at `@`, a safe terminator, so it keeps the plain marker.
         (
             f"https://{_TOKEN_16}:@h1 postgres://u:s3cr3tPass@h2",
-            "https://[redacted: secret value]:@h1 postgres://u:[redacted: secret value]@h2",
+            "https://[redacted: possibly partial secret value]:@h1 "
+            "postgres://u:[redacted: secret value]@h2",
         ),
         (
             f"postgres://u:s3cr3tPass@h1 https://{_TOKEN_16}:@h2",
-            "postgres://u:[redacted: secret value]@h1 https://[redacted: secret value]:@h2",
+            "postgres://u:[redacted: secret value]@h1 "
+            "https://[redacted: possibly partial secret value]:@h2",
         ),
-        # All three userinfo shapes on one line.
+        # All three userinfo shapes on one line. Only the username-token marker (`:@`
+        # follower) flips; both password-shape markers end at `@` and stay plain.
         (
             f"https://{_TOKEN_16}:@h1 redis://:s3cr3tPw@h2 postgres://u:s3cr3tPass@h3",
-            "https://[redacted: secret value]:@h1 "
+            "https://[redacted: possibly partial secret value]:@h1 "
             "redis://:[redacted: secret value]@h2 "
             "postgres://u:[redacted: secret value]@h3",
         ),
@@ -880,8 +914,10 @@ def test_username_token_gate_counts_serialized_characters_not_decoded_ones():
     anyone who does add decoding has a test that tells them what they changed.
     """
     assert redaction.redact_text("ftp://anonymous:@host/pub") == "ftp://anonymous:@host/pub"
+    # This shape's marker always gets the partial variant (#446): its replaced span ends
+    # right at the `:@` closing lookahead's `:`, which is not a safe terminator.
     assert redaction.redact_text("ftp://%61%6E%6F%6E%79%6D%6F%75%73:@host/pub") == (
-        "ftp://[redacted: secret value]:@host/pub"
+        "ftp://[redacted: possibly partial secret value]:@host/pub"
     )
 
 
@@ -890,7 +926,10 @@ def test_username_token_redaction_is_idempotent():
     # gate, so a second pass cannot re-match and nest a marker inside a marker.
     once = redaction.redact_text(f"https://{_TOKEN_16}:@h1 redis://:s3cr3tPw@h2")
     assert redaction.redact_text(once) == once
-    assert once.count("[redacted: secret value]") == 2
+    # The username-token shape's marker (`:@` follower) is partial (#446); the
+    # empty-username password shape's marker (`@` follower) stays plain.
+    assert once.count("[redacted: possibly partial secret value]") == 1
+    assert once.count("[redacted: secret value]") == 1
 
 
 def test_username_token_redacted_in_a_source_diff_and_path_recorded():
@@ -902,7 +941,9 @@ def test_username_token_redacted_in_a_source_diff_and_path_recorded():
         ]
     )
     out, paths = redaction.redact(diff)
-    assert '+CLIENT = Api("https://[redacted: secret value]:@api.example.com")' in out
+    assert (
+        '+CLIENT = Api("https://[redacted: possibly partial secret value]:@api.example.com")' in out
+    )
     assert paths == ["app.py"]
 
 
@@ -1263,9 +1304,12 @@ def test_the_tail_sentinel_is_not_self_redacting():
             "redis://:token=s3cr3tvalue0123456789%2Ftailsegment@host",
             "redis://:[redacted: secret value]@host",
         ),
+        # This row's replaced span ends at the username-token shape's own `:@` closing
+        # `:`, which is not a safe terminator (#446) — same over-caution as elsewhere in
+        # this file for that shape, not a leftover fragment.
         (
             "redis://token=s3cr3tvalue0123456789%2Ftailsegment:@host",
-            "redis://[redacted: secret value]:@host",
+            "redis://[redacted: possibly partial secret value]:@host",
         ),
         # A vendor prefix rather than a label, in each position it can fragment.
         (
@@ -1274,7 +1318,7 @@ def test_the_tail_sentinel_is_not_self_redacting():
         ),
         (
             "https://sk-aaaaaaaaaaaaaaaaaaaaaaaa%2Ftailsegment:@api.example.com",
-            "https://[redacted: secret value]:@api.example.com",
+            "https://[redacted: possibly partial secret value]:@api.example.com",
         ),
         # A JWT, whose shape alone is enough to trip the earlier matcher.
         ("x://u:eyJabcdefgh.abcdefgh.abcdefgh%2Ftail@h", "x://u:[redacted: secret value]@h"),
@@ -1323,51 +1367,52 @@ def test_query_string_false_positive_is_pinned_until_442():
         # `/` is outside every userinfo run, so the named arm cannot span this password...
         (
             "redis://u:token=s3cr3tvalue0123456789%2Fmore/tail@host",
-            "redis://u:token=[redacted: secret value]%2Fmore/tail@host",
+            "redis://u:token=[redacted: possibly partial secret value]%2Fmore/tail@host",
         ),
         (
             "redis://u:ghp_aaaaaaaaaaaaaaaaaaaa/tailsegment@host",
-            "redis://u:[redacted: secret value]/tailsegment@host",
+            "redis://u:[redacted: possibly partial secret value]/tailsegment@host",
         ),
         # ...and `?`/`#` are outside the empty-username and username-token runs (#440).
         (
             "redis://:token=s3cr3tvalue0123456789?tailsegment@host",
-            "redis://:token=[redacted: secret value]?tailsegment@host",
+            "redis://:token=[redacted: possibly partial secret value]?tailsegment@host",
         ),
-        ("amqp://sk-abcdefghijklmnopqrst?tail:@host", "amqp://[redacted: secret value]?tail:@host"),
+        (
+            "amqp://sk-abcdefghijklmnopqrst?tail:@host",
+            "amqp://[redacted: possibly partial secret value]?tail:@host",
+        ),
     ],
 )
-def test_a_credential_the_userinfo_runs_cannot_span_is_only_partly_redacted(
-    text, expected, monkeypatch
-):
+def test_a_credential_the_userinfo_runs_cannot_span_is_only_partly_redacted(text, expected):
     """Characterization of what #443's reorder does NOT close, so the boundary is explicit.
 
     The reorder closes every shape the connection-string matchers can SPAN. A credential
     carrying a character those runs exclude was never matchable by them in the first place —
-    ordering cannot help — so an earlier matcher firing on its prefix still emits a marker
-    with the remainder beside it. Order-invariant: identical before and after #443.
-
-    Recorded because #443's own text claims the bug closes for all three userinfo shapes,
-    and that is true only within the runs' character domain. Tracked separately as #446
-    rather than silently left; a fix there should CONVERT this test, not delete it.
+    ordering cannot help — so an earlier matcher firing on its prefix still leaves the
+    remainder beside a marker. #446 does not close that miss — no pattern can produce a
+    candidate covering the excluded character, so the value is still only partly replaced —
+    it closes the DISHONESTY of the marker claiming otherwise. Each follower here (`%`, `/`,
+    `?`) is not one of the safe-terminator characters the trailing check treats as proof the
+    value ended, so the emitted marker is `[redacted: possibly partial secret value]` rather
+    than the plain one: the reader can no longer conclude the credential was fully handled from
+    the marker alone. This is the trailing half of #446 (a leading-continuation miss is
+    exercised in `test_a_mid_token_jwt_match_is_marked_partial`); none of these four rows has a
+    leading-continuation predecessor, so only the trailing check is in play here.
 
     Exact output rather than a `not in`/`endswith` pair, per this file's convention: those
-    weaker forms pass on any output that merely keeps the tail and a marker somewhere, so
-    they would not notice the redaction moving to the wrong span — including an output that
-    discarded the scheme and delimiters entirely.
+    weaker forms pass on any output that merely keeps the tail and a marker somewhere, so they
+    would not notice the redaction moving to the wrong span, or the marker silently reverting
+    to the plain (complete-claiming) one.
 
-    The order-invariance half is now VACUOUS, and is left in place only because the brief for
-    #445 held every unaffected test byte-for-byte. It once carried weight: re-running under the
-    pre-#443 ordering proved this was a characterization of a pre-existing limit rather than of
-    something #443 introduced. Under the span-merge engine order cannot affect output at all —
-    the merged span set is a per-pattern union over the original text — so that second assertion
-    can no longer fail and proves nothing. What this test is still worth is the exact-output
-    characterization of #446: a credential the userinfo runs cannot SPAN is only partly redacted,
-    and no merge reaches it because no single pattern produces a candidate covering it. #446's
-    fix should CONVERT this test — retiring the monkeypatched half with it — not delete it.
+    The miss itself remains this module's documented best-effort boundary: no merge can widen
+    a single matcher's span, so a userinfo credential carrying `/` (or, on the arms that stop
+    there, `?`/`#`) is never fully redacted by this pipeline. #446's fix does not repair that —
+    it cannot, the excluded character is still unreachable — it only stops the output from
+    claiming completeness it does not have. #446's fixer CONVERTED this test rather than
+    deleting it, retiring the now-vacuous pre-#443-order monkeypatch half along with it (under
+    the #445 span-merge engine, order cannot affect output at all).
     """
-    assert redaction.redact_text(text) == expected
-    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
     assert redaction.redact_text(text) == expected
 
 
@@ -1404,10 +1449,13 @@ _STRANDED_TAIL_CASES = [
     (f"token={_XOXB_20}.tailsegment", "token=[redacted: secret value]"),
     # The same collision in the USERNAME slot of a connection string, where the merge has
     # to keep the two independent credentials apart: the labelled span (username) and the
-    # connection-string password span do not overlap, so both markers survive.
+    # connection-string password span do not overlap, so both markers survive. The first
+    # marker is partial (#446): the labelled value stops at the `:` separating username
+    # from password, which is not a safe terminator. The second (the password itself,
+    # ending at `@`) stays plain.
     (
         f"x://token={_GHP_20}-tail:pw@h",
-        "x://token=[redacted: secret value]:[redacted: secret value]@h",
+        "x://token=[redacted: possibly partial secret value]:[redacted: secret value]@h",
     ),
 ]
 
@@ -1438,6 +1486,16 @@ def test_adjacent_spans_get_two_markers():
     abut emit two markers, exactly as two successive `re.sub` passes did. Asserted with
     the adjacency VERIFIED rather than assumed: a corpus whose spans happened to overlap
     (or not touch at all) would make this a test of nothing.
+
+    Both markers are partial (#446), and correctly so: two credential shapes glued
+    together with no separator at all is indistinguishable, from the trailing/leading
+    checks' point of view, from ONE longer secret a matcher's own character class split
+    in two — precisely the shape #446 exists to flag. AKIA's span sees `g` (the vendor
+    prefix's own first letter) right after it, not a safe terminator; the vendor
+    pattern's span is a whole-match candidate with AKIA's last letter right before it, in
+    the leading-continuation class. Neither check knows AKIA is fixed-length — that
+    pattern-specific fact is exactly what this general, per-character heuristic cannot
+    see, so it hedges instead of asserting completeness it cannot back up.
     """
     text = _AKIA_KEY + _GHP_20
     spans = sorted(
@@ -1447,7 +1505,9 @@ def test_adjacent_spans_get_two_markers():
     # replaced span; the guard is what makes the adjacency claim checkable.
     assert len(spans) == 2 and spans[0][1] == spans[1][0], f"adjacency is not genuine: {spans}"
     out, redacted = redaction._redact_secret_values(text)
-    assert out == "[redacted: secret value][redacted: secret value]"
+    assert out == (
+        "[redacted: possibly partial secret value][redacted: possibly partial secret value]"
+    )
     assert redacted is True
 
 
@@ -1465,13 +1525,20 @@ def test_exemption_is_judged_against_the_original_line_not_the_accumulator():
     Candidates are now collected by `finditer` over the ORIGINAL line, so the lead scan
     reads `secretAKIA…` and the sensitive-label guard fires: BOTH values are redacted. The
     delta only ever removes exemptions, which is the safe direction for this boundary.
+
+    Both markers are partial (#446), for two independent reasons: the AKIA marker's
+    follower is `_` (not a safe terminator, and its own leading check also fires — the
+    `t` of `secret` sits right before its whole-match span), and the labelled marker's
+    value stops at `(`, the same call-follower shape this file's `(` cases concentrate
+    around.
     """
     line = "+secretAKIAABCDEFGHIJKLMNOP_key = helper_function_name(x)"
     diff = f"diff --git a/app.py b/app.py\n{line}"
     out, paths = redaction.redact(diff)
     assert out == (
         "diff --git a/app.py b/app.py\n"
-        "+secret[redacted: secret value]_key = [redacted: secret value](x)"
+        "+secret[redacted: possibly partial secret value]_key = "
+        "[redacted: possibly partial secret value](x)"
     )
     assert paths == ["app.py"]
 
@@ -1527,6 +1594,70 @@ def test_a_non_participating_group_1_falls_back_to_the_full_span(monkeypatch):
     out, redacted = redaction._redact_secret_values(text)
     assert out == "xx [redacted: secret value] yy"
     assert redacted is True
+
+
+# --- #446: partial-marker honesty ---------------------------------------------
+# A credential carrying a character the connection-string runs exclude (`/`, or `?`/`#` on
+# the arms that stop there) can never be SPANNED by those matchers, so an earlier matcher
+# firing on its prefix leaves the remainder beside a marker that claims completeness it does
+# not have — `test_a_credential_the_userinfo_runs_cannot_span_is_only_partly_redacted` pins
+# that exact shape. These tests cover the two checks that decide which marker a merged
+# interval gets, and the properties the two markers must hold relative to each other.
+
+
+def test_a_mid_token_jwt_match_is_marked_partial():
+    """The leading check (a plan-review round-2 finding), pinned directly.
+
+    `xxxeyJ…`: the JWT pattern has no group, so its candidate is a whole-match one, and its
+    true start (`eyJ`, not the leading `xxx`) is immediately preceded by `x` — a member of
+    the leading-continuation class — so the match may have begun mid-token. Marked partial.
+
+    Its complement, `token=ghp_<20 a's>`: the vendor pattern's whole-match candidate for
+    `ghp_...` ties, at the exact same span, with `LABELLED_VALUE_PATTERN`'s prefix-preserving
+    candidate for the same value (both start right after `=`) — the fold in
+    `_redact_secret_values` ANDs whole-match flags across a tie at a merged interval's
+    leftmost start, so that alone would already keep this plain. It stays plain for a second,
+    independent reason too: the character right before the value is `=`, which the
+    leading-continuation class deliberately excludes (round-3 finding) — an assignment
+    delimiter legitimately abuts a COMPLETE vendor token, unlike every other member of
+    `_VALUE_CHARS`, which can be an interior character of a longer secret.
+    """
+    jwt_body = "a" * 30 + "." + "b" * 10 + "." + "c" * 10
+    partial_text = f"xxxeyJ{jwt_body}"
+    out = redaction.redact_text(partial_text)
+    assert out == "xxx[redacted: possibly partial secret value]"
+
+    complete_text = "token=" + "ghp_" + "a" * 20
+    out2 = redaction.redact_text(complete_text)
+    assert out2 == "token=[redacted: secret value]"
+
+
+def test_partial_marker_does_not_contain_the_plain_marker():
+    # Pinned so an `in`-style assertion elsewhere (there are many in this file) cannot
+    # silently pass against the wrong marker: if the partial marker ever grew the plain
+    # one as a substring, `_any_marker_in`-style checks would stop distinguishing them.
+    assert redaction._SECRET_VALUE_MARKER not in redaction._PARTIAL_SECRET_VALUE_MARKER
+
+
+def test_partial_marker_is_idempotent():
+    # Re-running redact_text over emitted partial-marker text must be a fixed point — the
+    # same guarantee the plain marker already carries throughout this file.
+    text = "redis://u:token=s3cr3tvalue0123456789%2Fmore/tail@host"
+    once = redaction.redact_text(text)
+    assert "[redacted: possibly partial secret value]" in once
+    assert redaction.redact_text(once) == once
+
+
+@pytest.mark.parametrize("char", sorted(redaction._SAFE_TERMINATORS))
+def test_complete_redactions_keep_the_plain_marker(char):
+    # One case per safe-terminator member, walking the whole set rather than a handful of
+    # representative characters — the same discipline
+    # `test_password_class_covers_every_character_it_claims` uses for the userinfo classes,
+    # so a member quietly dropped from `_SAFE_TERMINATORS` fails here rather than only in a
+    # narrower, easy-to-miss corpus.
+    text = f"token=abcdefghijklmnop{char}tail"
+    out = redaction.redact_text(text)
+    assert out == f"token=[redacted: secret value]{char}tail"
 
 
 # --- free-text redaction (#58) ----------------------------------------------
@@ -1705,7 +1836,10 @@ _MUST_REDACT = [
 def test_credential_still_redacted_in_diff(line: str):
     diff = f"diff --git a/app.py b/app.py\n+{line}"
     out, paths = redaction.redact(diff)
-    assert "[redacted: secret value]" in out
+    # Several of these values are immediately followed by `(` — not a safe terminator
+    # (#446) — so some rows get the partial marker rather than the plain one; this test's
+    # contract is only that the credential stays redacted, not which marker it gets.
+    assert _any_marker_in(out)
     assert paths == ["app.py"]
 
 
@@ -1732,7 +1866,10 @@ _CONFIG_DIFFS = [
 @pytest.mark.parametrize("diff", _CONFIG_DIFFS)
 def test_non_source_file_gets_no_code_exemption(diff: str):
     out, _ = redaction.redact(diff)
-    assert "[redacted: secret value]" in out
+    # Every value here is immediately followed by `(` — not a safe terminator (#446) — so
+    # the marker is the partial variant; this test's contract is only that redaction
+    # happens at all, not which marker it gets.
+    assert _any_marker_in(out)
 
 
 def test_vendor_shape_still_redacted_inside_exempt_context():
@@ -1748,7 +1885,9 @@ def test_redact_text_does_not_exempt_code_references():
     # Prose carries no syntax guarantee, so free text stays conservatively redacted.
     text = "token = _placeholder_seed(text)"
     assert redaction.redact_text(text) != text
-    assert "[redacted: secret value]" in redaction.redact_text(text)
+    # `(` right after the value is not a safe terminator (#446), so this gets the partial
+    # marker; the contract here is only that redaction happened.
+    assert _any_marker_in(redaction.redact_text(text))
 
 
 def test_authorization_header_line_is_not_treated_as_source():
@@ -1756,7 +1895,7 @@ def test_authorization_header_line_is_not_treated_as_source():
     # it gets prose's conservative treatment rather than the code-reference exemption.
     line = "Authorization: token = _placeholder_seed(text)"
     out, _ = redaction.redact(f"diff --git a/app.py b/app.py\n{line}")
-    assert "[redacted: secret value]" in out
+    assert _any_marker_in(out)
 
 
 # --- quoted keys (#432) ------------------------------------------------------
@@ -1838,7 +1977,10 @@ _QUOTED_KEY_IN_SOURCE = [
 def test_quoted_key_never_gets_code_exemption(line: str):
     diff = f"diff --git a/app.py b/app.py\n{line}"
     out, paths = redaction.redact(diff)
-    assert "[redacted: secret value]" in out
+    # Three of these four values are immediately followed by `(` — not a safe terminator
+    # (#446) — so those rows get the partial marker; this test's contract is only that no
+    # quoted key ever gets the code exemption, not which marker the value ends up with.
+    assert _any_marker_in(out)
     assert paths == ["app.py"]
 
 
@@ -1907,7 +2049,9 @@ def test_bracket_key_with_exemption_triggering_follower_is_redacted():
     line = '+cfg["password"]["key"] = helper_function_name_here(x)'
     diff = f"diff --git a/app.py b/app.py\n{line}"
     out, paths = redaction.redact(diff)
-    assert "[redacted: secret value]" in out
+    # `(` right after the value is not a safe terminator (#446), so this gets the partial
+    # marker; the point of this test is the fail-closed rejection, not the marker text.
+    assert _any_marker_in(out)
     assert "helper_function_name_here" not in out
     assert paths == ["app.py"]
 
@@ -2044,5 +2188,7 @@ def test_bracket_key_redacts_ordinary_code_by_design():
     line = '+token["refresh_token"] = self.refresh_token_generator(user, scope)'
     diff = f"diff --git a/app.py b/app.py\n{line}"
     out, paths = redaction.redact(diff)
-    assert "[redacted: secret value]" in out
+    # `(` right after the value is not a safe terminator (#446), so this gets the partial
+    # marker; the point of this test is that it is masked at all, not the marker text.
+    assert _any_marker_in(out)
     assert paths == ["app.py"]

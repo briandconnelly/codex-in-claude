@@ -118,7 +118,10 @@ version.
 
 Secret-looking values are redacted from every free-text surface before it leaves the plugin —
 `summary`, `findings`/`questions`/`assumptions`/`next_steps`, and `raw_response.text` — in addition
-to gathered diffs. Inline matches become `[redacted: secret value]`. This is **best-effort
+to gathered diffs. Inline matches become `[redacted: secret value]`, or
+`[redacted: possibly partial secret value]` when the matched text's neighboring characters don't
+look like a safe boundary, so the replaced span may not cover the whole credential — the marker
+then says so rather than claiming completeness it doesn't have. This is **best-effort
 defense-in-depth, not a guarantee**: it covers content the plugin itself surfaces, not whatever Codex
 may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
 

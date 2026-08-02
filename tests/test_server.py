@@ -3521,11 +3521,15 @@ def test_internal_error_result_omits_empty_exception_detail(clean_env, tmp_path)
 
 def test_spawn_failure_envelope_redacts_secret_in_exception_text(clean_env, tmp_path):
     # F10: the spawn-failure internal_error is a second exception-text sink.
+    from codex_in_claude._core import redaction
+
     exc = OSError("cannot exec /home/AKIAIOSFODNN7EXAMPLE/worker")
     res = server._spawn_failure_envelope(exc, _meta_for(tmp_path))
     msg = res["error"]["message"]
     assert "AKIAIOSFODNN7EXAMPLE" not in msg
-    assert "[redacted: secret value]" in msg
+    # The AWS key is immediately followed by `/`, not a safe terminator (#446), so this
+    # gets the partial marker; the point of this test is that the key is masked at all.
+    assert redaction._SECRET_VALUE_MARKER in msg or redaction._PARTIAL_SECRET_VALUE_MARKER in msg
     # The safe exception class name is preserved, consistent with the other sinks.
     assert "OSError" in msg
 
