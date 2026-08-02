@@ -635,7 +635,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 8197
+          "size_bytes": 8482
         }
       },
       "mimeType": "application/schema+json",
@@ -942,7 +942,7 @@
           },
           "protocol_revision": {
             "default": "2025-11-25",
-            "description": "The MCP protocol revision this server targets on the wire (the `initialize` response's protocolVersion). The 2026-07-28 migration plan for this revision's deprecated features is recorded in ADR 0004 (docs/adr/0004-mcp-2026-07-28-migration.md).",
+            "description": "The MCP protocol revision this server's wire shapes are written against (the target). The installed SDK negotiates per session: a client requesting an older mutually-supported revision (e.g. 2025-06-18) gets that version back in `initialize.protocolVersion`, so a given session's negotiated value can be earlier than this field. This field states the target, not the per-session negotiation. The 2026-07-28 migration plan for this target's deprecated features is recorded in ADR 0004 (docs/adr/0004-mcp-2026-07-28-migration.md).",
             "title": "Protocol Revision",
             "type": "string"
           },
@@ -2139,7 +2139,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 8197
+          "size_bytes": 8482
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",

@@ -272,6 +272,40 @@ def test_capabilities_names_protocol_revision():
     assert res["protocol_revision"] == "2025-11-25"
 
 
+def test_protocol_revision_matches_installed_sdk_target():
+    """Dependency-drift guard (#423 Codex review, Medium): `protocol_revision` is a
+    declared TARGET, not the per-session negotiated `initialize.protocolVersion` — the
+    installed SDK's `initialize` handler
+    (`mcp/server/session.py::ServerSession._received_request`) echoes back the client's
+    requested version unchanged whenever it is one of `SUPPORTED_PROTOCOL_VERSIONS`
+    (`mcp/shared/version.py`), and falls back to `types.LATEST_PROTOCOL_VERSION`
+    (`mcp/types.py`) only when the request names something unsupported. So a
+    2025-06-18 client gets `2025-06-18` back on the wire while this field still
+    reports the target.
+
+    That target has to track the installed SDK's own default/fallback revision
+    (`mcp.types.LATEST_PROTOCOL_VERSION`) or the two silently drift apart on a
+    fastmcp/mcp upgrade that moves the SDK's preferred revision without this literal
+    moving. Both assertions below use that constant, plus `SUPPORTED_PROTOCOL_VERSIONS`
+    for the weaker sanity check, so a future SDK upgrade trips this test loudly instead
+    of staleing the declared value."""
+    import mcp.types as mcp_types
+    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+
+    declared = server.codex_capabilities()["protocol_revision"]
+    assert declared in SUPPORTED_PROTOCOL_VERSIONS, (
+        f"{declared!r} is not one of the installed SDK's SUPPORTED_PROTOCOL_VERSIONS "
+        f"{SUPPORTED_PROTOCOL_VERSIONS} (mcp/shared/version.py)"
+    )
+    assert declared == mcp_types.LATEST_PROTOCOL_VERSION, (
+        f"protocol_revision ({declared!r}) no longer matches the installed SDK's own "
+        f"default/fallback revision (mcp.types.LATEST_PROTOCOL_VERSION == "
+        f"{mcp_types.LATEST_PROTOCOL_VERSION!r}) — a dependency upgrade moved the "
+        "SDK's target; update protocol_revision (and ADR 0004) deliberately rather "
+        "than leaving the declared value stale."
+    )
+
+
 def test_instructions_name_the_error_carrier():
     # F3: the capability summary (served as MCP instructions) names the carrier for
     # tool failures, so a discovery-only client need not infer it from the outputSchema.

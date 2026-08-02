@@ -1155,16 +1155,24 @@ class CapabilitiesResult(BaseModel):
         "tool result with isError: true; the error envelope is in structuredContent, "
         "and content[0].text mirrors it as JSON"
     )
-    # The MCP protocol revision this server targets on the wire (the `initialize`
-    # response's protocolVersion) — otherwise discoverable only by inspecting that
-    # response, not from this payload (#423). Kept as a plain `str`, not a `Literal`,
-    # because a future revision bump changes the value without narrowing the type.
+    # The MCP protocol revision this server's wire shapes are written against — a
+    # declared TARGET, not the per-session negotiated value (#423 Codex review): the
+    # installed SDK echoes back whatever older mutually-supported revision a client
+    # requests, so a given session's `initialize.protocolVersion` can be earlier than
+    # this field (see ADR 0004 and test_protocol_revision_matches_installed_sdk_target,
+    # which pins the target to the installed SDK's own default/fallback revision).
+    # Kept as a plain `str`, not a `Literal`, because a future revision bump changes the
+    # value without narrowing the type.
     protocol_revision: str = Field(
         default="2025-11-25",
         description=(
-            "The MCP protocol revision this server targets on the wire (the "
-            "`initialize` response's protocolVersion). The 2026-07-28 migration plan "
-            "for this revision's deprecated features is recorded in ADR 0004 "
+            "The MCP protocol revision this server's wire shapes are written against "
+            "(the target). The installed SDK negotiates per session: a client "
+            "requesting an older mutually-supported revision (e.g. 2025-06-18) gets "
+            "that version back in `initialize.protocolVersion`, so a given session's "
+            "negotiated value can be earlier than this field. This field states the "
+            "target, not the per-session negotiation. The 2026-07-28 migration plan "
+            "for this target's deprecated features is recorded in ADR 0004 "
             "(docs/adr/0004-mcp-2026-07-28-migration.md)."
         ),
     )
