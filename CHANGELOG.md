@@ -35,6 +35,70 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **An ordinary URL whose query or fragment carries an `@` is no longer masked as
+  userinfo** (#442). The named-username connection-string matcher had TWO independent
+  admissions of `?`/`#`, found and fixed across two review rounds, on the PASSWORD side
+  and the USERNAME side respectively:
+
+  - The password run: a run starting right after a port (or a bare name) and ending just
+    before a later `@` parsed as `user:password@` even when that `@` actually belonged to
+    a query string or fragment — `https://host.example:8443?email=user@example.com`
+    (host, port, an email in the query, no userinfo anywhere) masked its port and query
+    and partly hid its host.
+  - The username run (found by a follow-up Codex review of this same fix): a run reaching
+    a LATER `:` before the `@` parsed the text ahead of it as a username —
+    `https://host.example?foo:bar12345678@x.example` (an ordinary query string with a
+    colon in it — a `time=`/ratio-style value, `12:34`, `16:9` — no userinfo anywhere)
+    parsed `host.example?foo` as username, `bar12345678` as password, and masked both.
+
+  Per RFC 3986, `?` and `#` terminate the authority component, so nothing after either
+  one can be userinfo — on EITHER side of the `:` — and an `@` following one never
+  delimits a credential.
+
+  #440 had already fixed the password case for the *empty*-username arm
+  (`://:password@host`, the canonical Redis URL), because admitting `?`/`#` there
+  collided with an empty host's port serialization; it deliberately left the named arm's
+  wider class alone, reasoning that narrowing it would lose a real (if RFC-invalid)
+  password containing a raw `?` or `#`. #442 reverses that call for both slots: weighed
+  against the whole ordinary-URL false-positive class, the RFC-invalid userinfo shape is
+  the smaller loss on both sides of the `:`. All three connection-string userinfo
+  classes — the password run, the username run, and
+  `CONNECTION_STRING_USERNAME_TOKEN_PATTERN`'s bare-token run — now derive from one
+  shared exclusion set (`_CS_TERMINATORS`) instead of three independently hand-spelled
+  (and, for one review round, silently drifted) character classes; the
+  `(?(cs_user)...)` conditional that used to pick between two different password classes
+  is gone along with the now-pointless `cs_user` group name.
+
+  **The accepted trade, pinned by its own characterization test on each side:** a
+  password containing a literal `?`/`#` is no longer redacted — the toy case is
+  `x://u:ab?cd@h`, and a realistic one is a labelled connection string whose password
+  happens to contain a raw `?`: `postgres://app:s3cr3t?value@db.internal:5432/appdb` now
+  goes out with the password in the clear, no backstop, since nothing else in this file
+  recognizes a bare `postgres://` credential once the connection-string matcher itself
+  won't span it. A username containing a literal `?`/`#` is an even larger loss:
+  `x://u?v:pw123456@h` no longer redacts AT ALL — not just the malformed username, but
+  the well-formed trailing password beside it — because the match fails at the anchor
+  once the username run can no longer reach the mandatory `:` separator. RFC 3986 already
+  calls both shapes invalid userinfo (a real `?`/`#` there has to be percent-encoded),
+  which is why both trades are judged acceptable rather than regressions.
+
+  The differential sweeps this file already runs (#438/#440) cannot detect a false
+  positive like this one — they only catch a matcher that redacts *less*, and this bug
+  was a matcher redacting *more* — so the fix instead lands with its own false-positive
+  corpus: the issue's own URL, OAuth-redirect/email-in-query/fragment variants, a shape
+  where `?` and `#` both appear before the `@`, an OAuth `redirect_uri` carrying a full
+  nested URL (a second `://`), shapes with a path segment before the query, and (round 2)
+  a colon inside the query and inside the fragment before the `@` — thirteen lines in
+  total, each asserted byte-identical in both `exempt_code` modes.
+
+  Corpus sweep, old pattern vs. new, over every line (`text.split("\n")`, matching
+  `wc -l`) of two real corpora on this tree: the whole checked-out `.venv` (5,020 files,
+  1,849,015 lines — not just `site-packages`) shows **zero** behavior changes in either
+  direction, in both `exempt_code` modes; this repository's own tracked files show 25
+  differing lines, every one of them documentation prose — the illustrative examples in
+  this entry and in the code comments and tests (including a pre-existing #443 entry line
+  quoting the same shape), not independent code.
+
 - **A labelled match no longer swallows a later sensitive label's secret** (#436). The #434
   swallow guard was conditioned on `key_bracket`, so it protected only bracketed candidates
   (`cfg["token"] = ...`); the identical swallow reached ANY labelled match, bracketed or not —

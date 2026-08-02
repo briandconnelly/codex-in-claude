@@ -140,6 +140,24 @@ _PRE_438_CONNECTION_PATTERN = re.compile(r"([a-zA-Z][\w+.-]*://[^:@\s/]+:)[^@\s/
 
 # Slots of the pattern's own grammar. A structured product over these finds the shapes
 # that matter here; random text essentially never generates a well-formed userinfo.
+#
+# Do NOT add a `?`/`#`-carrying value to EITHER `_USERS` or `_PASSWORDS` below (e.g.
+# `"u?v"`, `"p?w"`, `"p#w"`) to widen either slot's coverage. `_all_lines()` feeds every
+# combination through BOTH #438/#440-era oracles (`_PRE_438_CONNECTION_PATTERN`,
+# `_PRE_440_CONNECTION_PATTERN`), which still admit `?`/`#` in EITHER position — #442
+# deliberately stopped the LIVE matcher from doing so, on the password side in round 1
+# (`test_password_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss` pins
+# it) and on the username side in round 2
+# (`test_username_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss`) — so
+# a `?`/`#` value in either slot would make both oracles report every one of that shape's
+# generated lines as a leftover: the PINNED, CHARACTERIZED #442 trade, misread by this
+# sweep as a regression. Verified directly rather than asserted: adding `"u?v"` to
+# `_USERS` alone (leaving every other slot as committed) made this sweep's grammar produce
+# 297/19200 leftovers against the #438 oracle and 360/19200 against the #440 oracle — the
+# same blindness class round 1's version of this warning already documented for
+# `_PASSWORDS`, just not yet extended to `_USERS`, which is exactly how the round-2 gap
+# survived round 1's review. Widening either slot needs the oracles re-scoped to know
+# about #442 first, not just an entry added here.
 _LEADS = ["", "x", "9", "-", "=", '"', "//", "cfg = "]
 _SCHEMES = ["", "a", "postgres", "mongodb+srv", "s" * 40]
 _SEPARATORS = ["://", ":/", "//", ":"]
@@ -237,24 +255,62 @@ def test_connection_string_redaction_unchanged_for_scheme_led_urls():
 # leaks `postgres://u:pass]word@h` while leaving every other test in this file green.
 # These two walk the whole printable domain instead, so any character quietly removed
 # from either class fails here.
-_NON_MEMBERS = "@/"  # plus whitespace, handled below
+#
+# `?` and `#` joined this set in #442: the named-username password class used to admit
+# them (RFC 3986 says it should not — see `_CS_PASSWORD_CHARS`'s comment in the source),
+# so this walk's domain narrows here too. The characters this class REJECTS are pinned
+# separately, from the other side, by `test_password_run_stops_at_a_query_or_fragment`.
+_NON_MEMBERS = "@/?#"  # plus whitespace, handled below
 
 
 @pytest.mark.parametrize(
     "char", [c for c in string.printable if c not in _NON_MEMBERS and not c.isspace()]
 )
 def test_password_class_covers_every_character_it_claims(char):
-    # `[^@\s/]+` — a password may contain anything but `@`, whitespace, and `/`.
+    # `[^@\s/?#]+` — a password may contain anything but `@`, whitespace, `/`, `?`, `#`.
     assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
 
 
+# The username class's OWN non-member set, named separately rather than inlined as
+# `_NON_MEMBERS + ":"` at the parametrize call site below. That inline form is what let
+# this walk's domain narrow SILENTLY when #442 round 1 added `?`/`#` to `_NON_MEMBERS`
+# for the PASSWORD class alone: the username walk inherited the exclusion through the
+# `+ ":"` expression and stopped exercising `?`/`#` here too, even though at the time the
+# USERNAME class in source hadn't actually been narrowed yet (round 2, Codex review) — a
+# parametrize domain can only pass more as it shrinks, never fail, so nothing caught the
+# gap. Naming it explicitly does not, by itself, fix that class of bug (the value is
+# still derived the same way); what closes it is the pair of tests right below asserting
+# `?`/`#` FROM THE OTHER SIDE — the same discipline `_EMPTY_USER_NON_MEMBERS` and
+# `test_password_run_stops_at_a_query_or_fragment` already established for the password
+# class, extended here to the username class's own `:` addition.
+_USERNAME_NON_MEMBERS = _NON_MEMBERS + ":"
+
+
 @pytest.mark.parametrize(
-    "char", [c for c in string.printable if c not in _NON_MEMBERS + ":" and not c.isspace()]
+    "char", [c for c in string.printable if c not in _USERNAME_NON_MEMBERS and not c.isspace()]
 )
 def test_username_class_covers_every_character_it_claims(char):
-    # `[^:@\s/]+` — same, and additionally not `:`, which separates user from password.
+    # `[^:@\s/?#]*` — same as the password class, minus `:` (which separates user from
+    # password) and, since #442 round 2, minus `?`/`#` too.
     out = redaction.redact_text(f"x://a{char}b:secretpw@h")
     assert out == f"x://a{char}b:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_username_run_stops_at_a_query_or_fragment(char):
+    """The username slot's turn (#442 round 2): closes the domain-walk gap above.
+
+    `_USERNAME_NON_MEMBERS` excludes `?`/`#` from what the walk tests as MEMBERS, which
+    is correct — but a printable-domain walk only ever asserts what a class ACCEPTS, so
+    excluding a character from its parametrize list, on its own, asserts nothing about
+    whether that character is actually rejected. This is the other side: `?`/`#` must
+    stop the username run exactly where `_USERNAME_NON_MEMBERS` claims. The full accepted-
+    loss characterization (a well-formed trailing password going unredacted too) is pinned
+    separately, alongside the password-side one,
+    by `test_username_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss`.
+    """
+    text = f"x://u{char}v:pw123456@h"
+    assert redaction.redact_text(text) == text
 
 
 @pytest.mark.parametrize(
@@ -699,8 +755,12 @@ def test_empty_username_connection_string_exact_output(text, expected):
     assert redaction.redact_text(text) == expected
 
 
-# The empty-username arm admits everything the named arm does EXCEPT `?` and `#`.
-_EMPTY_USER_NON_MEMBERS = _NON_MEMBERS + "?#"
+# The empty-username arm admitted everything the named arm did except `?` and `#` when
+# #440 wrote this (the named arm still let them through then). #442 brought the named
+# arm's excluded set to match, so the two sets are now equal — kept as its own name
+# rather than folded away, so a test walking `x://:...` still self-documents which arm
+# it exercises even though the domain it computes is identical to `_NON_MEMBERS`.
+_EMPTY_USER_NON_MEMBERS = _NON_MEMBERS
 
 
 @pytest.mark.parametrize(
@@ -710,29 +770,31 @@ _EMPTY_USER_NON_MEMBERS = _NON_MEMBERS + "?#"
 def test_empty_username_password_class_covers_every_character_it_claims(char):
     # The password run is reachable through a SECOND route once the username may be
     # empty. A narrowing on that route alone would leave the named-username walk above
-    # green, so the domain is walked here too — minus the two characters that route
-    # deliberately excludes, which the next test pins from the other side.
+    # green, so the domain is walked here too.
     assert redaction.redact_text(f"x://:ab{char}cd@h") == "x://:[redacted: secret value]@h"
 
 
 @pytest.mark.parametrize("char", ["?", "#"])
-def test_empty_username_run_stops_at_a_query_or_fragment(char):
-    """`://:` is also an empty host with a port, so this arm must stop at `?`/`#`.
+def test_password_run_stops_at_a_query_or_fragment(char):
+    """`?`/`#` terminate BOTH arms (#442), reversing #440's split.
 
-    `custom://:8080?email=a@b` has no userinfo at all — the `@` sits in the query — and
-    admitting these characters masked it as a credential, hiding the host. Per RFC 3986
-    a raw `?`/`#` cannot appear in userinfo, so an `@` after one never delimits one.
+    `://:` is also an empty host with a port, so the empty-username arm has always had to
+    stop at `?`/`#`: `custom://:8080?email=a@b` has no userinfo at all — the `@` sits in
+    the query — and admitting these characters masked it as a credential, hiding the host.
 
-    The NAMED arm keeps admitting both (pinned by the walk above): narrowing it would
-    stop redacting a password containing a raw `?`, which is a real loss, and this
-    change is only allowed to widen.
+    #440 left the NAMED arm alone, reasoning that narrowing it would lose a real
+    (if RFC-invalid) password containing a raw `?`/`#`. #442 reverses that: per RFC 3986 a
+    raw `?`/`#` cannot appear in userinfo at all, on EITHER arm, so an `@` following one is
+    never a credential delimiter — `https://host.example:8443?email=user@example.com` (the
+    named-arm twin of the empty-username case above) was the false positive that cost, and
+    `x://u:ab?cd@h` losing its redaction is the accepted trade (pinned separately).
     """
     assert redaction.redact_text(f"x://:ab{char}cd@h") == f"x://:ab{char}cd@h"
     assert redaction.redact_text(f"custom://:8080{char}email=a@b") == (
         f"custom://:8080{char}email=a@b"
     )
-    # ...while the same shape WITH a username stays exactly as it was before #440.
-    assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
+    # ...and the same shape WITH a username, which #440 left redacted, is unredacted too.
+    assert redaction.redact_text(f"x://u:ab{char}cd@h") == f"x://u:ab{char}cd@h"
 
 
 @pytest.mark.parametrize(
@@ -1362,43 +1424,138 @@ def test_marker_no_longer_strands_a_connection_string_credential(text, expected)
     assert redaction.redact_text(out) == out
 
 
-def test_query_string_false_positive_is_pinned_until_442():
-    """#442, a pre-existing false positive, pinned with its exact current output.
+# --- #442: an ordinary URL whose query carries an `@` is not userinfo --------
+# The named-username password class admitted `?` and `#`, so a run starting at a
+# port-or-name and ending right before a query/fragment `@` parsed as `user:password@`.
+# Per RFC 3986, `?` and `#` terminate the authority component — nothing after either
+# one can be userinfo, so a run containing them can never be a password. This is the
+# instrument for that FIX: the differential sweeps above (#438/#440) only detect a
+# matcher that redacts LESS, and this bug is a matcher that redacts MORE, so they are
+# structurally blind to it (the issue's own diagnosis). Every line below must come back
+# BYTE-IDENTICAL, in both `exempt_code` modes, or the corpus has stopped being ordinary
+# text and the fix is masking something a reviewer needed to see.
+_QUERY_FRAGMENT_FALSE_POSITIVES = [
+    # The issue's own reproduction: host, port, and a query carrying an email.
+    "https://host.example:8443?email=user@example.com",
+    # An OAuth-style authorize URL whose query carries an `@` for a reason that is not
+    # an email — a compound `state`/`return_to` value, a real convention in some SSO
+    # implementations.
+    "https://sso.example.com:8443?state=return_to@dashboard&client_id=web-app",
+    # Email in query, different port/host/label from the issue's own case.
+    "https://api.example.com:443?contact=jane.doe@example.org",
+    # The fragment form: `#` terminates the authority exactly like `?` does.
+    "https://docs.example.com:8443#section=owner@example.com",
+    # BOTH `?` and `#` present, with the `@` following both — genuine pre-#442
+    # reproductions (verified against `HEAD~1`, the pre-fix commit): the old class
+    # admitted either character alone, so a run crossing both still reached the `@`.
+    "https://host.example:8443?a=1#frag=owner@example.com",
+    "https://host.example:8443#frag=1?embedded=owner@example.com",
+    # An OAuth redirect_uri carrying a FULL nested URL (a second `://`), with a path
+    # segment before the query. Already safe pre-#442 too (verified against `HEAD~1`):
+    # the path segment's `/` stops the run before it ever reaches an `@`. Pinned anyway
+    # as a shape #442's fix must not regress — a future change to the `/`-exclusion
+    # would reopen exactly this.
+    "https://idp.example.com:8443/oauth/authorize?redirect_uri=https://app.example.com/callback&login_hint=jane@example.com",
+    # The same nested-URL shape with NO path before the query (the run reaches the
+    # query directly, unlike the row above). Already safe pre-#442 too — for a DIFFERENT
+    # reason than #442's fix: the nested URL's own `://app.example.com/callback` carries
+    # a `/`, which the run excludes independently of `?`/`#`, so it stops there before
+    # ever reaching the eventual `@`. Distinct coverage from #442's own fix, pinned so
+    # this independent protection is not confused with it.
+    "https://idp.example.com:8443?redirect_uri=https://app.example.com/callback&login_hint=jane@example.com",
+    # A path component before the query, no nested URL. Already safe pre-#442 (the path's
+    # `/` blocks the run before `#442`'s own `?`/`#` exclusion is ever reached) — pinned
+    # as a boundary case adjacent to the issue's own shape (which has NO path segment).
+    "https://api.example.com:8443/v1/resource?contact=jane.doe@example.com",
+    "https://docs.example.com:8443/guide/setup#section=owner@example.com",
+    # A `:` INSIDE the query, before the `@` — the USERNAME slot's turn to leak this FP
+    # (Codex review round 2). `[^:@\s/]*` still admitted `?`/`#`, so `host.example?foo`
+    # parsed as a username, `:` as the user/password separator, and `bar12345678` as an
+    # RFC-invalid-but-matched password: no port anywhere, an ordinary query string with a
+    # colon in it (a real shape — a `time=` or ratio-style query value; `12:34`, `16:9`).
+    "https://host.example?foo:bar12345678@x.example",
+    # Same gap on the fragment side.
+    "https://host.example#foo:bar12345678@x.example",
+    # Both `?` and `#` present ahead of the colon-bearing username slot.
+    "https://host.example?a=1#foo:bar12345678@x.example",
+]
 
-    The named-username password class admits `?` and `#`, which cannot appear raw in
-    userinfo, so an ordinary URL whose query carries an `@` is masked as a credential: scheme
-    and host survive, the port and query go with the marker.
 
-    Accepted rather than fixed here: #442's remedy is to exclude `?`/`#` from that class,
-    which NARROWS a documented guarantee (`test_password_class_covers_every_character_it_
-    claims` forbids it) and needs its own false-positive corpus. Folding it in would bundle a
-    narrowing into a security fix. The credential is redacted either way — what is at stake is
-    how much surrounding host/port/query text is masked with it. Pinned so #442's eventual
-    fixer sees the current output rather than re-deriving it, and so a change to that span
-    fails here with its reason attached.
+@pytest.mark.parametrize("exempt_code", [False, True])
+@pytest.mark.parametrize("text", _QUERY_FRAGMENT_FALSE_POSITIVES)
+def test_ordinary_url_with_at_in_query_or_fragment_is_not_masked(text, exempt_code):
+    out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
+    assert out == text
+    assert redacted is False
 
-    History, because this test used to assert a DELTA and no longer can. #443's reorder
-    ENLARGED #442's reach by removing an accidental brake — under the old sequential pipeline
-    a labelled marker landed inside the query and stopped the connection matcher from matching
-    at all — so the pre-#443 ordering produced a visibly narrower span and the delta was worth
-    asserting. Under the span-merge engine (#445) both orderings emit the output below, since
-    the merged span set does not depend on the list's order; the monkeypatched half would have
-    become a tautology, so it is gone rather than kept as decoration.
 
-    Partial, not plain (a #446 review-round-2 finding): the connection-string password
-    candidate's span and `LABELLED_VALUE_PATTERN`'s candidate for `token=...` both end at
-    the identical position (the `@`), so this interval's trailing edge is a TIE between a
-    userinfo candidate (wide safe set, `@` genuinely terminal) and a labelled one (narrow
-    safe set, `@` dropped) — and a tie fails toward the narrower set, the same fail-closed
-    direction `leading_whole`'s tie-break uses. Scrutinized rather than taken at face value:
-    the interval here is fully covered either way (the wider connection-string span, not the
-    narrower labelled sub-span, sets the actual replaced text), so the credential is not
-    truncated — the marker is conservative, not incorrect, on a case #442 already documents
-    as an accepted imprecision in how much surrounding text this shape masks.
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_password_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss(char):
+    """The deliberate trade #442 makes, pinned rather than left implicit.
+
+    `x://u:ab?cd@h` (or `#`) is a password containing a literal `?`/`#` — RFC-invalid
+    userinfo already, since RFC 3986 requires either to be percent-encoded there. Before
+    #442 this WAS redacted (the named arm's password class admitted both), and
+    `test_password_class_covers_every_character_it_claims`'s printable-domain walk forbade
+    narrowing it for exactly that reason. #442 narrows it anyway, weighing this loss
+    against the whole ordinary-URL false-positive class `?`/`#` admission was causing
+    (`test_ordinary_url_with_at_in_query_or_fragment_is_not_masked` above) — the RFC-invalid
+    shape is judged the smaller cost. No other matcher picks up the slack: `ab?cd` is
+    short and label-free, so nothing here is redacted at all.
+    """
+    text = f"x://u:ab{char}cd@h"
+    assert redaction.redact_text(text) == text
+
+
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_username_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss(char):
+    """The #442 round-2 counterpart to the accepted-loss test right above.
+
+    A username containing a literal `?`/`#` is even more RFC-3986-invalid than a
+    password containing one (the password class at least stops there; the username
+    class's `?`/`#` used to be silently accepted as an ordinary username character with
+    no RFC reading that permits it either). And the loss is LARGER than the password
+    side's: because the username run now stops before it can reach the mandatory `:`
+    separator, the WHOLE match fails at the anchor — not only the malformed username, but
+    a perfectly well-formed trailing password goes unredacted alongside it. `pw123456` is
+    exactly the kind of value the password class would otherwise catch (see
+    `test_password_class_covers_every_character_it_claims`), and it still isn't picked up
+    by any other matcher here (short, label-free, no vendor prefix).
+    """
+    text = f"x://u{char}v:pw123456@h"
+    assert redaction.redact_text(text) == text
+
+
+def test_query_string_false_positive_no_longer_masks_userinfo():
+    """#442, fixed: this test used to be `test_query_string_false_positive_is_pinned_
+    until_442`, pinning the FALSE POSITIVE's exact output as an accepted trade-off
+    pending its own corpus. That corpus now exists above
+    (`test_ordinary_url_with_at_in_query_or_fragment_is_not_masked`), and the fix landed:
+    `_CS_PASSWORD_CHARS` excludes `?`/`#` on the named-username arm the same way #440's
+    empty-username arm already did, so this shape's connection-string candidate no longer
+    matches at all — `host.example:8443?token=` stays exactly as written.
+
+    What DOES still redact here is unrelated to userinfo: `token=s3cr3tvalue0123456789`
+    is its own LABELLED-value candidate (`token` is a sensitive label), and that value is
+    a real secret-shaped string independent of the URL it sits inside. #442's fix narrows
+    how the CONNECTION-STRING matcher sees this text; it says nothing about whether a
+    labelled query parameter should be masked, and this test is not the place to
+    relitigate that.
+
+    Partial, not plain, and for a DIFFERENT reason than before the fix. Before, this was a
+    trailing-edge TIE between the (wider, `@`-safe) connection-string candidate and the
+    (narrower, `@`-unsafe) labelled candidate, both ending at the `@`, decided toward the
+    narrower set. Now there is no tie — the connection-string candidate does not exist on
+    this input — so the marker comes from `LABELLED_VALUE_PATTERN`'s OWN trailing check
+    alone: its narrow `_LABELLED_SAFE_TERMINATORS` set drops `@` (`token=<value>@host` is a
+    real shape a labelled value's own alphabet cannot rule out continuing across), so the
+    character right after the match is unsafe and the marker is the partial one. Same
+    marker text, different mechanism — verified by running the fixed engine rather than
+    assumed from the pre-fix output.
     """
     text = "https://host.example:8443?token=s3cr3tvalue0123456789@x.example"
     assert redaction.redact_text(text) == (
-        "https://host.example:[redacted: possibly partial secret value]@x.example"
+        "https://host.example:8443?token=[redacted: possibly partial secret value]@x.example"
     )
 
 
