@@ -515,16 +515,19 @@ def _diff_path_from_header(line: str) -> str:
 _SECRET_VALUE_MARKER = "[redacted: secret value]"
 
 # The PARTIAL marker: this module found AFFIRMATIVE evidence the match may have stopped
-# short of the true credential — a follower or leader character the MATCHED PATTERN's own
-# alphabet demonstrably could not have produced, not merely "some character this heuristic
-# doesn't universally recognize as safe" (#446). A userinfo credential carrying a character
+# short of the true credential, from either of two checks (#446, full decision in
+# `_interval_is_partial`) — not merely "some character this heuristic doesn't universally
+# recognize as safe": a TRAILING follower the matched pattern's own alphabet demonstrably
+# could NOT have produced (the value may continue past the marker), or a LEADING preceding
+# character that COULD continue the same token, when the interval starts at a whole-match
+# candidate (the match may have begun mid-token). A userinfo credential carrying a character
 # the connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there) can never
 # be SPANNED by those matchers, so an earlier matcher firing on its prefix leaves the
-# remainder beside a marker; that shape is what this marker exists to be honest about, and
-# `_interval_is_partial` has the full decision — including why the evidence bar differs by
-# candidate type. Deliberately NOT a substring of `_SECRET_VALUE_MARKER` — pinned by
-# `test_partial_marker_does_not_contain_the_plain_marker` — so an `in`-style assertion
-# elsewhere cannot mistake one for the other.
+# remainder beside a marker; that shape is what the trailing check exists to be honest about,
+# and `_interval_is_partial` has the full decision for both checks — including why the
+# trailing evidence bar differs by candidate type. Deliberately NOT a substring of
+# `_SECRET_VALUE_MARKER` — pinned by `test_partial_marker_does_not_contain_the_plain_marker`
+# — so an `in`-style assertion elsewhere cannot mistake one for the other.
 _PARTIAL_SECRET_VALUE_MARKER = "[redacted: possibly partial secret value]"
 
 # The trailing-check safe set (#446): a character right after a merged interval that is NOT

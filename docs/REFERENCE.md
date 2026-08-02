@@ -121,11 +121,12 @@ Secret-looking values are redacted from every free-text surface before it leaves
 to gathered diffs. Inline matches are replaced with `[redacted: secret value]` when nothing about
 the match's neighboring characters gives an affirmative sign it stopped short — not a claim the
 replaced span is provably complete, which this best-effort mechanism cannot make — or with
-`[redacted: possibly partial secret value]` when a neighboring character is one the matched text's
-own alphabet could not have produced, which *is* a positive (if still heuristic) sign of
-truncation. Neither marker is a guarantee in either direction: a free-form secret can contain
-almost any character, so the checks deliberately do not flag every unusual neighbor — doing so
-would fire on nearly every redaction and stop being a useful signal. This is **best-effort
+`[redacted: possibly partial secret value]` when it finds such a sign: a trailing character the
+matched text's own alphabet could not have produced (the value may continue past the marker), or a
+leading character that could continue the same token (the match may have started mid-token).
+Neither marker is a guarantee in either direction: a free-form secret can contain almost any
+character, so the checks deliberately do not flag every unusual neighbor — doing so would fire on
+nearly every redaction and stop being a useful signal. This is **best-effort
 defense-in-depth, not a guarantee**: it covers content the plugin itself surfaces, not whatever Codex
 may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
 
