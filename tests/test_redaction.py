@@ -1665,6 +1665,42 @@ def test_userinfo_shapes_keep_the_plain_marker_where_their_grammar_closed_them()
     )
 
 
+def test_a_labelled_value_followed_by_a_space_keeps_the_plain_marker():
+    """Boundary characterization (a Codex confirm-round finding): the trailing-check
+    boundary argument RECEDES FOREVER if pushed on its own terms. A free-form passphrase can
+    legitimately contain a space (`correct horse battery staple`), so a space right after a
+    LABELLED match's replaced span is, by the SAME reasoning the review's MEDIUM finding used
+    for `@`/`&`/`;`/`\\`, not provably a boundary either — yet whitespace stays in
+    `_LABELLED_SAFE_TERMINATORS` and this stays PLAIN.
+
+    That is deliberate, not an inconsistency. This module's own contract (module docstring:
+    "best-effort... NOT a guarantee") already concedes the plain marker never proves
+    completeness, so treating a space as "affirmative evidence" would not make the signal
+    more honest — it would erase it: a space follows essentially every labelled value in
+    running prose (an ordinary sentence, a JSON blob's next key, a shell command's next
+    argument), so flagging it would fire on nearly every redaction this module ever performs
+    and stop distinguishing anything. The line drawn in `_LABELLED_SAFE_TERMINATORS` is a
+    calibration between two failure modes — missing a truncated tail vs. crying wolf on
+    almost every complete one — not a claim that whitespace is somehow provably safe where
+    `@` is not. See `_SECRET_VALUE_MARKER`'s header for the documented semantics this pins.
+    """
+    text = "passphrase=" + "a" * 16 + " tailsegment"
+    assert redaction.redact_text(text) == "passphrase=[redacted: secret value] tailsegment"
+
+
+def test_a_labelled_value_followed_by_a_comma_keeps_the_plain_marker():
+    """Companion boundary characterization to the space case above, for `,` — the other
+    shared-safe member most likely to abut a real, legitimately-embedded secret character (a
+    value in a comma-separated list, or immediately before a trailing clause). Same
+    reasoning: flagging every labelled value followed by a comma would fire constantly (list
+    values, sentence clauses) for a character that is exactly as unprovable a boundary, in
+    the abstract, as the four the review DID move into the narrow-set's excluded group.
+    Deliberately not moved; documented here rather than left as a silent asymmetry.
+    """
+    text = "key=" + "a" * 16 + ",tailsegment"
+    assert redaction.redact_text(text) == "key=[redacted: secret value],tailsegment"
+
+
 def test_a_mid_token_jwt_match_is_marked_partial():
     """The leading check (a plan-review round-2 finding), pinned directly.
 

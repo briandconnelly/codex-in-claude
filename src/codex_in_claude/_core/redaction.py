@@ -496,21 +496,33 @@ def _diff_path_from_header(line: str) -> str:
     return spec
 
 
-# The COMPLETE-redaction marker. Two markers ship from this module now, not one — see
-# `_PARTIAL_SECRET_VALUE_MARKER` immediately below for the other, and `_interval_is_partial`
-# for the authoritative decision between them (both the trailing and leading checks, and the
-# candidate-type-dependent safe sets the trailing check reads). A constant rather than an
-# inline literal, so the string the idempotency arguments throughout this file depend on (it
-# carries a space and a `:`, which every userinfo run stops at) cannot drift between the two
-# emission sites it used to have.
+# The PLAIN marker: this module found no AFFIRMATIVE, grammar-level reason to suspect the
+# match stopped short. NOT a proof of completeness — it cannot be one, and does not claim to
+# be (#446, recalibrated after a Codex confirm-round finding: the earlier prose here read as
+# a completeness claim the mechanism can't back up). A free-form labelled secret — a
+# passphrase, an internal token — can legitimately contain almost any character, including
+# ones this marker's own checks treat as safe (whitespace, a closing quote/bracket, a comma).
+# Treating THOSE as suspect too would not sharpen the signal, it would erase it: virtually
+# every labelled value in ordinary prose is followed by one of them, so a heuristic that
+# flagged all of them would fire on nearly every redaction and stop meaning anything —
+# `test_shared_safe_terminators_keep_the_plain_marker_for_labelled_values` and the boundary
+# characterizations pin this as a deliberate calibration, not an oversight. Two markers ship
+# from this module — see `_PARTIAL_SECRET_VALUE_MARKER` immediately below for the other, and
+# `_interval_is_partial` for the authoritative decision between them. A constant rather than
+# an inline literal, so the string the idempotency arguments throughout this file depend on
+# (it carries a space and a `:`, which every userinfo run stops at) cannot drift between the
+# two emission sites it used to have.
 _SECRET_VALUE_MARKER = "[redacted: secret value]"
 
-# Emitted instead of `_SECRET_VALUE_MARKER` when the rebuild step (below) determines a merged
-# interval may not cover the whole credential (#446): a userinfo credential carrying a
-# character the connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there)
-# can never be SPANNED by those matchers, so an earlier matcher firing on its prefix leaves the
-# remainder beside a marker that otherwise claims completeness it does not have. Deliberately
-# NOT a substring of `_SECRET_VALUE_MARKER` — pinned by
+# The PARTIAL marker: this module found AFFIRMATIVE evidence the match may have stopped
+# short of the true credential — a follower or leader character the MATCHED PATTERN's own
+# alphabet demonstrably could not have produced, not merely "some character this heuristic
+# doesn't universally recognize as safe" (#446). A userinfo credential carrying a character
+# the connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there) can never
+# be SPANNED by those matchers, so an earlier matcher firing on its prefix leaves the
+# remainder beside a marker; that shape is what this marker exists to be honest about, and
+# `_interval_is_partial` has the full decision — including why the evidence bar differs by
+# candidate type. Deliberately NOT a substring of `_SECRET_VALUE_MARKER` — pinned by
 # `test_partial_marker_does_not_contain_the_plain_marker` — so an `in`-style assertion
 # elsewhere cannot mistake one for the other.
 _PARTIAL_SECRET_VALUE_MARKER = "[redacted: possibly partial secret value]"
@@ -614,29 +626,47 @@ def _replaced_span(match: re.Match) -> tuple[int, int]:
 def _interval_is_partial(
     line: str, start: int, end: int, leading_whole: bool, trailing_narrow: bool
 ) -> bool:
-    """Whether the merged interval ``line[start:end]`` may be a truncated fragment of a
-    longer secret rather than the whole of it (#446), so the emitted marker must not claim
-    completeness. Either check alone is sufficient.
+    """Whether the merged interval ``line[start:end]`` gets the PARTIAL marker rather than
+    the plain one (#446) — the authoritative decision point for both, and for the documented
+    semantics each one carries.
+
+    Neither marker is a proof. The PLAIN marker means this function found no AFFIRMATIVE,
+    grammar-level reason to suspect the match stopped short — never that it verified
+    completeness, which it structurally cannot: a free-form labelled secret can legitimately
+    contain almost any character, including ones the checks below treat as safe. The PARTIAL
+    marker means it found such a reason — a follower or leader character the matched
+    pattern's own alphabet demonstrably could not have produced. Both checks are heuristic
+    hedges, consistent with this module's "best-effort... NOT a guarantee" contract (module
+    docstring); where the checks' own mechanics are ambiguous (a tie between candidates —
+    see ``_redact_secret_values``'s fold), the tie resolves toward the PARTIAL marker —
+    over-hedging, not under-hedging, is the safe direction for a secret boundary. What the
+    checks do NOT do is treat every character a value's alphabet excludes as suspect:
+    whitespace, a closing quote/bracket, and a comma follow essentially every labelled value
+    in ordinary prose, so flagging those too would fire on nearly every redaction and erase
+    the signal rather than sharpen it — a deliberate calibration, not an oversight, pinned by
+    the boundary characterizations near ``test_a_credential_the_userinfo_runs_cannot_span_
+    is_only_partly_redacted``. Either check below is independently sufficient.
 
     **Trailing**: the character right after the interval exists and is not one of the
-    safe-terminator characters — a follower that could plausibly be more of the same value.
-    An absent follower (end of string) is unconditionally complete. Which SET of safe
-    terminators applies depends on ``trailing_narrow`` (see the fold in
+    safe-terminator characters for the interval's TRAILING-EDGE CANDIDATE TYPE. An absent
+    follower (end of string) is unconditionally treated as no evidence of truncation. Which
+    SET of safe terminators applies depends on ``trailing_narrow`` (see the fold in
     ``_redact_secret_values`` for how that is derived across a tie): a LABELLED or Bearer
-    trailing edge uses the narrower ``_LABELLED_SAFE_TERMINATORS`` (its value alphabet is a
-    generic catch-all, so a character it excludes could be a real interior character), while
-    everything else — userinfo/connection-string candidates, and the vendor/JWT/PEM
-    whole-match patterns whose classes ARE a specific credential's grammar — uses the wider
-    ``_SAFE_TERMINATORS``.
+    trailing edge uses the narrower ``_LABELLED_SAFE_TERMINATORS`` — its value alphabet
+    (`_VALUE_CHARS`, or Bearer's RFC 6750 `b64token` character set) is not a specific
+    credential's own grammar the way a vendor prefix or userinfo delimiter is, so a character
+    it excludes is weaker (but not zero) evidence of a real boundary there — while everything
+    else — userinfo/connection-string candidates, and the vendor/JWT/PEM whole-match patterns
+    whose classes ARE a specific credential's grammar — uses the wider ``_SAFE_TERMINATORS``.
 
     **Leading**: the interval's earliest-starting covered candidate is a whole-match one
     (``leading_whole`` — derived the same way as ``trailing_narrow``, across a tie) AND the
     character right before the interval exists and is in the leading-continuation class. A
     whole-match candidate's span start is the true start of what the pattern matched, so a
-    continuation character sitting right before it means the match itself may have begun
-    mid-token. A candidate whose span was instead pinned at a preserved group's end (a label,
-    `://user:`, `Bearer `) does not carry this risk — that boundary is deliberate, not an
-    artifact of the pattern's own reach — which is why a prefix-preserving candidate is
+    continuation character sitting right before it is affirmative evidence the match itself
+    began mid-token. A candidate whose span was instead pinned at a preserved group's end (a
+    label, `://user:`, `Bearer `) does not carry this evidence — that boundary is deliberate,
+    not an artifact of the pattern's own reach — which is why a prefix-preserving candidate is
     excluded rather than merely deprioritized.
     """
     safe_terminators = _LABELLED_SAFE_TERMINATORS if trailing_narrow else _SAFE_TERMINATORS
@@ -786,12 +816,14 @@ def redact_text(text: str | None) -> str | None:
     Applies only the inline ``SECRET_VALUE_PATTERNS`` — the same value replacement
     used on diff body lines — to arbitrary prose Codex returns (summaries, answers,
     raw_response text, finding fields). File-hunk dropping does not apply to prose,
-    so only inline values are replaced — with ``[redacted: secret value]`` when the
-    replaced span is believed to cover the whole credential, or
-    ``[redacted: possibly partial secret value]`` when it may not (#446): see
-    ``_interval_is_partial`` for the authoritative decision between the two. ``None``
-    and empty strings pass through unchanged. Defense-in-depth, NOT a guarantee
-    (consistent with this module's contract)."""
+    so only inline values are replaced — with ``[redacted: secret value]`` when no
+    affirmative, grammar-level sign was found that the replaced span stopped short (NOT
+    a claim the value is provably complete — it cannot be one), or
+    ``[redacted: possibly partial secret value]`` when such a sign was found (#446): see
+    ``_interval_is_partial`` for the authoritative decision between the two and what
+    each marker does and does not claim. ``None`` and empty strings pass through
+    unchanged. Defense-in-depth, NOT a guarantee (consistent with this module's
+    contract)."""
     if not text:
         return text
     out, _ = _redact_secret_values(text)

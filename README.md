@@ -207,10 +207,12 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   remaining unverified edge cases are in [`COMPATIBILITY.md`](COMPATIBILITY.md). Best-effort redaction protects
   gathered diffs and returned free text
   (`summary`, `findings`, `raw_response.text`): secret-looking file hunks are dropped, and inline
-  matches become `[redacted: secret value]` — or, when the matched text may not cover the whole
-  credential (its neighboring characters don't look like a safe boundary),
-  `[redacted: possibly partial secret value]`, so the marker never claims completeness it can't
-  back up. It is output/diff defense-in-depth, not input
+  matches are replaced with `[redacted: secret value]` — no affirmative sign the match stopped
+  short, which is *not* the same as proof it's complete — or, when a neighboring character is one
+  the matched text's own alphabet could not have produced, `[redacted: possibly partial secret
+  value]`. Neither marker is a guarantee either way: a free-form secret can contain almost any
+  character, and flagging every unusual neighbor as suspect would fire on nearly every redaction
+  and stop meaning anything. It is output/diff defense-in-depth, not input
   protection or a guarantee; do not target a workspace containing secrets you cannot disclose.
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
