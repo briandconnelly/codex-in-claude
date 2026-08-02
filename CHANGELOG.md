@@ -35,6 +35,39 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **A redaction marker no longer claims completeness it doesn't have** (#446). A credential
+  carrying a character the connection-string userinfo matchers exclude (`/`, or `?`/`#` on the
+  arms that stop there) can never be SPANNED by those matchers — #445's span merge cannot fix
+  that, only widen coverage for values a single pattern CAN span — so when an earlier matcher
+  fires on its prefix, the remainder still ships beside the marker unredacted:
+  `redis://u:token=[redacted: secret value]%2Fmore/tail@host` looked complete while `/tail`
+  went out in the clear. The engine's single rebuild site now decides per merged interval
+  whether the replacement may be partial and, if so, emits
+  `[redacted: possibly partial secret value]` instead of the plain marker. Two checks, either
+  sufficient: **trailing** — the character right after the interval exists and is not a safe
+  terminator for that interval's TRAILING-EDGE CANDIDATE TYPE. Not one fixed set: a
+  userinfo/connection-string or vendor/JWT/PEM candidate (whose character class IS a specific
+  credential's own grammar) uses a wider set; a LABELLED or Bearer candidate (whose value
+  alphabet — `_VALUE_CHARS`, or Bearer's RFC 6750 `b64token` class — is not) uses a narrower
+  one, after a later Codex review round found the original single global set wrongly treated
+  `@`/`&`/`;`/`\` as safe there too. Exact membership lives on `_SAFE_TERMINATORS`/
+  `_LABELLED_SAFE_TERMINATORS` in `redaction.py`, the authoritative source — not restated here
+  to avoid a second copy drifting. **Leading** — the interval's earliest-starting candidate is
+  a whole-match one (no preserved group ahead of it) and the character right before it is in a
+  leading-continuation class (`_VALUE_CHARS` minus `=`, since `=` legitimately abuts a complete
+  vendor token like `token=ghp_…` while every other member can be an interior character of a
+  longer secret) — the case a bounded JWT match starting mid-token (`xxxeyJ…`) needs. Neither
+  check is a completeness proof: the plain marker means no affirmative sign of truncation was
+  found, not that completeness was verified, which this best-effort mechanism cannot do. Three
+  options were weighed: suppressing the marker entirely (rejected — it would hide that
+  redaction happened at all, which is worse than an honest partial marker); span-merging harder
+  (rejected — verified impossible, no pattern can produce a candidate covering the excluded
+  character in the first place, so there is nothing to merge); and this one, marking the
+  uncertainty instead of hiding it. The underlying miss — a userinfo credential the
+  connection-string matchers cannot span — remains this module's documented best-effort
+  boundary; this change is only about not letting the output claim otherwise. No agent-visible
+  MCP surface changes (this is a redacted-text VALUE, not a schema field), so no `fingerprint`
+  bump.
 - **`initialize` advertised the `io.modelcontextprotocol/ui` extension (MCP Apps) even though this
   server implements no UI/Apps code** (#424). FastMCP's `LowLevelServer.get_capabilities`
   unconditionally injects `UI_EXTENSION_ID` into `ServerCapabilities.model_extra`; a host probing
