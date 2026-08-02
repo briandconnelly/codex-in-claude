@@ -4550,7 +4550,6 @@ async def test_initialize_ui_extension_filter_preserves_other_extensions(clean_e
     null the whole key — a future FastMCP version may legitimately add a different
     extension, and this server must not silently suppress that one too (#424 review)."""
     from fastmcp import Client
-    from fastmcp.apps import UI_EXTENSION_ID
 
     sentinel_id = "io.example/sentinel"
     real_orig_get_capabilities = server._orig_get_capabilities
@@ -4558,7 +4557,7 @@ async def test_initialize_ui_extension_filter_preserves_other_extensions(clean_e
     def fake_orig_get_capabilities(*args: object, **kwargs: object) -> object:
         caps = real_orig_get_capabilities(*args, **kwargs)
         return caps.model_copy(
-            update={"extensions": {UI_EXTENSION_ID: {}, sentinel_id: {"foo": "bar"}}}
+            update={"extensions": {server._UI_EXTENSION_ID: {}, sentinel_id: {"foo": "bar"}}}
         )
 
     clean_env.setattr(server, "_orig_get_capabilities", fake_orig_get_capabilities)

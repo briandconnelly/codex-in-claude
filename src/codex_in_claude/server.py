@@ -24,7 +24,6 @@ from uuid import uuid4
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
-from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import DisabledError, NotFoundError, ResourceError
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import Middleware
@@ -253,6 +252,11 @@ mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=_
 # adds untouched) and only null the whole key when nothing is left. Guarded by
 # test_initialize_does_not_advertise_the_ui_extension, so a FastMCP upgrade that
 # changes this seam fails loudly.
+# spec-stable wire id (MCP extension identifiers are part of the wire protocol, not
+# a fastmcp implementation detail) — deliberately a literal, not imported from
+# fastmcp.apps, so a fastmcp internal refactor can't break this module at import time.
+_UI_EXTENSION_ID = "io.modelcontextprotocol/ui"
+
 _lowlevel_server = mcp._mcp_server
 _orig_get_capabilities = _lowlevel_server.get_capabilities
 
@@ -261,7 +265,7 @@ def _get_capabilities_without_prompts_or_extensions(*args: Any, **kwargs: Any) -
     caps = _orig_get_capabilities(*args, **kwargs)
     extensions = (caps.model_extra or {}).get("extensions")
     filtered_extensions = (
-        {ext_id: value for ext_id, value in extensions.items() if ext_id != UI_EXTENSION_ID}
+        {ext_id: value for ext_id, value in extensions.items() if ext_id != _UI_EXTENSION_ID}
         if isinstance(extensions, dict)
         else None
     )
