@@ -1614,13 +1614,17 @@ def test_a_mid_token_jwt_match_is_marked_partial():
 
     Its complement, `token=ghp_<20 a's>`: the vendor pattern's whole-match candidate for
     `ghp_...` ties, at the exact same span, with `LABELLED_VALUE_PATTERN`'s prefix-preserving
-    candidate for the same value (both start right after `=`) — the fold in
-    `_redact_secret_values` ANDs whole-match flags across a tie at a merged interval's
-    leftmost start, so that alone would already keep this plain. It stays plain for a second,
-    independent reason too: the character right before the value is `=`, which the
-    leading-continuation class deliberately excludes (round-3 finding) — an assignment
-    delimiter legitimately abuts a COMPLETE vendor token, unlike every other member of
-    `_VALUE_CHARS`, which can be an interior character of a longer secret.
+    candidate for the same value (both start right after `=`). The fold in
+    `_redact_secret_values` ORs whole-match flags across a tie at a merged interval's leftmost
+    start (the fail-closed direction — prefer marking partial), so that tie by ITSELF would
+    make `leading_whole` true here, same as if only the whole-match vendor candidate existed.
+    What keeps this plain is the leading check's OTHER half: the character right before the
+    value is `=`, which the leading-continuation class deliberately excludes (round-3
+    finding) — an assignment delimiter legitimately abuts a COMPLETE vendor token, unlike
+    every other member of `_VALUE_CHARS`, which can be an interior character of a longer
+    secret. (The tie-break's AND-vs-OR choice is unobservable through this case specifically
+    because of that exclusion; `test_tie_fold_prefers_partial_when_any_tied_candidate_is_
+    whole_match` isolates and pins the tie-break itself with a synthetic probe.)
     """
     jwt_body = "a" * 30 + "." + "b" * 10 + "." + "c" * 10
     partial_text = f"xxxeyJ{jwt_body}"
@@ -1630,6 +1634,52 @@ def test_a_mid_token_jwt_match_is_marked_partial():
     complete_text = "token=" + "ghp_" + "a" * 20
     out2 = redaction.redact_text(complete_text)
     assert out2 == "token=[redacted: secret value]"
+
+
+@pytest.mark.parametrize(
+    "patterns_in_order",
+    [
+        "whole-first",
+        "prefix-first",
+    ],
+)
+def test_tie_fold_prefers_partial_when_any_tied_candidate_is_whole_match(
+    patterns_in_order, monkeypatch
+):
+    """Direct unit-level pin for the tie-break's OR semantics (the fail-closed direction:
+    prefer marking partial), isolated from every real pattern.
+
+    On today's shipped patterns, AND/OR/"keep whichever candidate sorts first" are
+    observationally IDENTICAL end-to-end — every real tie between a whole-match and a
+    prefix-preserving candidate is also decided independently by the trailing check or the
+    `=` leading-continuation exclusion (see the fold's comment in `_redact_secret_values` and
+    `test_a_mid_token_jwt_match_is_marked_partial`'s docstring). This probe manufactures a tie
+    that neither of those can reach: the text ends exactly where the value ends (so the
+    trailing check is silent — absent follower is unconditionally complete), and the
+    character right before the tied start is a LETTER, not `=` (so the leading-continuation
+    check's character test passes either way). Only the tie-break itself decides the outcome.
+
+    ``whole`` has no group (a whole-match candidate, `lastindex` falsy); ``prefixed`` has a
+    leading group ending at the identical position (a prefix-preserving candidate) — verified
+    to share the exact same replaced span before trusting the probe. Run in BOTH list orders:
+    the result must not depend on which pattern `SECRET_VALUE_PATTERNS` lists first, which is
+    the whole reason OR (not "keep first candidate") was chosen — matching the #445
+    order-invariance this engine is built to keep.
+    """
+    text = "pfxSECRETVALUE0123456789"
+    whole = re.compile(r"SECRETVALUE0123456789")
+    prefixed = re.compile(r"(pfx)SECRETVALUE0123456789")
+    whole_span = redaction._replaced_span(whole.search(text))
+    prefixed_span = redaction._replaced_span(prefixed.search(text))
+    assert whole_span == prefixed_span, (
+        f"the probe's tie is no longer real: {whole_span} != {prefixed_span}"
+    )
+
+    patterns = [whole, prefixed] if patterns_in_order == "whole-first" else [prefixed, whole]
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", patterns)
+    out, redacted = redaction._redact_secret_values(text)
+    assert out == "pfx[redacted: possibly partial secret value]"
+    assert redacted is True
 
 
 def test_partial_marker_does_not_contain_the_plain_marker():
@@ -1648,13 +1698,33 @@ def test_partial_marker_is_idempotent():
     assert redaction.redact_text(once) == once
 
 
+def test_review_locked_sets_have_not_drifted():
+    """Literal pin for the two sets three plan-review rounds settled (brief: "do not
+    'simplify' them").
+
+    The parametrized sweep below (`test_complete_redactions_keep_the_plain_marker`) reads its
+    domain FROM `_SAFE_TERMINATORS` itself (`sorted(redaction._SAFE_TERMINATORS)`), so it
+    cannot catch a member quietly DROPPED from that constant — a dropped member simply
+    shrinks the sweep's own parametrize list along with it, and the sweep still passes on
+    whatever remains (the derived-expectations-are-tautological failure mode: a test whose
+    input domain IS the value under test can't fail when that value shrinks). What the sweep
+    DOES guard is that every member CURRENTLY in the set actually behaves as a safe
+    terminator — i.e. that the trailing check's logic is correct for each one. Only a literal,
+    independently-spelled pin can catch the set itself changing, which is what this test is
+    for.
+    """
+    assert frozenset(" \t\n\r\v\f\"'\\@&,;)]}>") == redaction._SAFE_TERMINATORS
+    assert redaction._LEADING_CONTINUATION_RE.pattern == "[A-Za-z0-9._~+/-]"
+
+
 @pytest.mark.parametrize("char", sorted(redaction._SAFE_TERMINATORS))
 def test_complete_redactions_keep_the_plain_marker(char):
-    # One case per safe-terminator member, walking the whole set rather than a handful of
-    # representative characters — the same discipline
-    # `test_password_class_covers_every_character_it_claims` uses for the userinfo classes,
-    # so a member quietly dropped from `_SAFE_TERMINATORS` fails here rather than only in a
-    # narrower, easy-to-miss corpus.
+    # One case per CURRENT safe-terminator member (see `test_review_locked_sets_have_not_
+    # drifted` for why this sweep's domain being the constant itself means it cannot detect
+    # a member being dropped): this guards each member's individual trailing-check behavior
+    # — the same discipline `test_password_class_covers_every_character_it_claims` uses for
+    # the userinfo classes — so a member that stops behaving as a safe terminator (without
+    # being removed from the set) fails here.
     text = f"token=abcdefghijklmnop{char}tail"
     out = redaction.redact_text(text)
     assert out == f"token=[redacted: secret value]{char}tail"

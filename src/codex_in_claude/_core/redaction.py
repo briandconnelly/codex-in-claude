@@ -601,8 +601,16 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
     tests substitute it; precompiling the list into one merged automaton would defeat that,
     and would also lose the per-pattern identity the ``exempt_code`` test below turns on.
     """
-    # Each candidate carries whether it is a "whole-match" one (``not match.lastindex``) —
-    # the marker-choice input the merge below threads alongside the span itself (#446).
+    # Each candidate carries whether it is a "whole-match" one — its REPLACED span starts at
+    # the match's own start, so nothing was stripped off the front — the marker-choice input
+    # the merge below threads alongside the span itself (#446). ``span_start == match.start()``
+    # rather than ``not match.lastindex``: the two agree for every ordinary case, but they
+    # diverge in the #456 fallback, where a grouped pattern violates the leading-participating-
+    # prefix invariant and ``_replaced_span`` falls back to the FULL match span. There
+    # ``lastindex`` is still truthy (a group DID match, just not usably), which would wrongly
+    # read as prefix-preserving and suppress the leading check — but the returned span really
+    # does start at the match's true beginning, so it deserves the same leading-check treatment
+    # as an ungrouped pattern. Testing the span directly gets the fallback case right for free.
     candidates: list[tuple[int, int, bool]] = []
     for pattern in SECRET_VALUE_PATTERNS:
         # The #421 exemption belongs to exactly one pattern, compared by identity as always.
@@ -611,7 +619,7 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
             if exempting and _is_code_reference(match):
                 continue  # an exempted candidate contributes no span
             span_start, span_end = _replaced_span(match)
-            candidates.append((span_start, span_end, not match.lastindex))
+            candidates.append((span_start, span_end, span_start == match.start()))
     if not candidates:
         return line, False
 
@@ -621,16 +629,30 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
     # its preserved group, so a zero-length candidate cannot occur and nothing here handles
     # one.
     #
-    # ``leading_whole`` tracks whether EVERY candidate tied for the merged interval's leftmost
+    # ``leading_whole`` tracks whether ANY candidate tied for the merged interval's leftmost
     # start is a whole-match one. A tie is not hypothetical — a vendor pattern with no group
     # (`gh[pousr]_...`) and the labelled pattern's group-bounded candidate
     # (`token=gh[pousr]_...`) commonly start at the identical position — and resolving it by
-    # AND-ing rather than by picking whichever candidate happened to sort first keeps the
+    # OR-ing rather than by picking whichever candidate happened to sort first keeps the
     # marker choice independent of ``SECRET_VALUE_PATTERNS``' list order, matching the
     # order-invariance #445 already established for the span set itself. Only a candidate
     # that starts at that same leftmost position can affect it; one merged in later (because
     # its span overlaps the interval already grown by a wider candidate) says nothing about
     # how the interval's LEFT edge arose.
+    #
+    # OR, not AND: the fail-closed direction for a secret boundary is to PREFER marking
+    # partial, so one tied whole-match candidate is enough to enable the leading check even
+    # when another tied candidate is prefix-preserving. On every pattern shipped today this
+    # choice is observationally unpinnable end-to-end — AND, OR, and "keep whichever candidate
+    # sorts first" all produce the identical marker for every real tie, because a real tie
+    # between a whole-match and a prefix-preserving candidate only arises where the
+    # prefix-preserving one's own separator (`=` before a labelled value, `://user:` before a
+    # connection-string password) is EITHER excluded from the leading-continuation class
+    # (`=`) or already decided by the trailing check via that same matcher's `(?=:@)` closer
+    # — a structural coupling between this module's matchers, not a property of this engine,
+    # so it is recorded here rather than relied on silently. `test_tie_fold_prefers_partial_
+    # when_any_tied_candidate_is_whole_match` pins OR directly with a synthetic tie that
+    # isolates the tie-break from both of those escapes.
     candidates.sort(key=lambda c: (c[0], c[1]))
     merged: list[tuple[int, int, bool]] = []
     start, end, leading_whole = candidates[0]
@@ -638,7 +660,7 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
         if span_start < end:
             end = max(end, span_end)
             if span_start == start:
-                leading_whole = leading_whole and whole_match
+                leading_whole = leading_whole or whole_match
         else:
             merged.append((start, end, leading_whole))
             start, end, leading_whole = span_start, span_end, whole_match
