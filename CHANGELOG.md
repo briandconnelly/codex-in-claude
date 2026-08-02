@@ -33,6 +33,48 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (`capabilities_payload`); additive field, **not breaking**; `RESULT_FORMAT` unchanged (the
   capabilities payload is not persisted).
 
+### Changed
+
+- **The skills-discovery disclosure now reads identically everywhere it appears** (#427). Every
+  egress-caveat prose site — the server instructions, the `codex_status` caveat, the six
+  `ToolCapability.returns` clauses, `codex_capabilities`' `negative_scope`, and the six egress
+  tool docstrings — previously stated the same fact (Codex auto-loads the resolved workspace's
+  `AGENTS.md`, discovers skills in that workspace's `.agents/skills/` and in the user-global
+  `$CODEX_HOME/skills/`, and the plugin's isolation flags do not suppress any of it) in its own
+  independently-drifted wording. All fifteen sites now share one canonical sentence pair —
+  `SKILLS_DISCOVERY_FACT`/`SKILLS_DISCOVERY_FACT_FULL`/`SKILLS_ISOLATION_NOTE`, defined in
+  `cli_contract.py` beside the "RULE: every egress-caveat prose site" comment it implements,
+  since that module is already the single source of truth for every Codex CLI assumption and a
+  server.py-local copy would create a second hand-sync obligation with it. `server.py` imports
+  them; the three `_async` tool docstrings deliberately use the shorter fact alone, preserving
+  the lighter guarantee subset `_REQUIRED_GUARANTEES` already gives them. This is a deliberate
+  wording convergence,
+  not a byte-identical refactor: no carrier shared one sentence before, so unifying them
+  necessarily rewords the wire. `FINGERPRINT` bumps `schema-72` → `schema-73`
+  (`initialize_response`, `capabilities_payload`); reworded disclosure text only, no guarantee
+  removed or weakened (the freeze matrix in `tests/test_server.py` and the doc-side parse tests
+  in `tests/test_docs_disclosure.py` both pass unchanged before and after), so **not breaking**;
+  `RESULT_FORMAT` unchanged (none of this text is persisted in a job result). The canonical
+  pair and the delegate-specific addendum were also tightened — dropped "both"/"that
+  workspace's"/a redundant "your", and replaced the delegate addendum's restatement of
+  "tracked"/"seeded" (already disclosed earlier in the same text by the pre-existing
+  "throwaway worktree seeded from tracked state" sentence) with just the two facts that
+  addendum uniquely carries: for delegate, the resolved workspace IS the worktree, and
+  scrubbing it doesn't exclude `$CODEX_HOME/skills/`. `tools/list` grew from 84,818 to
+  84,975 bytes (+157 B, net of tightening) and the parallel `CATALOG_BYTE_CAP` wire measure
+  in `tests/test_schemas.py` from 84,835 to 84,992 bytes (+157 B) — both fit under their
+  existing 85,000 budgets, so neither gate moved. Also adds `TOOLS_LIST_BYTE_TARGET` beside
+  `TOOLS_LIST_BYTE_BUDGET` (`tests/test_wire_size.py`, set to the measured 84,975): the
+  budget assertion stays the only hard gate, but its failure message now reports the
+  measured size, the budget, and the target together so the distance from the last
+  deliberate measurement is visible on every run. New `tests/test_server.py` coverage pins
+  each egress tool docstring against the canonical constant with normalized (backtick- and
+  whitespace-insensitive) containment — the sync tools' docstrings must contain the full
+  fact (including the isolation-flags note), the `_async` tools' must contain the fact but
+  NOT the full form and NOT the isolation note as a standalone sentence either — the latter
+  catches a note injected on its own, outside the concatenated FULL form, which the
+  FULL-exclusion check alone would miss — pinning `_REQUIRED_GUARANTEES`' deliberate subset.
+
 ### Fixed
 
 - **A redaction marker no longer claims completeness it doesn't have** (#446). A credential

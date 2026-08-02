@@ -13,7 +13,7 @@ import pytest
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
-from codex_in_claude import __version__, codex, delegate, orchestration, server
+from codex_in_claude import __version__, cli_contract, codex, delegate, orchestration, server
 from codex_in_claude._core.jobs import DiscardOutcome
 from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import (
@@ -729,6 +729,56 @@ def test_active_tool_docstring_preserves_guarantee(name, guarantee):
     """Every guarantee a tool's description states today must survive compression (#333)."""
     doc = (getattr(server, name).__doc__ or "").lower()
     assert _GUARANTEE_MATCHERS[guarantee](doc), f"{name} dropped egress guarantee: {guarantee}"
+
+
+# #427: the six egress tool docstrings are hand-copied literal text — FastMCP captures
+# `fn.__doc__` eagerly at decoration time (see `wrapper.__doc__ = getattr(fn, "__doc__", ...)`
+# in fastmcp's FunctionTool), so a docstring can't interpolate `cli_contract.SKILLS_DISCOVERY_FACT`
+# as an f-string and still register as `__doc__`. That copy is exactly the drift risk #427's
+# convergence exists to close, so pin it here against the cli_contract.py constants (the
+# single source of truth every other carrier site imports directly): each docstring's
+# normalized text must still CONTAIN the normalized constant, word for word. Backtick markdown
+# and line-wrap whitespace are the only permitted divergence from the constant's plain-prose
+# form, hence normalizing both away before comparing.
+def _normalize(s: str) -> str:
+    return re.sub(r"\s+", " ", s.replace("`", "")).strip()
+
+
+# The three SYNC tools disclose the isolation-flags note too (their docstrings state
+# `isolation_suppress` in `_REQUIRED_GUARANTEES`); the three `_async` twins deliberately
+# carry the lighter subset (`cli_contract.SKILLS_DISCOVERY_FACT` alone) and must NOT also
+# contain the isolation note — that would silently erase the very distinction
+# `_REQUIRED_GUARANTEES` pins, so the async-side check is three-sided: contains the fact,
+# excludes the concatenated FULL form, AND excludes the isolation note as a standalone
+# sentence (a docstring could otherwise carry the note without going through
+# SKILLS_DISCOVERY_FACT_FULL, e.g. copied in from a different spot, and the FULL-only
+# exclusion would miss it).
+_SYNC_EGRESS_TOOLS = ("codex_consult", "codex_review_changes", "codex_delegate")
+_ASYNC_EGRESS_TOOLS = ("codex_consult_async", "codex_review_changes_async", "codex_delegate_async")
+
+
+@pytest.mark.parametrize("name", _SYNC_EGRESS_TOOLS)
+def test_sync_tool_docstring_matches_full_skills_discovery_constant(name):
+    doc = _normalize(getattr(server, name).__doc__ or "")
+    assert _normalize(cli_contract.SKILLS_DISCOVERY_FACT_FULL) in doc, (
+        f"{name}'s docstring diverged from cli_contract.SKILLS_DISCOVERY_FACT_FULL"
+    )
+
+
+@pytest.mark.parametrize("name", _ASYNC_EGRESS_TOOLS)
+def test_async_tool_docstring_matches_fact_only_not_full(name):
+    doc = _normalize(getattr(server, name).__doc__ or "")
+    assert _normalize(cli_contract.SKILLS_DISCOVERY_FACT) in doc, (
+        f"{name}'s docstring diverged from cli_contract.SKILLS_DISCOVERY_FACT"
+    )
+    assert _normalize(cli_contract.SKILLS_DISCOVERY_FACT_FULL) not in doc, (
+        f"{name}'s docstring carries the full fact — _REQUIRED_GUARANTEES pins it to the "
+        "lighter subset (no isolation-flags note)"
+    )
+    assert _normalize(cli_contract.SKILLS_ISOLATION_NOTE) not in doc, (
+        f"{name}'s docstring carries the isolation-flags note on its own (not via the FULL "
+        "form) — _REQUIRED_GUARANTEES still pins it to the lighter subset"
+    )
 
 
 def _param_description(alias_name):
@@ -2288,7 +2338,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-72"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-73"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6216,7 +6266,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-72")
+    assert result["fingerprint"].endswith("schema-73")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6962,7 +7012,7 @@ async def test_capabilities_advertise_reasoning_effort(clean_env):
 async def test_dry_run_model_echo_reconciles_help_gated_drop(monkeypatch, clean_env, tmp_path):
     # Codex-review regression (#309): on a CLI without --model the paid call DROPS the
     # flag and nulls meta.model; the preview's echo must not claim the dropped override.
-    from codex_in_claude import cli_contract, preflight
+    from codex_in_claude import preflight
 
     monkeypatch.setattr(
         server.preflight,

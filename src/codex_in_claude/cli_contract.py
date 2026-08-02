@@ -233,7 +233,33 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # caveat, the tool capability descriptions and docstrings, codex_capabilities'
 # negative_scope, README.md, COMPATIBILITY.md, SECURITY.md, and the
 # collaborating-with-codex skill — must disclose BOTH skills roots. No feature-detection
-# logic exists here by design.
+# logic exists here by design. The canonical sentence pair every code-side site imports
+# lives just below (SKILLS_DISCOVERY_FACT / SKILLS_DISCOVERY_FACT_FULL); the doc-side
+# sites restate it in their own prose instead, checked for the same two roots by
+# tests/test_docs_disclosure.py.
+
+# Canonical wording for the disclosure the RULE above requires (#427). Every code-side site
+# it names imports these rather than hand-copying the fact in its own words, so a Codex
+# upgrade that changes this behavior has exactly one place in code to fix — a stale hand-copy
+# is precisely the drift risk the RULE exists to prevent. `SKILLS_DISCOVERY_FACT` states the
+# discovery alone (both roots, the default path, and that the global root is reachable from
+# outside the workspace); `SKILLS_ISOLATION_NOTE` is the separate isolation-flags sentence,
+# appended only where a site's disclosure needs it — the three `_async` tool docstrings
+# deliberately carry a lighter subset (see `_REQUIRED_GUARANTEES` in tests/test_server.py) and
+# use the fact alone, everywhere else uses `SKILLS_DISCOVERY_FACT_FULL`. The six egress tool
+# docstrings can't import these directly: FastMCP captures `fn.__doc__` eagerly at decoration
+# time (`wrapper.__doc__ = getattr(fn, "__doc__", ...)` in its FunctionTool), so a docstring
+# can't interpolate an f-string and still register as `__doc__`. Those six are hand-copied
+# literal text instead, pinned against drift by tests/test_server.py's
+# `test_sync_tool_docstring_matches_full_skills_discovery_constant` /
+# `test_async_tool_docstring_matches_fact_only_not_full`.
+SKILLS_DISCOVERY_FACT = (
+    "Codex auto-loads the resolved workspace's AGENTS.md and discovers skills in its "
+    ".agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), "
+    "reachable from outside the workspace."
+)
+SKILLS_ISOLATION_NOTE = "The plugin's isolation flags don't suppress any of it."
+SKILLS_DISCOVERY_FACT_FULL = f"{SKILLS_DISCOVERY_FACT} {SKILLS_ISOLATION_NOTE}"
 
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
