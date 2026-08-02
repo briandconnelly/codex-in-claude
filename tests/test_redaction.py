@@ -934,9 +934,16 @@ def test_identity_urls_in_a_source_diff_record_no_redaction():
 #     redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host
 #     -> redis://u:token=[redacted: secret value]%2Ftailsegment@host
 #
-# Both connection-string matchers now run FIRST, so the complete userinfo span is consumed
-# before anything can fragment it. This is a property of the ordered pipeline rather than of
-# any one matcher, which is why no regex changes here.
+# #443 fixed that by running both connection-string matchers FIRST, so the complete userinfo
+# span was consumed before anything could fragment it — a property of the ordered pipeline
+# rather than of any one matcher, which is why no regex changed. #445 then replaced the
+# ordering itself: the engine collects every pattern's candidate spans against the ORIGINAL
+# text and merges the overlapping ones, so no matcher can consume text out from under another
+# at all. The sweep BODY below is unchanged and still guards the same property — the loop, the
+# corpus, and the assertion are as #443 wrote them; only its signature grew an `engine`
+# parameter for the conversion below. What changed is that the property now holds for reasons
+# that do not depend on this list's order, which is why the control substitutes the pre-#445
+# ENGINE rather than the pre-#443 ordering.
 #
 # The instrument is a SENTINEL sweep, not the old-pattern oracle the #438/#440 sweeps use.
 # That oracle is structurally incapable of seeing this bug: the regexes are unchanged, so an
@@ -944,7 +951,8 @@ def test_identity_urls_in_a_source_diff_record_no_redaction():
 # the old pipeline cannot recognize its OWN partially redacted output, because the marker
 # destroys the syntax the oracle needs in order to match. Every credential generated below
 # therefore carries a unique tail that no matcher recognizes on its own; the assertion is
-# that the tail disappears. The pre-#443 ordering is kept as the control.
+# that the tail disappears. The pre-#445 sequential engine, driven over the pre-#443 ordering
+# — the exact pipeline that shipped the bug — is kept as the control.
 
 _CS_MATCHERS = (
     redaction.CONNECTION_STRING_PASSWORD_PATTERN,
@@ -963,6 +971,43 @@ def _pre_443_order():
     return [p for p in redaction.SECRET_VALUE_PATTERNS if p not in _CS_MATCHERS] + list(
         _CS_MATCHERS
     )
+
+
+def _sequential_engine(patterns):
+    """The PRE-#445 engine, kept as an ORACLE: one `re.sub` pass per pattern, each running
+    over the PREVIOUS pass's output.
+
+    Spelled out here rather than imported, the discipline every oracle in this file follows
+    (:123-129): the thing being replaced cannot also be the thing that judges the
+    replacement. The live engine is order-independent by construction — it computes each
+    pattern's candidate spans against the original text and merges them — so monkeypatching
+    `SECRET_VALUE_PATTERNS` into a different order can no longer make the pipeline strand
+    anything, and a control that did so would report "no leaks" for the wrong reason. This is
+    an engine that CAN still strand a tail.
+
+    Returns a callable with `_redact_secret_values`' exact signature, so a sweep body takes it
+    unchanged.
+    """
+
+    def engine(line: str, *, exempt_code: bool = False) -> tuple[str, bool]:
+        redacted = False
+        out = line
+        for pattern in patterns:
+            exempting = exempt_code and pattern is redaction.LABELLED_VALUE_PATTERN
+
+            def repl(match: re.Match, *, exempting: bool = exempting) -> str:
+                nonlocal redacted
+                if exempting and redaction._is_code_reference(match):
+                    return match.group(0)
+                redacted = True
+                if match.lastindex:
+                    return f"{match.group(1)}[redacted: secret value]"
+                return "[redacted: secret value]"
+
+            out = pattern.sub(repl, out)
+        return out, redacted
+
+    return engine
 
 
 # A tail that no matcher recognizes on its own (pinned below), containing no character a
@@ -1040,11 +1085,19 @@ def _collision_lines():
         yield lead + shape.format(s=scheme, c=payload + _TAIL_SENTINEL, h=host) + trailer
 
 
-def _sentinel_leaks(*, exempt_code):
-    """Every generated line whose emitted output still carries the tail sentinel."""
+def _sentinel_leaks(*, exempt_code, engine=None):
+    """Every generated line whose emitted output still carries the tail sentinel.
+
+    ``engine`` selects the pipeline under test and defaults to the LIVE redactor — resolved
+    at call time rather than bound as a default argument, so the default names whatever
+    `redaction._redact_secret_values` is when the sweep runs. The control below passes
+    `_sequential_engine(...)`, so both exercise byte-identical sweep logic: a control that
+    re-implements the loop proves nothing about the loop the real test runs.
+    """
+    run = engine if engine is not None else redaction._redact_secret_values
     leaks = []
     for line in _collision_lines():
-        out, _ = redaction._redact_secret_values(line, exempt_code=exempt_code)
+        out, _ = run(line, exempt_code=exempt_code)
         if _TAIL_SENTINEL in out:
             leaks.append((line, out))
     return leaks
@@ -1058,16 +1111,22 @@ def test_no_marker_strands_a_connection_string_credential(exempt_code):
 
 
 @pytest.mark.parametrize("exempt_code", [False, True])
-def test_the_collision_sweep_can_actually_see_a_stranded_tail(monkeypatch, exempt_code):
-    """Control: restoring the pre-#443 ordering must make the SAME sweep body report leaks.
+def test_the_collision_sweep_can_actually_see_a_stranded_tail(exempt_code):
+    """Control: the pre-#445 pipeline must make the SAME sweep body report leaks.
 
     Without this, a sweep whose payloads had drifted out of collision range and a sweep over
     a correct pipeline are indistinguishable — both simply report nothing.
+
+    The instrument changed with #445, and the reason is the point of the control. This used to
+    monkeypatch the pre-#443 ORDER onto the live engine; under span merging that reports no
+    leaks, because the merged span set is a per-pattern union over the original text and so
+    cannot depend on the list's order. A control left in that form would have gone green while
+    testing nothing. What can still strand a tail is the pre-#445 sequential engine — driven
+    over the pre-#443 ordering, which is exactly the pipeline that shipped the bug — so the
+    substitution moved from the ordering to the ENGINE.
     """
-    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
-    assert _sentinel_leaks(exempt_code=exempt_code), (
-        "the sweep reported no stranded tail against the pre-#443 ordering"
-    )
+    leaks = _sentinel_leaks(exempt_code=exempt_code, engine=_sequential_engine(_pre_443_order()))
+    assert leaks, "the sweep reported no stranded tail against the pre-#443/#445 pipeline"
 
 
 def test_every_matcher_that_can_fire_inside_userinfo_has_a_collision_payload():
@@ -1116,13 +1175,22 @@ def test_the_whitespace_only_exemption_is_earned_by_every_member():
 
 
 def test_no_other_matcher_can_straddle_a_userinfo_boundary():
-    """The invariant the reorder's safety argument actually rests on.
+    """A pattern-class TRIPWIRE. It used to be #443's whole safety argument; #445 demoted it.
 
-    Running the connection-string matchers first is safe because a later candidate is either
-    inside the span they replace (covered by the marker) or wholly outside it (`sub` rescans
-    the whole string). The only dangerous case is a candidate STRADDLING the boundary — and
-    the boundary characters are the `:` that opens the password run and the `@` that closes
-    it. So the invariant is that no other matcher's REPLACED run may contain either.
+    Under the span-merge engine this property is no longer what keeps a credential whole: a
+    candidate straddling a userinfo boundary is merged with the span it crosses, not stranded
+    by it, so a matcher that violated this would produce a wider marker rather than a leak.
+    Kept — and kept exactly as written — because it still says something worth knowing about
+    the pattern set: a new matcher whose replaced run admits `:` or `@` is reaching across
+    authority delimiters, which is a design smell in a value matcher and worth a deliberate
+    look. It fails here instead of going unremarked.
+
+    The argument it originally checked, recorded so the demotion is legible: running the
+    connection-string matchers first was safe because a later candidate was either inside the
+    span they replace (covered by the marker) or wholly outside it (`sub` rescans the whole
+    string). The only dangerous case was a candidate STRADDLING the boundary — and the
+    boundary characters are the `:` that opens the password run and the `@` that closes it. So
+    the invariant was that no other matcher's REPLACED run may contain either.
 
     It belongs to the OTHER matchers, not to the connection-string ones: the password run
     admits `:` on purpose, so `postgres://user:p1:p2:p3@host` is redacted whole (pinned by
@@ -1172,21 +1240,15 @@ def test_the_tail_sentinel_is_not_self_redacting():
     assert redaction.redact_text(_TAIL_SENTINEL) == _TAIL_SENTINEL
 
 
-def test_the_connection_string_matchers_run_before_the_substring_matchers():
-    """The ordering itself, stated so a reordering fails with its reason attached.
-
-    The sweep above is the real guard; this exists so the failure names the invariant
-    instead of pointing at 4,320 generated lines. Presence is asserted before position for
-    the same reason: `list.index` on a removed matcher raises a bare
-    `ValueError: re.compile(...) is not in list`, which reports the symptom of a deletion
-    without naming the invariant it broke.
-    """
-    missing = [p.pattern for p in _CS_MATCHERS if p not in redaction.SECRET_VALUE_PATTERNS]
-    assert not missing, f"a connection-string matcher was removed from the pipeline: {missing}"
-    positions = [redaction.SECRET_VALUE_PATTERNS.index(p) for p in _CS_MATCHERS]
-    assert max(positions) < len(_CS_MATCHERS), (
-        "the connection-string matchers must precede every substring-oriented matcher (#443)"
-    )
+# RETIRED with #445: `test_the_connection_string_matchers_run_before_the_substring_matchers`
+# asserted that both connection-string matchers occupy the first two positions of
+# `SECRET_VALUE_PATTERNS`. That invariant is dead — the span-merge engine's output does not
+# depend on the list's order — so the test could only fail on a change that breaks nothing,
+# and it would have read as a live safety requirement to anyone touching the list. Deleted
+# rather than converted: the property it guarded is now structural. The matchers still stand
+# first in the shipped list (see that list's header for why). The PRESENCE half of the retired
+# test is not lost — removing either matcher fails the exact-output pins in the #438/#440
+# sections, which assert the redacted form of every userinfo shape.
 
 
 @pytest.mark.parametrize(
@@ -1228,32 +1290,31 @@ def test_marker_no_longer_strands_a_connection_string_credential(text, expected)
     assert redaction.redact_text(out) == out
 
 
-def test_reordering_enlarges_the_query_string_false_positive(monkeypatch):
-    """The accepted cost of #443, recorded as a decision with a test on it.
+def test_query_string_false_positive_is_pinned_until_442():
+    """#442, a pre-existing false positive, pinned with its exact current output.
 
-    #442 is the pre-existing false positive: the named-username password class admits `?`
-    and `#`, which cannot appear raw in userinfo, so an ordinary URL whose query carries an
-    `@` is masked as a credential. Running the connection-string matchers first REMOVES an
-    accidental brake on it — a labelled marker used to land inside the query and stop the
-    connection matcher — so #442 now fires on strings where it previously did not.
+    The named-username password class admits `?` and `#`, which cannot appear raw in
+    userinfo, so an ordinary URL whose query carries an `@` is masked as a credential: scheme
+    and host survive, the port and query go with the marker.
 
     Accepted rather than fixed here: #442's remedy is to exclude `?`/`#` from that class,
     which NARROWS a documented guarantee (`test_password_class_covers_every_character_it_
     claims` forbids it) and needs its own false-positive corpus. Folding it in would bundle a
-    narrowing into a security fix. The credential is still redacted in the enlarged case —
-    what grows is how much surrounding host/port/query text is masked with it.
+    narrowing into a security fix. The credential is redacted either way — what is at stake is
+    how much surrounding host/port/query text is masked with it. Pinned so #442's eventual
+    fixer sees the current output rather than re-deriving it, and so a change to that span
+    fails here with its reason attached.
 
-    The pre-#443 output is asserted too, so this test shows the DELTA. Pinning only the new
-    output would leave "this is an enlargement" an unverified claim in a docstring, and a
-    second assertion that the secret is absent would add nothing — the exact-output check
-    already settles it.
+    History, because this test used to assert a DELTA and no longer can. #443's reorder
+    ENLARGED #442's reach by removing an accidental brake — under the old sequential pipeline
+    a labelled marker landed inside the query and stopped the connection matcher from matching
+    at all — so the pre-#443 ordering produced a visibly narrower span and the delta was worth
+    asserting. Under the span-merge engine (#445) both orderings emit the output below, since
+    the merged span set does not depend on the list's order; the monkeypatched half would have
+    become a tautology, so it is gone rather than kept as decoration.
     """
     text = "https://host.example:8443?token=s3cr3tvalue0123456789@x.example"
     assert redaction.redact_text(text) == "https://host.example:[redacted: secret value]@x.example"
-    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
-    assert redaction.redact_text(text) == (
-        "https://host.example:8443?token=[redacted: secret value]@x.example"
-    )
 
 
 @pytest.mark.parametrize(
@@ -1295,13 +1356,177 @@ def test_a_credential_the_userinfo_runs_cannot_span_is_only_partly_redacted(
     they would not notice the redaction moving to the wrong span — including an output that
     discarded the scheme and delimiters entirely.
 
-    Order invariance is ASSERTED, not just claimed: the same exact output must come back
-    under the pre-#443 ordering. That is what makes this a characterization of a
-    pre-existing limit rather than of something this change introduced.
+    The order-invariance half is now VACUOUS, and is left in place only because the brief for
+    #445 held every unaffected test byte-for-byte. It once carried weight: re-running under the
+    pre-#443 ordering proved this was a characterization of a pre-existing limit rather than of
+    something #443 introduced. Under the span-merge engine order cannot affect output at all —
+    the merged span set is a per-pattern union over the original text — so that second assertion
+    can no longer fail and proves nothing. What this test is still worth is the exact-output
+    characterization of #446: a credential the userinfo runs cannot SPAN is only partly redacted,
+    and no merge reaches it because no single pattern produces a candidate covering it. #446's
+    fix should CONVERT this test — retiring the monkeypatched half with it — not delete it.
     """
     assert redaction.redact_text(text) == expected
     monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", _pre_443_order())
     assert redaction.redact_text(text) == expected
+
+
+# --- #445: no matcher may strand part of a secret another one covers whole ----
+# The sequential `re.sub` pipeline let an earlier, NARROWER matcher consume a PREFIX of a
+# value a later, wider matcher would have covered whole. `sub` never revisits consumed
+# text, so the tail shipped beside a complete-looking marker:
+#
+#     token=ghp_<20 chars>-tailsegment  ->  token=[redacted: secret value]-tailsegment
+#     password=AKIA<16 chars>tailsegment -> password=[redacted: secret value]tailsegment
+#
+# Both are the vendor matchers (whose value classes are narrower than `_VALUE_CHARS`)
+# running ahead of `LABELLED_VALUE_PATTERN`. #443 patched ONE instance of this class by
+# reordering; the engine now collects every candidate span from the ORIGINAL text and
+# merges overlapping ones, which removes the interference class rather than trading which
+# member of it bites.
+#
+# Exact output rather than `not in`, per this file's convention: a partial replacement is
+# the whole defect, and it LOOKS complete. Both `exempt_code` modes, because the engine's
+# exemption step moved (see the exemption test below); the positive controls beneath prove
+# each stranded tail is not self-redacting, so a green assertion cannot come from the tail
+# being independently covered.
+
+_GHP_20 = "ghp_" + "a" * 20
+_XOXB_20 = "xoxb-" + "a" * 20
+_AKIA_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
+
+_STRANDED_TAIL_CASES = [
+    # `-` is outside `gh[pousr]_[A-Za-z0-9_]{20,}` but inside `_VALUE_CHARS`.
+    (f"token={_GHP_20}-tailsegment", "token=[redacted: secret value]"),
+    # `AKIA[0-9A-Z]{16}` is a FIXED length, so a lowercase tail simply falls outside it.
+    (f"password={_AKIA_KEY}tailsegment", "password=[redacted: secret value]"),
+    # `.` is outside `xox[baprs]-[A-Za-z0-9-]{20,}` but inside `_VALUE_CHARS`.
+    (f"token={_XOXB_20}.tailsegment", "token=[redacted: secret value]"),
+    # The same collision in the USERNAME slot of a connection string, where the merge has
+    # to keep the two independent credentials apart: the labelled span (username) and the
+    # connection-string password span do not overlap, so both markers survive.
+    (
+        f"x://token={_GHP_20}-tail:pw@h",
+        "x://token=[redacted: secret value]:[redacted: secret value]@h",
+    ),
+]
+
+
+@pytest.mark.parametrize("exempt_code", [False, True])
+@pytest.mark.parametrize(("text", "expected"), _STRANDED_TAIL_CASES)
+def test_a_narrow_matcher_does_not_strand_the_tail_of_a_wider_one(text, expected, exempt_code):
+    out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
+    assert out == expected
+    assert redacted is True
+    # Re-run the emitted line: the fix must not depend on a second pass, and must not
+    # mangle its own output on one.
+    again, _ = redaction._redact_secret_values(out, exempt_code=exempt_code)
+    assert again == out
+
+
+@pytest.mark.parametrize("tail", ["-tailsegment", "tailsegment", ".tailsegment", "-tail", "pw"])
+def test_the_stranded_tail_is_not_self_redacting(tail: str):
+    # Positive control for every case above (the discipline `_PROBES` follows): if a tail
+    # were redacted on its own, the exact-output assertions would pass for the wrong reason.
+    assert redaction.redact_text(tail) == tail
+
+
+def test_adjacent_spans_get_two_markers():
+    """Touching spans do NOT merge — that is today's behavior and it is preserved.
+
+    The fold merges on strict overlap (`start < merged_end`), so two candidates that
+    abut emit two markers, exactly as two successive `re.sub` passes did. Asserted with
+    the adjacency VERIFIED rather than assumed: a corpus whose spans happened to overlap
+    (or not touch at all) would make this a test of nothing.
+    """
+    text = _AKIA_KEY + _GHP_20
+    spans = sorted(
+        (m.start(), m.end()) for p in redaction.SECRET_VALUE_PATTERNS for m in p.finditer(text)
+    )
+    # None of the matchers that fire here have a preserved group, so start/end IS the
+    # replaced span; the guard is what makes the adjacency claim checkable.
+    assert len(spans) == 2 and spans[0][1] == spans[1][0], f"adjacency is not genuine: {spans}"
+    out, redacted = redaction._redact_secret_values(text)
+    assert out == "[redacted: secret value][redacted: secret value]"
+    assert redacted is True
+
+
+def test_exemption_is_judged_against_the_original_line_not_the_accumulator():
+    """The one behavioral delta of the span-merge rewrite, pinned — it fails CLOSED.
+
+    `_is_code_reference` reads the text around the match (`match.string`). Under the
+    sequential engine that string was the PARTIALLY SUBSTITUTED accumulator, so an earlier
+    matcher's marker could erase the evidence the exemption is judged on. Here the `AKIA`
+    matcher used to replace `secret` + key out of `_LABEL_LEAD_RE`'s reach: the lead scan
+    stops at the marker's `]`, never saw the word `secret`, and the labelled match was then
+    exempted as a code reference — emitting
+    `+secret[redacted: secret value]_key = helper_function_name(x)`.
+
+    Candidates are now collected by `finditer` over the ORIGINAL line, so the lead scan
+    reads `secretAKIA…` and the sensitive-label guard fires: BOTH values are redacted. The
+    delta only ever removes exemptions, which is the safe direction for this boundary.
+    """
+    line = "+secretAKIAABCDEFGHIJKLMNOP_key = helper_function_name(x)"
+    diff = f"diff --git a/app.py b/app.py\n{line}"
+    out, paths = redaction.redact(diff)
+    assert out == (
+        "diff --git a/app.py b/app.py\n"
+        "+secret[redacted: secret value]_key = [redacted: secret value](x)"
+    )
+    assert paths == ["app.py"]
+
+
+# --- #445 review / #456: the replaced-span projection must fail closed --------
+# The projection `(end(1), end(0))` is only correct when group 1 is a LEADING, PARTICIPATING
+# prefix of the match. That holds for all four grouped patterns shipped today — and it is a
+# property of those patterns, not of the engine, so a pattern added later (or substituted by a
+# caller) can violate it. Both violation modes leak under an unguarded projection, which is
+# why the engine validates rather than assumes and falls back to the FULL match span.
+#
+# These probes monkeypatch `SECRET_VALUE_PATTERNS` to the malformed matcher ALONE. With the
+# live list present the real `AKIA` matcher would redact the key anyway and the test would
+# pass without exercising the projection at all — the same "passes against the bug it guards"
+# trap `_PROBES` exists for. Each test asserts the malformed pattern really does violate the
+# assumption before asserting the output, so a probe that drifted into well-formedness fails
+# loudly instead of going vacuous.
+
+
+def test_a_group_that_is_not_at_the_match_start_falls_back_to_the_full_span(monkeypatch):
+    """Violation mode 1: group 1 sits in the MIDDLE of the match.
+
+    `end(1)` then lands mid-match, so everything before the group — here an entire AWS access
+    key — is copied through as "preserved" text while the marker covers only the tail.
+    """
+    malformed = re.compile(r"AKIA[0-9A-Z]{16}(_hint:)[A-Za-z0-9]{16,}")
+    text = "AKIAABCDEFGHIJKLMNOP_hint:abcdefghij1234567890"
+    probe = malformed.search(text)
+    assert probe is not None and probe.lastindex and probe.start(1) != probe.start(0), (
+        "the probe no longer violates the leading-group assumption"
+    )
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", [malformed])
+    out, redacted = redaction._redact_secret_values(text)
+    assert out == "[redacted: secret value]"
+    assert redacted is True
+
+
+def test_a_non_participating_group_1_falls_back_to_the_full_span(monkeypatch):
+    """Violation mode 2: `lastindex` is truthy but group 1 never participated.
+
+    An alternation whose SECOND branch matched leaves `span(1) == (-1, -1)` while `lastindex`
+    reports the branch that did match. The projection then carries a negative start, which
+    slices from the wrong end of the line: the secret survives intact and a stray marker
+    appears beside it.
+    """
+    malformed = re.compile(r"(?:(pre:)|(alt:))SECRETVALUE0123456789")
+    text = "xx alt:SECRETVALUE0123456789 yy"
+    probe = malformed.search(text)
+    assert probe is not None and probe.lastindex and probe.span(1) == (-1, -1), (
+        "the probe no longer leaves group 1 non-participating"
+    )
+    monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", [malformed])
+    out, redacted = redaction._redact_secret_values(text)
+    assert out == "xx [redacted: secret value] yy"
+    assert redacted is True
 
 
 # --- free-text redaction (#58) ----------------------------------------------
