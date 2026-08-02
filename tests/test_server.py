@@ -3437,7 +3437,7 @@ async def test_async_launchers_are_not_read_only(tool_name):
 async def test_sync_active_tools_are_not_read_only(tool_name):
     """The sync consult/review/delegate tools spawn the same observable, spend-
     committing job record as their *_async twins above, so they share the same
-    readOnlyHint:false posture (issue #138) — half the reality
+    readOnlyHint:false posture (issue #138). This is half of what
     CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
@@ -3450,7 +3450,7 @@ async def test_sync_active_tools_are_not_read_only(tool_name):
 )
 async def test_dry_run_tools_are_read_only(tool_name):
     """Dry-run tools call no model and create no job record, so they keep
-    readOnlyHint:true — the other half of the reality
+    readOnlyHint:true. This is the other half of what
     CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
