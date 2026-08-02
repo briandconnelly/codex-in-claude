@@ -21,14 +21,81 @@ SECRET_PATH_RE = re.compile(
 # Named because the code-reference exemption below applies to this pattern alone (#421).
 
 # The sensitive-label alternation. Defined once because the pattern below uses it TWICE —
-# as the label itself, and inside the guard that stops a bracketed match from swallowing a
-# later label. Two literal copies would drift, and a guard that silently stopped covering a
-# label the pattern still matches is precisely the failure this indirection prevents.
+# as the label itself, and inside the guard that stops a match from swallowing a later
+# label (#436; originally bracket-only, #434). Two literal copies would drift, and a guard
+# that silently stopped covering a label the pattern still matches is precisely the failure
+# this indirection prevents.
 _LABEL_ALT = (
     r"(?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)"
 )
 # The value run, also used twice for the same reason.
 _VALUE_CHARS = r"[A-Za-z0-9._~+/=-]"
+# The redactable-value threshold, likewise defined once and interpolated everywhere this
+# pattern family hard-codes it — the main value run below AND the guard's inner-value tail
+# (#436). A repeated literal `16` lets the guard's notion of "redactable" drift from the
+# matcher's own, silently, the same drift `_KEY_STEP_ANON` above exists to make
+# unrepresentable for the label/separator shape. (Bearer/userinfo/`sk_live_`'s own `{16,}`
+# are hand-spelled per their own comments and deliberately untouched — this constant is
+# scoped to the labelled-value family alone.)
+_MIN_SECRET_VALUE_LEN = 16
+# How far the UNCONDITIONAL swallow guard (below) peeks ahead of a candidate's own
+# separator hunting a LATER label, in `_VALUE_CHARS`, when `key_bracket` is falsy (the
+# coverage #436 ADDS — main had no protection here at any distance, bracketed or not).
+# Left unbounded, that peek made the guard quadratic on repeated-anchor input the same way
+# #439's JWT segment was (that bound is defined further below, at the JWT entry in
+# `SECRET_VALUE_PATTERNS`): matching an open-ended run costs O(remaining) even with no
+# backtracking, and the guard is evaluated at every one of a repeated anchor's
+# occurrences, so `("key=", N)` summed that cost across ~N positions — O(N^2). Measured on
+# the unbounded guard: `"key="*20000` (80k chars) 3.5s, `"key="*40000` (160k) 14.2s, ~4x
+# per 2x input.
+#
+# This bound applies ONLY to the non-bracket branch. The bracketed branch (below, the
+# `(?(key_bracket)...)` conditional) stays genuinely UNBOUNDED — restoring #434's shipped
+# guarantee exactly, with no cap and no distance limit — and is still flat on the hostile
+# seed for a structural reason rather than a numeric one: on `"key="*N`, `key_bracket` is
+# false at EVERY anchor (there is no bracket anywhere in that text), so the unbounded
+# conditional branch never evaluates at all — only this O(cap) branch runs, giving O(N).
+# On a text built from repeated BRACKETED anchors (`'x["key"]= ' * N`, the seed this
+# guard's own conditional branch is actually exposed to), the branch is flat for a
+# different reason: `key_bracket` requires consuming a quote and a `]`, and both are
+# outside `_VALUE_CHARS`, so the unbounded probe run FROM one bracketed anchor is
+# terminated (by hitting a quote/bracket char the value class can't cross) before the NEXT
+# bracketed anchor can even begin — no probe run can span two bracketed anchors, so the
+# per-anchor cost cannot compound across anchors the way an uncapped non-bracket peek did.
+# Measured (`'x["key"]= ' * N`): 5000 reps (50k chars) 0.007s, 10000 (100k) 0.014s, 20000
+# (200k) 0.029s, 40000 (400k) 0.057s — linear, ~2x per 2x input, both branches together
+# proven flat by `test_repeated_anchor_input_is_not_quadratic_for_any_pattern` and a
+# second, bracket-anchor-seeded timing test alongside it.
+#
+# The value-length probe on BOTH branches is an EXACT `_MIN_SECRET_VALUE_LEN` rather than
+# an open `{16,}` — the guard only asks a yes/no question ("is the inner value at least
+# this long"), which a fixed count answers identically (both accept exactly when 16+
+# matching chars exist) at O(16) instead of O(remaining); this is what keeps the
+# UNBOUNDED bracketed branch itself flat per-anchor once it reaches a candidate inner
+# label, independent of the peek-cap question above, which is about how far it can reach
+# in the first place.
+#
+# 1024 rather than a smaller cap: measured (`"key="*20000`, the mandated anti-quadratic
+# seed) at 256 -> 0.034s, 1024 -> 0.103s, 4096 -> 0.366s, confirming the cost scales
+# linearly in the cap (not just in input length) — so the cap itself, not only the
+# bound's existence, has to be chosen deliberately. 1024 is 2x the JWT first-segment
+# bound (512, chosen for real JOSE headers ~20-60 chars, ~120 with `kid`/`jku`) and >12x
+# the widest peek distance any fixture in the swallow suites below (:2300-2358,
+# `test_labelled_match_does_not_swallow_a_later_sensitive_label`) exercises (under 80
+# chars), while still leaving ~20x headroom under the 2.0s anti-quadratic budget on this
+# machine — 4096's ~5.5x margin was judged too thin for a slower CI runner, the same
+# reasoning `test_repeated_anchor_input_is_not_quadratic_for_any_pattern`'s own module
+# comment applies to the JWT rep count.
+#
+# Because the bracketed branch is unbounded, this cap is NOT a narrowing of anything main
+# ever shipped: main's bracket-conditional guard is preserved byte-for-byte in reach (see
+# the conditional branch below), so every input it protected is still protected, at any
+# distance. What the cap bounds is exclusively the NEW non-bracket coverage #436 adds —
+# main had zero protection there at ANY distance, so capping it at 1024 is a partial fix
+# of a pre-existing leak, not a regression: a non-bracket swallow chain whose gap exceeds
+# 1024 chars remains exactly as unprotected as it always was on every released version.
+# Pinned at the exact cliff by `test_non_bracket_swallow_guard_peek_boundary_is_pinned`.
+_SWALLOW_GUARD_PEEK = 1024
 
 # Everything between a sensitive label and its `:`/`=` separator: an optional closing quote
 # (`"api_key":`, #432) and, nested inside it, an optional closing bracket
@@ -56,31 +123,76 @@ LABELLED_VALUE_PATTERN = re.compile(
     # `key_quote` would silently break that guarantee.
     # `key_quote` is named because `_is_code_reference` keys the #421 exemption off it.
     rf"(?i)({_LABEL_ALT}{_KEY_STEP}\s*(?:\\?['\"])?)"
-    # A bracketed match refuses to start when its own value would contain a LATER sensitive
-    # label and separator. Found by the #434 review: a bracketed candidate matches EARLIER
-    # than the pre-#434 pattern did, and `sub` never revisits consumed text, so
+    # TWO guards in sequence, both refusing a candidate whose own value would contain a
+    # LATER sensitive label, separator, and a redactable value behind it — a swallow.
+    # Found by the #434 review: a bracketed candidate matches EARLIER than the pre-#434
+    # pattern did, and `sub` never revisits consumed text, so
     # `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]`,
     # swallowed `application_specific_api_key`, and sent the real secret after the second
     # separator out intact — where the old pattern had redacted it. Failing the candidate
     # here makes the engine advance and find the `api_key` match instead.
     #
-    # The guard looks INSIDE the value, not past its end, because `_VALUE_CHARS` contains
+    # Both guards look INSIDE the value, not past its end, because `_VALUE_CHARS` contains
     # `=`: an unspaced `label=value` chain is absorbed whole, so a trailing `(?!\s*[:=])`
-    # inspects the wrong position and misses it entirely.
-    #
-    # It also has to allow the value run to start INSIDE a quoted key: the value's own
-    # opening quote consumes the swallowed key's opening `"`, so the run begins at the
-    # label and ends on its closing quote — which is why `_KEY_STEP_ANON` and not a bare
-    # separator (the second #434 review finding; the bare form leaked
+    # inspects the wrong position and misses it entirely. Both also have to allow the
+    # value run to start INSIDE a quoted key: the value's own opening quote consumes the
+    # swallowed key's opening `"`, so the run begins at the label and ends on its closing
+    # quote — which is why each uses `_KEY_STEP_ANON` and not a bare separator (the second
+    # #434 review finding; the bare form leaked
     # `cfg["token"] = "aws_secret_access_key": "<secret>"`).
     #
-    # Conditioned on `key_bracket` so NON-bracket matches keep byte-identical behavior.
-    # Unconditional, it would also change them — `key:api_key=<secret>` would redact only
-    # the tail rather than the whole chain — and that class is pre-existing, reachable on
-    # the pre-#434 pattern too, so it is tracked separately as #436 rather than quietly
-    # altered here.
-    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}{_KEY_STEP_ANON}))"
-    rf"{_VALUE_CHARS}{{16,}}"
+    # GUARD 1 (conditional, UNBOUNDED): `#434`'s original guard, conditioned on
+    # `key_bracket` so it fires only for a bracketed outer, at ANY distance — no peek cap.
+    # This is deliberately not merged into guard 2: it exists to preserve #434's shipped
+    # protection byte-for-byte in REACH (not narrowed by anything #436 or its own
+    # follow-up adds), while still picking up the one refinement both guards need (see the
+    # length-tail paragraph below). Flat on a repeated-BRACKETED-anchor seed for a
+    # structural reason, not a numeric one — see `_SWALLOW_GUARD_PEEK`'s module comment
+    # for why an unbounded probe here still cannot compound across anchors.
+    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}{_KEY_STEP_ANON}\s*(?:\\?['\"])?"
+    rf"{_VALUE_CHARS}{{{_MIN_SECRET_VALUE_LEN}}}))"
+    # GUARD 2 (unconditional, BOUNDED at `_SWALLOW_GUARD_PEEK`): fires for every
+    # candidate, bracketed or not — this is the coverage #436 ADDS that #434 never had at
+    # any distance, so it is a bounded ADDITION, not a narrowing of guard 1's reach (see
+    # `_SWALLOW_GUARD_PEEK`'s module comment for the full non-regression argument and the
+    # cap's own flatness proof).
+    rf"(?!{_VALUE_CHARS}{{0,{_SWALLOW_GUARD_PEEK}}}{_LABEL_ALT}{_KEY_STEP_ANON}\s*(?:\\?['\"])?"
+    rf"{_VALUE_CHARS}{{{_MIN_SECRET_VALUE_LEN}}})"
+    # The trailing length check on the swallowed label's OWN value — shared by both
+    # guards — is load-bearing, not decorative: without it a guard refuses the outer
+    # candidate the moment it merely SEES a later label, whether or not that label's own
+    # value would ever have been redactable. `cfg["token"] = aaaaaaaaaaaakey=short` is the
+    # counterexample for guard 1 (bracketed) and `token = aaaaaaaaaaaakey=short` for guard
+    # 2: the inner `key=short` value is 5 chars, below the redaction threshold, so a naive
+    # guard refuses the outer AND the inner never matches on its own — a total miss.
+    # Verified on `main`: the pre-#436, tail-less bracketed guard DOES leak the whole
+    # bracketed chain this way (`cfg["token"] = aaaaaaaaaaaakey=short` comes out
+    # untouched) — so the tail is not only new-coverage hygiene for guard 2, it is a
+    # genuine improvement over guard 1's pre-#436 shape too, now redacting that chain
+    # whole. Requiring the inner value to itself clear `_MIN_SECRET_VALUE_LEN` keeps the
+    # outer eligible whenever the inner alone could never have been redacted. It is an
+    # EXACT `{_MIN_SECRET_VALUE_LEN}` on both guards, not an open `{_MIN_SECRET_VALUE_LEN,}`
+    # — a yes/no probe, not a real match, so a fixed count answers identically at O(16)
+    # instead of O(remaining); see `_SWALLOW_GUARD_PEEK` for why that matters even for
+    # guard 1's unbounded peek, not only guard 2's bounded one.
+    #
+    # Making guard 2 unconditional (rather than absent, as `main` had it) also changes
+    # NON-bracket matches that used to keep byte-identical behavior: `key:api_key=<secret>`
+    # redacts only the tail (`key:api_key=[redacted…]`) rather than the whole chain.
+    # Accepted deliberately (#436) — the narrower span is the trade for closing the
+    # swallow on a shape `main` never protected at all, not a leak either way, since the
+    # secret is still redacted.
+    #
+    # On a diff body line (`exempt_code=True`), a guard's refusal can also hand the line
+    # to `_is_code_reference` (#421), which may then exempt it entirely — e.g.
+    # `password = application_api_key = resolve_credentialx(env)` used to redact the FIRST
+    # span; now the whole line reads as a code reference and nothing is masked. Accepted:
+    # 0 occurrences in the 713,126-line real third-party corpus swept for this change
+    # (`.venv/site-packages`, `exempt_code=True`), and what stays unmasked in that shape
+    # is an IDENTIFIER (`application_api_key`), not a literal — arguably a false-positive
+    # reduction rather than a loss, since the code-reference exemption exists precisely to
+    # stop masking source under review.
+    rf"{_VALUE_CHARS}{{{_MIN_SECRET_VALUE_LEN},}}"
 )
 
 # The connection-string userinfo matchers, named rather than left anonymous in the list
