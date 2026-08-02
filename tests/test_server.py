@@ -288,7 +288,7 @@ def test_protocol_revision_matches_installed_sdk_target():
     fastmcp/mcp upgrade that moves the SDK's preferred revision without this literal
     moving. Both assertions below use that constant, plus `SUPPORTED_PROTOCOL_VERSIONS`
     for the weaker sanity check, so a future SDK upgrade trips this test loudly instead
-    of staleing the declared value."""
+    of staling the declared value."""
     import mcp.types as mcp_types
     from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
 
