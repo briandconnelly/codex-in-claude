@@ -555,10 +555,16 @@ _SAFE_TERMINATORS = _SHARED_SAFE_TERMINATORS | _USERINFO_ONLY_SAFE_TERMINATORS
 
 # The narrower set used when the trailing edge is a LABELLED or Bearer candidate:
 # `_SHARED_SAFE_TERMINATORS` alone, dropping `@`/`&`/`;`/`\`. Both patterns share
-# `_VALUE_CHARS` (or, for Bearer, its hand-spelled equivalent) as their value alphabet — a
-# generic "looks like a secret" class rather than a specific credential's grammar — so a
-# character that class excludes is exactly as likely to be a real interior character the class
-# cannot express as it is to be an actual boundary.
+# `_VALUE_CHARS` (or, for Bearer, its hand-spelled equivalent) as their value alphabet, but the
+# two reach the same conclusion for different reasons. For LABELLED, that alphabet really is a
+# generic "looks like a secret" catch-all with no defined grammar of its own, so a character it
+# excludes is exactly as likely to be a real interior character the class cannot express as it
+# is to be an actual boundary. For Bearer, the alphabet is not generic at all — `[A-Za-z0-9._~
+# +/=-]` is exactly RFC 6750's `b64token` character set — so the over-caution is narrower: a
+# b64token is base64(url)-encoded, meaning it can carry ARBITRARY bytes, so its interior can
+# look like anything a decoder downstream chooses to make of it. A character the token alphabet
+# excludes is therefore still not provably a boundary rather than more of the encoded payload —
+# the conclusion matches LABELLED's even though the class itself is exact, not heuristic.
 _LABELLED_SAFE_TERMINATORS = _SHARED_SAFE_TERMINATORS
 
 # The leading-continuation class (#446, a round-2 plan-review finding): `_VALUE_CHARS` MINUS

@@ -16,8 +16,9 @@ def _any_marker_in(text: str) -> bool:
     """Whether EITHER redaction marker — the plain one or #446's partial variant — appears
     in ``text``. For tests whose contract is "this value must stay redacted", not which of
     the two markers it gets; the trailing/leading checks that pick between them are pinned
-    separately (`test_complete_redactions_keep_the_plain_marker` and the `(`-follower cases
-    throughout this file)."""
+    separately (`test_shared_safe_terminators_keep_the_plain_marker_for_labelled_values`,
+    `test_userinfo_only_safe_terminators_keep_the_plain_marker_for_wide_scope_candidates`,
+    and the `(`-follower cases throughout this file)."""
     return redaction._SECRET_VALUE_MARKER in text or redaction._PARTIAL_SECRET_VALUE_MARKER in text
 
 
