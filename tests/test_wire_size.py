@@ -75,8 +75,9 @@ from codex_in_claude.server import mcp
 # outputSchema; its description is likewise stripped from the advertised schema): 84,818 bytes
 # (+40 B) — still within budget, no further change.
 # Measured again 2026-08-02 (#427: the six egress tool docstrings converged onto one shared
-# skills-discovery sentence pair — `_SKILLS_DISCOVERY_FACT`/`_SKILLS_DISCOVERY_FACT_FULL` in
-# server.py. First pass (before tightening) grew this to 85,299 bytes, over budget — a
+# skills-discovery sentence pair — `cli_contract.SKILLS_DISCOVERY_FACT`/
+# `SKILLS_DISCOVERY_FACT_FULL`. First pass (before tightening) grew this to 85,299 bytes, over
+# budget — a
 # tighter canonical pair (dropped "both"/"that workspace's"/redundant "your", kept
 # "resolved") plus a minimal per-delegate addendum (the pre-existing "throwaway worktree
 # seeded from tracked state" sentence earlier in each docstring already disclosed
