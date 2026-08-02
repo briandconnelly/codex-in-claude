@@ -195,6 +195,17 @@ CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
 # legitimately contain `?` and `#`, so narrowing that class would lose coverage.
 CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
 
+# Named — like the two connection-string matchers above, and for the same reason
+# `LABELLED_VALUE_PATTERN` is: the #446 trailing-safe-set selection (see
+# `_LABELLED_SAFE_TERMINATORS` below) has to compare a candidate's originating pattern by
+# IDENTITY, and an anonymous `re.compile(...)` inline in `SECRET_VALUE_PATTERNS` cannot be
+# named twice without drifting. Shares `_VALUE_CHARS`' character class, hand-spelled here
+# rather than referencing the constant, matching how this pattern has always been written —
+# unchanged by this naming.
+AUTHORIZATION_BEARER_PATTERN = re.compile(
+    r"(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{16,}"
+)
+
 SECRET_VALUE_PATTERNS = [
     # ORDER IS NO LONGER SEMANTICALLY LOAD-BEARING (#445), and `_redact_secret_values` is
     # what makes that true: it runs every pattern against the ORIGINAL text, collects the
@@ -281,7 +292,7 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
-    re.compile(r"(?i)(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]{16,}"),
+    AUTHORIZATION_BEARER_PATTERN,
     LABELLED_VALUE_PATTERN,
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     # Unlabeled secrets caught by shape alone (#73), independent of an adjacent label.
@@ -485,9 +496,13 @@ def _diff_path_from_header(line: str) -> str:
     return spec
 
 
-# The one marker this module emits. A constant rather than two literals, so the string the
-# idempotency arguments throughout this file depend on (it carries a space and a `:`, which
-# every userinfo run stops at) cannot drift between the two emission sites it used to have.
+# The COMPLETE-redaction marker. Two markers ship from this module now, not one — see
+# `_PARTIAL_SECRET_VALUE_MARKER` immediately below for the other, and `_interval_is_partial`
+# for the authoritative decision between them (both the trailing and leading checks, and the
+# candidate-type-dependent safe sets the trailing check reads). A constant rather than an
+# inline literal, so the string the idempotency arguments throughout this file depend on (it
+# carries a space and a `:`, which every userinfo run stops at) cannot drift between the two
+# emission sites it used to have.
 _SECRET_VALUE_MARKER = "[redacted: secret value]"
 
 # Emitted instead of `_SECRET_VALUE_MARKER` when the rebuild step (below) determines a merged
@@ -501,13 +516,50 @@ _SECRET_VALUE_MARKER = "[redacted: secret value]"
 _PARTIAL_SECRET_VALUE_MARKER = "[redacted: possibly partial secret value]"
 
 # The trailing-check safe set (#446): a character right after a merged interval that is NOT
-# one of these means the replaced text may be a truncated fragment of a longer secret rather
-# than the whole of it, since none of these can plausibly continue a credential's own value
-# run. Whitespace plus the punctuation a credential is conventionally followed by: a closing
-# quote/bracket/brace, a userinfo `@`, a query/header/list separator (`&`, `,`, `;`), or a
-# comparison/closing angle bracket (`>`). Settled by three plan-review rounds; do not
-# "simplify" it.
-_SAFE_TERMINATORS = frozenset(" \t\n\r\v\f" + "\"'\\@&,;)]}>")
+# safe for that interval's TRAILING-EDGE candidate means the replaced text may be a truncated
+# fragment of a longer secret rather than the whole of it. Two sets, not one — a Codex review
+# round found the original single global set unsound: `@`/`&`/`;`/`\` are genuinely terminal
+# for a USERINFO/connection-string candidate (its own grammar closes there — `user:pass@host`
+# by RFC 3986), but for a LABELLED or Bearer candidate, whose value alphabet is the generic
+# `_VALUE_CHARS` catch-all rather than a specific credential's grammar, those same characters
+# are exactly as plausible as an INTERIOR character the alphabet simply cannot express —
+# treating them as safe there repeated the honesty failure this module exists to close:
+# `password=<16+ chars>@tailsegment` must not read as complete merely because `@` happens to
+# close userinfo ELSEWHERE in this file. Both sets derive from one shared base so they cannot
+# silently diverge; `_interval_is_partial` selects between them per merged interval.
+
+# Members safe for EVERY candidate type: none of them can be a legitimate interior character
+# of any secret shape this module recognizes — whitespace, a closing quote (`"` `'`), a closing
+# bracket/brace (`)` `]` `}`), a comparison/closing angle bracket (`>`), and a plain list
+# separator (`,`).
+_SHARED_SAFE_TERMINATORS = frozenset(" \t\n\r\v\f" + "\"'),]}>")
+
+# Members safe ONLY when the trailing edge is a USERINFO/connection-string candidate: `@`
+# closes userinfo (`user:pass@host`, `token:@host`) by RFC 3986 — nothing after it can be part
+# of the credential a userinfo pattern matched. `&`, `;`, and `\` join it for the same
+# reasoning even though — measured — none is reachable as an actual immediate follower of
+# either connection-string pattern shipped today: both classes ADMIT all three as ordinary
+# password/token characters, so a real occurrence is consumed into the match rather than
+# stopping it early. Kept anyway, to record the intended classification ahead of a future
+# userinfo-shaped pattern that DOES exclude them, rather than leaving it undocumented until
+# one exists.
+_USERINFO_ONLY_SAFE_TERMINATORS = frozenset("@&;\\")
+
+# The set used for a userinfo/connection-string trailing edge, and the DEFAULT for every other
+# candidate type this fix does not touch — the vendor/JWT/PEM whole-match patterns, whose
+# character classes ARE the credential's real grammar (a vendor's own spec, not a generic
+# catch-all), so a character their class excludes is a genuine boundary rather than a
+# value-alphabet artifact. Settled by three plan-review rounds for its ORIGINAL (still correct
+# for this scope) members; do not "simplify" it.
+_SAFE_TERMINATORS = _SHARED_SAFE_TERMINATORS | _USERINFO_ONLY_SAFE_TERMINATORS
+
+# The narrower set used when the trailing edge is a LABELLED or Bearer candidate:
+# `_SHARED_SAFE_TERMINATORS` alone, dropping `@`/`&`/`;`/`\`. Both patterns share
+# `_VALUE_CHARS` (or, for Bearer, its hand-spelled equivalent) as their value alphabet — a
+# generic "looks like a secret" class rather than a specific credential's grammar — so a
+# character that class excludes is exactly as likely to be a real interior character the class
+# cannot express as it is to be an actual boundary.
+_LABELLED_SAFE_TERMINATORS = _SHARED_SAFE_TERMINATORS
 
 # The leading-continuation class (#446, a round-2 plan-review finding): `_VALUE_CHARS` MINUS
 # `=`. Derived from `_VALUE_CHARS` — not retyped — so the two classes cannot silently diverge
@@ -553,26 +605,36 @@ def _replaced_span(match: re.Match) -> tuple[int, int]:
     return match.span()
 
 
-def _interval_is_partial(line: str, start: int, end: int, leading_whole: bool) -> bool:
+def _interval_is_partial(
+    line: str, start: int, end: int, leading_whole: bool, trailing_narrow: bool
+) -> bool:
     """Whether the merged interval ``line[start:end]`` may be a truncated fragment of a
     longer secret rather than the whole of it (#446), so the emitted marker must not claim
     completeness. Either check alone is sufficient.
 
     **Trailing**: the character right after the interval exists and is not one of the
     safe-terminator characters — a follower that could plausibly be more of the same value.
-    An absent follower (end of string) is unconditionally complete.
+    An absent follower (end of string) is unconditionally complete. Which SET of safe
+    terminators applies depends on ``trailing_narrow`` (see the fold in
+    ``_redact_secret_values`` for how that is derived across a tie): a LABELLED or Bearer
+    trailing edge uses the narrower ``_LABELLED_SAFE_TERMINATORS`` (its value alphabet is a
+    generic catch-all, so a character it excludes could be a real interior character), while
+    everything else — userinfo/connection-string candidates, and the vendor/JWT/PEM
+    whole-match patterns whose classes ARE a specific credential's grammar — uses the wider
+    ``_SAFE_TERMINATORS``.
 
     **Leading**: the interval's earliest-starting covered candidate is a whole-match one
-    (``leading_whole`` — see the fold in ``_redact_secret_values`` for how that is derived
-    across a tie) AND the character right before the interval exists and is in the
-    leading-continuation class. A whole-match candidate's span start is the true start of
-    what the pattern matched, so a continuation character sitting right before it means the
-    match itself may have begun mid-token. A candidate whose span was instead pinned at a
-    preserved group's end (a label, `://user:`, `Bearer `) does not carry this risk — that
-    boundary is deliberate, not an artifact of the pattern's own reach — which is why a
-    prefix-preserving candidate is excluded rather than merely deprioritized.
+    (``leading_whole`` — derived the same way as ``trailing_narrow``, across a tie) AND the
+    character right before the interval exists and is in the leading-continuation class. A
+    whole-match candidate's span start is the true start of what the pattern matched, so a
+    continuation character sitting right before it means the match itself may have begun
+    mid-token. A candidate whose span was instead pinned at a preserved group's end (a label,
+    `://user:`, `Bearer `) does not carry this risk — that boundary is deliberate, not an
+    artifact of the pattern's own reach — which is why a prefix-preserving candidate is
+    excluded rather than merely deprioritized.
     """
-    trailing = end < len(line) and line[end] not in _SAFE_TERMINATORS
+    safe_terminators = _LABELLED_SAFE_TERMINATORS if trailing_narrow else _SAFE_TERMINATORS
+    trailing = end < len(line) and line[end] not in safe_terminators
     leading = (
         leading_whole and start > 0 and _LEADING_CONTINUATION_RE.match(line[start - 1]) is not None
     )
@@ -601,25 +663,36 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
     tests substitute it; precompiling the list into one merged automaton would defeat that,
     and would also lose the per-pattern identity the ``exempt_code`` test below turns on.
     """
-    # Each candidate carries whether it is a "whole-match" one — its REPLACED span starts at
-    # the match's own start, so nothing was stripped off the front — the marker-choice input
-    # the merge below threads alongside the span itself (#446). ``span_start == match.start()``
-    # rather than ``not match.lastindex``: the two agree for every ordinary case, but they
-    # diverge in the #456 fallback, where a grouped pattern violates the leading-participating-
-    # prefix invariant and ``_replaced_span`` falls back to the FULL match span. There
-    # ``lastindex`` is still truthy (a group DID match, just not usably), which would wrongly
-    # read as prefix-preserving and suppress the leading check — but the returned span really
-    # does start at the match's true beginning, so it deserves the same leading-check treatment
-    # as an ungrouped pattern. Testing the span directly gets the fallback case right for free.
-    candidates: list[tuple[int, int, bool]] = []
+    # Each candidate carries two marker-choice flags alongside its span, threaded through the
+    # merge below (#446):
+    #
+    #   * ``whole_match`` — whether the candidate is a "whole-match" one: its REPLACED span
+    #     starts at the match's own start, so nothing was stripped off the front.
+    #     ``span_start == match.start()`` rather than ``not match.lastindex``: the two agree
+    #     for every ordinary case, but they diverge in the #456 fallback, where a grouped
+    #     pattern violates the leading-participating-prefix invariant and ``_replaced_span``
+    #     falls back to the FULL match span. There ``lastindex`` is still truthy (a group DID
+    #     match, just not usably), which would wrongly read as prefix-preserving and suppress
+    #     the leading check — but the returned span really does start at the match's true
+    #     beginning, so it deserves the same leading-check treatment as an ungrouped pattern.
+    #     Testing the span directly gets the fallback case right for free.
+    #   * ``narrow_trailing`` — whether the candidate is a LABELLED or Bearer one, compared by
+    #     identity (the two patterns whose value alphabet is the generic `_VALUE_CHARS`
+    #     catch-all rather than a specific credential's grammar — see
+    #     `_LABELLED_SAFE_TERMINATORS`'s header). Every other candidate — userinfo/
+    #     connection-string, and the vendor/JWT/PEM whole-match patterns — uses the wider set.
+    candidates: list[tuple[int, int, bool, bool]] = []
     for pattern in SECRET_VALUE_PATTERNS:
         # The #421 exemption belongs to exactly one pattern, compared by identity as always.
         exempting = exempt_code and pattern is LABELLED_VALUE_PATTERN
+        narrow_trailing = pattern is LABELLED_VALUE_PATTERN or (
+            pattern is AUTHORIZATION_BEARER_PATTERN
+        )
         for match in pattern.finditer(line):
             if exempting and _is_code_reference(match):
                 continue  # an exempted candidate contributes no span
             span_start, span_end = _replaced_span(match)
-            candidates.append((span_start, span_end, span_start == match.start()))
+            candidates.append((span_start, span_end, span_start == match.start(), narrow_trailing))
     if not candidates:
         return line, False
 
@@ -653,29 +726,46 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
     # so it is recorded here rather than relied on silently. `test_tie_fold_prefers_partial_
     # when_any_tied_candidate_is_whole_match` pins OR directly with a synthetic tie that
     # isolates the tie-break from both of those escapes.
+    #
+    # ``trailing_narrow`` mirrors ``leading_whole`` for the interval's RIGHT edge: it tracks
+    # whether ANY candidate that currently achieves the merged interval's maximum ``end`` is a
+    # narrow-trailing one, OR-ed the same way and for the same fail-closed reason (prefer the
+    # set that makes MORE characters unsafe). Unlike ``leading_whole`` this has to be
+    # re-evaluated on every span, not only at ties: the candidate that ends up owning the
+    # interval's end can be discovered anywhere in the fold, not just among those sharing the
+    # leftmost start. A strictly larger ``span_end`` replaces the running flag outright (the
+    # previous candidates no longer decide the end at all); an EQUAL one OR-s in; a smaller one
+    # is irrelevant to the end and changes nothing.
     candidates.sort(key=lambda c: (c[0], c[1]))
-    merged: list[tuple[int, int, bool]] = []
-    start, end, leading_whole = candidates[0]
-    for span_start, span_end, whole_match in candidates[1:]:
+    merged: list[tuple[int, int, bool, bool]] = []
+    start, end, leading_whole, trailing_narrow = candidates[0]
+    for span_start, span_end, whole_match, narrow_trailing in candidates[1:]:
         if span_start < end:
-            end = max(end, span_end)
+            if span_end > end:
+                end = span_end
+                trailing_narrow = narrow_trailing
+            elif span_end == end:
+                trailing_narrow = trailing_narrow or narrow_trailing
             if span_start == start:
                 leading_whole = leading_whole or whole_match
         else:
-            merged.append((start, end, leading_whole))
-            start, end, leading_whole = span_start, span_end, whole_match
-    merged.append((start, end, leading_whole))
+            merged.append((start, end, leading_whole, trailing_narrow))
+            start, end = span_start, span_end
+            leading_whole, trailing_narrow = whole_match, narrow_trailing
+    merged.append((start, end, leading_whole, trailing_narrow))
 
     # Rebuild from the ORIGINAL text. A preserved prefix survives because it lies outside
     # every merged interval, not because a replacement emitted it — so a wider candidate
     # covering it takes it with the secret, which is the whole point of #445.
     out: list[str] = []
     cursor = 0
-    for span_start, span_end, interval_leading_whole in merged:
+    for span_start, span_end, interval_leading_whole, interval_trailing_narrow in merged:
         out.append(line[cursor:span_start])
         marker = (
             _PARTIAL_SECRET_VALUE_MARKER
-            if _interval_is_partial(line, span_start, span_end, interval_leading_whole)
+            if _interval_is_partial(
+                line, span_start, span_end, interval_leading_whole, interval_trailing_narrow
+            )
             else _SECRET_VALUE_MARKER
         )
         out.append(marker)
@@ -690,7 +780,10 @@ def redact_text(text: str | None) -> str | None:
     Applies only the inline ``SECRET_VALUE_PATTERNS`` — the same value replacement
     used on diff body lines — to arbitrary prose Codex returns (summaries, answers,
     raw_response text, finding fields). File-hunk dropping does not apply to prose,
-    so only inline values are replaced with ``[redacted: secret value]``. ``None``
+    so only inline values are replaced — with ``[redacted: secret value]`` when the
+    replaced span is believed to cover the whole credential, or
+    ``[redacted: possibly partial secret value]`` when it may not (#446): see
+    ``_interval_is_partial`` for the authoritative decision between the two. ``None``
     and empty strings pass through unchanged. Defense-in-depth, NOT a guarantee
     (consistent with this module's contract)."""
     if not text:

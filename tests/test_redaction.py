@@ -1356,9 +1356,22 @@ def test_query_string_false_positive_is_pinned_until_442():
     asserting. Under the span-merge engine (#445) both orderings emit the output below, since
     the merged span set does not depend on the list's order; the monkeypatched half would have
     become a tautology, so it is gone rather than kept as decoration.
+
+    Partial, not plain (a #446 review-round-2 finding): the connection-string password
+    candidate's span and `LABELLED_VALUE_PATTERN`'s candidate for `token=...` both end at
+    the identical position (the `@`), so this interval's trailing edge is a TIE between a
+    userinfo candidate (wide safe set, `@` genuinely terminal) and a labelled one (narrow
+    safe set, `@` dropped) — and a tie fails toward the narrower set, the same fail-closed
+    direction `leading_whole`'s tie-break uses. Scrutinized rather than taken at face value:
+    the interval here is fully covered either way (the wider connection-string span, not the
+    narrower labelled sub-span, sets the actual replaced text), so the credential is not
+    truncated — the marker is conservative, not incorrect, on a case #442 already documents
+    as an accepted imprecision in how much surrounding text this shape masks.
     """
     text = "https://host.example:8443?token=s3cr3tvalue0123456789@x.example"
-    assert redaction.redact_text(text) == "https://host.example:[redacted: secret value]@x.example"
+    assert redaction.redact_text(text) == (
+        "https://host.example:[redacted: possibly partial secret value]@x.example"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1605,6 +1618,52 @@ def test_a_non_participating_group_1_falls_back_to_the_full_span(monkeypatch):
 # interval gets, and the properties the two markers must hold relative to each other.
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # `@` is genuinely terminal for a USERINFO candidate (`user:pass@host`, RFC 3986),
+        # but NOT for a LABELLED one: `_VALUE_CHARS` excludes `@` only because the alphabet
+        # is a generic catch-all, not because a real secret can't contain one.
+        (
+            "password=" + "a" * 16 + "@tailsegment",
+            "password=[redacted: possibly partial secret value]@tailsegment",
+        ),
+        (
+            "token=" + "a" * 16 + "&tailsegment",
+            "token=[redacted: possibly partial secret value]&tailsegment",
+        ),
+        (
+            "key=" + "a" * 16 + ";tailsegment",
+            "key=[redacted: possibly partial secret value];tailsegment",
+        ),
+    ],
+)
+def test_labelled_value_followed_by_a_dropped_wide_char_is_marked_partial(text, expected):
+    """Regression pins for the Codex review's MEDIUM finding: the ORIGINAL global
+    `_SAFE_TERMINATORS` treated `@`/`&`/`;`/`\\` as safe for every candidate, so
+    `password=<16+ chars>@tailsegment` emitted the PLAIN marker while `@tailsegment` could
+    be live credential text — the exact honesty failure this whole PR exists to remove. Each
+    of these must now be partial. `test_shared_safe_terminators_keep_the_plain_marker_for_
+    labelled_values` and `test_userinfo_only_safe_terminators_keep_the_plain_marker_for_wide_
+    scope_candidates` cover the full member-by-member sweep; these three are the concrete
+    motivating cases named in the review.
+    """
+    assert redaction.redact_text(text) == expected
+
+
+def test_userinfo_shapes_keep_the_plain_marker_where_their_grammar_closed_them():
+    """The companion regression: narrowing the LABELLED/Bearer safe set must not touch a
+    userinfo/connection-string candidate, whose own grammar makes `@` genuinely terminal.
+    Both userinfo shapes stay plain, unaffected by the narrowing.
+    """
+    assert redaction.redact_text("postgres://user:s3cr3tPassw0rd@db.example.com:5432/app") == (
+        "postgres://user:[redacted: secret value]@db.example.com:5432/app"
+    )
+    assert redaction.redact_text("redis://:onlypass@localhost:6379") == (
+        "redis://:[redacted: secret value]@localhost:6379"
+    )
+
+
 def test_a_mid_token_jwt_match_is_marked_partial():
     """The leading check (a plan-review round-2 finding), pinned directly.
 
@@ -1699,35 +1758,66 @@ def test_partial_marker_is_idempotent():
 
 
 def test_review_locked_sets_have_not_drifted():
-    """Literal pin for the two sets three plan-review rounds settled (brief: "do not
-    'simplify' them").
+    """Literal pin for the sets plan-review rounds settled (brief: "do not 'simplify' them").
 
-    The parametrized sweep below (`test_complete_redactions_keep_the_plain_marker`) reads its
-    domain FROM `_SAFE_TERMINATORS` itself (`sorted(redaction._SAFE_TERMINATORS)`), so it
-    cannot catch a member quietly DROPPED from that constant — a dropped member simply
-    shrinks the sweep's own parametrize list along with it, and the sweep still passes on
-    whatever remains (the derived-expectations-are-tautological failure mode: a test whose
-    input domain IS the value under test can't fail when that value shrinks). What the sweep
-    DOES guard is that every member CURRENTLY in the set actually behaves as a safe
-    terminator — i.e. that the trailing check's logic is correct for each one. Only a literal,
-    independently-spelled pin can catch the set itself changing, which is what this test is
+    The parametrized sweeps below (`test_shared_safe_terminators_keep_the_plain_marker_for_
+    labelled_values`, `test_userinfo_only_safe_terminators_keep_the_plain_marker_for_wide_
+    scope_candidates`) read their domain FROM these constants themselves
+    (`sorted(redaction._LABELLED_SAFE_TERMINATORS)` etc.), so neither can catch a member
+    quietly DROPPED from the constant it sweeps — a dropped member simply shrinks that
+    sweep's own parametrize list along with it, and the sweep still passes on whatever
+    remains (the derived-expectations-are-tautological failure mode: a test whose input
+    domain IS the value under test can't fail when that value shrinks). What the sweeps DO
+    guard is that every member CURRENTLY in a set actually behaves as a safe terminator FOR
+    THE CANDIDATE TYPE it is claimed safe for — i.e. that the trailing check's logic is
+    correct for each one, not that the set's own membership is unchanged. Only a literal,
+    independently-spelled pin can catch a set itself changing, which is what this test is
     for.
     """
+    assert frozenset(" \t\n\r\v\f\"'),]}>") == redaction._SHARED_SAFE_TERMINATORS
+    assert frozenset("@&;\\") == redaction._USERINFO_ONLY_SAFE_TERMINATORS
     assert frozenset(" \t\n\r\v\f\"'\\@&,;)]}>") == redaction._SAFE_TERMINATORS
+    assert frozenset(" \t\n\r\v\f\"'),]}>") == redaction._LABELLED_SAFE_TERMINATORS
     assert redaction._LEADING_CONTINUATION_RE.pattern == "[A-Za-z0-9._~+/-]"
 
 
-@pytest.mark.parametrize("char", sorted(redaction._SAFE_TERMINATORS))
-def test_complete_redactions_keep_the_plain_marker(char):
-    # One case per CURRENT safe-terminator member (see `test_review_locked_sets_have_not_
-    # drifted` for why this sweep's domain being the constant itself means it cannot detect
-    # a member being dropped): this guards each member's individual trailing-check behavior
-    # — the same discipline `test_password_class_covers_every_character_it_claims` uses for
-    # the userinfo classes — so a member that stops behaving as a safe terminator (without
-    # being removed from the set) fails here.
+@pytest.mark.parametrize("char", sorted(redaction._LABELLED_SAFE_TERMINATORS))
+def test_shared_safe_terminators_keep_the_plain_marker_for_labelled_values(char):
+    """Exercises each `_LABELLED_SAFE_TERMINATORS` member against the NARROW-scope candidate
+    type it is claimed safe for: a LABELLED value (#446, a Codex review finding — the
+    original single global safe set wrongly claimed `@`/`&`/`;`/`\\` were also safe here; see
+    `_LABELLED_SAFE_TERMINATORS`'s header). Every member of this set is ALSO a member of the
+    wide `_SAFE_TERMINATORS` (it is the shared base both derive from), so this sweep doubles
+    as coverage for the wide set's shared members too — a separate sweep for those would be
+    redundant. `test_userinfo_only_safe_terminators_keep_the_plain_marker_for_wide_scope_
+    candidates` below covers the members that are safe ONLY outside this narrow scope.
+    """
     text = f"token=abcdefghijklmnop{char}tail"
     out = redaction.redact_text(text)
     assert out == f"token=[redacted: secret value]{char}tail"
+
+
+@pytest.mark.parametrize("char", sorted(redaction._USERINFO_ONLY_SAFE_TERMINATORS))
+def test_userinfo_only_safe_terminators_keep_the_plain_marker_for_wide_scope_candidates(char):
+    """Exercises each `_USERINFO_ONLY_SAFE_TERMINATORS` member (`@`, `&`, `;`, `\\`) against
+    a WIDE-scope candidate — i.e. anything that is not LABELLED/Bearer, which still uses
+    `_SAFE_TERMINATORS` unchanged (#446 narrowed only the LABELLED/Bearer case).
+
+    A vendor whole-match pattern (`AKIA`), not a real connection-string shape, is the
+    construction: `AKIA[0-9A-Z]{16}` is FIXED-length and excludes all four characters, so
+    each genuinely CAN be the immediate follower of a real `AKIA` match — unlike for a
+    connection-string candidate, where `&`/`;`/`\\` are already ADMITTED into the
+    password/token character classes (measured: neither class excludes them), so a real
+    occurrence is consumed into the match rather than ever appearing as an immediate
+    follower — only `@` is naturally reachable there, via the `(?=@)`/`(?=:@)` closing
+    lookahead, and that shape is already pinned elsewhere in this file (e.g.
+    `test_connection_string_redaction_unchanged_for_scheme_led_urls`). Testing all four via
+    one always-reachable construction keeps this sweep uniform rather than mixing a
+    userinfo-shaped case for `@` with something else for the other three.
+    """
+    text = f"AKIA{'A' * 16}{char}tail"
+    out = redaction.redact_text(text)
+    assert out == f"[redacted: secret value]{char}tail"
 
 
 # --- free-text redaction (#58) ----------------------------------------------
@@ -1751,7 +1841,11 @@ def test_redact_text_handles_json_escaped_quote():
     text = 'found password = \\"supersecretvalue1234567890\\" in config'
     out = redaction.redact_text(text)
     assert "supersecretvalue" not in out
-    assert "[redacted: secret value]" in out
+    # The value's span ends right at the closing `\"`'s `\` — not a safe terminator for a
+    # LABELLED candidate (#446's narrowed set), since `\` can also be a real interior
+    # character a generic value alphabet cannot express — so this gets the partial marker;
+    # the point of this test (#58) is that the value is stripped at all.
+    assert _any_marker_in(out)
 
 
 def test_redact_text_preserves_clean_prose_and_newlines():
@@ -2011,7 +2105,10 @@ _QUOTED_KEY_LINES = [
 @pytest.mark.parametrize("line", _QUOTED_KEY_LINES)
 def test_quoted_key_secret_redacted_in_prose(line: str):
     out = redaction.redact_text(line)
-    assert "[redacted: secret value]" in out
+    # The double-escaped-quote row's value ends right at the closing `\"`'s `\` — not a
+    # safe terminator for a LABELLED candidate (#446's narrowed set) — so it gets the
+    # partial marker; every other row's value ends at a plain `"`, which stays safe.
+    assert _any_marker_in(out)
     for probe in _PROBES:
         assert probe not in out
 
@@ -2218,8 +2315,10 @@ def test_bracket_match_does_not_swallow_a_later_sensitive_label():
     ]:
         out = redaction.redact_text(line)
         assert secret not in out, out
-        # and the redaction must land on the real value, not on the identifier before it
-        assert "[redacted: secret value]" in out
+        # and the redaction must land on the real value, not on the identifier before it.
+        # One row's value ends right at a closing `\"`'s `\`, not a safe terminator for a
+        # LABELLED candidate (#446's narrowed set), so it gets the partial marker.
+        assert _any_marker_in(out)
 
 
 def test_neutral_bracket_key_is_untouched():
