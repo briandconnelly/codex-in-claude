@@ -92,8 +92,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   both outside `_VALUE_CHARS`, so guard 1's unbounded probe run from one bracketed anchor is
   always terminated before the next bracketed anchor begins — no probe run spans two anchors,
   so per-anchor cost cannot compound. Measured: 20,000 reps (200k chars) 0.029s, 40,000 (400k)
-  0.057s — linear. Both seeds kept flat by `test_repeated_anchor_input_is_not_quadratic_for_
-  any_pattern` and the new `test_repeated_bracketed_anchor_input_is_not_quadratic`.
+  0.057s — linear. Both seeds kept flat by
+  `test_repeated_anchor_input_is_not_quadratic_for_any_pattern` and the new
+  `test_repeated_bracketed_anchor_input_is_not_quadratic`.
 
   One more disclosed, accepted consequence, unchanged by the dual-guard formulation: on a diff
   body line, a guard's refusal can hand the line to the #421 code-reference exemption, which
