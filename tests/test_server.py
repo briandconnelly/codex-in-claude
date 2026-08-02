@@ -272,6 +272,18 @@ def test_capabilities_names_protocol_revision():
     assert res["protocol_revision"] == "2025-11-25"
 
 
+def test_capabilities_names_annotations_reading():
+    # #426: the readOnlyHint reading (observable job/spend state, not file I/O) lived
+    # only in server.py source comments; state it on the agent-visible payload too.
+    # The claim's accuracy is checked separately by test_sync_active_tools_are_not_read_only
+    # / test_dry_run_tools_are_read_only / test_async_launchers_are_not_read_only.
+    res = server.codex_capabilities()
+    reading = res["annotations_reading"]
+    assert "readOnlyHint" in reading
+    assert "codex_dry_run" in reading
+    assert "codex_delegate_dry_run" in reading
+
+
 def test_protocol_revision_matches_installed_sdk_target():
     """Dependency-drift guard (#423 Codex review, Medium): `protocol_revision` is a
     declared TARGET, not the per-session negotiated `initialize.protocolVersion` — the
@@ -2276,7 +2288,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-71"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-72"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3416,6 +3428,33 @@ async def test_async_launchers_are_not_read_only(tool_name):
     assert ann.idempotentHint is False
     assert ann.openWorldHint is True
     assert ann.destructiveHint is False
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["codex_consult", "codex_review_changes", "codex_delegate"],
+)
+async def test_sync_active_tools_are_not_read_only(tool_name):
+    """The sync consult/review/delegate tools spawn the same observable, spend-
+    committing job record as their *_async twins above, so they share the same
+    readOnlyHint:false posture (issue #138) — half the reality
+    CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is False
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["codex_dry_run", "codex_delegate_dry_run"],
+)
+async def test_dry_run_tools_are_read_only(tool_name):
+    """Dry-run tools call no model and create no job record, so they keep
+    readOnlyHint:true — the other half of the reality
+    CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is True
 
 
 def test_job_status_model_surfaces_cleanup_warnings():
@@ -6173,7 +6212,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-71")
+    assert result["fingerprint"].endswith("schema-72")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

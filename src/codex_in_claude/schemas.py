@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-71"
+FINGERPRINT = "codex-in-claude/0.1/schema-72"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -1174,6 +1174,30 @@ class CapabilitiesResult(BaseModel):
             "target, not the per-session negotiation. The 2026-07-28 migration plan "
             "for this target's deprecated features is recorded in ADR 0004 "
             "(docs/adr/0004-mcp-2026-07-28-migration.md)."
+        ),
+    )
+    # The server's documented reading of its own `readOnlyHint` tool annotation (#426):
+    # a judgment call, not a restatement. The long-form rationale — and the annotation
+    # presets it governs (_FREE_READ/_ACTIVE_PROPOSE/_ACTIVE_ASYNC) — live in server.py
+    # (~server.py:181-204, esp. the observable-job-state paragraph on _ACTIVE_ASYNC);
+    # this field is the compact, agent-facing statement of that reading, kept free of
+    # the mechanics the comments already own. Verified against the live annotations by
+    # test_sync_active_tools_are_not_read_only / test_dry_run_tools_are_read_only
+    # (alongside the existing test_async_launchers_are_not_read_only).
+    annotations_reading: str = Field(
+        default=(
+            "readOnlyHint tracks whether a call changes observable state that outlives "
+            "the response — a job record, committed spend — rather than file I/O. "
+            "That's why codex_consult, codex_review_changes, and codex_delegate (and "
+            "their _async variants) are readOnlyHint: false even though consult and "
+            "review never write files, while codex_dry_run and codex_delegate_dry_run, "
+            "which create no job record, stay readOnlyHint: true."
+        ),
+        description=(
+            "The server's documented reading of its `readOnlyHint` tool annotation: "
+            "what counts as read-only for tools that call Codex. Stated here because "
+            "it's a judgment call a literal reader of the MCP spec could reach "
+            "differently, not a restatement of server.py's annotation-preset mechanics."
         ),
     )
     # Where a RESOURCE-read failure travels (audit F9, #181). A resources/read of an

@@ -511,7 +511,12 @@ def test_loosened_schemas_stay_under_byte_budget():
     schema by `_strip_schema_noise` (not registered in `_KEPT_DESCRIPTIONS`), so only
     the bare `{"type":"string"}` property remains — CAPABILITIES_SCHEMA moved
     1968 -> 2006 B, tripping the prior 2000 B cap by 6 B. STATUS_SCHEMA is unaffected
-    (1659 B, unchanged)."""
+    (1659 B, unchanged).
+
+    Measured again (#426): `annotations_reading` added a second described `str` field
+    to `CapabilitiesResult`, stripped the same way — CAPABILITIES_SCHEMA moved
+    2006 -> 2046 B, still under the 2100 B cap (no raise needed this time).
+    STATUS_SCHEMA remains unaffected (1659 B, unchanged)."""
     for name, (sch, _) in _OPAQUE_FIELD_SCHEMAS.items():
         size = len(json.dumps(sch, separators=(",", ":")))
         assert size < 2100, f"{name} is {size} B, over the 2100 B budget"
@@ -791,7 +796,12 @@ def _wire_catalog_bytes() -> int:
 # → ~84,757 (#414: the three sync tools' Progress & recovery paragraphs name `codex_job_status`
 # as the recovery chain's polling step and state that some MCP clients background a long call
 # before the server's own deadline, so `timeout_seconds` bounds the run, not necessarily the
-# client's inline wait — the job record covers that case too).
+# client's inline wait — the job record covers that case too). → 84,795 (#423:
+# `protocol_revision`'s bare `{"type":"string"}` property on `codex_capabilities`'
+# outputSchema — same ~38 B this cap's comment history skipped narrating at the time).
+# Measured again 2026-08-01 (#426: `annotations_reading`, another bare `{"type":"string"}`
+# property on the same outputSchema — its description is stripped the same way
+# `protocol_revision`'s is): 84,835 bytes — still within budget, no further change.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
 CATALOG_BYTE_CAP = 85_000
@@ -953,7 +963,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-71"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-72"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

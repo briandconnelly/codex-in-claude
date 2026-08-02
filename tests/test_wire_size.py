@@ -70,6 +70,10 @@ from codex_in_claude.server import mcp
 # the `tools/list` wire path (its description is stripped from the advertised `outputSchema` by
 # `_strip_schema_noise`), but the tool's `outputSchema` embeds the bare `{"type":"string"}`
 # property): 84,778 bytes (+38 B) — still within budget, no further change.
+# Measured again 2026-08-01 (#426: `CapabilitiesResult.annotations_reading` — same treatment as
+# `protocol_revision` above, a second bare `{"type":"string"}` property on `codex_capabilities`'
+# outputSchema; its description is likewise stripped from the advertised schema): 84,818 bytes
+# (+40 B) — still within budget, no further change.
 TOOLS_LIST_BYTE_BUDGET = 85_000
 
 
