@@ -551,8 +551,8 @@ def _redact_secret_values(line: str, *, exempt_code: bool = False) -> tuple[str,
 
     # Fold left over spans sorted by (start, end). STRICT overlap merges; touching does not,
     # so abutting candidates keep two markers exactly as two `re.sub` passes did. No span can
-    # be empty — every pattern requires literal text after its preserved group — so a
-    # zero-length candidate is noted rather than defended against.
+    # be empty: every pattern in SECRET_VALUE_PATTERNS requires literal characters after its
+    # preserved group, so a zero-length candidate cannot occur and nothing here handles one.
     spans.sort()
     merged: list[tuple[int, int]] = []
     start, end = spans[0]
