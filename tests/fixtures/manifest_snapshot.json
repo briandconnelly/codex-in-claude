@@ -8,6 +8,7 @@
       "codex_delegate",
       "codex_delegate_async"
     ],
+    "annotations_reading": "readOnlyHint tracks whether a call changes observable state that outlives the response — a job record, committed spend — rather than file I/O. That's why codex_consult, codex_review_changes, and codex_delegate (and their _async variants) are readOnlyHint: false even though consult and review never write files, while codex_dry_run and codex_delegate_dry_run, which create no job record, stay readOnlyHint: true.",
     "deprecation_policy": "Pre-1.0: minor versions may change the agent-visible surface; the fingerprint changes when they do.",
     "error_envelope_resource": "codex://error-envelope",
     "fingerprint_covers": [
@@ -56,6 +57,7 @@
       "codex CLI on PATH",
       "authenticated via `codex login`"
     ],
+    "protocol_revision": "2025-11-25",
     "resource_error_carrier": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this server keeps `code`/`message` rather than the machine_code/human_message spelling some §6 profiles use — nesting inside `data` already avoids shadowing the native JSON-RPC keys.",
     "result_meta_resource": "codex://result-meta",
     "sandboxes": [
@@ -634,7 +636,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 7839
+          "size_bytes": 9296
         }
       },
       "mimeType": "application/schema+json",
@@ -886,6 +888,12 @@
             "title": "Active Tools",
             "type": "array"
           },
+          "annotations_reading": {
+            "default": "readOnlyHint tracks whether a call changes observable state that outlives the response — a job record, committed spend — rather than file I/O. That's why codex_consult, codex_review_changes, and codex_delegate (and their _async variants) are readOnlyHint: false even though consult and review never write files, while codex_dry_run and codex_delegate_dry_run, which create no job record, stay readOnlyHint: true.",
+            "description": "The server's documented reading of its `readOnlyHint` tool annotation: what counts as read-only for tools that call Codex. Stated here because it's a judgment call a literal reader of the MCP spec could reach differently, not a restatement of server.py's annotation-preset mechanics.",
+            "title": "Annotations Reading",
+            "type": "string"
+          },
           "deprecation_policy": {
             "title": "Deprecation Policy",
             "type": "string"
@@ -896,7 +904,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-69",
+            "default": "codex-in-claude/0.1/schema-72",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -938,6 +946,12 @@
             },
             "title": "Prerequisites",
             "type": "array"
+          },
+          "protocol_revision": {
+            "default": "2025-11-25",
+            "description": "The MCP protocol revision this server's wire shapes are written against (the target). The installed SDK negotiates per session: a client requesting an older mutually-supported revision (e.g. 2025-06-18) gets that version back in `initialize.protocolVersion`, so a given session's negotiated value can be earlier than this field. This field states the target, not the per-session negotiation. The 2026-07-28 migration plan for this target's deprecated features is recorded in ADR 0004 (docs/adr/0004-mcp-2026-07-28-migration.md).",
+            "title": "Protocol Revision",
+            "type": "string"
           },
           "resource_error_carrier": {
             "default": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this server keeps `code`/`message` rather than the machine_code/human_message spelling some §6 profiles use — nesting inside `data` already avoids shadowing the native JSON-RPC keys.",
@@ -1448,7 +1462,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-69",
+                "default": "codex-in-claude/0.1/schema-72",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2083,9 +2097,6 @@
   "initialize": {
     "capabilities": {
       "experimental": {},
-      "extensions": {
-        "io.modelcontextprotocol/ui": {}
-      },
       "logging": {},
       "resources": {
         "listChanged": true,
@@ -2135,7 +2146,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 7839
+          "size_bytes": 9296
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
@@ -2575,7 +2586,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-69",
+            "default": "codex-in-claude/0.1/schema-72",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3258,7 +3269,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-69",
+            "default": "codex-in-claude/0.1/schema-72",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3410,6 +3421,9 @@
                 },
                 "type": "array"
               },
+              "annotations_reading": {
+                "type": "string"
+              },
               "deprecation_policy": {
                 "type": "string"
               },
@@ -3450,6 +3464,9 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "protocol_revision": {
+                "type": "string"
               },
               "resource_error_carrier": {
                 "type": "string"

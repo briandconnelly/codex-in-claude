@@ -265,6 +265,59 @@ def test_capabilities_names_tool_error_carrier():
     assert "isError" in carrier
 
 
+def test_capabilities_names_protocol_revision():
+    # #423: the targeted MCP protocol revision was previously derivable only from the
+    # `initialize` wire response, never stated in the agent-visible capability payload.
+    res = server.codex_capabilities()
+    assert res["protocol_revision"] == "2025-11-25"
+
+
+def test_capabilities_names_annotations_reading():
+    # #426: the readOnlyHint reading (observable job/spend state, not file I/O) lived
+    # only in server.py source comments; state it on the agent-visible payload too.
+    # The claim's accuracy is checked separately by test_sync_active_tools_are_not_read_only
+    # / test_dry_run_tools_are_read_only / test_async_launchers_are_not_read_only.
+    res = server.codex_capabilities()
+    reading = res["annotations_reading"]
+    assert "readOnlyHint" in reading
+    assert "codex_dry_run" in reading
+    assert "codex_delegate_dry_run" in reading
+
+
+def test_protocol_revision_matches_installed_sdk_target():
+    """Dependency-drift guard (#423 Codex review, Medium): `protocol_revision` is a
+    declared TARGET, not the per-session negotiated `initialize.protocolVersion` — the
+    installed SDK's `initialize` handler
+    (`mcp/server/session.py::ServerSession._received_request`) echoes back the client's
+    requested version unchanged whenever it is one of `SUPPORTED_PROTOCOL_VERSIONS`
+    (`mcp/shared/version.py`), and falls back to `types.LATEST_PROTOCOL_VERSION`
+    (`mcp/types.py`) only when the request names something unsupported. So a
+    2025-06-18 client gets `2025-06-18` back on the wire while this field still
+    reports the target.
+
+    That target has to track the installed SDK's own default/fallback revision
+    (`mcp.types.LATEST_PROTOCOL_VERSION`) or the two silently drift apart on a
+    fastmcp/mcp upgrade that moves the SDK's preferred revision without this literal
+    moving. Both assertions below use that constant, plus `SUPPORTED_PROTOCOL_VERSIONS`
+    for the weaker sanity check, so a future SDK upgrade trips this test loudly instead
+    of staling the declared value."""
+    import mcp.types as mcp_types
+    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+
+    declared = server.codex_capabilities()["protocol_revision"]
+    assert declared in SUPPORTED_PROTOCOL_VERSIONS, (
+        f"{declared!r} is not one of the installed SDK's SUPPORTED_PROTOCOL_VERSIONS "
+        f"{SUPPORTED_PROTOCOL_VERSIONS} (mcp/shared/version.py)"
+    )
+    assert declared == mcp_types.LATEST_PROTOCOL_VERSION, (
+        f"protocol_revision ({declared!r}) no longer matches the installed SDK's own "
+        f"default/fallback revision (mcp.types.LATEST_PROTOCOL_VERSION == "
+        f"{mcp_types.LATEST_PROTOCOL_VERSION!r}) — a dependency upgrade moved the "
+        "SDK's target; update protocol_revision (and ADR 0004) deliberately rather "
+        "than leaving the declared value stale."
+    )
+
+
 def test_instructions_name_the_error_carrier():
     # F3: the capability summary (served as MCP instructions) names the carrier for
     # tool failures, so a discovery-only client need not infer it from the outputSchema.
@@ -2235,7 +2288,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-69"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-72"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3375,6 +3428,33 @@ async def test_async_launchers_are_not_read_only(tool_name):
     assert ann.idempotentHint is False
     assert ann.openWorldHint is True
     assert ann.destructiveHint is False
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["codex_consult", "codex_review_changes", "codex_delegate"],
+)
+async def test_sync_active_tools_are_not_read_only(tool_name):
+    """The sync consult/review/delegate tools spawn the same observable, spend-
+    committing job record as their *_async twins above, so they share the same
+    readOnlyHint:false posture (issue #138). This is half of what
+    CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is False
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["codex_dry_run", "codex_delegate_dry_run"],
+)
+async def test_dry_run_tools_are_read_only(tool_name):
+    """Dry-run tools call no model and create no job record, so they keep
+    readOnlyHint:true. This is the other half of what
+    CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is True
 
 
 def test_job_status_model_surfaces_cleanup_warnings():
@@ -4529,6 +4609,48 @@ async def test_initialize_does_not_advertise_prompts(clean_env):
     # models, so re-run that exact seam and assert the key is actually absent.
     wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
     assert "prompts" not in wire
+
+
+# --- initialize: no unimplemented ui extension (#424) -------------------------
+async def test_initialize_does_not_advertise_the_ui_extension(clean_env):
+    """FastMCP's LowLevelServer.get_capabilities unconditionally advertises the
+    io.modelcontextprotocol/ui extension (MCP Apps), but this server implements no
+    UI/Apps code. Advertising it is a false capability claim (#424)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        caps = client.initialize_result.capabilities
+    assert caps.model_extra is None or "extensions" not in caps.model_extra
+    assert caps.tools is not None  # the override must not clobber siblings
+    assert caps.resources is not None
+    # Same reasoning as the prompts guard above: confirm the key is actually absent
+    # from the wire representation, not just parsed back to None/omitted.
+    wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert "extensions" not in wire
+
+
+async def test_initialize_ui_extension_filter_preserves_other_extensions(clean_env):
+    """The seam must filter only the ui extension out of the extensions mapping, not
+    null the whole key — a future FastMCP version may legitimately add a different
+    extension, and this server must not silently suppress that one too (#424 review)."""
+    from fastmcp import Client
+
+    sentinel_id = "io.example/sentinel"
+    real_orig_get_capabilities = server._orig_get_capabilities
+
+    def fake_orig_get_capabilities(*args: object, **kwargs: object) -> object:
+        caps = real_orig_get_capabilities(*args, **kwargs)
+        return caps.model_copy(
+            update={"extensions": {server._UI_EXTENSION_ID: {}, sentinel_id: {"foo": "bar"}}}
+        )
+
+    clean_env.setattr(server, "_orig_get_capabilities", fake_orig_get_capabilities)
+
+    async with Client(server.mcp) as client:
+        caps = client.initialize_result.capabilities
+
+    wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert wire["extensions"] == {sentinel_id: {"foo": "bar"}}
 
 
 # --- advertised error codes must be MCP-reachable (#92) -----------------------
@@ -6094,7 +6216,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-69")
+    assert result["fingerprint"].endswith("schema-72")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

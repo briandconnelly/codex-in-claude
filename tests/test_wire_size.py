@@ -66,6 +66,14 @@ from codex_in_claude.server import mcp
 # background a long call before the server's own deadline, so `timeout_seconds` bounds the run,
 # not necessarily the client's inline wait — the job record covers that case too): 84,740 bytes —
 # budget raised to the next 500 above the measured value.
+# Measured again 2026-08-01 (#423: `CapabilitiesResult.protocol_revision` — this schema is not on
+# the `tools/list` wire path (its description is stripped from the advertised `outputSchema` by
+# `_strip_schema_noise`), but the tool's `outputSchema` embeds the bare `{"type":"string"}`
+# property): 84,778 bytes (+38 B) — still within budget, no further change.
+# Measured again 2026-08-01 (#426: `CapabilitiesResult.annotations_reading` — same treatment as
+# `protocol_revision` above, a second bare `{"type":"string"}` property on `codex_capabilities`'
+# outputSchema; its description is likewise stripped from the advertised schema): 84,818 bytes
+# (+40 B) — still within budget, no further change.
 TOOLS_LIST_BYTE_BUDGET = 85_000
 
 

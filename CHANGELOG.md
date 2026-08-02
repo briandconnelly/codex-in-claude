@@ -5,6 +5,34 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_capabilities()` now declares the targeted MCP protocol revision** via a new
+  `protocol_revision` field (`"2025-11-25"`), previously derivable only by inspecting the
+  `initialize` wire response (#423). Its description points to the new
+  `docs/adr/0004-mcp-2026-07-28-migration.md`, which records why this server stays on 2025-11-25
+  (verified FastMCP/`mcp` SDK support and deployment compatibility — not any spec-granted support
+  window for the legacy revision, which the spec makes optional) and the per-feature migration plan
+  for the deprecated pieces already in use (roots; the 2025-11-25 revision itself once FastMCP
+  supports 2026-07-28). Also fixes a stale `_roots_from_ctx` docstring comment that called the
+  2026-07-28 spec an "RC" — it has been Final since 2026-07-28. The rest of #423's vendored-skill
+  sweep was already done by #448 (`.agents/skills/agent-friendly-mcp` rebased onto the final spec);
+  `tests/runs/` transcripts are immutable historical evidence by declared policy and were left
+  untouched. `FINGERPRINT` bumps `schema-70` → `schema-71` (`capabilities_payload`); additive field,
+  **not breaking**; `RESULT_FORMAT` unchanged (the capabilities payload is not persisted).
+- **`codex_capabilities()` now documents the server's `readOnlyHint` reading** via a new
+  `annotations_reading` field, previously stated only in `server.py` source comments and cross-
+  referenced agent-visibly only obliquely via `Meta.tier`'s description (#426). It states the
+  judgment call directly: `readOnlyHint` tracks whether a call changes observable state that
+  outlives the response (a job record, committed spend) rather than file I/O, which is why
+  `codex_consult`, `codex_review_changes`, and `codex_delegate` (and their `_async` variants) are
+  `readOnlyHint: false` even though consult and review never write files, while `codex_dry_run`
+  and `codex_delegate_dry_run`, which create no job record, stay `readOnlyHint: true`. Consistency
+  guards (`test_sync_active_tools_are_not_read_only`, `test_dry_run_tools_are_read_only`) assert
+  the claim against the live tool annotations. `FINGERPRINT` bumps `schema-71` → `schema-72`
+  (`capabilities_payload`); additive field, **not breaking**; `RESULT_FORMAT` unchanged (the
+  capabilities payload is not persisted).
+
 ### Fixed
 
 - **A redaction marker no longer claims completeness it doesn't have** (#446). A credential
@@ -40,6 +68,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   boundary; this change is only about not letting the output claim otherwise. No agent-visible
   MCP surface changes (this is a redacted-text VALUE, not a schema field), so no `fingerprint`
   bump.
+- **`initialize` advertised the `io.modelcontextprotocol/ui` extension (MCP Apps) even though this
+  server implements no UI/Apps code** (#424). FastMCP's `LowLevelServer.get_capabilities`
+  unconditionally injects `UI_EXTENSION_ID` into `ServerCapabilities.model_extra`; a host probing
+  for MCP Apps support would find the capability advertised but nothing behind it. The existing
+  `get_capabilities` monkeypatch seam — already used to null out the unused `prompts` capability
+  (#F5-audit) — is renamed `_get_capabilities_without_prompts_or_extensions` and now also filters
+  the `extensions` mapping: it removes only the `io.modelcontextprotocol/ui` id, preserves any other
+  entry a future FastMCP version might legitimately add, and omits the `extensions` key entirely
+  only when nothing is left after filtering. Removing a falsely-advertised capability is a
+  correction, not a removal of implemented behavior — nothing a client could actually use is taken
+  away — so this bumps `FINGERPRINT` (`schema-69` → `schema-70`) but is **not breaking**;
+  `RESULT_FORMAT` is unchanged (`initialize` is not persisted).
 - **Secret redaction now merges every matcher's candidate spans instead of substituting them one
   pass at a time, so no matcher can strand part of a secret another one covers whole** (#445). The
   inline patterns used to be applied as sequential `re.sub` passes, each over the previous pass's
