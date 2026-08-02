@@ -8,6 +8,7 @@
       "codex_delegate",
       "codex_delegate_async"
     ],
+    "annotations_reading": "readOnlyHint tracks whether a call changes observable state that outlives the response — a job record, committed spend — rather than file I/O. That's why codex_consult, codex_review_changes, and codex_delegate (and their _async variants) are readOnlyHint: false even though consult and review never write files, while codex_dry_run and codex_delegate_dry_run, which create no job record, stay readOnlyHint: true.",
     "deprecation_policy": "Pre-1.0: minor versions may change the agent-visible surface; the fingerprint changes when they do.",
     "error_envelope_resource": "codex://error-envelope",
     "fingerprint_covers": [
@@ -635,7 +636,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 8482
+          "size_bytes": 9296
         }
       },
       "mimeType": "application/schema+json",
@@ -887,6 +888,12 @@
             "title": "Active Tools",
             "type": "array"
           },
+          "annotations_reading": {
+            "default": "readOnlyHint tracks whether a call changes observable state that outlives the response — a job record, committed spend — rather than file I/O. That's why codex_consult, codex_review_changes, and codex_delegate (and their _async variants) are readOnlyHint: false even though consult and review never write files, while codex_dry_run and codex_delegate_dry_run, which create no job record, stay readOnlyHint: true.",
+            "description": "The server's documented reading of its `readOnlyHint` tool annotation: what counts as read-only for tools that call Codex. Stated here because it's a judgment call a literal reader of the MCP spec could reach differently, not a restatement of server.py's annotation-preset mechanics.",
+            "title": "Annotations Reading",
+            "type": "string"
+          },
           "deprecation_policy": {
             "title": "Deprecation Policy",
             "type": "string"
@@ -897,7 +904,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-71",
+            "default": "codex-in-claude/0.1/schema-72",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1455,7 +1462,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-71",
+                "default": "codex-in-claude/0.1/schema-72",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2139,7 +2146,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 8482
+          "size_bytes": 9296
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
@@ -2579,7 +2586,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-71",
+            "default": "codex-in-claude/0.1/schema-72",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3262,7 +3269,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-71",
+            "default": "codex-in-claude/0.1/schema-72",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3413,6 +3420,9 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "annotations_reading": {
+                "type": "string"
               },
               "deprecation_policy": {
                 "type": "string"

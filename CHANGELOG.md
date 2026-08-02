@@ -20,6 +20,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `tests/runs/` transcripts are immutable historical evidence by declared policy and were left
   untouched. `FINGERPRINT` bumps `schema-70` → `schema-71` (`capabilities_payload`); additive field,
   **not breaking**; `RESULT_FORMAT` unchanged (the capabilities payload is not persisted).
+- **`codex_capabilities()` now documents the server's `readOnlyHint` reading** via a new
+  `annotations_reading` field, previously stated only in `server.py` source comments and cross-
+  referenced agent-visibly only obliquely via `Meta.tier`'s description (#426). It states the
+  judgment call directly: `readOnlyHint` tracks whether a call changes observable state that
+  outlives the response (a job record, committed spend) rather than file I/O, which is why
+  `codex_consult`, `codex_review_changes`, and `codex_delegate` (and their `_async` variants) are
+  `readOnlyHint: false` even though consult and review never write files, while `codex_dry_run`
+  and `codex_delegate_dry_run`, which create no job record, stay `readOnlyHint: true`. Consistency
+  guards (`test_sync_active_tools_are_not_read_only`, `test_dry_run_tools_are_read_only`) assert
+  the claim against the live tool annotations. `FINGERPRINT` bumps `schema-71` → `schema-72`
+  (`capabilities_payload`); additive field, **not breaking**; `RESULT_FORMAT` unchanged (the
+  capabilities payload is not persisted).
 
 ### Fixed
 
