@@ -196,42 +196,78 @@ LABELLED_VALUE_PATTERN = re.compile(
 )
 
 # The connection-string userinfo matchers, named rather than left anonymous in the list
-# below. Their contract is one-directional — a change may widen what is recognized, never
-# narrow it — and the differential sweep that enforces that has to substitute one of them
-# to prove it can still see a loss. Addressing them by list POSITION is what that test did
+# below. Their contract is one-directional BY DEFAULT — a change may widen what is
+# recognized, never narrow it, EXCEPT under an explicit, characterized trade weighed
+# against a documented false-positive cost (see #442 below, which does exactly that) —
+# and the differential sweep that enforces the default has to substitute one of them to
+# prove it can still see a loss. Addressing them by list POSITION is what that test did
 # first, and appending a matcher pointed it at the wrong one. A name cannot drift that way.
+#
+# That "EXCEPT" is load-bearing, not throat-clearing: the unqualified version of this
+# sentence is the exact reasoning #440 used to leave the named arm's `?`/`#` admission
+# alone ("narrowing it would be a loss, and this class is one-directional"). Read
+# unqualified, it re-arms the same trap for the next narrowing this file needs — the
+# bar is not "zero loss", it is "the loss is characterized, pinned by its own test, and
+# smaller than what leaving it unnarrowed costs".
 #
 # See the comments at each definition below for why each is shaped as it is.
 #
-# The password run's character class is CONDITIONAL on whether a username was present,
-# and the two arms are not interchangeable:
+# The password run's character class used to be CONDITIONAL on whether a username was
+# present, with the two arms deliberately NOT interchangeable: the named-username arm
+# (`://user:…@`) admitted `?` and `#`, while #440's empty-username arm (`://:…@`) excluded
+# them because `://:` also serializes an empty host with a port, so admitting them made
+# `custom://:8080?email=a@b` — a query string carrying an `@`, no userinfo anywhere — come
+# out as `custom://:[redacted: secret value]@b`.
 #
-#   * With a username (`://user:…@`) the run admits `?` and `#`, byte-for-byte as before.
-#     This arm is deliberately untouched. Narrowing it would stop redacting a password
-#     containing a raw `?` or `#` (`x://u:ab?cd@h`), a loss the printable-domain walk in
-#     the tests already forbids, and the one-directional contract above rules out.
-#   * WITHOUT a username (`://:…@`, the branch #440 adds) the run stops at `?` and `#`.
-#     It has to: `://:` is also how an empty host with a port serializes, so admitting
-#     them made `custom://:8080?email=a@b` — a query string carrying an `@`, no userinfo
-#     anywhere — come out as `custom://:[redacted: secret value]@b`. Per RFC 3986 a raw
-#     `?`/`#` cannot appear in userinfo (it must be percent-encoded), so an `@` that
-#     follows one is in the query or fragment and never delimits a credential.
+# #442 REVERSES that split. Per RFC 3986, `?` and `#` terminate the authority component —
+# nothing after either one can be userinfo, so a run containing them can never be a
+# password, on EITHER arm. The named arm's `?`/`#` admission was reasoned about as
+# "maximal run, narrow only under an established loss" when #438 wrote it, and #440 kept
+# that reasoning for the arm it left alone — but the loss it was protecting
+# (`x://u:ab?cd@h`, a password containing a literal `?`) is RFC-invalid userinfo already,
+# while what admitting them costs is every ordinary URL whose query or fragment carries an
+# `@`: `https://host.example:8443?email=user@example.com` masked its port and query as a
+# credential, and #443's reorder (below) only widened how much of the query that false
+# positive could reach. Weighed against each other, the RFC-invalid password shape is the
+# smaller loss, so both arms now share the SAME run — `_CS_PASSWORD_CHARS` below — and the
+# conditional that used to pick between them collapses (kept anonymous rather than
+# revived: `(?(cs_user)...)`'s two arms are no longer different expressions to pick
+# between). `x://u:ab?cd@h` losing its redaction is the accepted, characterized trade
+# (see the test pinning it).
 #
-# Constraining only the NEW arm is what keeps this a pure widening: every input the old
-# pattern matched still matches, identically. The same false positive DOES exist on the
-# username arm (`https://host.example:8443?email=user@example.com` is masked, and was
-# before this change), but fixing that is a narrowing of a documented guarantee rather
-# than a bug in this one, so it is filed separately as #442 rather than folded in here.
+# #443 enlarged the pre-#442 false positive's reach without changing this class: running
+# these matchers first removed an accidental brake, a labelled marker landing inside the
+# query used to stop the username arm from matching, so
+# `https://host.example:8443?token=<secret>@x.example` kept its port and query. It no
+# longer does — and since #445 that no longer depends on position either, candidates are
+# collected from the ORIGINAL text. #442 does not undo that enlargement; it removes the
+# false positive the enlargement was making worse.
 #
-# #443 ENLARGED #442's reach without changing this class. Running these matchers first
-# removed an accidental brake: a labelled marker landing inside the query used to stop
-# the username arm from matching, so `https://host.example:8443?token=<secret>@x.example`
-# kept its port and query. It no longer does — and since #445 that no longer depends on
-# position either: candidates are collected from the ORIGINAL text, so there is no marker
-# in the query to brake on whatever order these matchers sit in. Accepted deliberately —
-# the credential is still redacted either way, what grows is how much surrounding text goes
-# with it — and pinned by a characterization test so #442's eventual fixer sees the current
-# output rather than re-deriving it.
+# #442 round 2 (Codex review): narrowing only the PASSWORD run above was not enough. The
+# USERNAME run below admitted `?`/`#` too, and the same RFC 3986 rationale applies to it —
+# `https://host.example?foo:bar12345678@x.example` has no userinfo at all, but the
+# username slot's un-narrowed class let it consume `host.example?foo` as a "username",
+# the `:` as the separator, and `bar12345678` as an RFC-invalid-but-matched password. A
+# hand-spelled second `[^:@\s/?#]` here — a THIRD near-copy alongside `_CS_PASSWORD_CHARS`
+# and `CONNECTION_STRING_USERNAME_TOKEN_PATTERN`'s own class below — is exactly the drift
+# this module's derived-fragment discipline (`_LABEL_ALT`, `_KEY_STEP`/`_KEY_STEP_ANON`)
+# exists to rule out, so all three now derive from ONE exclusion set instead.
+#
+# Characters that terminate ANY connection-string userinfo run, username or password:
+# `@` (the userinfo/host boundary, the lookahead terminator elsewhere), whitespace and
+# `/` (the authority never contains either raw), and `?`/`#` (RFC 3986 authority
+# terminators — nothing after either can be userinfo, on EITHER side of the `:`).
+_CS_TERMINATORS = r"@\s/?#"
+# The password run: one-or-more of anything but a terminator. `:` is deliberately NOT
+# excluded — a password may legitimately contain colons whole
+# (`test_connection_string_password_with_colons_redacted`), so this class stays wider
+# than the username one below.
+_CS_PASSWORD_CHARS = rf"[^{_CS_TERMINATORS}]+"
+# The username run's PER-CHARACTER class (no quantifier of its own — each use site picks
+# one: `*` for an optional username below, `{{16,}}` for the bare-token form further
+# down): every terminator above, PLUS `:` — the user/password separator, which must stop
+# the username run or it would swallow the password too.
+_CS_USERNAME_CHAR = rf"[^:{_CS_TERMINATORS}]"
 #
 # ---------------------------------------------------------------------------
 # Connection-string userinfo: redact the password between `://[user]:` and `@host`,
@@ -270,7 +306,12 @@ LABELLED_VALUE_PATTERN = re.compile(
 # (`key=<...>://user:pw@host`), the old pattern could no longer match and the
 # password went out intact.
 CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
-    r"(://(?P<cs_user>[^:@\s/]+)?:)(?(cs_user)[^@\s/]+|[^@\s/?#]+)(?=@)"
+    # The username slot no longer needs to be a NAMED group: `cs_user` existed only for
+    # the `(?(cs_user)...)` conditional #442 removes above, and nothing else read it by
+    # name (grep before touching this: a named group elsewhere in this file, e.g.
+    # `LABELLED_VALUE_PATTERN`'s `key_bracket`/`key_quote`, is read by `_is_code_reference`
+    # or the swallow guards — this one was not).
+    rf"(://{_CS_USERNAME_CHAR}*:){_CS_PASSWORD_CHARS}(?=@)"
 )
 # A token in the USERNAME slot, with a password field present but EMPTY
 # (`://<token>:@host`) — the pattern above preserves the username, so a
@@ -299,13 +340,18 @@ CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
 #     not a new constant; it is already this file's credential threshold, in
 #     LABELLED_VALUE_PATTERN's value run.
 #
-# `?` and `#` are excluded here although the PASSWORD class admits them, because
-# the two runs play different roles. This run is the text being REPLACED, so it
-# has to stop at the end of the authority or a query carrying an `@` is masked as
-# userinfo — `https://example.com?email=a.b+c@example.org` would collapse to
-# `https://[redacted: secret value]@example.org`, hiding the host. A password may
-# legitimately contain `?` and `#`, so narrowing that class would lose coverage.
-CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
+# Both userinfo matchers in this file stop at `?`/`#` now (#442): a raw `?` or `#` per
+# RFC 3986 terminates the authority, so nothing after either one — on the username side
+# or the password side — can be userinfo. This run reuses `_CS_USERNAME_CHAR` (defined
+# above, alongside `_CS_PASSWORD_CHARS`) rather than hand-spelling its own class, so the
+# two runs cannot drift onto different exclusion sets again the way username and password
+# briefly did across #442's two review rounds.
+#
+# What IS specific to this matcher: it is the text being REPLACED, so it has to stop at
+# the end of the authority or a query carrying an `@` is masked as userinfo —
+# `https://example.com?email=a.b+c@example.org` would collapse to
+# `https://[redacted: secret value]@example.org`, hiding the host.
+CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(rf"(://){_CS_USERNAME_CHAR}{{16,}}(?=:@)")
 
 # Named — like the two connection-string matchers above, and for the same reason
 # `LABELLED_VALUE_PATTERN` is: the #446 trailing-safe-set selection (see
