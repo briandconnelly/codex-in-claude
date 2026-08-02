@@ -32,6 +32,32 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   the claim against the live tool annotations. `FINGERPRINT` bumps `schema-71` → `schema-72`
   (`capabilities_payload`); additive field, **not breaking**; `RESULT_FORMAT` unchanged (the
   capabilities payload is not persisted).
+- **`codex_dry_run` and `codex_delegate_dry_run` now advise when a previewed call may exceed the
+  synchronous deadline** via a new `deadline_advisory` field, described identically on both
+  (#342). Non-null exactly when the previewed call would actually run the model AND either its
+  prompt exceeds 100,000 bytes or its resolved `reasoning_effort` is `"high"`/`"xhigh"` (an exact,
+  case-sensitive match — an unrecognized effort string, including a near-miss like `"HIGH "` or
+  `"Xhigh"`, is deliberately not treated as high); null whenever the call would run no model at
+  all (`codex_dry_run`'s `would_call_model=false` on an empty diff; `codex_delegate_dry_run` has
+  no such short-circuit, since a blank task is already rejected before this point). It is a hint,
+  not a refusal — `would_call_model` and every other field are unaffected — and names, verbatim,
+  the **previewed paid tool's own** `_async` counterpart (`codex_review_changes_async` from
+  `codex_dry_run`, `codex_delegate_async` from `codex_delegate_dry_run`) — never the dry-run
+  tool's own name, which has no `_async` variant. A pre-release Codex review (concerns/1, medium)
+  caught an earlier draft that instead said "this tool's `_async` variant" — read from the
+  dry-run caller's own perspective, that generic phrase pointed at the nonexistent
+  `codex_dry_run_async`/`codex_delegate_dry_run_async`, the exact wrong-tool failure this field
+  exists to prevent; fixed before this field ever shipped. `codex_consult` has no dry-run preview
+  at all; the field's own description carries a one-clause pointer to `codex_consult_async` for a
+  high-effort or broad repo-grounded consult instead. The 100,000-byte threshold is grounded in
+  the same deadline datapoints as the
+  180→300s `timeout_seconds` raise (#338/#341): comfortably below the 200,000-byte default
+  `max_input_bytes` ceiling, inside the range of the mid-tier consult/review runs observed
+  exceeding the old 180s cap, and short of the still-unremoved >~420s cliff the `_async` variants
+  exist to absorb. `FINGERPRINT` bumps `schema-73` → `schema-74` (`tool_output_schemas`,
+  `tool_descriptions`); additive field, **not breaking**; `RESULT_FORMAT` unchanged — dry-run
+  results are never persisted (`result_format_snapshot.py` covers only the four run envelopes, not
+  either dry-run preview).
 
 ### Changed
 

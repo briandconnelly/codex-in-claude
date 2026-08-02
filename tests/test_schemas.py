@@ -806,9 +806,22 @@ def _wire_catalog_bytes() -> int:
 # skills-discovery sentence pair — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET/TARGET
 # history for the tightening story, which applies identically here): 84,835 -> 84,992 bytes
 # (+157 B) — fits under the existing cap, no raise.
+# Measured again 2026-08-02 (#342: `deadline_advisory` added to `DryRunResult` and
+# `DelegateDryRunResult`, described identically on both, plus one docstring sentence per
+# dry-run tool — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET/TARGET history for
+# the same field's justification, which applies identically here: genuinely new
+# pre-spend disclosure, not wording flab): 84,992 -> 86,435 bytes (+1,443 B, incl. an
+# accuracy reword of the field description) — over cap;
+# cap raised to the next 500 above the measured value.
+# Measured again 2026-08-02 (#342 round-3, Codex review concerns/1 medium, verified
+# valid — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET/TARGET history for the
+# same correction's justification, which applies identically here: the advisory now
+# names the previewed PAID tool's own `_async` counterpart verbatim instead of a
+# generic, wrong-tool-pointing phrase): 86,435 -> 86,766 bytes (+331 B) — over cap;
+# cap raised to the next 500 above the measured value.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 85_000
+CATALOG_BYTE_CAP = 87_000
 
 
 def test_wire_catalog_under_cap():
@@ -967,7 +980,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-73"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-74"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

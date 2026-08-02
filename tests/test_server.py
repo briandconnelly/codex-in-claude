@@ -2338,7 +2338,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-73"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-74"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6266,7 +6266,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-73")
+    assert result["fingerprint"].endswith("schema-74")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -7007,6 +7007,239 @@ async def test_capabilities_advertise_reasoning_effort(clean_env):
     # so the code is reachable there too (pre-spend shape guard; no Codex involved).
     for name in effort_tools[6:]:
         assert "invalid_reasoning_effort" in details[name]["error_codes"], name
+
+
+# --- deadline advisory (#342) -----------------------------------------------
+# _deadline_advisory(would_call_model, prompt_bytes, effort, timeout_seconds, async_tool)
+# is the one shared helper both codex_dry_run and codex_delegate_dry_run call. The
+# predicate is: advise iff would_call_model AND (prompt_bytes > _DEADLINE_ADVISORY_
+# PROMPT_BYTES OR effort in {"high", "xhigh"}). would_call_model gates the ENTIRE
+# predicate — a preview whose paid call would run no model (empty diff) must never
+# advise, regardless of size or effort, or the advisory would claim a deadline risk for
+# a call that never happens.
+#
+# Round-3 Codex review (concerns/1, medium, verified valid): the advisory text must
+# name the PREVIEWED PAID tool's own `_async` counterpart verbatim
+# (codex_review_changes_async / codex_delegate_async) — never a generic "this tool's
+# _async variant" phrase, which read from the dry-run caller's own perspective points
+# at a nonexistent codex_dry_run_async / codex_delegate_dry_run_async. `async_tool` is
+# caller-supplied precisely so the helper can't reintroduce that generic phrasing.
+
+_DEADLINE_ADVISORY_ASYNC_TOOL = "codex_review_changes_async"  # filler for tests that
+# don't care which tool name is embedded, only that the trigger/gate logic is correct.
+
+
+def test_deadline_advisory_prompt_bytes_constant_is_100_000():
+    # Pin the literal so a drifted constant can't satisfy a derived-expectation test
+    # (repo lesson: derived expectations are tautological).
+    assert server._DEADLINE_ADVISORY_PROMPT_BYTES == 100_000
+
+
+@pytest.mark.parametrize(
+    ("prompt_bytes", "effort", "expected_nonnull"),
+    [
+        (100_000, "low", False),  # exactly at the boundary: no advisory
+        (100_001, "low", True),  # one byte over: advisory
+    ],
+)
+def test_deadline_advisory_prompt_bytes_boundary(prompt_bytes, effort, expected_nonnull):
+    result = server._deadline_advisory(
+        True, prompt_bytes, effort, 300, _DEADLINE_ADVISORY_ASYNC_TOOL
+    )
+    assert (result is not None) is expected_nonnull
+
+
+@pytest.mark.parametrize("effort", ["high", "xhigh"])
+def test_deadline_advisory_high_effort_triggers(effort):
+    result = server._deadline_advisory(True, 0, effort, 300, _DEADLINE_ADVISORY_ASYNC_TOOL)
+    assert result is not None
+    assert _DEADLINE_ADVISORY_ASYNC_TOOL in result
+
+
+@pytest.mark.parametrize("effort", ["ultra", "HIGH ", "", "Xhigh", None])
+def test_deadline_advisory_unrecognized_effort_does_not_trigger(effort):
+    # Unrecognized strings (including near-misses: trailing space, wrong case) are NOT
+    # "high" — no advisory from effort alone.
+    assert server._deadline_advisory(True, 0, effort, 300, _DEADLINE_ADVISORY_ASYNC_TOOL) is None
+
+
+def test_deadline_advisory_small_low_effort_is_null():
+    # The issue's acceptance criterion: an ordinary small/low-effort preview advises
+    # nothing.
+    assert server._deadline_advisory(True, 10, "low", 300, _DEADLINE_ADVISORY_ASYNC_TOOL) is None
+
+
+def test_deadline_advisory_gate_blocks_on_would_call_model_false():
+    # Round-2 correction, load-bearing: would_call_model=False must null the advisory
+    # even when size/effort alone would otherwise trigger it — a preview that short-
+    # circuits the paid path runs no model, so an effort/size advisory there would be
+    # factually false.
+    assert (
+        server._deadline_advisory(False, 999_999, "xhigh", 300, _DEADLINE_ADVISORY_ASYNC_TOOL)
+        is None
+    )
+
+
+def test_deadline_advisory_names_the_passed_async_tool_verbatim_not_generically():
+    # Round-3 correction, load-bearing: the helper must embed the CALLER-supplied
+    # async_tool string verbatim, never a synthesized generic "this tool's _async
+    # variant" phrase — a generic phrase read from codex_dry_run's own payload would
+    # point an agent at the nonexistent codex_dry_run_async.
+    sentinel = "some_other_tool_async"
+    result = server._deadline_advisory(True, 0, "xhigh", 300, sentinel)
+    assert result is not None
+    assert sentinel in result
+    assert "this tool" not in result.lower()
+
+
+async def test_deadline_advisory_named_tools_are_actually_registered():
+    # Registry-derived guard (repo lesson: derived expectations are tautological, so
+    # this is deliberately a SEPARATE assertion from the literal-name checks below,
+    # not a replacement for them): confirm the two tool names the advisory can embed
+    # are real, currently-registered tools, so a future rename of either async tool
+    # fails this test loudly instead of silently pointing agents at a dead name.
+    registered = {t.name for t in await server.mcp.list_tools()}
+    assert "codex_review_changes_async" in registered
+    assert "codex_delegate_async" in registered
+
+
+async def test_dry_run_deadline_advisory_large_prompt_triggers(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_dry_run(
+        scope="working_tree",
+        workspace_root=str(tmp_path),
+        extra_context="x" * 150_000,
+    )
+    assert res["ok"] is True
+    assert res["prompt_bytes"] > 100_000
+    assert res["deadline_advisory"] is not None
+    # Literal-name assertions: names the PREVIEWED PAID tool's async counterpart, and
+    # explicitly never this dry-run tool's own (nonexistent) async variant.
+    assert res["deadline_advisory"] == (
+        "This previewed call's prompt size or reasoning effort may exceed the "
+        "300s synchronous deadline; prefer codex_review_changes_async (the async "
+        "counterpart of the previewed call), which is polled instead of terminated "
+        "if the run outlasts the deadline."
+    )
+    assert "codex_dry_run_async" not in res["deadline_advisory"]
+
+
+async def test_dry_run_deadline_advisory_xhigh_effort_triggers(monkeypatch, clean_env, tmp_path):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_dry_run(
+        scope="working_tree",
+        workspace_root=str(tmp_path),
+        reasoning_effort="xhigh",
+    )
+    assert res["ok"] is True
+    assert res["prompt_bytes"] <= 100_000
+    assert res["deadline_advisory"] is not None
+    assert "codex_review_changes_async" in res["deadline_advisory"]
+    assert "codex_dry_run_async" not in res["deadline_advisory"]
+
+
+async def test_dry_run_deadline_advisory_null_for_small_low_effort(
+    monkeypatch, clean_env, tmp_path
+):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), reasoning_effort="low"
+    )
+    assert res["ok"] is True
+    assert res["deadline_advisory"] is None
+
+
+async def test_dry_run_deadline_advisory_null_when_would_not_call_model(
+    monkeypatch, clean_env, tmp_path
+):
+    # Gate test (round-2): high effort but an empty diff (would_call_model False) must
+    # still advise nothing.
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="", summary=gitdiff.DiffSummary(0, 0, 0), redacted_paths=[]
+        ),
+    )
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), reasoning_effort="high"
+    )
+    assert res["ok"] is True
+    assert res["would_call_model"] is False
+    assert res["deadline_advisory"] is None
+
+
+async def test_delegate_dry_run_deadline_advisory_large_prompt_triggers(
+    monkeypatch, clean_env, tmp_path
+):
+    _init_repo(tmp_path)
+    res = await server.codex_delegate_dry_run(
+        "x" * 150_000,
+        workspace_root=str(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["prompt_bytes"] > 100_000
+    assert res["deadline_advisory"] is not None
+    # Literal-name assertions: names the PREVIEWED PAID tool's async counterpart, and
+    # explicitly never this dry-run tool's own (nonexistent) async variant.
+    assert "codex_delegate_async" in res["deadline_advisory"]
+    assert "codex_delegate_dry_run_async" not in res["deadline_advisory"]
+    assert "codex_review_changes_async" not in res["deadline_advisory"]
+
+
+async def test_delegate_dry_run_deadline_advisory_xhigh_effort_triggers(
+    monkeypatch, clean_env, tmp_path
+):
+    _init_repo(tmp_path)
+    res = await server.codex_delegate_dry_run(
+        "add a feature",
+        workspace_root=str(tmp_path),
+        reasoning_effort="xhigh",
+    )
+    assert res["ok"] is True
+    assert res["prompt_bytes"] <= 100_000
+    assert res["deadline_advisory"] is not None
+    assert "codex_delegate_async" in res["deadline_advisory"]
+    assert "codex_delegate_dry_run_async" not in res["deadline_advisory"]
+
+
+async def test_delegate_dry_run_deadline_advisory_null_for_small_low_effort(
+    monkeypatch, clean_env, tmp_path
+):
+    _init_repo(tmp_path)
+    res = await server.codex_delegate_dry_run(
+        "add a feature",
+        workspace_root=str(tmp_path),
+        reasoning_effort="low",
+    )
+    assert res["ok"] is True
+    assert res["deadline_advisory"] is None
+
+
+@pytest.mark.parametrize("effort", ["ultra", "HIGH ", ""])
+async def test_delegate_dry_run_deadline_advisory_unrecognized_effort_is_null(
+    monkeypatch, clean_env, tmp_path, effort
+):
+    _init_repo(tmp_path)
+    res = await server.codex_delegate_dry_run(
+        "add a feature",
+        workspace_root=str(tmp_path),
+        reasoning_effort=effort,
+    )
+    assert res["ok"] is True
+    assert res["deadline_advisory"] is None
+
+
+@pytest.mark.parametrize("effort", ["ultra", "HIGH ", ""])
+async def test_dry_run_deadline_advisory_unrecognized_effort_is_null(
+    monkeypatch, clean_env, tmp_path, effort
+):
+    monkeypatch.setattr(gitdiff, "gather_diff", lambda *a, **k: _diff())
+    res = await server.codex_dry_run(
+        scope="working_tree", workspace_root=str(tmp_path), reasoning_effort=effort
+    )
+    assert res["ok"] is True
+    assert res["deadline_advisory"] is None
 
 
 async def test_dry_run_model_echo_reconciles_help_gated_drop(monkeypatch, clean_env, tmp_path):

@@ -972,6 +972,57 @@ def _dry_run_effective_model(requested: str | None) -> str | None:
     return requested
 
 
+# #342: the prompt-size half of the deadline-advisory predicate. An EXACT constant, not
+# a fraction of max_input_bytes — grounded in the CHANGELOG's own datapoints for this
+# deadline: the 180->300s timeout raise (#338/#341) recovered the mid-tier consult/review
+# runs observed exceeding the old 180s cap, but the destructive >~420s cliff remains
+# unremoved, so a call already well past the historical mid-tier size is worth flagging
+# before it's sent, not after it's terminated. 100_000 bytes sits below max_input_bytes'
+# 200_000-byte default, comfortably inside the sizes that were observed running long.
+_DEADLINE_ADVISORY_PROMPT_BYTES = 100_000
+_DEADLINE_ADVISORY_HIGH_EFFORTS = frozenset({"high", "xhigh"})
+
+
+def _deadline_advisory(
+    would_call_model: bool,
+    prompt_bytes: int,
+    effort: str | None,
+    timeout_seconds: int,
+    async_tool: str,
+) -> str | None:
+    """Advise when a previewed paid call may exceed its synchronous deadline.
+
+    Gates entirely on `would_call_model` (round-2 correction, load-bearing): a preview
+    whose paid call would short-circuit and run no model — e.g. codex_dry_run's empty
+    diff — cannot overrun a deadline it never approaches, so an effort/size-only
+    advisory there would be factually false. When would_call_model is True, advise iff
+    the prompt exceeds `_DEADLINE_ADVISORY_PROMPT_BYTES` or `effort` is exactly "high"
+    or "xhigh" (case-sensitive, no normalization — effort is a free-form string per
+    config.py, and an unrecognized value is deliberately NOT treated as high). A hint
+    only: every other preview field is unaffected.
+
+    `async_tool` is the REGISTERED name of the previewed PAID tool's own `_async`
+    counterpart (e.g. "codex_review_changes_async" for a codex_dry_run preview,
+    "codex_delegate_async" for a codex_delegate_dry_run preview) — never this dry-run
+    tool's own name, which has no `_async` variant (there is no codex_dry_run_async).
+    Named verbatim in the returned text so an agent can call it directly (round-3
+    correction, verified by Codex review: an unrouted generic phrase like "this tool's
+    _async variant" would point at a nonexistent tool when read from the dry-run
+    caller's own perspective)."""
+    if not would_call_model:
+        return None
+    triggers_on_size = prompt_bytes > _DEADLINE_ADVISORY_PROMPT_BYTES
+    triggers_on_effort = effort in _DEADLINE_ADVISORY_HIGH_EFFORTS
+    if not (triggers_on_size or triggers_on_effort):
+        return None
+    return (
+        f"This previewed call's prompt size or reasoning effort may exceed the "
+        f"{timeout_seconds}s synchronous deadline; prefer {async_tool} (the async "
+        "counterpart of the previewed call), which is polled instead of terminated "
+        "if the run outlasts the deadline."
+    )
+
+
 def _resolve_isolation(value: str | None) -> tuple[str | None, ErrorInfo | None]:
     isolation = value or config.defaults().isolation
     if isolation not in config.VALID_ISOLATIONS:
@@ -3814,7 +3865,10 @@ async def codex_dry_run(
     whether the paid call would actually run the model (False on an empty diff, where
     `prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the
     review would. The result echoes the effective `model`/`reasoning_effort` overrides
-    the paid call would send (unvalidated)."""
+    the paid call would send (unvalidated). `deadline_advisory` is non-null when size
+    or effort risks the synchronous deadline (null whenever `would_call_model` is
+    False) and names `codex_review_changes_async` verbatim — the async counterpart of
+    the previewed call, not of this dry-run tool. A hint, not a refusal."""
     d = config.defaults()
     # Mirror _prepare_review's resolution so the preview reports what the paid call
     # would send: falsey-coalesced model, exact-None effort (#309).
@@ -3951,6 +4005,13 @@ async def codex_dry_run(
     would_call_model = not (diff.summary.files_changed == 0 and not diff.text.strip())
     prompt = prompts.build_review_prompt(diff.text, label, extra_context or "")
     prompt_bytes = len(prompt.encode("utf-8")) if would_call_model else 0
+    deadline_advisory = _deadline_advisory(
+        would_call_model,
+        prompt_bytes,
+        effort,
+        config.clamp_timeout(d.timeout_seconds),
+        "codex_review_changes_async",
+    )
     return DryRunResult(
         cwd=cwd,
         workspace_source=wres.source,
@@ -3978,6 +4039,7 @@ async def codex_dry_run(
         truncation_hint=diff.truncation_hint,
         redacted_paths_count=len(diff.redacted_paths),
         redacted_paths=diff.redacted_paths,
+        deadline_advisory=deadline_advisory,
     ).model_dump(mode="json")
 
 
@@ -4016,7 +4078,10 @@ async def codex_delegate_dry_run(
     a failure here is a failure the paid call would also hit. The returned
     `tier`/`sandbox` describe the previewed propose run, not this read-only preview;
     the result echoes the effective `model`/`reasoning_effort` overrides the paid
-    call would send (unvalidated)."""
+    call would send (unvalidated). `deadline_advisory` is non-null when size or
+    reasoning effort risks the synchronous deadline and names `codex_delegate_async`
+    verbatim — the async counterpart of the previewed call, not of this dry-run tool.
+    A hint, not a refusal."""
     d = config.defaults()
     # See codex_dry_run: mirror the paid call's resolution (#309).
     effort = reasoning_effort if reasoning_effort is not None else d.reasoning_effort
@@ -4117,6 +4182,14 @@ async def codex_delegate_dry_run(
         )
 
     prompt = prompts.build_delegate_prompt(task)
+    prompt_bytes = len(prompt.encode("utf-8"))
+    # Unlike codex_dry_run, a delegate preview has no empty-diff-style short-circuit: a
+    # blank task is already rejected above (_blank_input_error), so every successful
+    # preview here reflects a real call that WOULD run the model — would_call_model is
+    # unconditionally True at this point (#342).
+    deadline_advisory = _deadline_advisory(
+        True, prompt_bytes, effort, timeout, "codex_delegate_async"
+    )
     return DelegateDryRunResult(
         cwd=cwd,
         workspace_source=wres.source,
@@ -4125,7 +4198,7 @@ async def codex_delegate_dry_run(
         isolation=cast("Isolation", isolation_v),
         model=_dry_run_effective_model(model or d.model),
         reasoning_effort=effort,
-        prompt_bytes=len(prompt.encode("utf-8")),
+        prompt_bytes=prompt_bytes,
         max_input_bytes=limit,
         worktree_plan=WorktreePlan(
             head_commit=plan.head_commit,
@@ -4136,6 +4209,7 @@ async def codex_delegate_dry_run(
             untracked_files=plan.untracked_files,
             note=_DELEGATE_PLAN_NOTE,
         ),
+        deadline_advisory=deadline_advisory,
     ).model_dump(mode="json")
 
 

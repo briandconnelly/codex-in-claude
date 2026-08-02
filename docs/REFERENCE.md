@@ -236,6 +236,18 @@ differ. A missing key means only that the value was not reported (see
 identity from its absence. The exhaustive per-envelope matrix ships with the field itself at
 `codex://result-meta`.
 
+Both dry runs also carry `deadline_advisory`: non-null when the previewed paid call's prompt size or
+reasoning effort risks the synchronous deadline, naming — verbatim, so it is directly callable — the
+**previewed paid tool's own** `_async` counterpart: `codex_review_changes_async` from `codex_dry_run`,
+`codex_delegate_async` from `codex_delegate_dry_run`. Never the dry-run tool's own name, which has no
+`_async` variant (there is no `codex_dry_run_async`) — an earlier draft of this field used a generic
+"this tool's `_async` variant" phrase that, read from the dry-run caller's own perspective, pointed at
+that nonexistent tool; a Codex review caught it before release. It is a hint, not a refusal —
+`would_call_model` and every other field are unaffected — and it is unconditionally null whenever
+`would_call_model` (`codex_dry_run`) or the delegate preview's equivalent would-call fact is false: a
+call that runs no model cannot overrun a deadline it never approaches. `codex_consult` has no dry-run
+preview at all; for a high-effort or broad repo-grounded consult, prefer `codex_consult_async` directly.
+
 The job-lifecycle tools (`codex_job_status`, `codex_job_list`, `codex_job_cancel`) carry the resolved
 workspace on **successful** responses too — a compact `workspace` object with `cwd`,
 `workspace_source` (`param`/`roots`/`cwd`), and `workspace_warning` (set on a cwd fallback). Because
