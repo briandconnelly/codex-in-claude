@@ -77,6 +77,148 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **An ordinary URL whose query or fragment carries an `@` is no longer masked as
+  userinfo** (#442). The named-username connection-string matcher had TWO independent
+  admissions of `?`/`#`, found and fixed across two review rounds, on the PASSWORD side
+  and the USERNAME side respectively:
+
+  - The password run: a run starting right after a port (or a bare name) and ending just
+    before a later `@` parsed as `user:password@` even when that `@` actually belonged to
+    a query string or fragment — `https://host.example:8443?email=user@example.com`
+    (host, port, an email in the query, no userinfo anywhere) masked its port and query
+    and partly hid its host.
+  - The username run (found by a follow-up Codex review of this same fix): a run reaching
+    a LATER `:` before the `@` parsed the text ahead of it as a username —
+    `https://host.example?foo:bar12345678@x.example` (an ordinary query string with a
+    colon in it — a `time=`/ratio-style value, `12:34`, `16:9` — no userinfo anywhere)
+    parsed `host.example?foo` as username, `bar12345678` as password, and masked both.
+
+  Per RFC 3986, `?` and `#` terminate the authority component, so nothing after either
+  one can be userinfo — on EITHER side of the `:` — and an `@` following one never
+  delimits a credential.
+
+  #440 had already fixed the password case for the *empty*-username arm
+  (`://:password@host`, the canonical Redis URL), because admitting `?`/`#` there
+  collided with an empty host's port serialization; it deliberately left the named arm's
+  wider class alone, reasoning that narrowing it would lose a real (if RFC-invalid)
+  password containing a raw `?` or `#`. #442 reverses that call for both slots: weighed
+  against the whole ordinary-URL false-positive class, the RFC-invalid userinfo shape is
+  the smaller loss on both sides of the `:`. All three connection-string userinfo
+  classes — the password run, the username run, and
+  `CONNECTION_STRING_USERNAME_TOKEN_PATTERN`'s bare-token run — now derive from one
+  shared exclusion set (`_CS_TERMINATORS`) instead of three independently hand-spelled
+  (and, for one review round, silently drifted) character classes; the
+  `(?(cs_user)...)` conditional that used to pick between two different password classes
+  is gone along with the now-pointless `cs_user` group name.
+
+  **The accepted trade, pinned by its own characterization test on each side:** a
+  password containing a literal `?`/`#` is no longer redacted — the toy case is
+  `x://u:ab?cd@h`, and a realistic one is a labelled connection string whose password
+  happens to contain a raw `?`: `postgres://app:s3cr3t?value@db.internal:5432/appdb` now
+  goes out with the password in the clear, no backstop, since nothing else in this file
+  recognizes a bare `postgres://` credential once the connection-string matcher itself
+  won't span it. A username containing a literal `?`/`#` is an even larger loss:
+  `x://u?v:pw123456@h` no longer redacts AT ALL — not just the malformed username, but
+  the well-formed trailing password beside it — because the match fails at the anchor
+  once the username run can no longer reach the mandatory `:` separator. RFC 3986 already
+  calls both shapes invalid userinfo (a real `?`/`#` there has to be percent-encoded),
+  which is why both trades are judged acceptable rather than regressions.
+
+  The differential sweeps this file already runs (#438/#440) cannot detect a false
+  positive like this one — they only catch a matcher that redacts *less*, and this bug
+  was a matcher redacting *more* — so the fix instead lands with its own false-positive
+  corpus: the issue's own URL, OAuth-redirect/email-in-query/fragment variants, a shape
+  where `?` and `#` both appear before the `@`, an OAuth `redirect_uri` carrying a full
+  nested URL (a second `://`), shapes with a path segment before the query, and (round 2)
+  a colon inside the query and inside the fragment before the `@` — thirteen lines in
+  total, each asserted byte-identical in both `exempt_code` modes.
+
+  Corpus sweep, old pattern vs. new, over every line (`text.split("\n")`, matching
+  `wc -l`) of two real corpora on this tree: the whole checked-out `.venv` (5,020 files,
+  1,849,015 lines — not just `site-packages`) shows **zero** behavior changes in either
+  direction, in both `exempt_code` modes; this repository's own tracked files show 25
+  differing lines, every one of them documentation prose — the illustrative examples in
+  this entry and in the code comments and tests (including a pre-existing #443 entry line
+  quoting the same shape), not independent code.
+
+- **A labelled match no longer swallows a later sensitive label's secret** (#436). The #434
+  swallow guard was conditioned on `key_bracket`, so it protected only bracketed candidates
+  (`cfg["token"] = ...`); the identical swallow reached ANY labelled match, bracketed or not —
+  `LABELLED_VALUE_PATTERN`'s value run is greedy and `re.sub` never revisits consumed text, so
+  an earlier weak label's value could absorb a later sensitive label whole and ship the real
+  secret behind it in the clear: `cfg "key": aaaaaaaaaaaaaaaaapassword = realsecret1234567890`
+  redacted `aaaa…password` and left `realsecret1234567890` untouched.
+
+  There are now TWO guards in sequence, not one, because a single formulation could not cover
+  both shapes without either regressing what `main` shipped or reopening the quadratic risk
+  #439 already taught this file to avoid. **Guard 1** is `#434`'s original guard, unchanged in
+  reach: conditioned on `key_bracket`, and genuinely UNBOUNDED — a bracketed swallow is caught
+  at ANY distance, exactly as before. **Guard 2** is new: unconditional, so it also covers
+  non-bracket swallows (a shape `main` never protected at all, at any distance), but bounded at
+  a new `_SWALLOW_GUARD_PEEK` (1024 `_VALUE_CHARS`) to stay flat on repeated-anchor input — see
+  below. Because guard 1 is untouched and guard 2 only ADDS coverage, **the branch is a strict
+  superset of `main`'s behavior for this pattern: nothing `main` protected is regressed**, only
+  bounded further out. Both guards share one refinement: a redactable-value tail on the
+  swallowed label's own value (the new shared `_MIN_SECRET_VALUE_LEN` constant, replacing two
+  hard-coded `16`s) so a guard only refuses when the inner label's value would itself clear the
+  redaction threshold — without it, `token = aaaaaaaaaaaakey=short` becomes a total miss (the
+  outer refuses, the inner's 5-char value is too short to match), a regression from what the
+  pre-#436 pattern still caught whole. Verified directly on `main`: its tail-less bracketed
+  guard has the identical bug for the bracketed shape — `cfg["token"] = aaaaaaaaaaaakey=short`
+  comes out byte-identical, untouched — so the shared tail is also a genuine improvement over
+  guard 1's pre-#436 form, not only new-coverage hygiene for guard 2; both are now pinned exact.
+  The accepted trade for guard 2 specifically, generalized from #434: a refused non-bracket
+  outer candidate's own value run survives on the page (`aaaa…password` above), and the engine
+  advances to redact the inner label instead — a narrower span, not a leak.
+
+  Making guard 2's two inner probes open-ended (`_VALUE_CHARS*` ahead of the inner label,
+  `{16,}` on its value) made IT quadratic on repeated-anchor input the same way #439's JWT
+  segment was (`"key="*20000`, 80k chars, 3.5s; `"key="*40000`, 160k, 14.2s — ~4x per 2x input);
+  both are now bounded, but the two bounds are **not** the same kind of change. The
+  value-length probe (shared by both guards) becomes an EXACT `_MIN_SECRET_VALUE_LEN` rather
+  than an open lower bound — semantics-preserving on both, since it only answers a yes/no
+  question ("is the inner value at least this long") that a fixed count answers identically to
+  an open one, at O(16) instead of O(remaining). Guard 2's peek ahead of the inner label becomes
+  bounded at `_SWALLOW_GUARD_PEEK` (1024) — and because guard 1 stays unbounded, this cap is
+  **not** a narrowing of anything `main` shipped: it bounds only the NEW non-bracket coverage,
+  which `main` had at no distance at all, so a non-bracket swallow chain whose gap exceeds 1024
+  chars is exactly as unprotected as it always was — a partial fix, not a regression. Pinned at
+  the exact cliff by `test_non_bracket_swallow_guard_peek_boundary_is_pinned`; guard 1's lack of
+  any such cliff is pinned separately by `test_bracketed_swallow_guard_has_no_distance_limit`
+  (redacted at gap 1025 and gap 100,000). 1024 — 2x the JWT first-segment bound, >12x the widest
+  peek distance any fixture in this file exercises, ~20x headroom under the 2.0s anti-quadratic
+  budget (measured on the mandated `"key="*20000` seed: 256 → 0.034s, 1024 → 0.103s,
+  4096 → 0.366s, linear in the cap; 4096's ~5.5x margin judged too thin for a slower CI runner).
+
+  Guard 1's own flatness is structural, not a bound: on `"key="*N` (the seed above), no
+  character is ever a bracket, so `key_bracket` is false at every anchor and guard 1's
+  unbounded branch never evaluates — only guard 2's O(cap) branch runs, giving O(N). On a
+  repeated-BRACKETED-anchor seed (`'x["key"]= ' * N`, the shape that actually exercises guard
+  1), it stays flat for a different reason: reaching `key_bracket` requires a quote and a `]`,
+  both outside `_VALUE_CHARS`, so guard 1's unbounded probe run from one bracketed anchor is
+  always terminated before the next bracketed anchor begins — no probe run spans two anchors,
+  so per-anchor cost cannot compound. Measured: 20,000 reps (200k chars) 0.029s, 40,000 (400k)
+  0.057s — linear. Both seeds kept flat by
+  `test_repeated_anchor_input_is_not_quadratic_for_any_pattern` and the new
+  `test_repeated_bracketed_anchor_input_is_not_quadratic`.
+
+  One more disclosed, accepted consequence, unchanged by the dual-guard formulation: on a diff
+  body line, a guard's refusal can hand the line to the #421 code-reference exemption, which
+  may then exempt it entirely — `password = application_api_key = resolve_credentialx(env)`
+  used to redact the first span; now the whole line reads as a code reference and nothing is
+  masked. 0 occurrences in the 713,126-line real third-party corpus swept for this change
+  (`.venv/site-packages`, `exempt_code=True`), and what stays unmasked in that shape is an
+  identifier, not a literal — arguably a false-positive reduction, not a loss.
+
+  Corpus A/B (old engine vs new, per line, both `exempt_code` modes): 249 repo text files /
+  77,370 lines and 3,033 real third-party source files / 713,126 lines. Real corpus: 0
+  redacts-less regressions and 0 newly-redacted lines in either mode. Repo files: 0 regressions
+  in prose mode; in code mode, 2 "regressions" that are self-referential — this repo's own
+  documentation (this entry, and the module comment above) quoting the code-reference-exemption
+  reproducer line verbatim, not real corpus occurrences. 9 newly-redacted repo lines in both
+  modes, all illustrative bug-example text in this module's own comments, this changelog entry,
+  and the new test file's docstrings — none a real secret. No agent-visible MCP surface changes
+  (a redacted-text VALUE, not a schema field), so no `fingerprint` bump.
 - **A redaction marker no longer claims completeness it doesn't have** (#446). A credential
   carrying a character the connection-string userinfo matchers exclude (`/`, or `?`/`#` on the
   arms that stop there) can never be SPANNED by those matchers — #445's span merge cannot fix

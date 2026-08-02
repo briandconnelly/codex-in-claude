@@ -21,14 +21,81 @@ SECRET_PATH_RE = re.compile(
 # Named because the code-reference exemption below applies to this pattern alone (#421).
 
 # The sensitive-label alternation. Defined once because the pattern below uses it TWICE —
-# as the label itself, and inside the guard that stops a bracketed match from swallowing a
-# later label. Two literal copies would drift, and a guard that silently stopped covering a
-# label the pattern still matches is precisely the failure this indirection prevents.
+# as the label itself, and inside the guard that stops a match from swallowing a later
+# label (#436; originally bracket-only, #434). Two literal copies would drift, and a guard
+# that silently stopped covering a label the pattern still matches is precisely the failure
+# this indirection prevents.
 _LABEL_ALT = (
     r"(?:(?:api|access|secret|private)?_?(?:key|token|secret)|passw(?:or)?d|pwd|passphrase)"
 )
 # The value run, also used twice for the same reason.
 _VALUE_CHARS = r"[A-Za-z0-9._~+/=-]"
+# The redactable-value threshold, likewise defined once and interpolated everywhere this
+# pattern family hard-codes it — the main value run below AND the guard's inner-value tail
+# (#436). A repeated literal `16` lets the guard's notion of "redactable" drift from the
+# matcher's own, silently, the same drift `_KEY_STEP_ANON` above exists to make
+# unrepresentable for the label/separator shape. (Bearer/userinfo/`sk_live_`'s own `{16,}`
+# are hand-spelled per their own comments and deliberately untouched — this constant is
+# scoped to the labelled-value family alone.)
+_MIN_SECRET_VALUE_LEN = 16
+# How far the UNCONDITIONAL swallow guard (below) peeks ahead of a candidate's own
+# separator hunting a LATER label, in `_VALUE_CHARS`, when `key_bracket` is falsy (the
+# coverage #436 ADDS — main had no protection here at any distance, bracketed or not).
+# Left unbounded, that peek made the guard quadratic on repeated-anchor input the same way
+# #439's JWT segment was (that bound is defined further below, at the JWT entry in
+# `SECRET_VALUE_PATTERNS`): matching an open-ended run costs O(remaining) even with no
+# backtracking, and the guard is evaluated at every one of a repeated anchor's
+# occurrences, so `("key=", N)` summed that cost across ~N positions — O(N^2). Measured on
+# the unbounded guard: `"key="*20000` (80k chars) 3.5s, `"key="*40000` (160k) 14.2s, ~4x
+# per 2x input.
+#
+# This bound applies ONLY to the non-bracket branch. The bracketed branch (below, the
+# `(?(key_bracket)...)` conditional) stays genuinely UNBOUNDED — restoring #434's shipped
+# guarantee exactly, with no cap and no distance limit — and is still flat on the hostile
+# seed for a structural reason rather than a numeric one: on `"key="*N`, `key_bracket` is
+# false at EVERY anchor (there is no bracket anywhere in that text), so the unbounded
+# conditional branch never evaluates at all — only this O(cap) branch runs, giving O(N).
+# On a text built from repeated BRACKETED anchors (`'x["key"]= ' * N`, the seed this
+# guard's own conditional branch is actually exposed to), the branch is flat for a
+# different reason: `key_bracket` requires consuming a quote and a `]`, and both are
+# outside `_VALUE_CHARS`, so the unbounded probe run FROM one bracketed anchor is
+# terminated (by hitting a quote/bracket char the value class can't cross) before the NEXT
+# bracketed anchor can even begin — no probe run can span two bracketed anchors, so the
+# per-anchor cost cannot compound across anchors the way an uncapped non-bracket peek did.
+# Measured (`'x["key"]= ' * N`): 5000 reps (50k chars) 0.007s, 10000 (100k) 0.014s, 20000
+# (200k) 0.029s, 40000 (400k) 0.057s — linear, ~2x per 2x input, both branches together
+# proven flat by `test_repeated_anchor_input_is_not_quadratic_for_any_pattern` and a
+# second, bracket-anchor-seeded timing test alongside it.
+#
+# The value-length probe on BOTH branches is an EXACT `_MIN_SECRET_VALUE_LEN` rather than
+# an open `{16,}` — the guard only asks a yes/no question ("is the inner value at least
+# this long"), which a fixed count answers identically (both accept exactly when 16+
+# matching chars exist) at O(16) instead of O(remaining); this is what keeps the
+# UNBOUNDED bracketed branch itself flat per-anchor once it reaches a candidate inner
+# label, independent of the peek-cap question above, which is about how far it can reach
+# in the first place.
+#
+# 1024 rather than a smaller cap: measured (`"key="*20000`, the mandated anti-quadratic
+# seed) at 256 -> 0.034s, 1024 -> 0.103s, 4096 -> 0.366s, confirming the cost scales
+# linearly in the cap (not just in input length) — so the cap itself, not only the
+# bound's existence, has to be chosen deliberately. 1024 is 2x the JWT first-segment
+# bound (512, chosen for real JOSE headers ~20-60 chars, ~120 with `kid`/`jku`) and >12x
+# the widest peek distance any fixture in the swallow suites below (:2300-2358,
+# `test_labelled_match_does_not_swallow_a_later_sensitive_label`) exercises (under 80
+# chars), while still leaving ~20x headroom under the 2.0s anti-quadratic budget on this
+# machine — 4096's ~5.5x margin was judged too thin for a slower CI runner, the same
+# reasoning `test_repeated_anchor_input_is_not_quadratic_for_any_pattern`'s own module
+# comment applies to the JWT rep count.
+#
+# Because the bracketed branch is unbounded, this cap is NOT a narrowing of anything main
+# ever shipped: main's bracket-conditional guard is preserved byte-for-byte in reach (see
+# the conditional branch below), so every input it protected is still protected, at any
+# distance. What the cap bounds is exclusively the NEW non-bracket coverage #436 adds —
+# main had zero protection there at ANY distance, so capping it at 1024 is a partial fix
+# of a pre-existing leak, not a regression: a non-bracket swallow chain whose gap exceeds
+# 1024 chars remains exactly as unprotected as it always was on every released version.
+# Pinned at the exact cliff by `test_non_bracket_swallow_guard_peek_boundary_is_pinned`.
+_SWALLOW_GUARD_PEEK = 1024
 
 # Everything between a sensitive label and its `:`/`=` separator: an optional closing quote
 # (`"api_key":`, #432) and, nested inside it, an optional closing bracket
@@ -56,70 +123,151 @@ LABELLED_VALUE_PATTERN = re.compile(
     # `key_quote` would silently break that guarantee.
     # `key_quote` is named because `_is_code_reference` keys the #421 exemption off it.
     rf"(?i)({_LABEL_ALT}{_KEY_STEP}\s*(?:\\?['\"])?)"
-    # A bracketed match refuses to start when its own value would contain a LATER sensitive
-    # label and separator. Found by the #434 review: a bracketed candidate matches EARLIER
-    # than the pre-#434 pattern did, and `sub` never revisits consumed text, so
+    # TWO guards in sequence, both refusing a candidate whose own value would contain a
+    # LATER sensitive label, separator, and a redactable value behind it — a swallow.
+    # Found by the #434 review: a bracketed candidate matches EARLIER than the pre-#434
+    # pattern did, and `sub` never revisits consumed text, so
     # `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]`,
     # swallowed `application_specific_api_key`, and sent the real secret after the second
     # separator out intact — where the old pattern had redacted it. Failing the candidate
     # here makes the engine advance and find the `api_key` match instead.
     #
-    # The guard looks INSIDE the value, not past its end, because `_VALUE_CHARS` contains
+    # Both guards look INSIDE the value, not past its end, because `_VALUE_CHARS` contains
     # `=`: an unspaced `label=value` chain is absorbed whole, so a trailing `(?!\s*[:=])`
-    # inspects the wrong position and misses it entirely.
-    #
-    # It also has to allow the value run to start INSIDE a quoted key: the value's own
-    # opening quote consumes the swallowed key's opening `"`, so the run begins at the
-    # label and ends on its closing quote — which is why `_KEY_STEP_ANON` and not a bare
-    # separator (the second #434 review finding; the bare form leaked
+    # inspects the wrong position and misses it entirely. Both also have to allow the
+    # value run to start INSIDE a quoted key: the value's own opening quote consumes the
+    # swallowed key's opening `"`, so the run begins at the label and ends on its closing
+    # quote — which is why each uses `_KEY_STEP_ANON` and not a bare separator (the second
+    # #434 review finding; the bare form leaked
     # `cfg["token"] = "aws_secret_access_key": "<secret>"`).
     #
-    # Conditioned on `key_bracket` so NON-bracket matches keep byte-identical behavior.
-    # Unconditional, it would also change them — `key:api_key=<secret>` would redact only
-    # the tail rather than the whole chain — and that class is pre-existing, reachable on
-    # the pre-#434 pattern too, so it is tracked separately as #436 rather than quietly
-    # altered here.
-    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}{_KEY_STEP_ANON}))"
-    rf"{_VALUE_CHARS}{{16,}}"
+    # GUARD 1 (conditional, UNBOUNDED): `#434`'s original guard, conditioned on
+    # `key_bracket` so it fires only for a bracketed outer, at ANY distance — no peek cap.
+    # This is deliberately not merged into guard 2: it exists to preserve #434's shipped
+    # protection byte-for-byte in REACH (not narrowed by anything #436 or its own
+    # follow-up adds), while still picking up the one refinement both guards need (see the
+    # length-tail paragraph below). Flat on a repeated-BRACKETED-anchor seed for a
+    # structural reason, not a numeric one — see `_SWALLOW_GUARD_PEEK`'s module comment
+    # for why an unbounded probe here still cannot compound across anchors.
+    rf"(?(key_bracket)(?!{_VALUE_CHARS}*{_LABEL_ALT}{_KEY_STEP_ANON}\s*(?:\\?['\"])?"
+    rf"{_VALUE_CHARS}{{{_MIN_SECRET_VALUE_LEN}}}))"
+    # GUARD 2 (unconditional, BOUNDED at `_SWALLOW_GUARD_PEEK`): fires for every
+    # candidate, bracketed or not — this is the coverage #436 ADDS that #434 never had at
+    # any distance, so it is a bounded ADDITION, not a narrowing of guard 1's reach (see
+    # `_SWALLOW_GUARD_PEEK`'s module comment for the full non-regression argument and the
+    # cap's own flatness proof).
+    rf"(?!{_VALUE_CHARS}{{0,{_SWALLOW_GUARD_PEEK}}}{_LABEL_ALT}{_KEY_STEP_ANON}\s*(?:\\?['\"])?"
+    rf"{_VALUE_CHARS}{{{_MIN_SECRET_VALUE_LEN}}})"
+    # The trailing length check on the swallowed label's OWN value — shared by both
+    # guards — is load-bearing, not decorative: without it a guard refuses the outer
+    # candidate the moment it merely SEES a later label, whether or not that label's own
+    # value would ever have been redactable. `cfg["token"] = aaaaaaaaaaaakey=short` is the
+    # counterexample for guard 1 (bracketed) and `token = aaaaaaaaaaaakey=short` for guard
+    # 2: the inner `key=short` value is 5 chars, below the redaction threshold, so a naive
+    # guard refuses the outer AND the inner never matches on its own — a total miss.
+    # Verified on `main`: the pre-#436, tail-less bracketed guard DOES leak the whole
+    # bracketed chain this way (`cfg["token"] = aaaaaaaaaaaakey=short` comes out
+    # untouched) — so the tail is not only new-coverage hygiene for guard 2, it is a
+    # genuine improvement over guard 1's pre-#436 shape too, now redacting that chain
+    # whole. Requiring the inner value to itself clear `_MIN_SECRET_VALUE_LEN` keeps the
+    # outer eligible whenever the inner alone could never have been redacted. It is an
+    # EXACT `{_MIN_SECRET_VALUE_LEN}` on both guards, not an open `{_MIN_SECRET_VALUE_LEN,}`
+    # — a yes/no probe, not a real match, so a fixed count answers identically at O(16)
+    # instead of O(remaining); see `_SWALLOW_GUARD_PEEK` for why that matters even for
+    # guard 1's unbounded peek, not only guard 2's bounded one.
+    #
+    # Making guard 2 unconditional (rather than absent, as `main` had it) also changes
+    # NON-bracket matches that used to keep byte-identical behavior: `key:api_key=<secret>`
+    # redacts only the tail (`key:api_key=[redacted…]`) rather than the whole chain.
+    # Accepted deliberately (#436) — the narrower span is the trade for closing the
+    # swallow on a shape `main` never protected at all, not a leak either way, since the
+    # secret is still redacted.
+    #
+    # On a diff body line (`exempt_code=True`), a guard's refusal can also hand the line
+    # to `_is_code_reference` (#421), which may then exempt it entirely — e.g.
+    # `password = application_api_key = resolve_credentialx(env)` used to redact the FIRST
+    # span; now the whole line reads as a code reference and nothing is masked. Accepted:
+    # 0 occurrences in the 713,126-line real third-party corpus swept for this change
+    # (`.venv/site-packages`, `exempt_code=True`), and what stays unmasked in that shape
+    # is an IDENTIFIER (`application_api_key`), not a literal — arguably a false-positive
+    # reduction rather than a loss, since the code-reference exemption exists precisely to
+    # stop masking source under review.
+    rf"{_VALUE_CHARS}{{{_MIN_SECRET_VALUE_LEN},}}"
 )
 
 # The connection-string userinfo matchers, named rather than left anonymous in the list
-# below. Their contract is one-directional — a change may widen what is recognized, never
-# narrow it — and the differential sweep that enforces that has to substitute one of them
-# to prove it can still see a loss. Addressing them by list POSITION is what that test did
+# below. Their contract is one-directional BY DEFAULT — a change may widen what is
+# recognized, never narrow it, EXCEPT under an explicit, characterized trade weighed
+# against a documented false-positive cost (see #442 below, which does exactly that) —
+# and the differential sweep that enforces the default has to substitute one of them to
+# prove it can still see a loss. Addressing them by list POSITION is what that test did
 # first, and appending a matcher pointed it at the wrong one. A name cannot drift that way.
+#
+# That "EXCEPT" is load-bearing, not throat-clearing: the unqualified version of this
+# sentence is the exact reasoning #440 used to leave the named arm's `?`/`#` admission
+# alone ("narrowing it would be a loss, and this class is one-directional"). Read
+# unqualified, it re-arms the same trap for the next narrowing this file needs — the
+# bar is not "zero loss", it is "the loss is characterized, pinned by its own test, and
+# smaller than what leaving it unnarrowed costs".
 #
 # See the comments at each definition below for why each is shaped as it is.
 #
-# The password run's character class is CONDITIONAL on whether a username was present,
-# and the two arms are not interchangeable:
+# The password run's character class used to be CONDITIONAL on whether a username was
+# present, with the two arms deliberately NOT interchangeable: the named-username arm
+# (`://user:…@`) admitted `?` and `#`, while #440's empty-username arm (`://:…@`) excluded
+# them because `://:` also serializes an empty host with a port, so admitting them made
+# `custom://:8080?email=a@b` — a query string carrying an `@`, no userinfo anywhere — come
+# out as `custom://:[redacted: secret value]@b`.
 #
-#   * With a username (`://user:…@`) the run admits `?` and `#`, byte-for-byte as before.
-#     This arm is deliberately untouched. Narrowing it would stop redacting a password
-#     containing a raw `?` or `#` (`x://u:ab?cd@h`), a loss the printable-domain walk in
-#     the tests already forbids, and the one-directional contract above rules out.
-#   * WITHOUT a username (`://:…@`, the branch #440 adds) the run stops at `?` and `#`.
-#     It has to: `://:` is also how an empty host with a port serializes, so admitting
-#     them made `custom://:8080?email=a@b` — a query string carrying an `@`, no userinfo
-#     anywhere — come out as `custom://:[redacted: secret value]@b`. Per RFC 3986 a raw
-#     `?`/`#` cannot appear in userinfo (it must be percent-encoded), so an `@` that
-#     follows one is in the query or fragment and never delimits a credential.
+# #442 REVERSES that split. Per RFC 3986, `?` and `#` terminate the authority component —
+# nothing after either one can be userinfo, so a run containing them can never be a
+# password, on EITHER arm. The named arm's `?`/`#` admission was reasoned about as
+# "maximal run, narrow only under an established loss" when #438 wrote it, and #440 kept
+# that reasoning for the arm it left alone — but the loss it was protecting
+# (`x://u:ab?cd@h`, a password containing a literal `?`) is RFC-invalid userinfo already,
+# while what admitting them costs is every ordinary URL whose query or fragment carries an
+# `@`: `https://host.example:8443?email=user@example.com` masked its port and query as a
+# credential, and #443's reorder (below) only widened how much of the query that false
+# positive could reach. Weighed against each other, the RFC-invalid password shape is the
+# smaller loss, so both arms now share the SAME run — `_CS_PASSWORD_CHARS` below — and the
+# conditional that used to pick between them collapses (kept anonymous rather than
+# revived: `(?(cs_user)...)`'s two arms are no longer different expressions to pick
+# between). `x://u:ab?cd@h` losing its redaction is the accepted, characterized trade
+# (see the test pinning it).
 #
-# Constraining only the NEW arm is what keeps this a pure widening: every input the old
-# pattern matched still matches, identically. The same false positive DOES exist on the
-# username arm (`https://host.example:8443?email=user@example.com` is masked, and was
-# before this change), but fixing that is a narrowing of a documented guarantee rather
-# than a bug in this one, so it is filed separately as #442 rather than folded in here.
+# #443 enlarged the pre-#442 false positive's reach without changing this class: running
+# these matchers first removed an accidental brake, a labelled marker landing inside the
+# query used to stop the username arm from matching, so
+# `https://host.example:8443?token=<secret>@x.example` kept its port and query. It no
+# longer does — and since #445 that no longer depends on position either, candidates are
+# collected from the ORIGINAL text. #442 does not undo that enlargement; it removes the
+# false positive the enlargement was making worse.
 #
-# #443 ENLARGED #442's reach without changing this class. Running these matchers first
-# removed an accidental brake: a labelled marker landing inside the query used to stop
-# the username arm from matching, so `https://host.example:8443?token=<secret>@x.example`
-# kept its port and query. It no longer does — and since #445 that no longer depends on
-# position either: candidates are collected from the ORIGINAL text, so there is no marker
-# in the query to brake on whatever order these matchers sit in. Accepted deliberately —
-# the credential is still redacted either way, what grows is how much surrounding text goes
-# with it — and pinned by a characterization test so #442's eventual fixer sees the current
-# output rather than re-deriving it.
+# #442 round 2 (Codex review): narrowing only the PASSWORD run above was not enough. The
+# USERNAME run below admitted `?`/`#` too, and the same RFC 3986 rationale applies to it —
+# `https://host.example?foo:bar12345678@x.example` has no userinfo at all, but the
+# username slot's un-narrowed class let it consume `host.example?foo` as a "username",
+# the `:` as the separator, and `bar12345678` as an RFC-invalid-but-matched password. A
+# hand-spelled second `[^:@\s/?#]` here — a THIRD near-copy alongside `_CS_PASSWORD_CHARS`
+# and `CONNECTION_STRING_USERNAME_TOKEN_PATTERN`'s own class below — is exactly the drift
+# this module's derived-fragment discipline (`_LABEL_ALT`, `_KEY_STEP`/`_KEY_STEP_ANON`)
+# exists to rule out, so all three now derive from ONE exclusion set instead.
+#
+# Characters that terminate ANY connection-string userinfo run, username or password:
+# `@` (the userinfo/host boundary, the lookahead terminator elsewhere), whitespace and
+# `/` (the authority never contains either raw), and `?`/`#` (RFC 3986 authority
+# terminators — nothing after either can be userinfo, on EITHER side of the `:`).
+_CS_TERMINATORS = r"@\s/?#"
+# The password run: one-or-more of anything but a terminator. `:` is deliberately NOT
+# excluded — a password may legitimately contain colons whole
+# (`test_connection_string_password_with_colons_redacted`), so this class stays wider
+# than the username one below.
+_CS_PASSWORD_CHARS = rf"[^{_CS_TERMINATORS}]+"
+# The username run's PER-CHARACTER class (no quantifier of its own — each use site picks
+# one: `*` for an optional username below, `{{16,}}` for the bare-token form further
+# down): every terminator above, PLUS `:` — the user/password separator, which must stop
+# the username run or it would swallow the password too.
+_CS_USERNAME_CHAR = rf"[^:{_CS_TERMINATORS}]"
 #
 # ---------------------------------------------------------------------------
 # Connection-string userinfo: redact the password between `://[user]:` and `@host`,
@@ -158,7 +306,12 @@ LABELLED_VALUE_PATTERN = re.compile(
 # (`key=<...>://user:pw@host`), the old pattern could no longer match and the
 # password went out intact.
 CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
-    r"(://(?P<cs_user>[^:@\s/]+)?:)(?(cs_user)[^@\s/]+|[^@\s/?#]+)(?=@)"
+    # The username slot no longer needs to be a NAMED group: `cs_user` existed only for
+    # the `(?(cs_user)...)` conditional #442 removes above, and nothing else read it by
+    # name (grep before touching this: a named group elsewhere in this file, e.g.
+    # `LABELLED_VALUE_PATTERN`'s `key_bracket`/`key_quote`, is read by `_is_code_reference`
+    # or the swallow guards — this one was not).
+    rf"(://{_CS_USERNAME_CHAR}*:){_CS_PASSWORD_CHARS}(?=@)"
 )
 # A token in the USERNAME slot, with a password field present but EMPTY
 # (`://<token>:@host`) — the pattern above preserves the username, so a
@@ -187,13 +340,18 @@ CONNECTION_STRING_PASSWORD_PATTERN = re.compile(
 #     not a new constant; it is already this file's credential threshold, in
 #     LABELLED_VALUE_PATTERN's value run.
 #
-# `?` and `#` are excluded here although the PASSWORD class admits them, because
-# the two runs play different roles. This run is the text being REPLACED, so it
-# has to stop at the end of the authority or a query carrying an `@` is masked as
-# userinfo — `https://example.com?email=a.b+c@example.org` would collapse to
-# `https://[redacted: secret value]@example.org`, hiding the host. A password may
-# legitimately contain `?` and `#`, so narrowing that class would lose coverage.
-CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(r"(://)[^:@\s/?#]{16,}(?=:@)")
+# Both userinfo matchers in this file stop at `?`/`#` now (#442): a raw `?` or `#` per
+# RFC 3986 terminates the authority, so nothing after either one — on the username side
+# or the password side — can be userinfo. This run reuses `_CS_USERNAME_CHAR` (defined
+# above, alongside `_CS_PASSWORD_CHARS`) rather than hand-spelling its own class, so the
+# two runs cannot drift onto different exclusion sets again the way username and password
+# briefly did across #442's two review rounds.
+#
+# What IS specific to this matcher: it is the text being REPLACED, so it has to stop at
+# the end of the authority or a query carrying an `@` is masked as userinfo —
+# `https://example.com?email=a.b+c@example.org` would collapse to
+# `https://[redacted: secret value]@example.org`, hiding the host.
+CONNECTION_STRING_USERNAME_TOKEN_PATTERN = re.compile(rf"(://){_CS_USERNAME_CHAR}{{16,}}(?=:@)")
 
 # Named — like the two connection-string matchers above, and for the same reason
 # `LABELLED_VALUE_PATTERN` is: the #446 trailing-safe-set selection (see

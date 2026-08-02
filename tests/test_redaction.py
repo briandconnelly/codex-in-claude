@@ -140,6 +140,24 @@ _PRE_438_CONNECTION_PATTERN = re.compile(r"([a-zA-Z][\w+.-]*://[^:@\s/]+:)[^@\s/
 
 # Slots of the pattern's own grammar. A structured product over these finds the shapes
 # that matter here; random text essentially never generates a well-formed userinfo.
+#
+# Do NOT add a `?`/`#`-carrying value to EITHER `_USERS` or `_PASSWORDS` below (e.g.
+# `"u?v"`, `"p?w"`, `"p#w"`) to widen either slot's coverage. `_all_lines()` feeds every
+# combination through BOTH #438/#440-era oracles (`_PRE_438_CONNECTION_PATTERN`,
+# `_PRE_440_CONNECTION_PATTERN`), which still admit `?`/`#` in EITHER position — #442
+# deliberately stopped the LIVE matcher from doing so, on the password side in round 1
+# (`test_password_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss` pins
+# it) and on the username side in round 2
+# (`test_username_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss`) — so
+# a `?`/`#` value in either slot would make both oracles report every one of that shape's
+# generated lines as a leftover: the PINNED, CHARACTERIZED #442 trade, misread by this
+# sweep as a regression. Verified directly rather than asserted: adding `"u?v"` to
+# `_USERS` alone (leaving every other slot as committed) made this sweep's grammar produce
+# 297/19200 leftovers against the #438 oracle and 360/19200 against the #440 oracle — the
+# same blindness class round 1's version of this warning already documented for
+# `_PASSWORDS`, just not yet extended to `_USERS`, which is exactly how the round-2 gap
+# survived round 1's review. Widening either slot needs the oracles re-scoped to know
+# about #442 first, not just an entry added here.
 _LEADS = ["", "x", "9", "-", "=", '"', "//", "cfg = "]
 _SCHEMES = ["", "a", "postgres", "mongodb+srv", "s" * 40]
 _SEPARATORS = ["://", ":/", "//", ":"]
@@ -237,24 +255,62 @@ def test_connection_string_redaction_unchanged_for_scheme_led_urls():
 # leaks `postgres://u:pass]word@h` while leaving every other test in this file green.
 # These two walk the whole printable domain instead, so any character quietly removed
 # from either class fails here.
-_NON_MEMBERS = "@/"  # plus whitespace, handled below
+#
+# `?` and `#` joined this set in #442: the named-username password class used to admit
+# them (RFC 3986 says it should not — see `_CS_PASSWORD_CHARS`'s comment in the source),
+# so this walk's domain narrows here too. The characters this class REJECTS are pinned
+# separately, from the other side, by `test_password_run_stops_at_a_query_or_fragment`.
+_NON_MEMBERS = "@/?#"  # plus whitespace, handled below
 
 
 @pytest.mark.parametrize(
     "char", [c for c in string.printable if c not in _NON_MEMBERS and not c.isspace()]
 )
 def test_password_class_covers_every_character_it_claims(char):
-    # `[^@\s/]+` — a password may contain anything but `@`, whitespace, and `/`.
+    # `[^@\s/?#]+` — a password may contain anything but `@`, whitespace, `/`, `?`, `#`.
     assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
 
 
+# The username class's OWN non-member set, named separately rather than inlined as
+# `_NON_MEMBERS + ":"` at the parametrize call site below. That inline form is what let
+# this walk's domain narrow SILENTLY when #442 round 1 added `?`/`#` to `_NON_MEMBERS`
+# for the PASSWORD class alone: the username walk inherited the exclusion through the
+# `+ ":"` expression and stopped exercising `?`/`#` here too, even though at the time the
+# USERNAME class in source hadn't actually been narrowed yet (round 2, Codex review) — a
+# parametrize domain can only pass more as it shrinks, never fail, so nothing caught the
+# gap. Naming it explicitly does not, by itself, fix that class of bug (the value is
+# still derived the same way); what closes it is the pair of tests right below asserting
+# `?`/`#` FROM THE OTHER SIDE — the same discipline `_EMPTY_USER_NON_MEMBERS` and
+# `test_password_run_stops_at_a_query_or_fragment` already established for the password
+# class, extended here to the username class's own `:` addition.
+_USERNAME_NON_MEMBERS = _NON_MEMBERS + ":"
+
+
 @pytest.mark.parametrize(
-    "char", [c for c in string.printable if c not in _NON_MEMBERS + ":" and not c.isspace()]
+    "char", [c for c in string.printable if c not in _USERNAME_NON_MEMBERS and not c.isspace()]
 )
 def test_username_class_covers_every_character_it_claims(char):
-    # `[^:@\s/]+` — same, and additionally not `:`, which separates user from password.
+    # `[^:@\s/?#]*` — same as the password class, minus `:` (which separates user from
+    # password) and, since #442 round 2, minus `?`/`#` too.
     out = redaction.redact_text(f"x://a{char}b:secretpw@h")
     assert out == f"x://a{char}b:[redacted: secret value]@h"
+
+
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_username_run_stops_at_a_query_or_fragment(char):
+    """The username slot's turn (#442 round 2): closes the domain-walk gap above.
+
+    `_USERNAME_NON_MEMBERS` excludes `?`/`#` from what the walk tests as MEMBERS, which
+    is correct — but a printable-domain walk only ever asserts what a class ACCEPTS, so
+    excluding a character from its parametrize list, on its own, asserts nothing about
+    whether that character is actually rejected. This is the other side: `?`/`#` must
+    stop the username run exactly where `_USERNAME_NON_MEMBERS` claims. The full accepted-
+    loss characterization (a well-formed trailing password going unredacted too) is pinned
+    separately, alongside the password-side one,
+    by `test_username_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss`.
+    """
+    text = f"x://u{char}v:pw123456@h"
+    assert redaction.redact_text(text) == text
 
 
 @pytest.mark.parametrize(
@@ -386,6 +442,33 @@ def test_repeated_anchor_input_is_not_quadratic_for_any_pattern():
         assert elapsed < 2.0, (
             f"{pattern.pattern!r} took {elapsed:.3f}s on {len(text)}-char {seed!r}*{reps}"
         )
+
+
+def test_repeated_bracketed_anchor_input_is_not_quadratic():
+    """#436's dual swallow guard adds a SECOND unbounded probe run — guard 1, the
+    `(?(key_bracket)...)` conditional in `LABELLED_VALUE_PATTERN` — that
+    `_QUADRATIC_SEEDS`' one-seed-per-pattern map above cannot exercise: `"key="*N`
+    (that map's seed for this pattern) carries no bracket anywhere, so `key_bracket` is
+    false at every anchor and guard 1 never evaluates there. This is the seed that DOES
+    reach it: a text built from repeated BRACKETED anchors.
+
+    Flat for a structural reason, not a numeric one (see `_SWALLOW_GUARD_PEEK`'s module
+    comment): `key_bracket` requires consuming a quote and a `]`, both outside
+    `_VALUE_CHARS`, so guard 1's unbounded probe run from one bracketed anchor is always
+    terminated before the next bracketed anchor begins — no probe run can span two
+    anchors, so per-anchor cost cannot compound. Measured on this machine:
+    5000 reps (50k chars) 0.007s, 10000 (100k) 0.014s, 20000 (200k) 0.029s, 40000
+    (400k) 0.057s — linear, ~2x per 2x input, comfortably under the 2.0s budget with
+    room to spare (Codex's own prototype measured 0.032s/0.043s at ~220k/270k chars on a
+    differently-shaped bracketed seed, same order of magnitude).
+    """
+    seed = 'x["key"]= '
+    for reps in (20000, 40000):
+        text = seed * reps
+        start = time.perf_counter()
+        redaction._redact_secret_values(text)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 2.0, f"{seed!r}*{reps} ({len(text)} chars) took {elapsed:.3f}s"
 
 
 # The pre-#439 pattern, kept as an ORACLE (the discipline the #438/#440 oracles above
@@ -672,8 +755,12 @@ def test_empty_username_connection_string_exact_output(text, expected):
     assert redaction.redact_text(text) == expected
 
 
-# The empty-username arm admits everything the named arm does EXCEPT `?` and `#`.
-_EMPTY_USER_NON_MEMBERS = _NON_MEMBERS + "?#"
+# The empty-username arm admitted everything the named arm did except `?` and `#` when
+# #440 wrote this (the named arm still let them through then). #442 brought the named
+# arm's excluded set to match, so the two sets are now equal — kept as its own name
+# rather than folded away, so a test walking `x://:...` still self-documents which arm
+# it exercises even though the domain it computes is identical to `_NON_MEMBERS`.
+_EMPTY_USER_NON_MEMBERS = _NON_MEMBERS
 
 
 @pytest.mark.parametrize(
@@ -683,29 +770,31 @@ _EMPTY_USER_NON_MEMBERS = _NON_MEMBERS + "?#"
 def test_empty_username_password_class_covers_every_character_it_claims(char):
     # The password run is reachable through a SECOND route once the username may be
     # empty. A narrowing on that route alone would leave the named-username walk above
-    # green, so the domain is walked here too — minus the two characters that route
-    # deliberately excludes, which the next test pins from the other side.
+    # green, so the domain is walked here too.
     assert redaction.redact_text(f"x://:ab{char}cd@h") == "x://:[redacted: secret value]@h"
 
 
 @pytest.mark.parametrize("char", ["?", "#"])
-def test_empty_username_run_stops_at_a_query_or_fragment(char):
-    """`://:` is also an empty host with a port, so this arm must stop at `?`/`#`.
+def test_password_run_stops_at_a_query_or_fragment(char):
+    """`?`/`#` terminate BOTH arms (#442), reversing #440's split.
 
-    `custom://:8080?email=a@b` has no userinfo at all — the `@` sits in the query — and
-    admitting these characters masked it as a credential, hiding the host. Per RFC 3986
-    a raw `?`/`#` cannot appear in userinfo, so an `@` after one never delimits one.
+    `://:` is also an empty host with a port, so the empty-username arm has always had to
+    stop at `?`/`#`: `custom://:8080?email=a@b` has no userinfo at all — the `@` sits in
+    the query — and admitting these characters masked it as a credential, hiding the host.
 
-    The NAMED arm keeps admitting both (pinned by the walk above): narrowing it would
-    stop redacting a password containing a raw `?`, which is a real loss, and this
-    change is only allowed to widen.
+    #440 left the NAMED arm alone, reasoning that narrowing it would lose a real
+    (if RFC-invalid) password containing a raw `?`/`#`. #442 reverses that: per RFC 3986 a
+    raw `?`/`#` cannot appear in userinfo at all, on EITHER arm, so an `@` following one is
+    never a credential delimiter — `https://host.example:8443?email=user@example.com` (the
+    named-arm twin of the empty-username case above) was the false positive that cost, and
+    `x://u:ab?cd@h` losing its redaction is the accepted trade (pinned separately).
     """
     assert redaction.redact_text(f"x://:ab{char}cd@h") == f"x://:ab{char}cd@h"
     assert redaction.redact_text(f"custom://:8080{char}email=a@b") == (
         f"custom://:8080{char}email=a@b"
     )
-    # ...while the same shape WITH a username stays exactly as it was before #440.
-    assert redaction.redact_text(f"x://u:ab{char}cd@h") == "x://u:[redacted: secret value]@h"
+    # ...and the same shape WITH a username, which #440 left redacted, is unredacted too.
+    assert redaction.redact_text(f"x://u:ab{char}cd@h") == f"x://u:ab{char}cd@h"
 
 
 @pytest.mark.parametrize(
@@ -1335,43 +1424,138 @@ def test_marker_no_longer_strands_a_connection_string_credential(text, expected)
     assert redaction.redact_text(out) == out
 
 
-def test_query_string_false_positive_is_pinned_until_442():
-    """#442, a pre-existing false positive, pinned with its exact current output.
+# --- #442: an ordinary URL whose query carries an `@` is not userinfo --------
+# The named-username password class admitted `?` and `#`, so a run starting at a
+# port-or-name and ending right before a query/fragment `@` parsed as `user:password@`.
+# Per RFC 3986, `?` and `#` terminate the authority component — nothing after either
+# one can be userinfo, so a run containing them can never be a password. This is the
+# instrument for that FIX: the differential sweeps above (#438/#440) only detect a
+# matcher that redacts LESS, and this bug is a matcher that redacts MORE, so they are
+# structurally blind to it (the issue's own diagnosis). Every line below must come back
+# BYTE-IDENTICAL, in both `exempt_code` modes, or the corpus has stopped being ordinary
+# text and the fix is masking something a reviewer needed to see.
+_QUERY_FRAGMENT_FALSE_POSITIVES = [
+    # The issue's own reproduction: host, port, and a query carrying an email.
+    "https://host.example:8443?email=user@example.com",
+    # An OAuth-style authorize URL whose query carries an `@` for a reason that is not
+    # an email — a compound `state`/`return_to` value, a real convention in some SSO
+    # implementations.
+    "https://sso.example.com:8443?state=return_to@dashboard&client_id=web-app",
+    # Email in query, different port/host/label from the issue's own case.
+    "https://api.example.com:443?contact=jane.doe@example.org",
+    # The fragment form: `#` terminates the authority exactly like `?` does.
+    "https://docs.example.com:8443#section=owner@example.com",
+    # BOTH `?` and `#` present, with the `@` following both — genuine pre-#442
+    # reproductions (verified against `HEAD~1`, the pre-fix commit): the old class
+    # admitted either character alone, so a run crossing both still reached the `@`.
+    "https://host.example:8443?a=1#frag=owner@example.com",
+    "https://host.example:8443#frag=1?embedded=owner@example.com",
+    # An OAuth redirect_uri carrying a FULL nested URL (a second `://`), with a path
+    # segment before the query. Already safe pre-#442 too (verified against `HEAD~1`):
+    # the path segment's `/` stops the run before it ever reaches an `@`. Pinned anyway
+    # as a shape #442's fix must not regress — a future change to the `/`-exclusion
+    # would reopen exactly this.
+    "https://idp.example.com:8443/oauth/authorize?redirect_uri=https://app.example.com/callback&login_hint=jane@example.com",
+    # The same nested-URL shape with NO path before the query (the run reaches the
+    # query directly, unlike the row above). Already safe pre-#442 too — for a DIFFERENT
+    # reason than #442's fix: the nested URL's own `://app.example.com/callback` carries
+    # a `/`, which the run excludes independently of `?`/`#`, so it stops there before
+    # ever reaching the eventual `@`. Distinct coverage from #442's own fix, pinned so
+    # this independent protection is not confused with it.
+    "https://idp.example.com:8443?redirect_uri=https://app.example.com/callback&login_hint=jane@example.com",
+    # A path component before the query, no nested URL. Already safe pre-#442 (the path's
+    # `/` blocks the run before `#442`'s own `?`/`#` exclusion is ever reached) — pinned
+    # as a boundary case adjacent to the issue's own shape (which has NO path segment).
+    "https://api.example.com:8443/v1/resource?contact=jane.doe@example.com",
+    "https://docs.example.com:8443/guide/setup#section=owner@example.com",
+    # A `:` INSIDE the query, before the `@` — the USERNAME slot's turn to leak this FP
+    # (Codex review round 2). `[^:@\s/]*` still admitted `?`/`#`, so `host.example?foo`
+    # parsed as a username, `:` as the user/password separator, and `bar12345678` as an
+    # RFC-invalid-but-matched password: no port anywhere, an ordinary query string with a
+    # colon in it (a real shape — a `time=` or ratio-style query value; `12:34`, `16:9`).
+    "https://host.example?foo:bar12345678@x.example",
+    # Same gap on the fragment side.
+    "https://host.example#foo:bar12345678@x.example",
+    # Both `?` and `#` present ahead of the colon-bearing username slot.
+    "https://host.example?a=1#foo:bar12345678@x.example",
+]
 
-    The named-username password class admits `?` and `#`, which cannot appear raw in
-    userinfo, so an ordinary URL whose query carries an `@` is masked as a credential: scheme
-    and host survive, the port and query go with the marker.
 
-    Accepted rather than fixed here: #442's remedy is to exclude `?`/`#` from that class,
-    which NARROWS a documented guarantee (`test_password_class_covers_every_character_it_
-    claims` forbids it) and needs its own false-positive corpus. Folding it in would bundle a
-    narrowing into a security fix. The credential is redacted either way — what is at stake is
-    how much surrounding host/port/query text is masked with it. Pinned so #442's eventual
-    fixer sees the current output rather than re-deriving it, and so a change to that span
-    fails here with its reason attached.
+@pytest.mark.parametrize("exempt_code", [False, True])
+@pytest.mark.parametrize("text", _QUERY_FRAGMENT_FALSE_POSITIVES)
+def test_ordinary_url_with_at_in_query_or_fragment_is_not_masked(text, exempt_code):
+    out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
+    assert out == text
+    assert redacted is False
 
-    History, because this test used to assert a DELTA and no longer can. #443's reorder
-    ENLARGED #442's reach by removing an accidental brake — under the old sequential pipeline
-    a labelled marker landed inside the query and stopped the connection matcher from matching
-    at all — so the pre-#443 ordering produced a visibly narrower span and the delta was worth
-    asserting. Under the span-merge engine (#445) both orderings emit the output below, since
-    the merged span set does not depend on the list's order; the monkeypatched half would have
-    become a tautology, so it is gone rather than kept as decoration.
 
-    Partial, not plain (a #446 review-round-2 finding): the connection-string password
-    candidate's span and `LABELLED_VALUE_PATTERN`'s candidate for `token=...` both end at
-    the identical position (the `@`), so this interval's trailing edge is a TIE between a
-    userinfo candidate (wide safe set, `@` genuinely terminal) and a labelled one (narrow
-    safe set, `@` dropped) — and a tie fails toward the narrower set, the same fail-closed
-    direction `leading_whole`'s tie-break uses. Scrutinized rather than taken at face value:
-    the interval here is fully covered either way (the wider connection-string span, not the
-    narrower labelled sub-span, sets the actual replaced text), so the credential is not
-    truncated — the marker is conservative, not incorrect, on a case #442 already documents
-    as an accepted imprecision in how much surrounding text this shape masks.
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_password_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss(char):
+    """The deliberate trade #442 makes, pinned rather than left implicit.
+
+    `x://u:ab?cd@h` (or `#`) is a password containing a literal `?`/`#` — RFC-invalid
+    userinfo already, since RFC 3986 requires either to be percent-encoded there. Before
+    #442 this WAS redacted (the named arm's password class admitted both), and
+    `test_password_class_covers_every_character_it_claims`'s printable-domain walk forbade
+    narrowing it for exactly that reason. #442 narrows it anyway, weighing this loss
+    against the whole ordinary-URL false-positive class `?`/`#` admission was causing
+    (`test_ordinary_url_with_at_in_query_or_fragment_is_not_masked` above) — the RFC-invalid
+    shape is judged the smaller cost. No other matcher picks up the slack: `ab?cd` is
+    short and label-free, so nothing here is redacted at all.
+    """
+    text = f"x://u:ab{char}cd@h"
+    assert redaction.redact_text(text) == text
+
+
+@pytest.mark.parametrize("char", ["?", "#"])
+def test_username_containing_a_raw_query_or_fragment_char_is_the_accepted_442_loss(char):
+    """The #442 round-2 counterpart to the accepted-loss test right above.
+
+    A username containing a literal `?`/`#` is even more RFC-3986-invalid than a
+    password containing one (the password class at least stops there; the username
+    class's `?`/`#` used to be silently accepted as an ordinary username character with
+    no RFC reading that permits it either). And the loss is LARGER than the password
+    side's: because the username run now stops before it can reach the mandatory `:`
+    separator, the WHOLE match fails at the anchor — not only the malformed username, but
+    a perfectly well-formed trailing password goes unredacted alongside it. `pw123456` is
+    exactly the kind of value the password class would otherwise catch (see
+    `test_password_class_covers_every_character_it_claims`), and it still isn't picked up
+    by any other matcher here (short, label-free, no vendor prefix).
+    """
+    text = f"x://u{char}v:pw123456@h"
+    assert redaction.redact_text(text) == text
+
+
+def test_query_string_false_positive_no_longer_masks_userinfo():
+    """#442, fixed: this test used to be `test_query_string_false_positive_is_pinned_
+    until_442`, pinning the FALSE POSITIVE's exact output as an accepted trade-off
+    pending its own corpus. That corpus now exists above
+    (`test_ordinary_url_with_at_in_query_or_fragment_is_not_masked`), and the fix landed:
+    `_CS_PASSWORD_CHARS` excludes `?`/`#` on the named-username arm the same way #440's
+    empty-username arm already did, so this shape's connection-string candidate no longer
+    matches at all — `host.example:8443?token=` stays exactly as written.
+
+    What DOES still redact here is unrelated to userinfo: `token=s3cr3tvalue0123456789`
+    is its own LABELLED-value candidate (`token` is a sensitive label), and that value is
+    a real secret-shaped string independent of the URL it sits inside. #442's fix narrows
+    how the CONNECTION-STRING matcher sees this text; it says nothing about whether a
+    labelled query parameter should be masked, and this test is not the place to
+    relitigate that.
+
+    Partial, not plain, and for a DIFFERENT reason than before the fix. Before, this was a
+    trailing-edge TIE between the (wider, `@`-safe) connection-string candidate and the
+    (narrower, `@`-unsafe) labelled candidate, both ending at the `@`, decided toward the
+    narrower set. Now there is no tie — the connection-string candidate does not exist on
+    this input — so the marker comes from `LABELLED_VALUE_PATTERN`'s OWN trailing check
+    alone: its narrow `_LABELLED_SAFE_TERMINATORS` set drops `@` (`token=<value>@host` is a
+    real shape a labelled value's own alphabet cannot rule out continuing across), so the
+    character right after the match is unsafe and the marker is the partial one. Same
+    marker text, different mechanism — verified by running the fixed engine rather than
+    assumed from the pre-fix output.
     """
     text = "https://host.example:8443?token=s3cr3tvalue0123456789@x.example"
     assert redaction.redact_text(text) == (
-        "https://host.example:[redacted: possibly partial secret value]@x.example"
+        "https://host.example:8443?token=[redacted: possibly partial secret value]@x.example"
     )
 
 
@@ -2358,6 +2542,20 @@ def test_bracket_match_does_not_swallow_a_later_sensitive_label():
         assert _any_marker_in(out)
 
 
+def test_bracketed_swallow_with_a_short_inner_label_is_now_redacted_whole():
+    # Verified on `main` (pre-#436): the bracketed guard's tail-less form REFUSES the
+    # outer the moment it merely sees the later `key` label, whether or not that label's
+    # own value clears the redaction threshold — and since `key=short`'s value is only 5
+    # chars, the inner candidate can't match either, so `main` leaks this chain WHOLE
+    # (`cfg["token"] = aaaaaaaaaaaakey=short` comes out byte-identical, untouched). #436's
+    # `{_MIN_SECRET_VALUE_LEN}` tail on guard 1 (the bracketed branch) fixes this as a
+    # side effect of the refinement both guards share: the outer stays eligible whenever
+    # the inner alone could never have been redacted, so the whole chain is now masked.
+    assert redaction.redact_text('cfg["token"] = aaaaaaaaaaaakey=short') == (
+        'cfg["token"] = [redacted: secret value]'
+    )
+
+
 def test_neutral_bracket_key_is_untouched():
     # The widening still keys on the LABEL. An ordinary subscript keeps its value, so this
     # does not degrade into "redact every subscripted assignment in a source file".
@@ -2368,19 +2566,135 @@ def test_neutral_bracket_key_is_untouched():
     assert paths == []
 
 
-def test_swallow_guard_leaves_non_bracket_matches_alone():
-    # The guard is CONDITIONED on `key_bracket`, and nothing else pinned that: making it
-    # unconditional passed every other test in this file. It is not a leak either way —
-    # both forms redact the secret — but an unconditional guard silently changes which SPAN
-    # a non-bracket chain redacts, and that class is pre-existing (reachable on the
-    # pre-#434 pattern too), so it belongs to #436 rather than to this change.
-    #
-    # Conditional (correct here): the whole chain is masked, exactly as before #434.
-    # Unconditional: `key:api_key=[redacted…]`, a narrower span and a behavior change to
-    # inputs this issue never touched.
-    assert redaction.redact_text("key:api_key=leftovervalue123456789") == (
-        "key:[redacted: secret value]"
+def test_labelled_match_does_not_swallow_a_later_sensitive_label():
+    # #436: the #434 guard was CONDITIONED on `key_bracket`, so it protected only bracketed
+    # matches. The same swallow reaches ANY labelled match — `_VALUE_CHARS` is greedy and
+    # `re.sub` never revisits consumed text, so an earlier WEAK label's value run can absorb
+    # a LATER sensitive label whole, and the real secret after that second separator went
+    # out unmasked: the pre-fix engine turned this into
+    # `cfg "key": [redacted: secret value] = realsecret1234567890` — a leak.
+    out = redaction.redact_text('cfg "key": aaaaaaaaaaaaaaaaapassword = realsecret1234567890')
+    # Exact output. The guard now refuses the OUTER candidate (`"key": ...`) because its own
+    # value run would reach the later `password` label with a redactable value behind it, so
+    # its value run — `aaaaaaaaaaaaaaaaapassword` — is left on the page; the engine advances
+    # and matches the INNER `password = ` label instead, which has no later label inside ITS
+    # OWN value and so redacts clean. The surviving `aaaa…password`-ish run of the refused
+    # outer match is the accepted trade, generalized from #434: a refused outer match's own
+    # value run survives whenever the inner label's value is itself redactable.
+    assert out == 'cfg "key": aaaaaaaaaaaaaaaaapassword = [redacted: secret value]'
+
+    # Quoted / JSON-escaped / no-space variants mirroring the bracket suite above
+    # (:2300-2358) but WITHOUT brackets — the swallow is not a bracket-only defect.
+    for line, secret in [
+        (
+            'cfg "key": "aws_secret_access_key": "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY"',
+            "wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEY",
+        ),
+        (
+            "key: my_application_password='opaquevaluewithnoprefix123'",
+            "opaquevaluewithnoprefix123",
+        ),
+        # Unspaced chain — the value class contains `=`, so `label=value` is absorbed
+        # whole and a guard that only inspects PAST the value's end misses it entirely
+        # (the same trap the bracketed guard's first attempt hit, :2316-2319).
+        (
+            "key:application_specific_api_key=abcdefghij1234567890",
+            "abcdefghij1234567890",
+        ),
+    ]:
+        out = redaction.redact_text(line)
+        assert secret not in out, out
+        assert _any_marker_in(out)
+
+    # Probe controls (must stay green before AND after #436).
+    # No swallowed inner label: the guard's lookahead never engages, so ordinary
+    # single-label redaction is byte-identical.
+    assert redaction.redact_text("password = realsecret1234567890") == (
+        "password = [redacted: secret value]"
     )
+    # The length tail on the guard's inner value is load-bearing: without it, the outer
+    # candidate would refuse to start whenever it merely SEES a later label, whether or
+    # not that label's own value is itself redactable. Here the inner label's value
+    # (`short`, 5 chars) is below the redaction threshold, so a naive guard would refuse
+    # the outer AND leave the inner unmatched — a total miss on a value the pre-#436
+    # pattern still caught whole. The tail keeps the outer eligible whenever the inner
+    # alone could never have been redacted, so this chain stays FULLY redacted.
+    assert redaction.redact_text("token = aaaaaaaaaaaakey=short") == (
+        "token = [redacted: secret value]"
+    )
+
+
+def test_generalized_guard_redacts_the_tail_of_an_unspaced_chain():
+    # #436 generalizes the swallow guard to be UNCONDITIONAL (previously conditioned on
+    # `key_bracket`, #434). It is not a leak either way — both forms redact the secret —
+    # but the unconditional guard changes which SPAN a non-bracket chain redacts: this
+    # input's own value run reaches the later `api_key` label with a redactable value
+    # behind it, so it refuses too, same as a bracketed candidate would.
+    #
+    # Before #436 (conditional, pinned by this test's prior form): the whole chain was
+    # masked — `key:[redacted: secret value]`. After (unconditional, by design): only the
+    # tail — `key:api_key=[redacted: secret value]`, a narrower span and a deliberate
+    # behavior change to inputs #434 never touched.
+    assert redaction.redact_text("key:api_key=leftovervalue123456789") == (
+        "key:api_key=[redacted: secret value]"
+    )
+
+
+def test_bracketed_swallow_guard_has_no_distance_limit():
+    # Guard 1 (the `(?(key_bracket)...)` conditional in LABELLED_VALUE_PATTERN) is
+    # deliberately UNBOUNDED — it restores #434's shipped protection exactly, at ANY
+    # distance, with no peek cap. Only guard 2 (unconditional, the NEW #436 coverage) is
+    # bounded at `_SWALLOW_GUARD_PEEK`. This pins that guard 1's reach has no cliff at
+    # all: a bracketed swallow is still caught far past where the non-bracket boundary
+    # test below stops protecting the non-bracket shape, and even far past
+    # `_SWALLOW_GUARD_PEEK` itself.
+    secret = "Zq7realsecret1234567890"
+
+    def bracket_swallow_line(gap: int) -> str:
+        return 'cfg["token"] = ' + "a" * gap + "api_key = " + secret
+
+    for gap in (redaction._SWALLOW_GUARD_PEEK + 1, 100_000):
+        out = redaction.redact_text(bracket_swallow_line(gap))
+        assert secret not in out, (gap, out)
+
+
+def test_non_bracket_swallow_guard_peek_boundary_is_pinned():
+    # `_SWALLOW_GUARD_PEEK` bounds ONLY the non-bracket swallow guard (guard 2) — the NEW
+    # coverage #436 adds, which `main` never had at any distance for this shape. This is
+    # NOT a regression versus `main` (see the module comment and
+    # test_bracketed_swallow_guard_has_no_distance_limit for the bracketed shape, which
+    # keeps its shipped unbounded protection); it is the LIMIT OF THE NEW COVERAGE this
+    # cap buys back from the #439-shaped quadratic risk an unbounded peek would reopen.
+    # This pins the exact cliff so a future change to the constant is a conscious,
+    # reviewed edit, not a silent shift.
+    #
+    # A literal 1024, not only a comparison against the constant: a test that reads its
+    # own expected value from `_SWALLOW_GUARD_PEEK` can never fail when THAT constant is
+    # the thing that regressed (repo lesson: derived expectations are tautological).
+    assert redaction._SWALLOW_GUARD_PEEK == 1024
+
+    cap = redaction._SWALLOW_GUARD_PEEK
+    secret = "Zq7realsecret1234567890"
+
+    def non_bracket_swallow_line(gap: int) -> str:
+        return "key: " + "a" * gap + "api_key = " + secret
+
+    # gap == cap: the inner `api_key` label still falls within the peek, so guard 2 still
+    # refuses the outer non-bracket candidate and the engine advances to redact the inner
+    # one instead — same shape as
+    # test_labelled_match_does_not_swallow_a_later_sensitive_label, at the boundary
+    # distance.
+    at_cap = redaction.redact_text(non_bracket_swallow_line(cap))
+    assert secret not in at_cap, at_cap
+
+    # gap == cap + 1: the inner label falls one character past the peek, guard 2's
+    # lookahead never reaches it, the outer non-bracket candidate is accepted, and it
+    # swallows the inner label (and the real secret behind it) whole — the accepted,
+    # pinned limit of the new coverage the module comment documents. This assertion is
+    # the one that must FAIL if the boundary arithmetic is flipped (an off-by-one that
+    # makes the peek reach one character too far, or stop one character short).
+    past_cap = redaction.redact_text(non_bracket_swallow_line(cap + 1))
+    assert secret in past_cap, past_cap
 
 
 def test_bracket_key_redacts_ordinary_code_by_design():
