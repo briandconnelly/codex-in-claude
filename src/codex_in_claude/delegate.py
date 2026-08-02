@@ -147,6 +147,14 @@ async def run_delegate(
                 # See orchestration._stamp_meta: a backend effort rejection is the
                 # caller's argument, not contract drift (#309).
                 reasoning_effort=meta.reasoning_effort,
+                # Codex runs with cwd=wt.path, so its raw stderr/event text can name the
+                # worktree, which is dead by the time this envelope reaches the caller
+                # (#420, the #412 remainder). sanitize_prose is the one approved
+                # relativize+redact composition (see the comment on the last_message
+                # rewrite below, which explains why the two passes can't be called
+                # separately); it REPLACES classify_failure's own redact_text call rather
+                # than adding a second pass.
+                sanitize=lambda t: worktree.sanitize_prose(t, wt_aliases) or "",
             )
             return serialize_error(ErrorResult(error=err, meta=meta))
         diff = worktree.capture_diff(wt.path, timeout=git_timeout)

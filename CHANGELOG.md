@@ -90,6 +90,35 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `invalid_paths`/`invalid_scope`/`not_a_git_repo` do, but `git_unavailable` and the `RuntimeError`
   fallback carry bounded, best-effort-redacted git diagnostics (a missing executable, git stderr, a
   timeout) instead — left unchanged by this fix.
+
+- **`codex_delegate`/`codex_delegate_async` error envelopes no longer quote the deleted
+  worktree** (#420), closing the surface #412 left open: "Error envelopes on this path can
+  still quote a worktree path through git or Codex stderr." Two families of producer fed the
+  gap. `codex.classify_failure`'s `nonzero_exit` branch surfaces the raw
+  `event_error or run.stderr or run.stdout` — Codex runs with `cwd` set to the throwaway
+  worktree, so that text can name it directly. And `WorktreeError` messages built from raw
+  git argv/stderr in `_core/worktree.py` — staging, committing, capturing the diff, and (a
+  finding from the third review round) gitattributes filter-driver enumeration, which
+  `_hardening_flags` runs from *inside* both the seeding and capture paths, not only
+  pre-worktree. Both are now routed through `worktree.sanitize_prose`, the one composition
+  that safely relativizes worktree-absolute paths AND redacts secrets in the same pass — the
+  two operations reordered are each independently unsafe (redact-then-relativize can
+  fragment a `file://` alias past its delimiter; relativize-then-redact can shorten a
+  path-bearing secret below the redactor's 16-character floor), which is why `sanitize_prose`
+  exists as a single function rather than two calls a caller has to order correctly.
+  `classify_failure` gained an optional `sanitize` keyword that, when given, replaces its
+  internal `redact_text` call (never both — the sanitizer already redacts); omitted, its
+  behavior is byte-identical to before. `delegate.run_delegate` passes a worktree-aware
+  sanitizer built from the same aliases the success-path rewrite already uses. A
+  create-failure (`WorktreeError` before a worktree path even exists to bind to) needs no
+  caller-side change — `_core/worktree.py`'s own construction sites now sanitize at the
+  source. Fixing a leak in the shared `sanitize_prose`/`_replace_aliases` machinery along
+  the way (a `.` immediately ending a worktree-path reference, e.g. `... in <wt>.`, used to
+  be left completely unrewritten rather than relativized) also changes the #412 success-path
+  `summary`/`raw_response.text` rendering for that shape: a sentence-final worktree root now
+  renders as `[worktree].` instead of surviving as the dead absolute path. Internal API only:
+  no result `fingerprint` or `RESULT_FORMAT` change.
+
 - **The background worker now guards its own persistence boundary against a nonconformant
   `invalid_arguments` envelope** (#419). `errors.make_error` enforces the `invalid_arguments`
   contract for every envelope the server *builds* — a non-empty per-argument list, AND `details`
