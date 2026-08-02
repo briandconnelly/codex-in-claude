@@ -265,6 +265,13 @@ def test_capabilities_names_tool_error_carrier():
     assert "isError" in carrier
 
 
+def test_capabilities_names_protocol_revision():
+    # #423: the targeted MCP protocol revision was previously derivable only from the
+    # `initialize` wire response, never stated in the agent-visible capability payload.
+    res = server.codex_capabilities()
+    assert res["protocol_revision"] == "2025-11-25"
+
+
 def test_instructions_name_the_error_carrier():
     # F3: the capability summary (served as MCP instructions) names the carrier for
     # tool failures, so a discovery-only client need not infer it from the outputSchema.
@@ -2235,7 +2242,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-70"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-71"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6132,7 +6139,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-70")
+    assert result["fingerprint"].endswith("schema-71")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

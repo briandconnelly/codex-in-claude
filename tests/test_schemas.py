@@ -504,10 +504,17 @@ def test_capabilities_result_schema_accepts_both_detail_modes():
 
 
 def test_loosened_schemas_stay_under_byte_budget():
-    """A future change must not silently reintroduce the $defs bloat (was 3864/3429 B)."""
+    """A future change must not silently reintroduce the $defs bloat (was 3864/3429 B).
+
+    Budget raised 2000 -> 2100 B (#423): `protocol_revision` added a described `str`
+    field to `CapabilitiesResult`. Its description is stripped from this loosened
+    schema by `_strip_schema_noise` (not registered in `_KEPT_DESCRIPTIONS`), so only
+    the bare `{"type":"string"}` property remains — CAPABILITIES_SCHEMA moved
+    1968 -> 2006 B, tripping the prior 2000 B cap by 6 B. STATUS_SCHEMA is unaffected
+    (1659 B, unchanged)."""
     for name, (sch, _) in _OPAQUE_FIELD_SCHEMAS.items():
         size = len(json.dumps(sch, separators=(",", ":")))
-        assert size < 2000, f"{name} is {size} B, over the 2000 B budget"
+        assert size < 2100, f"{name} is {size} B, over the 2100 B budget"
 
 
 def test_result_meta_schema_is_full_meta_contract():
@@ -946,7 +953,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-70"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-71"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

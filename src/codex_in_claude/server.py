@@ -907,7 +907,8 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
     client never advertised roots" from "the roots call failed this turn" — previously both
     degraded to an empty list and a silent fallback to the server's own cwd, on a call that
     spends money. Roots stay advisory either way: `workspace_root` is the durable path, and
-    the 2026-07-28 RC deprecates roots entirely."""
+    the MCP 2026-07-28 spec (final, not an RC) deprecates roots in favor of tool-argument
+    scoping — see ADR 0004 for the migration plan."""
     if ctx is None:
         return [], "not_negotiated"
     try:
@@ -2171,6 +2172,7 @@ def codex_capabilities(
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
         deprecation_policy="Pre-1.0: minor versions may change the agent-visible "
         "surface; the fingerprint changes when they do.",
+        protocol_revision="2025-11-25",
     )
     # Inject per-tool error codes from the single source of truth; KeyError here
     # means a newly advertised tool is missing from _TOOL_ERROR_CODES. Strip any

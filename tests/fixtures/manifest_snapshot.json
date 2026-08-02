@@ -56,6 +56,7 @@
       "codex CLI on PATH",
       "authenticated via `codex login`"
     ],
+    "protocol_revision": "2025-11-25",
     "resource_error_carrier": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this server keeps `code`/`message` rather than the machine_code/human_message spelling some §6 profiles use — nesting inside `data` already avoids shadowing the native JSON-RPC keys.",
     "result_meta_resource": "codex://result-meta",
     "sandboxes": [
@@ -634,7 +635,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 7839
+          "size_bytes": 8197
         }
       },
       "mimeType": "application/schema+json",
@@ -896,7 +897,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-70",
+            "default": "codex-in-claude/0.1/schema-71",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -938,6 +939,12 @@
             },
             "title": "Prerequisites",
             "type": "array"
+          },
+          "protocol_revision": {
+            "default": "2025-11-25",
+            "description": "The MCP protocol revision this server targets on the wire (the `initialize` response's protocolVersion). The 2026-07-28 migration plan for this revision's deprecated features is recorded in ADR 0004 (docs/adr/0004-mcp-2026-07-28-migration.md).",
+            "title": "Protocol Revision",
+            "type": "string"
           },
           "resource_error_carrier": {
             "default": "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this server keeps `code`/`message` rather than the machine_code/human_message spelling some §6 profiles use — nesting inside `data` already avoids shadowing the native JSON-RPC keys.",
@@ -1448,7 +1455,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-70",
+                "default": "codex-in-claude/0.1/schema-71",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2132,7 +2139,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 7839
+          "size_bytes": 8197
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
@@ -2572,7 +2579,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-70",
+            "default": "codex-in-claude/0.1/schema-71",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3255,7 +3262,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-70",
+            "default": "codex-in-claude/0.1/schema-71",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3447,6 +3454,9 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "protocol_revision": {
+                "type": "string"
               },
               "resource_error_carrier": {
                 "type": "string"

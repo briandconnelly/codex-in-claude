@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-70"
+FINGERPRINT = "codex-in-claude/0.1/schema-71"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -1154,6 +1154,19 @@ class CapabilitiesResult(BaseModel):
     tool_error_carrier: str = (
         "tool result with isError: true; the error envelope is in structuredContent, "
         "and content[0].text mirrors it as JSON"
+    )
+    # The MCP protocol revision this server targets on the wire (the `initialize`
+    # response's protocolVersion) — otherwise discoverable only by inspecting that
+    # response, not from this payload (#423). Kept as a plain `str`, not a `Literal`,
+    # because a future revision bump changes the value without narrowing the type.
+    protocol_revision: str = Field(
+        default="2025-11-25",
+        description=(
+            "The MCP protocol revision this server targets on the wire (the "
+            "`initialize` response's protocolVersion). The 2026-07-28 migration plan "
+            "for this revision's deprecated features is recorded in ADR 0004 "
+            "(docs/adr/0004-mcp-2026-07-28-migration.md)."
+        ),
     )
     # Where a RESOURCE-read failure travels (audit F9, #181). A resources/read of an
     # unknown/disabled URI returns a JSON-RPC error whose `error.data` now carries the

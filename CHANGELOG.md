@@ -5,6 +5,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`codex_capabilities()` now declares the targeted MCP protocol revision** via a new
+  `protocol_revision` field (`"2025-11-25"`), previously derivable only by inspecting the
+  `initialize` wire response (#423). Its description points to the new
+  `docs/adr/0004-mcp-2026-07-28-migration.md`, which records why this server stays on 2025-11-25
+  (verified FastMCP/`mcp` SDK support and deployment compatibility — not any spec-granted support
+  window for the legacy revision, which the spec makes optional) and the per-feature migration plan
+  for the deprecated pieces already in use (roots; the 2025-11-25 revision itself once FastMCP
+  supports 2026-07-28). Also fixes a stale `_roots_from_ctx` docstring comment that called the
+  2026-07-28 spec an "RC" — it has been Final since 2026-07-28. The rest of #423's vendored-skill
+  sweep was already done by #448 (`.agents/skills/agent-friendly-mcp` rebased onto the final spec);
+  `tests/runs/` transcripts are immutable historical evidence by declared policy and were left
+  untouched. `FINGERPRINT` bumps `schema-70` → `schema-71` (`capabilities_payload`); additive field,
+  **not breaking**; `RESULT_FORMAT` unchanged (the capabilities payload is not persisted).
+
 ### Fixed
 
 - **`initialize` advertised the `io.modelcontextprotocol/ui` extension (MCP Apps) even though this
