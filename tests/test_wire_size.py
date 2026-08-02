@@ -85,7 +85,22 @@ from codex_in_claude.server import mcp
 # the worktree, and that scrubbing it doesn't exclude $CODEX_HOME/skills/) recovered the
 # rest): 84,818 -> 84,975 bytes (+157 B, closing wording gaps between sites without adding
 # net new disclosure bulk) — fits under the existing budget, no raise.
-TOOLS_LIST_BYTE_BUDGET = 85_000
+# Measured again 2026-08-02 (#342: `codex_dry_run`/`codex_delegate_dry_run` both gained a
+# `deadline_advisory` output field, described identically on both, plus one docstring
+# sentence per tool — a genuinely new disclosure, unlike C4's wording-only tightening
+# above: it tells a client BEFORE it spends that a previewed call's size or reasoning
+# effort risks the synchronous deadline, and names the tool's own `_async` alternative):
+# 86,418 bytes (+1,443 B, incl. an accuracy reword of the field description) — over
+# budget; budget raised to the next 500 above the
+# measured value.
+# Measured again 2026-08-02 (#342 round-3, Codex review concerns/1 medium, verified
+# valid: the generic "this tool's `_async` variant" phrasing pointed a
+# codex_dry_run/codex_delegate_dry_run caller at a nonexistent codex_dry_run_async /
+# codex_delegate_dry_run_async — the field, both docstrings, and REFERENCE.md now name
+# the previewed PAID tool's own `_async` counterpart verbatim instead, a longer but
+# genuinely more correct disclosure, not flab): 86,749 bytes (+331 B) — over budget;
+# budget raised to the next 500 above the measured value.
+TOOLS_LIST_BYTE_BUDGET = 87_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -97,7 +112,7 @@ TOOLS_LIST_BYTE_BUDGET = 85_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 84_975
+TOOLS_LIST_BYTE_TARGET = 86_749
 
 
 def _budget_failure_message(measured: int) -> str:

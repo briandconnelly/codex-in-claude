@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-73"
+FINGERPRINT = "codex-in-claude/0.1/schema-74"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -160,6 +160,27 @@ _DRY_RUN_MODEL_DESC = (
 _DRY_RUN_EFFORT_DESC = (
     "Reasoning-effort override the previewed paid call would send (per-call param or "
     "server default); null = Codex would resolve it itself. Unvalidated by the preview."
+)
+# #342: a hint, not a refusal — every other preview field is unaffected. null unless
+# the previewed call would actually run the model AND its size or effort risks the
+# deadline (a call that runs no model can't overrun one; on codex_dry_run that's
+# would_call_model=False). Shared verbatim between DryRunResult and
+# DelegateDryRunResult so the two previews can't drift (#342). Round-3 Codex-review
+# correction: the text must name the PREVIEWED PAID tool's own `_async` counterpart
+# (codex_review_changes_async / codex_delegate_async) — NOT this dry-run tool's own
+# name, which has no `_async` variant; an agent following a generic "this tool's
+# _async variant" phrase from codex_dry_run's own payload would attempt the
+# nonexistent codex_dry_run_async. codex_consult has no dry-run preview at all — this
+# field doesn't exist there — so its description below carries the one-clause pointer
+# instead.
+_DEADLINE_ADVISORY_DESC = (
+    "Non-null when the previewed call would actually run the model AND its prompt "
+    "size or reasoning effort risks the synchronous deadline; null otherwise "
+    "(including whenever it would not call the model at all). Names the previewed "
+    "PAID tool's own `_async` counterpart verbatim (e.g. codex_review_changes_async "
+    "for a codex_dry_run preview) — never this dry-run tool's own name, which has no "
+    "`_async` variant. A hint, not a refusal. codex_consult has no dry-run preview; "
+    "prefer codex_consult_async for a high-effort or broad repo-grounded consult."
 )
 
 Severity = Literal["critical", "high", "medium", "low", "nit"]
@@ -1411,6 +1432,7 @@ class DryRunResult(BaseModel):
     redacted_paths_count: int = 0
     redacted_paths: list[str] = Field(default_factory=list)
     security_warnings: list[str] = Field(default_factory=list)
+    deadline_advisory: str | None = Field(default=None, description=_DEADLINE_ADVISORY_DESC)
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 
@@ -1452,6 +1474,7 @@ class DelegateDryRunResult(BaseModel):
     prompt_bytes: int  # full UTF-8 size of the delegate prompt that would be sent
     max_input_bytes: int  # the task byte limit the real run enforces
     worktree_plan: WorktreePlan
+    deadline_advisory: str | None = Field(default=None, description=_DEADLINE_ADVISORY_DESC)
     fingerprint: str = FINGERPRINT
     server_version: str | None = _server_version_field()
 
@@ -1551,6 +1574,7 @@ _KEPT_DESCRIPTIONS = frozenset(
         _SUPPORTED_EFFORTS_DESC,
         _DRY_RUN_MODEL_DESC,
         _DRY_RUN_EFFORT_DESC,
+        _DEADLINE_ADVISORY_DESC,
         _FINGERPRINT_COVERS_DESC,
         # _TOOL_STABILITY_DESC: verified empirically (removing this entry leaves the full
         # suite green) that no current test needs this registration — its only wire route,

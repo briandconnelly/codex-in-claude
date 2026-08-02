@@ -904,7 +904,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-73",
+            "default": "codex-in-claude/0.1/schema-74",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1462,7 +1462,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-73",
+                "default": "codex-in-claude/0.1/schema-74",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2586,7 +2586,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-73",
+            "default": "codex-in-claude/0.1/schema-74",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3269,7 +3269,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-73",
+            "default": "codex-in-claude/0.1/schema-74",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -4755,7 +4755,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Preview what a `codex_delegate`/`codex_delegate_async` call would do — the\nbaseline it seeds from (HEAD commit, tracked file count/size, uncommitted and\nuntracked counts), the prompt size that would be sent, and the resolved\nworkspace/isolation. Free — no model call, no spend, no worktree created.\n\nUse it before delegating to confirm scope and repo before committing to cost,\nexactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real\ndelegate's zero-spend validation (workspace, isolation, task size, git repo), so\na failure here is a failure the paid call would also hit. The returned\n`tier`/`sandbox` describe the previewed propose run, not this read-only preview;\nthe result echoes the effective `model`/`reasoning_effort` overrides the paid\ncall would send (unvalidated).",
+      "description": "Preview what a `codex_delegate`/`codex_delegate_async` call would do — the\nbaseline it seeds from (HEAD commit, tracked file count/size, uncommitted and\nuntracked counts), the prompt size that would be sent, and the resolved\nworkspace/isolation. Free — no model call, no spend, no worktree created.\n\nUse it before delegating to confirm scope and repo before committing to cost,\nexactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real\ndelegate's zero-spend validation (workspace, isolation, task size, git repo), so\na failure here is a failure the paid call would also hit. The returned\n`tier`/`sandbox` describe the previewed propose run, not this read-only preview;\nthe result echoes the effective `model`/`reasoning_effort` overrides the paid\ncall would send (unvalidated). `deadline_advisory` is non-null when size or\nreasoning effort risks the synchronous deadline and names `codex_delegate_async`\nverbatim — the async counterpart of the previewed call, not of this dry-run tool.\nA hint, not a refusal.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4834,6 +4834,17 @@
             "properties": {
               "cwd": {
                 "type": "string"
+              },
+              "deadline_advisory": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Non-null when the previewed call would actually run the model AND its prompt size or reasoning effort risks the synchronous deadline; null otherwise (including whenever it would not call the model at all). Names the previewed PAID tool's own `_async` counterpart verbatim (e.g. codex_review_changes_async for a codex_dry_run preview) — never this dry-run tool's own name, which has no `_async` variant. A hint, not a refusal. codex_consult has no dry-run preview; prefer codex_consult_async for a high-effort or broad repo-grounded consult."
               },
               "fingerprint": {
                 "type": "string"
@@ -5042,7 +5053,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Preview what a `codex_review_changes` call would send — scope, diff size,\nredactions, truncation. Free — no model call, no spend. Use it before a\nreview to inspect the scope and the reported redactions; redaction is\nbest-effort, so treat the preview as a check on scope, not as confirmation\nthat no secret remains. Pass the same `extra_context` and `untracked` policy\nyou would give the review so the preview matches it. `would_call_model` reports\nwhether the paid call would actually run the model (False on an empty diff, where\n`prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the\nreview would. The result echoes the effective `model`/`reasoning_effort` overrides\nthe paid call would send (unvalidated).",
+      "description": "Preview what a `codex_review_changes` call would send — scope, diff size,\nredactions, truncation. Free — no model call, no spend. Use it before a\nreview to inspect the scope and the reported redactions; redaction is\nbest-effort, so treat the preview as a check on scope, not as confirmation\nthat no secret remains. Pass the same `extra_context` and `untracked` policy\nyou would give the review so the preview matches it. `would_call_model` reports\nwhether the paid call would actually run the model (False on an empty diff, where\n`prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the\nreview would. The result echoes the effective `model`/`reasoning_effort` overrides\nthe paid call would send (unvalidated). `deadline_advisory` is non-null when size\nor effort risks the synchronous deadline (null whenever `would_call_model` is\nFalse) and names `codex_review_changes_async` verbatim — the async counterpart of\nthe previewed call, not of this dry-run tool. A hint, not a refusal.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5285,6 +5296,17 @@
               },
               "cwd": {
                 "type": "string"
+              },
+              "deadline_advisory": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Non-null when the previewed call would actually run the model AND its prompt size or reasoning effort risks the synchronous deadline; null otherwise (including whenever it would not call the model at all). Names the previewed PAID tool's own `_async` counterpart verbatim (e.g. codex_review_changes_async for a codex_dry_run preview) — never this dry-run tool's own name, which has no `_async` variant. A hint, not a refusal. codex_consult has no dry-run preview; prefer codex_consult_async for a high-effort or broad repo-grounded consult."
               },
               "fingerprint": {
                 "type": "string"
