@@ -41,6 +41,47 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   wrong end of the line and leave the secret intact beside a stray marker. No shipped pattern
   triggers the fallback (all four grouped matchers are leading-group), so this is a guarantee for
   future ones. No agent-visible surface changes, so no `fingerprint` bump.
+- **`Meta.timeout_seconds` published a bare, undescribed field** — the only semantically-loaded
+  member of `Meta` with no description, unlike its neighbours `roots_source` and `tier` (#413). It
+  now documents which deadline the value is, by envelope: a synchronous call that runs Codex
+  (`codex_consult`/`codex_review_changes`/`codex_delegate`) reports that call's own resolved
+  deadline, post-clamp (10-600s; an out-of-range value is coerced to the nearest bound, not
+  rejected). A background job — a `*_async` call's job-start handle, or a later
+  `codex_job_result`/`codex_job_consume_result` fetch of that job's ORIGINATING run — reports the
+  job's own deadline instead: the job-lifecycle ceiling (`config.job_max_seconds()`, default 1800,
+  clamped 60-7200), since a background job runs to that ceiling, not the sync clamp. A
+  `codex_job_*` call's own handler-generated lifecycle error (`job_not_found` and its siblings)
+  reports that same ceiling, present even when no job was resolved (`job_not_found`, where
+  `meta.job_kind` is omitted from the envelope, not null). Call-boundary argument validation
+  (`invalid_arguments`) and an unexpected `internal_error` — on any tool, not only `codex_job_*` —
+  instead report the server's configured sync deadline, still post-clamp; neither is tied to any
+  run or resolved job. A regression test now pins an async handle's `meta.timeout_seconds` to
+  `config.job_max_seconds()`, the one documented sub-case with no prior coverage. Wording only, so
+  it bumps `FINGERPRINT` (`schema-67` → `schema-68`) without moving `RESULT_FORMAT`; not breaking.
+- **A transfer or rate-limit read's `stderr_tail` no longer races the drain thread that
+  fills it for a terminated child** (#449). `_StderrDrain` reads a child's stderr on its own
+  daemon thread and kept no reference to it, so `transfer_session` and `read_rate_limits`
+  could build their outcome — snapshotting the drain — with zero synchronization against
+  that thread. On a loaded runner the scheduler could exit the child and let the outcome be
+  assembled before the last, most diagnostic line ever reached the capture, and a quiesce
+  placed in the `finally` could not fix it: Python evaluates a `return` expression before
+  `finally` runs, so the outcome was already built. The fix is a shared settle step
+  (`_settle_and_tail`) that every post-spawn exit in both functions now runs before
+  constructing its outcome — terminate the child, join the stdout reader, then give the
+  newly-tracked drain thread a bounded `quiesce()` (~2s, comfortably above the milliseconds
+  EOF normally takes once the child is dead) to catch up, and only then take the final
+  snapshot. This removes the race for the common case — a child that has actually
+  terminated. It does **not** promise a complete tail unconditionally: a stream that never
+  reaches EOF (a descendant that inherited the fd, or one whose progress resumes only after
+  the quiesce bound has already elapsed) still yields a bounded, possibly incomplete tail —
+  that boundary is deliberate and unchanged, and is now pinned by tests rather than left
+  implicit. `_terminate` is meant to run exactly once per child, not to be repeat-called:
+  after the first call has already reaped the leader, the OS is free to recycle that pid for
+  an unrelated process before a second call would run, so repeating it is not safe. The
+  settle step now tracks whether it already ran one so `finally` skips its own call on every
+  settled path; `finally` remains the sole teardown only for a path that raises instead of
+  returning. No agent-visible surface changed.
+
 - **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
   on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
   ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
@@ -83,6 +124,51 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `invalid_paths`/`invalid_scope`/`not_a_git_repo` do, but `git_unavailable` and the `RuntimeError`
   fallback carry bounded, best-effort-redacted git diagnostics (a missing executable, git stderr, a
   timeout) instead — left unchanged by this fix.
+
+- **`codex_delegate`/`codex_delegate_async` error envelopes no longer quote the deleted
+  worktree** (#420), closing the surface #412 left open: "Error envelopes on this path can
+  still quote a worktree path through git or Codex stderr." Two families of producer fed the
+  gap. `codex.classify_failure`'s `nonzero_exit` branch surfaces the raw
+  `event_error or run.stderr or run.stdout` — Codex runs with `cwd` set to the throwaway
+  worktree, so that text can name it directly. And `WorktreeError` messages built from raw
+  git argv/stderr in `_core/worktree.py` — staging, committing, capturing the diff, and (a
+  finding from the third review round) gitattributes filter-driver enumeration, which
+  `_hardening_flags` runs from *inside* both the seeding and capture paths, not only
+  pre-worktree. Both are now routed through `worktree.sanitize_prose`, the one composition
+  that safely relativizes worktree-absolute paths AND redacts secrets in the same pass — the
+  two operations reordered are each independently unsafe (redact-then-relativize can
+  fragment a `file://` alias past its delimiter; relativize-then-redact can shorten a
+  path-bearing secret below the redactor's 16-character floor), which is why `sanitize_prose`
+  exists as a single function rather than two calls a caller has to order correctly.
+  `classify_failure` gained an optional `sanitize` keyword that, when given, replaces its
+  internal `redact_text` call (never both — the sanitizer already redacts); omitted, its
+  behavior is byte-identical to before. `delegate.run_delegate` passes a worktree-aware
+  sanitizer built from the same aliases the success-path rewrite already uses. A
+  create-failure (`WorktreeError` before a worktree path even exists to bind to) needs no
+  caller-side change — `_core/worktree.py`'s own construction sites now sanitize at the
+  source. Fixing a leak in the shared `sanitize_prose`/`_replace_aliases` machinery along
+  the way (a `.` immediately ending a worktree-path reference, e.g. `... in <wt>.`, used to
+  be left completely unrewritten rather than relativized) also changes the #412 success-path
+  `summary`/`raw_response.text` rendering for that shape: a sentence-final worktree root now
+  renders as `[worktree].` instead of surviving as the dead absolute path. Internal API only:
+  no result `fingerprint` or `RESULT_FORMAT` change.
+
+- **The background worker now guards its own persistence boundary against a nonconformant
+  `invalid_arguments` envelope** (#419). `errors.make_error` enforces the `invalid_arguments`
+  contract for every envelope the server *builds* — a non-empty per-argument list, AND `details`
+  exactly mirroring that list's first entry — but the worker wrote whatever its dispatched producer
+  returned straight to `result.json` with no validation, and replay reconstructs stored records
+  through `ErrorResult.model_validate`, which deliberately bypasses that constructor guard so a
+  pre-existing record stays readable. A worker path that ever produced a listless
+  `invalid_arguments` envelope, or one whose `details` disagreed with its own list, would therefore
+  persist it, and replay would return it stamped with the *current* fingerprint — advertising a
+  conformance it never had. No worker path can mint one today, but nothing tied that property to
+  the invariant. `_worker.main` now normalizes any such envelope to a conformant `internal_error`
+  immediately before the atomic write, preserving the run's own meta; an envelope that satisfies
+  BOTH halves of the contract passes through unchanged, and a failure inside the guard itself falls
+  through to persisting the original payload rather than losing the record. No `FINGERPRINT` or
+  `RESULT_FORMAT` change — this is a runtime normalization on an already-broken path, not a schema
+  or description change.
 - **A marker from an earlier pattern no longer strands the rest of a connection-string
   credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
   never revisits consumed text. Every matcher except the connection-string pair is

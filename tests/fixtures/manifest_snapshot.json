@@ -896,7 +896,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-67",
+            "default": "codex-in-claude/0.1/schema-68",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1044,7 +1044,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 20373
+          "size_bytes": 21536
         }
       },
       "mimeType": "application/schema+json",
@@ -1448,7 +1448,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-67",
+                "default": "codex-in-claude/0.1/schema-68",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -1643,6 +1643,7 @@
                 "type": "string"
               },
               "timeout_seconds": {
+                "description": "Deadline in seconds for the run this envelope describes; which deadline depends on the envelope. A synchronous call that runs Codex (codex_consult, codex_review_changes, codex_delegate) reports that call's own resolved deadline, post-clamp (10-600s; a value outside that range is coerced to the nearest bound, not rejected). A background job — a *_async call's job-start handle, or a later codex_job_result/codex_job_consume_result fetch of that job's ORIGINATING run — reports the job's own deadline instead: the job-lifecycle ceiling (config.job_max_seconds(), default 1800, clamped 60-7200), since a background job runs to that ceiling, not the sync clamp. A codex_job_* call's own handler-generated lifecycle error (job_not_found and its siblings) reports that same ceiling, present even when no job was resolved (job_not_found, where meta.job_kind is omitted from the envelope). Call-boundary argument validation (invalid_arguments) and an unexpected internal_error — on any tool, not only codex_job_* — instead report the server's configured sync deadline, still post-clamp; NEITHER is tied to any run or resolved job.",
                 "title": "Timeout Seconds",
                 "type": "integer"
               },
@@ -2146,7 +2147,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 20373
+          "size_bytes": 21536
         }
       },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
@@ -2183,7 +2184,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 14649
+          "size_bytes": 15812
         }
       },
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
@@ -2209,7 +2210,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 14649
+          "size_bytes": 15812
         }
       },
       "mimeType": "application/schema+json",
@@ -2574,7 +2575,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-67",
+            "default": "codex-in-claude/0.1/schema-68",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2769,6 +2770,7 @@
             "type": "string"
           },
           "timeout_seconds": {
+            "description": "Deadline in seconds for the run this envelope describes; which deadline depends on the envelope. A synchronous call that runs Codex (codex_consult, codex_review_changes, codex_delegate) reports that call's own resolved deadline, post-clamp (10-600s; a value outside that range is coerced to the nearest bound, not rejected). A background job — a *_async call's job-start handle, or a later codex_job_result/codex_job_consume_result fetch of that job's ORIGINATING run — reports the job's own deadline instead: the job-lifecycle ceiling (config.job_max_seconds(), default 1800, clamped 60-7200), since a background job runs to that ceiling, not the sync clamp. A codex_job_* call's own handler-generated lifecycle error (job_not_found and its siblings) reports that same ceiling, present even when no job was resolved (job_not_found, where meta.job_kind is omitted from the envelope). Call-boundary argument validation (invalid_arguments) and an unexpected internal_error — on any tool, not only codex_job_* — instead report the server's configured sync deadline, still post-clamp; NEITHER is tied to any run or resolved job.",
             "title": "Timeout Seconds",
             "type": "integer"
           },
@@ -3256,7 +3258,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-67",
+            "default": "codex-in-claude/0.1/schema-68",
             "title": "Fingerprint",
             "type": "string"
           },

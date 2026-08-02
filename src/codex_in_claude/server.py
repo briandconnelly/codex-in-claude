@@ -4468,6 +4468,12 @@ def _finished_job_envelope(
         # pre-upgrade run's error, misattributing old failures to the newest release.
         # Absent stays absent: an honest unknown beats a plausible-but-wrong value.
         validated.meta.server_version = stored_version
+        # `ErrorResult.model_validate` above deliberately does NOT enforce the
+        # invalid_arguments non-empty-list invariant (errors.make_error does, but a
+        # model_validator here would make a pre-existing legacy record unreadable) — so
+        # this read site trusts the worker's own persistence-boundary guard
+        # (_worker._guard_invalid_arguments, #419) to have normalized any nonconformant
+        # envelope before it ever reached disk.
         # Boundary redact (#186/F10): a schema-valid payload written by a pre-fix worker
         # (still within its TTL) could carry unredacted exception text in its message. Scope
         # this belt-and-braces pass to `internal_error` — the code every raw-exception sink

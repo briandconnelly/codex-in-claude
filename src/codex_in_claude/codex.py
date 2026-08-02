@@ -335,6 +335,7 @@ def classify_failure(
     events: str | None = None,
     extra_args: config.ExtraArgs | None = None,
     reasoning_effort: str | None = None,
+    sanitize: Callable[[str], str] | None = None,
 ) -> ErrorInfo:
     """Classify a non-success `codex exec` run into a recoverable ErrorInfo.
 
@@ -353,7 +354,17 @@ def classify_failure(
     `[…]` field form the failure is the caller's argument
     (`invalid_reasoning_effort`), not contract drift (#309) — unless the operator's
     own matched passthrough descriptors account for that signature, in which case
-    the rejection is theirs (`extra_args_rejected`, #313)."""
+    the rejection is theirs (`extra_args_rejected`, #313).
+
+    `sanitize`, when given, REPLACES the generic `nonzero_exit` branch's `redact_text`
+    call (it already includes redaction — see `worktree.sanitize_prose`, the one
+    approved composition) and runs on the raw `event_error or run.stderr or run.stdout`
+    before the `[:300]` truncation, exactly where `redact_text` ran. `delegate.run_delegate`
+    passes a worktree-aware sanitizer so a delegate error can't quote a dead absolute path
+    into the (already torn-down) throwaway worktree (#420). Every classification decision
+    above (drift/auth/rate-limit signature matching) still reads the RAW strings — only the
+    emitted text changes. Omitted (the default), behavior is byte-identical to before this
+    parameter existed."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
@@ -408,7 +419,9 @@ def classify_failure(
         if retry_after is None:
             retry_after = cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
         return _rate_limit_error(retry_after)
-    # Redact the full text *before* truncating: a secret straddling the 300-char cut
-    # would otherwise lose the tail the redaction patterns need to match, leaking a prefix.
-    detail = (redaction.redact_text((event_error or run.stderr or run.stdout).strip()) or "")[:300]
+    # Sanitize (or redact, when no `sanitize` was given) the full text *before* truncating:
+    # a secret or worktree path straddling the 300-char cut would otherwise lose the tail
+    # the redaction/relativization patterns need to match, leaking a prefix.
+    raw = (event_error or run.stderr or run.stdout).strip()
+    detail = (sanitize(raw) if sanitize is not None else (redaction.redact_text(raw) or ""))[:300]
     return make_error("nonzero_exit", f"codex exited {run.exit_code}: {detail}")

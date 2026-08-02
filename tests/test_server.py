@@ -1509,10 +1509,10 @@ async def test_delegate_baseline_commit_failure_no_spend(monkeypatch, clean_env,
 
     real_git = worktree._git
 
-    def fake_git(repo, args, timeout):
+    def fake_git(repo, args, timeout, **kwargs):
         if "commit" in args:
             return subprocess.CompletedProcess(["git", *args], 1, "", "simulated commit failure")
-        return real_git(repo, args, timeout)
+        return real_git(repo, args, timeout, **kwargs)
 
     monkeypatch.setattr(worktree, "_git", fake_git)
 
@@ -1898,6 +1898,10 @@ async def test_delegate_async_returns_job_id(monkeypatch, clean_env, tmp_path):
     assert res["status"] == "running"
     # JobStarted's only wire path — unreachable from the free-tool walk (#304).
     assert res["server_version"] == __version__
+    # A background job is bounded by the job-lifecycle ceiling, not the sync clamp
+    # (10-600s) — the handle's own meta.timeout_seconds must show that ceiling, not a
+    # sync-clamped value (#413 description review).
+    assert res["meta"]["timeout_seconds"] == server.config.job_max_seconds()
     # the spawned command targets the worker module
     assert "codex_in_claude._worker" in store.started[0]["cmd"]
     assert store.started[0]["spec"]["task"] == "do x"
@@ -2231,7 +2235,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-67"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-68"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6086,7 +6090,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-67")
+    assert result["fingerprint"].endswith("schema-68")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

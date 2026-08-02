@@ -113,7 +113,9 @@ def _base_hardening_flags() -> list[str]:
     return ["-c", f"core.hooksPath={_empty_hooks_dir()}", "-c", "core.fsmonitor=false"]
 
 
-def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
+def _configured_filter_drivers(
+    repo: str, timeout: int, *, aliases: Iterable[str] = ()
+) -> list[str]:
     """Every gitattributes filter driver name configured for ``repo`` -- from system and
     repo-local config, but NOT the user's global ``~/.gitconfig``. This runs under
     ``_base_env()``, which every other git call here also uses; because that is a
@@ -124,7 +126,12 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
     Read with a raw subprocess carrying only ``_base_hardening_flags`` -- NOT ``_git``,
     which would recurse back through ``_hardening_flags`` -> here. Raises WorktreeError
     if enumeration fails, or if a driver name cannot be safely expressed as a ``-c``
-    override (fail closed; see ``_UNNEUTRALIZABLE_DRIVER_CHARS``)."""
+    override (fail closed; see ``_UNNEUTRALIZABLE_DRIVER_CHARS``).
+
+    ``aliases`` (default ``()``, byte-identical to before) sanitizes the enumeration-failure
+    message through ``sanitize_prose`` when ``repo`` is a throwaway worktree -- this is NOT
+    pre-worktree-only: `_seed_uncommitted` and `capture_diff` both call ``_hardening_flags``
+    (hence here) against ``wt`` (#420)."""
     proc = subprocess.run(
         ["git", *_base_hardening_flags(), "config", "--name-only", "--get-regexp", r"^filter\."],
         cwd=repo,
@@ -136,9 +143,16 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
     )
     # returncode 1 is git's "no matching keys" (no filters configured), not an error.
     if proc.returncode not in (0, 1):
-        raise WorktreeError(
-            f"enumerating filter drivers failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
-        )
+        aliases = tuple(aliases)
+        if aliases:
+            raw = f"enumerating filter drivers failed: {proc.stderr.strip()}"
+            message = (sanitize_prose(raw, aliases) or "")[:200]
+        else:
+            message = (
+                f"enumerating filter drivers failed: "
+                f"{(redact_text(proc.stderr.strip()) or '')[:200]}"
+            )
+        raise WorktreeError(message)
     names: list[str] = []
     seen: set[str] = set()
     for line in proc.stdout.splitlines():
@@ -150,25 +164,46 @@ def _configured_filter_drivers(repo: str, timeout: int) -> list[str]:
             continue
         seen.add(name)
         if _UNNEUTRALIZABLE_DRIVER_CHARS.search(name):
-            # Cap the echoed name (like the [:200] git-stderr truncation elsewhere) so a
-            # pathologically long driver name can't bloat the client-visible envelope.
-            raise WorktreeError(
-                f"refusing to run: gitattributes filter driver {name[:100]!r} cannot be safely "
-                "neutralized (its name contains '=' or a control character)"
-            )
+            # The name is read from repo-controlled gitattributes/config, so a malformed
+            # one can itself embed the worktree path (#420 review finding 2) -- run the
+            # complete message through sanitize_prose (same aliases, same pattern as the
+            # enumeration-failure raise above) before truncating, rather than embedding
+            # `name` raw. The `aliases=()` branch mirrors that sibling raise too (#420
+            # review round 4 finding 3): it previously embedded the name completely raw,
+            # with neither redaction nor a length cap, even though the very `=` that makes
+            # a name "unneutralizable" is also what a labelled secret pattern keys on
+            # (`api_key=<40 z's>` both triggers this branch AND is redactable).
+            aliases = tuple(aliases)
+            if aliases:
+                raw = (
+                    f"refusing to run: gitattributes filter driver {name[:100]!r} cannot "
+                    "be safely neutralized (its name contains '=' or a control character)"
+                )
+                message = (sanitize_prose(raw, aliases) or "")[:200]
+            else:
+                detail = (redact_text(repr(name[:100])) or "")[:200]
+                message = (
+                    f"refusing to run: gitattributes filter driver {detail} cannot be "
+                    "safely neutralized (its name contains '=' or a control character)"
+                )
+            raise WorktreeError(message)
         names.append(name)
     return names
 
 
-def _filter_neutralization_flags(repo: str, timeout: int) -> list[str]:
+def _filter_neutralization_flags(
+    repo: str, timeout: int, *, aliases: Iterable[str] = ()
+) -> list[str]:
     """``-c`` overrides that disable every configured gitattributes filter driver so no
     ``clean``/``smudge``/``process`` command executes. For each driver we blank the three
     command hooks (an empty command is a no-op, leaving git to use the raw blob bytes)
     and force ``required=false`` so a now-disabled ``required`` filter is non-fatal
     instead of aborting checkout. ``process`` must be blanked explicitly: it takes
-    precedence over ``smudge``/``clean``, so overriding only those would still run it."""
+    precedence over ``smudge``/``clean``, so overriding only those would still run it.
+
+    ``aliases`` is forwarded to ``_configured_filter_drivers`` -- see there (#420)."""
     flags: list[str] = []
-    for name in _configured_filter_drivers(repo, timeout):
+    for name in _configured_filter_drivers(repo, timeout, aliases=aliases):
         flags += [
             "-c",
             f"filter.{name}.process=",
@@ -182,7 +217,7 @@ def _filter_neutralization_flags(repo: str, timeout: int) -> list[str]:
     return flags
 
 
-def _hardening_flags(repo: str, timeout: int) -> list[str]:
+def _hardening_flags(repo: str, timeout: int, *, aliases: Iterable[str] = ()) -> list[str]:
     """``git -c`` overrides prepended to every git call here, to neutralize
     repo-configured code execution in the *server process* (these git ops run here, not
     in Codex's sandbox): repo hooks and fsmonitor (``_base_hardening_flags``) plus every
@@ -196,8 +231,16 @@ def _hardening_flags(repo: str, timeout: int) -> list[str]:
     since 2.31 and would fail *open* on an older binary) at the highest config
     precedence, so it overrides the repo's own local config and reaches even the
     standalone ``git apply``. The filter set is enumerated fresh per call (uncached) so a
-    driver added between operations in a long-lived server process is never missed."""
-    return [*_base_hardening_flags(), *_filter_neutralization_flags(repo, timeout)]
+    driver added between operations in a long-lived server process is never missed.
+
+    ``aliases`` is forwarded to ``_filter_neutralization_flags`` -- pass ``path_aliases(wt)``
+    whenever ``repo`` IS the throwaway worktree, so a filter-enumeration failure it triggers
+    is sanitized rather than naming a path that is dead by the time the caller reads it
+    (#420). Leave it default when ``repo`` is the source repo (structurally worktree-path-free)."""
+    return [
+        *_base_hardening_flags(),
+        *_filter_neutralization_flags(repo, timeout, aliases=aliases),
+    ]
 
 
 def _base_env() -> dict[str, str]:
@@ -207,9 +250,13 @@ def _base_env() -> dict[str, str]:
     return gitdiff._base_git_env()
 
 
-def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProcess:
+def _git(
+    repo: str, args: list[str], timeout: int, *, aliases: Iterable[str] = ()
+) -> subprocess.CompletedProcess:
+    """``aliases`` is forwarded to ``_hardening_flags`` -- pass ``path_aliases(wt)`` when
+    ``repo`` is the throwaway worktree (#420); see there."""
     return subprocess.run(
-        ["git", *_hardening_flags(repo, timeout), *args],
+        ["git", *_hardening_flags(repo, timeout, aliases=aliases), *args],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -219,12 +266,24 @@ def _git(repo: str, args: list[str], timeout: int) -> subprocess.CompletedProces
     )
 
 
-def _git_ok(repo: str, args: list[str], timeout: int) -> str:
+def _git_ok(repo: str, args: list[str], timeout: int, *, aliases: Iterable[str] = ()) -> str:
+    """Run a git command in ``repo``, raising WorktreeError with the (redacted) stderr on
+    failure. The message interpolates argv verbatim, so a worktree path can appear there
+    even with empty stderr; ``aliases`` (default ``()``, byte-identical to before) sanitizes
+    the WHOLE raw message -- argv and stderr together -- through ``sanitize_prose`` when the
+    caller knows ``args`` can name a worktree (#420). ``_git``'s own internal hardening-flags
+    call is NOT threaded with these aliases: that call operates on ``repo``, decoupled from
+    whatever path the caller's ``args`` happen to reference."""
     proc = _git(repo, args, timeout)
     if proc.returncode != 0:
-        raise WorktreeError(
-            f"git {' '.join(args)} failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
-        )
+        aliases = tuple(aliases)
+        if aliases:
+            raw = f"git {' '.join(args)} failed: {proc.stderr.strip()}"
+            message = (sanitize_prose(raw, aliases) or "")[:200]
+        else:
+            detail = (redact_text(proc.stderr.strip()) or "")[:200]
+            message = f"git {' '.join(args)} failed: {detail}"
+        raise WorktreeError(message)
     return proc.stdout
 
 
@@ -266,7 +325,22 @@ def create(repo: str, *, timeout: int, on_parent: Callable[[str], None] | None =
             raise
     wt = str(Path(parent) / "tree")
     try:
-        _git_ok(repo, ["worktree", "add", "--detach", "--quiet", wt, "HEAD"], timeout)
+        # argv names `wt` (the destination) even though this call runs against `repo` (the
+        # source), so the failure message needs `wt`'s aliases -- not `_hardening_flags`'s
+        # own repo-scoped enumeration, which stays default (#420). `path_aliases(wt)` here
+        # runs BEFORE `wt` itself exists (only `parent`, from `mkdtemp` above, does) --
+        # safe despite `path_aliases`'s own "capture while it still exists" docstring
+        # caveat, because that caveat is about symlinked ANCESTORS (macOS's /tmp ->
+        # /private/tmp): `os.path.realpath` resolves those against `parent`, which already
+        # exists, and the leaf `wt` adds is a plain directory `git worktree add` creates
+        # fresh -- never itself a symlink -- so its absence at alias-computation time
+        # changes nothing `realpath` needs to resolve.
+        _git_ok(
+            repo,
+            ["worktree", "add", "--detach", "--quiet", wt, "HEAD"],
+            timeout,
+            aliases=path_aliases(wt),
+        )
     except BaseException:
         # A git hang (TimeoutExpired) or spawn failure (OSError) is not a WorktreeError,
         # so catch broadly and match the sibling _seed_uncommitted block: best-effort
@@ -428,14 +502,25 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     leave the worktree at HEAD and return a warning. But once the patch HAS applied,
     the baseline commit must fully succeed — otherwise ``capture_diff`` would later
     report the caller's live changes as the agent's work. Any failure finalizing the
-    baseline raises ``WorktreeError`` (the caller maps it to a zero-spend error)."""
+    baseline raises ``WorktreeError`` (the caller maps it to a zero-spend error). Every
+    git call against ``wt`` below carries ``wt``'s aliases, so any WorktreeError it raises
+    (a staging/commit failure, or a filter-enumeration failure surfaced through
+    ``_hardening_flags`` -- round-3 review finding, #420) is sanitized rather than naming
+    the worktree, which is dead by the time the caller reads the result."""
+    aliases = path_aliases(wt)
     diff = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"], timeout)
     if diff.returncode != 0:
         return "could not read live uncommitted changes; worktree based on HEAD only"
     if not diff.stdout.strip():
         return None  # clean tree; HEAD is already the live state
     apply = subprocess.run(
-        ["git", *_hardening_flags(wt, timeout), "apply", "--whitespace=nowarn", "-"],
+        [
+            "git",
+            *_hardening_flags(wt, timeout, aliases=aliases),
+            "apply",
+            "--whitespace=nowarn",
+            "-",
+        ],
         cwd=wt,
         input=diff.stdout,
         capture_output=True,
@@ -446,11 +531,10 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
     )
     if apply.returncode != 0:
         return "uncommitted changes could not be replayed; worktree based on HEAD only"
-    add = _git(wt, ["add", "-A"], timeout)
+    add = _git(wt, ["add", "-A"], timeout, aliases=aliases)
     if add.returncode != 0:
-        raise WorktreeError(
-            f"staging the baseline failed: {(redact_text(add.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"staging the baseline failed: {add.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     commit = _git(
         wt,
         [
@@ -466,14 +550,16 @@ def _seed_uncommitted(repo: str, wt: str, timeout: int) -> str | None:
             "baseline: live uncommitted state",
         ],
         timeout,
+        aliases=aliases,
     )
     if commit.returncode != 0:
-        raise WorktreeError(
-            f"committing the baseline failed: {(redact_text(commit.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"committing the baseline failed: {commit.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     # The baseline commit must leave the worktree clean; any residue means the live
     # changes were not fully captured and would leak into the agent's diff.
-    status = _git(wt, ["status", "--porcelain=v1", "--untracked-files=all"], timeout)
+    status = _git(
+        wt, ["status", "--porcelain=v1", "--untracked-files=all"], timeout, aliases=aliases
+    )
     if status.returncode != 0 or status.stdout.strip():
         raise WorktreeError("baseline commit left the worktree dirty; aborting before spend")
     return None
@@ -499,20 +585,25 @@ def capture_diff(wt: str, *, timeout: int) -> str:
     Staging first means new and deleted files appear in the diff, so the returned
     patch is a complete, git-appliable representation of the agent's work. Common
     build artifacts (``__pycache__``, ``.pyc``, caches) are excluded so the patch
-    holds only meaningful source changes."""
+    holds only meaningful source changes. Every git call carries ``wt``'s aliases, so a
+    staging/diff failure -- or a filter-enumeration failure surfaced through
+    ``_hardening_flags`` -- round-3 review finding, #420 -- is sanitized rather than naming
+    the worktree, which is dead by the time the caller reads the result."""
+    aliases = path_aliases(wt)
     pathspec = [".", *_ARTIFACT_EXCLUDES]
-    add = _git(wt, ["add", "-A", "--", *pathspec], timeout)
+    add = _git(wt, ["add", "-A", "--", *pathspec], timeout, aliases=aliases)
     if add.returncode != 0:
-        raise WorktreeError(
-            f"staging the worktree diff failed: {(redact_text(add.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"staging the worktree diff failed: {add.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     proc = _git(
-        wt, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec], timeout
+        wt,
+        ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--", *pathspec],
+        timeout,
+        aliases=aliases,
     )
     if proc.returncode != 0:
-        raise WorktreeError(
-            f"capturing the worktree diff failed: {(redact_text(proc.stderr.strip()) or '')[:200]}"
-        )
+        raw = f"capturing the worktree diff failed: {proc.stderr.strip()}"
+        raise WorktreeError((sanitize_prose(raw, aliases) or "")[:200])
     return proc.stdout
 
 
@@ -529,11 +620,28 @@ def capture_diff(wt: str, *, timeout: int) -> str:
 # both sides and was a silent no-op on every real case. On the LEFT it would mean the alias
 # is the tail of a longer path (`/other<root>/f.py`), a different file, so it is excluded.
 #
-# `.` is absent from the right-hand set deliberately: allowing it would rewrite a
-# sentence-final `<root>.` to `..`, the parent directory — more misleading than the dead
-# path it replaced. See `relativize`'s documented limitation.
+# `.` is absent from the right-hand set deliberately: allowing it as an ordinary
+# right-delimiter would rewrite a sentence-final `<root>.` to `..`, the parent directory —
+# more misleading than the dead path it replaced. That is NOT the same as leaving it
+# unmatched, though (#420 review round 3): a `.` immediately followed by a right-delimiter
+# or end of string is unambiguously the end of THIS path reference (a clause/sentence
+# boundary), never a continuation like `<root>.bak` (a genuinely different file, where the
+# `.` is followed by more path characters) — so `_replace_aliases` below matches that case
+# too, through a distinct ambiguous-suffix branch, and substitutes an unambiguous marker
+# instead of a bare `.`. Leaving it fully unmatched (the original design) let the complete
+# absolute path leak instead, which is strictly worse than the `..` ambiguity this was
+# meant to avoid, and is exactly the shape a raw git diagnostic takes
+# (`fatal: … in <wt>.`). See `relativize`'s docstring and `_AMBIGUOUS_SUFFIX_MARKER`.
 _LEFT_DELIMS = r"\s(\[{`\"'<=,;:|"
 _RIGHT_DELIMS = r"/\s)\]}`\"'<>,;:!?*|"
+
+# What an alias becomes when it is followed by the ambiguous `.` case above: unlike a bare
+# `.`, concatenating this with the literal period that follows in the source text can never
+# read as `..` (or anything else path-like), so the worktree path is removed without
+# introducing a new misleading path. Never emitted by the normal (non-ambiguous) branch,
+# which keeps using `replacement` (`.` for `relativize`, the staging placeholder for
+# `sanitize_prose`) exactly as before.
+_AMBIGUOUS_SUFFIX_MARKER = "[worktree]"
 
 
 def path_aliases(path: str) -> tuple[str, ...]:
@@ -598,9 +706,10 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
     / ``_RIGHT_DELIMS`` for why that is an allowlist rather than a denylist of path
     characters, and why ``/`` is allowed on only one side.
 
-    Known limitation: a sentence-final bare root (``... in <root>.``) is left alone,
-    because rewriting it would emit ``..`` — the parent directory, which is more
-    misleading than the dead path it replaced.
+    A sentence-final bare root (``... in <root>.``) is a special case: replacing it with a
+    bare ``.`` would emit ``..``, the parent directory, more misleading than the dead path
+    it replaced — so this one shape gets ``_AMBIGUOUS_SUFFIX_MARKER`` (``[worktree]``)
+    instead of ``.``, never a fragment of the original path either way.
 
     Aliases are sorted longest-first HERE rather than trusting the caller's order: with a
     containing alias tried second, a shorter one it contains would match first and name
@@ -613,15 +722,38 @@ def relativize(text: str | None, aliases: Iterable[str]) -> str | None:
     return _replace_aliases(text, aliases, ".")
 
 
-def _replace_aliases(text: str | None, aliases: Iterable[str], replacement: str) -> str | None:
+def _replace_aliases(
+    text: str | None,
+    aliases: Iterable[str],
+    replacement: str,
+    *,
+    ambiguous_replacement: str = _AMBIGUOUS_SUFFIX_MARKER,
+) -> str | None:
     if not text:
         return text
     usable = sorted({alias for alias in aliases if alias.strip()}, key=len, reverse=True)
     if not usable:
         return text
     alternation = "|".join(re.escape(alias) for alias in usable)
-    pattern = re.compile(rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})(?=[{_RIGHT_DELIMS}]|$)")
-    return pattern.sub(replacement, text)
+    # The lookahead has two branches: the ordinary right-delimiter set (unambiguous --
+    # `replacement` applies), and a named `ambiguous` branch for a `.` immediately followed
+    # by a right-delimiter or end of string (a clause/sentence boundary -- see
+    # `_AMBIGUOUS_SUFFIX_MARKER`; `<root>.bak`, where more path characters follow the `.`,
+    # matches NEITHER branch and stays unmatched, same as before). Both are lookaheads, so
+    # neither consumes the `.` itself -- it survives untouched in the output either way.
+    #
+    # `ambiguous_replacement` defaults to the literal marker (what `relativize` wants, since
+    # it never redacts). `sanitize_prose` overrides it with a STAGED alphanumeric stand-in
+    # instead -- substituting the bracketed marker directly here, during the staging pass,
+    # would break the labelled-value character run right at the `[`, letting an adjacent
+    # secret ship unredacted (#420 review round 4). See `_staged_ambiguous_placeholder`.
+    pattern = re.compile(
+        rf"(?<![^{_LEFT_DELIMS}])(?:{alternation})"
+        rf"(?=(?P<ambiguous>\.(?=[{_RIGHT_DELIMS}]|$))|[{_RIGHT_DELIMS}]|$)"
+    )
+    return pattern.sub(
+        lambda m: ambiguous_replacement if m.group("ambiguous") else replacement, text
+    )
 
 
 # The stand-in an alias wears while the secret redactor runs. Three properties are required,
@@ -665,6 +797,90 @@ def _staged_placeholder(text: str) -> str:
     return token
 
 
+# Sibling of `_PLACEHOLDER_PREFIX` for `_replace_aliases`'s ambiguous-suffix branch (#420
+# review round 4): that branch cannot stage behind `_AMBIGUOUS_SUFFIX_MARKER` (`[worktree]`)
+# directly during `sanitize_prose`'s redaction pass -- `[`/`]` sit outside the redactor's
+# inline-value character class, so `api_key=<root>./<16-char secret>` would stage as
+# `api_key=[worktree]./<16-char secret>`, breaking the labelled-value run right at the `[`
+# and shipping the secret tail unredacted (reopening ordering attack (b) for exactly this
+# shape). This prefix stages that branch behind an EQUALLY alphanumeric, equally
+# verified-absent token instead, carrying the same "swallowed whole or not at all"
+# guarantee as the ordinary placeholder; only the final unstaging step in `sanitize_prose`
+# tells the two branches apart, mapping survivors of this one to `_AMBIGUOUS_SUFFIX_MARKER`
+# instead of `.`.
+_AMBIGUOUS_PLACEHOLDER_PREFIX = "cicwt0ambig0"
+
+# Every character _guard_char_absent_from can hand out, in a fixed search order. Spelled out
+# literally (not `string.ascii_letters + string.digits`) so this file adds no new import for
+# it. Uppercase first: legitimate placeholder content here is always lowercase-hex-and-prefix
+# (see `_placeholder_seed`/`_PLACEHOLDER_PREFIX`/`_AMBIGUOUS_PLACEHOLDER_PREFIX`), so the
+# common case resolves on the very first candidate.
+_GUARD_CHAR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def _guard_char_absent_from(other: str) -> str:
+    """A single alphanumeric character verified absent from ``other``. Exists so
+    ``_staged_ambiguous_placeholder`` can build a token structurally incapable of
+    containing ``other`` as a substring (see there) instead of trying to fix that by
+    appending, which cannot work once ``other`` already occurs in the token. Searches the
+    full 62-character alphanumeric alphabet in a fixed order, so it terminates even in the
+    pathological case a test constructs ``other`` to contain most of it — this module's own
+    callers only ever pass a prefixed hex digest, so this returns on one of the first few
+    candidates in practice."""
+    for candidate in _GUARD_CHAR_ALPHABET:
+        if candidate not in other:
+            return candidate
+    # Every alphanumeric character appears in `other` -- unreachable through this module's
+    # own callers, only through a test deliberately constructing such a string. Fail loudly
+    # rather than loop forever with nothing left to try.
+    raise AssertionError("_guard_char_absent_from: `other` exhausts the alphanumeric alphabet")
+
+
+def _staged_ambiguous_placeholder(text: str, other: str) -> str:
+    """Sibling of ``_staged_placeholder`` for the ambiguous-suffix branch: alphanumeric,
+    longer than the redaction floor, and disjoint from BOTH ``text`` and ``other`` (the
+    ordinary placeholder already staged for this same call) in both directions — the two
+    tokens coexist in the same staged text and are unstaged by two separate literal
+    ``.replace()`` calls, so one containing the other as a substring would corrupt both.
+
+    Three termination arguments, one per ``while`` clause, because they are NOT
+    interchangeable:
+
+    - ``token in text``: ``text`` is fixed and finite, so appending a character each pass
+      eventually makes ``token`` longer than ``text`` — at most ``len(text)`` iterations.
+    - ``token in other``: same argument, bounded by ``len(other)``.
+    - ``other in token``: appending CANNOT fix this. Once ``other`` occurs anywhere in
+      ``token``, every further extension only adds characters AFTER the existing (already
+      matching) content, so the match survives no matter how long ``token`` grows — a loop
+      that only appends here never terminates (#420 review round 5's NEW-2 finding). Fixed
+      structurally instead of loop-repaired: ``token`` is rebuilt from a single character
+      chosen to be absent from ``other`` (``_guard_char_absent_from``) and repeated. A
+      string built entirely from a character that ``other`` does not itself contain CANNOT
+      have ``other`` as a substring — a property of the CONTENT, not the length — so this
+      clause cannot re-trigger for the rebuilt token, and any further extension (for the
+      ``token in text`` clause) keeps appending that same guard character to preserve the
+      guarantee rather than reverting to ``"0"``.
+
+    ``other`` must be non-empty: the empty string is a substring of every string, which
+    would make the ``other in token`` clause permanently, unfixably true no matter what
+    ``token`` becomes — ``_staged_placeholder``'s own output is never empty, so this is a
+    caller-contract check on a case that cannot arise from this module's own callers, not a
+    real-world scenario."""
+    if not other:
+        raise ValueError("_staged_ambiguous_placeholder needs a non-empty `other`")
+    token = _AMBIGUOUS_PLACEHOLDER_PREFIX + _placeholder_seed(text)
+    guard: str | None = None
+    while token in text or token in other or other in token:
+        if guard is None and other in token:
+            guard = _guard_char_absent_from(other)
+            token = guard * max(len(token), 32)
+        elif guard is not None:
+            token += guard
+        else:
+            token += "0"
+    return token
+
+
 def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
     """Relativize worktree paths AND redact secrets — the one order safe for both (#412).
 
@@ -684,7 +900,12 @@ def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
     So each alias is first staged behind a token from ``_staged_placeholder`` — which the
     redactor can neither partially consume nor confuse with pre-existing text (see there for
     all three required properties); redaction runs against that; then any token that survived
-    — i.e. was not part of a redacted secret — becomes ``.``.
+    — i.e. was not part of a redacted secret — becomes ``.``. The sentence-final ambiguous
+    case (see ``_replace_aliases``) is staged behind a SEPARATE token
+    (``_staged_ambiguous_placeholder``) with the same properties, so it carries the same
+    redaction guarantee; a survivor there becomes ``_AMBIGUOUS_SUFFIX_MARKER`` instead of
+    ``.`` — never the bracketed marker directly, which would break the labelled-value run
+    the redactor needs to see (#420 review round 4).
 
     Redaction remains best-effort by contract (see ``redaction``): an adversarial model can
     always emit an unlabelled secret that no pattern matches. This closes the interaction
@@ -692,11 +913,16 @@ def sanitize_prose(text: str | None, aliases: Iterable[str]) -> str | None:
     if not text:
         return text
     placeholder = _staged_placeholder(text)
-    staged = _replace_aliases(text, aliases, placeholder)
+    ambiguous_placeholder = _staged_ambiguous_placeholder(text, placeholder)
+    staged = _replace_aliases(
+        text, aliases, placeholder, ambiguous_replacement=ambiguous_placeholder
+    )
     redacted = redact_text(staged)
     if not redacted:
         return redacted
-    return redacted.replace(placeholder, ".")
+    return redacted.replace(placeholder, ".").replace(
+        ambiguous_placeholder, _AMBIGUOUS_SUFFIX_MARKER
+    )
 
 
 def remove(repo: str, worktree: Worktree, *, timeout: int) -> None:

@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-67"
+FINGERPRINT = "codex-in-claude/0.1/schema-68"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -676,7 +676,26 @@ class Meta(BaseModel):
     base: str | None = None
     commit: str | None = None
     paths: list[str] | None = None
-    timeout_seconds: int
+    timeout_seconds: int = Field(
+        description=(
+            "Deadline in seconds for the run this envelope describes; which deadline "
+            "depends on the envelope. A synchronous call that runs Codex (codex_consult, "
+            "codex_review_changes, codex_delegate) reports that call's own resolved "
+            "deadline, post-clamp (10-600s; a value outside that range is coerced to the "
+            "nearest bound, not rejected). A background job — a *_async call's job-start "
+            "handle, or a later codex_job_result/codex_job_consume_result fetch of that "
+            "job's ORIGINATING run — reports the job's own deadline instead: the "
+            "job-lifecycle ceiling (config.job_max_seconds(), default 1800, clamped "
+            "60-7200), since a background job runs to that ceiling, not the sync clamp. "
+            "A codex_job_* call's own handler-generated lifecycle error (job_not_found "
+            "and its siblings) reports that same ceiling, present even when no job was "
+            "resolved (job_not_found, where meta.job_kind is omitted from the envelope). "
+            "Call-boundary argument validation (invalid_arguments) and an unexpected "
+            "internal_error — on any tool, not only codex_job_* — instead report the "
+            "server's configured sync deadline, still post-clamp; NEITHER is tied to any "
+            "run or resolved job."
+        )
+    )
     elapsed_ms: int
     command_exit_code: int | None = None
     session_id: str | None = None  # Codex session id, when one was emitted
