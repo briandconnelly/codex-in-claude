@@ -1671,6 +1671,37 @@ async def test_dry_run_preview(monkeypatch, clean_env, tmp_path):
     assert res["redacted_paths_count"] == 1
 
 
+async def test_dry_run_coverage_redaction_matches_the_gathered_diff_split(
+    monkeypatch, clean_env, tmp_path
+):
+    # #433 dry-run parity: codex_dry_run and codex_review_changes both build their
+    # `coverage` via orchestration.build_coverage(scope=scope, diff=diff) on the exact
+    # same gathered DiffResult (orchestration.py's run_review calls the identical
+    # function server.py's codex_dry_run does), so the free preview discloses the same
+    # withheld/masked split a paid review would, with no separate code path to drift.
+    monkeypatch.setattr(
+        gitdiff,
+        "gather_diff",
+        lambda *a, **k: gitdiff.DiffResult(
+            text="diff --git a/app.py b/app.py\n+x\ndiff --git a/.env b/.env\n+y",
+            summary=gitdiff.DiffSummary(2, 2, 0),
+            redacted_paths=["app.py", ".env"],
+            withheld_paths=[".env"],
+            masked_paths=["app.py"],
+            inline_masks=1,
+        ),
+    )
+    res = await server.codex_dry_run(scope="working_tree", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["redacted_paths_count"] == 2
+    redaction = res["coverage"]["redaction"]
+    assert redaction == {
+        "withheld_paths": [".env"],
+        "masked_paths": ["app.py"],
+        "inline_masks": 1,
+    }
+
+
 async def test_dry_run_empty_diff_reports_no_model_call_and_zero_bytes(
     monkeypatch, clean_env, tmp_path
 ):
@@ -2338,7 +2369,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-74"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-75"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6266,7 +6297,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-74")
+    assert result["fingerprint"].endswith("schema-75")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

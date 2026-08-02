@@ -108,6 +108,15 @@ class DiffResult:
     truncated: bool = False
     truncation_hint: str | None = None
     redacted_paths: list[str] = field(default_factory=list)
+    # #433: the same union `redacted_paths` carries, split by what happened to each
+    # file. `withheld_paths`: hunks dropped whole (the file path itself looked
+    # secret-bearing). `masked_paths`: sent, but with >=1 inline value replaced.
+    # Disjoint, each in its own encounter order. `inline_masks`: total emitted
+    # replacement markers across `masked_paths` (see `DiffRedactor`/
+    # `_redact_secret_values` for why that differs from a raw candidate-match count).
+    withheld_paths: list[str] = field(default_factory=list)
+    masked_paths: list[str] = field(default_factory=list)
+    inline_masks: int = 0
     diff_bytes: int = 0
     # Untracked-file coverage (#319). Counts scoped to the review's pathspec.
     # `untracked_detected` is None for non-working_tree scopes, where untracked files
@@ -771,7 +780,24 @@ class _BoundedDiffAccumulator:
         return max(_MAX_DIFF_LINE_BYTES, self._max_bytes)
 
     def feed(self, logical_line: str) -> None:
-        for out in self._redactor.feed(logical_line):
+        # #433 review C2: the redaction disclosure (withheld_paths/masked_paths/
+        # inline_masks) must describe only what's actually RETAINED in `text()`, not
+        # the full stream — `masked_paths` documents files SENT with a value replaced,
+        # so a mask (or a withhold) whose output line(s) land in the dropped tail past
+        # the byte cap must not be recorded. `track=False` computes this call's output
+        # without applying its disclosure event; `commit_pending()` is called only once
+        # EVERY output line this call produced is confirmed to have fit in `_head` —
+        # `was_already_truncated` catches a call that starts already past the cap
+        # (nothing it produces can ever land), and `overflowed_this_call` catches an
+        # event whose OWN output line(s) are what first crosses the cap (a header line
+        # that fits followed by a marker line that doesn't, say) — both must suppress
+        # the commit, not just the obviously-post-cap case. Still exactly one pass:
+        # `overflowed_this_call` is set on the FIRST line within this call that
+        # doesn't fit, at which point `self.truncated` also flips, so later lines in
+        # the same call take the same branch without re-setting it.
+        was_already_truncated = self.truncated
+        overflowed_this_call = False
+        for out in self._redactor.feed(logical_line, track=False):
             n = len(out.encode("utf-8", "replace"))
             self._content_bytes += n
             self._line_count += 1
@@ -781,11 +807,27 @@ class _BoundedDiffAccumulator:
                 self._head.append(out)
                 self._stored += sep + n
             else:
+                if not self.truncated:
+                    overflowed_this_call = True
                 self.truncated = True
+        if not was_already_truncated and not overflowed_this_call:
+            self._redactor.commit_pending()
 
     @property
     def redacted_paths(self) -> list[str]:
         return self._redactor.redacted
+
+    @property
+    def withheld_paths(self) -> list[str]:
+        return self._redactor.withheld_paths
+
+    @property
+    def masked_paths(self) -> list[str]:
+        return self._redactor.masked_paths
+
+    @property
+    def inline_masks(self) -> int:
+        return self._redactor.inline_masks
 
     @property
     def diff_bytes(self) -> int:
@@ -1126,6 +1168,9 @@ def gather_diff(
         truncated=truncated,
         truncation_hint=hint,
         redacted_paths=acc.redacted_paths,
+        withheld_paths=acc.withheld_paths,
+        masked_paths=acc.masked_paths,
+        inline_masks=acc.inline_masks,
         diff_bytes=diff_bytes,
         untracked_detected=untracked_detected,
         untracked_included=untracked_included,

@@ -130,6 +130,12 @@ nearly every redaction and stop being a useful signal. This is **best-effort
 defense-in-depth, not a guarantee**: it covers content the plugin itself surfaces, not whatever Codex
 may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
 
+For a gathered diff specifically, `codex_review_changes`/`codex_dry_run`'s `coverage.redaction`
+(present whenever the `redacted` omission reason fires, `null` otherwise) breaks the redaction down
+further: `withheld_paths` names files whose hunk was dropped whole, `masked_paths` names files sent
+with inline values replaced, and `inline_masks` counts the markers actually emitted. `meta.redacted_paths`
+stays the flat, backward-compatible union of both path lists.
+
 ### Detail levels
 
 `codex_consult`, `codex_review_changes`, `codex_delegate`, and async result retrieval

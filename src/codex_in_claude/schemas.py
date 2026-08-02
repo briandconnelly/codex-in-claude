@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-74"
+FINGERPRINT = "codex-in-claude/0.1/schema-75"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -105,7 +105,16 @@ FINGERPRINT = "codex-in-claude/0.1/schema-74"
 # That does NOT move this integer: the field is already known at format 7, so a format-7 reader
 # accepts it — only an UNKNOWN key would trip a closed schema. The representative envelope above
 # still leaves it null, so the `serialized` view is unchanged and the snapshot stays green.
-RESULT_FORMAT: int = 7
+# #433 bumped 7->8: `Coverage` gained `redaction: RedactionSummary | None = None`. The field
+# itself defaults to None (see its own comment on `Coverage.redaction`) so an OLDER stored
+# Coverage without the key still replays — that is exactly why the default is required, not
+# optional. What moves the integer is the REPRESENTATIVE `review_success` envelope in
+# result_format_snapshot.py, which the null-fixtures convention (#400) requires to populate
+# every producible optional somewhere so its future deletion is visible: it now carries a
+# non-null, non-empty RedactionSummary, so the `serialized` view's `review_success` entry
+# gains the key WITH a populated value — a real shape addition to what a replaying reader
+# must be able to parse, not merely a schema-only change.
+RESULT_FORMAT: int = 8
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -791,24 +800,76 @@ CoverageStatus = Literal["complete", "partial"]
 #   redacted                   — secret redaction hid content from the model. EITHER a
 #                                secret-looking file's whole hunk was dropped (the model saw
 #                                a marker instead of its content) OR a secret-looking value
-#                                inside an otherwise-sent file was masked inline. The two are
-#                                not distinguished here — `meta.redacted_paths` names the
-#                                files either way (#421).
+#                                inside an otherwise-sent file was masked inline.
+#                                `coverage.redaction` (when present) distinguishes the two;
+#                                `meta.redacted_paths` names the files either way regardless
+#                                (#421, #433).
 CoverageOmissionReason = Literal[
     "untracked_omitted", "tree_changed_during_gather", "truncated", "redacted"
 ]
 
 
+class RedactionSummary(BaseModel):
+    """Structured breakdown of the `redacted` omission reason (#433): which files had
+    their hunk dropped whole vs which were sent with inline values masked, scoped to
+    content that actually reached the model. Both path lists are encounter order and
+    mutually exclusive (withholding is dominant: a later mask on an already-withheld
+    path counts nowhere — see `DiffRedactor`). `withheld_paths` union `masked_paths`
+    can be a STRICT SUBSET of `meta.redacted_paths`: that flat union describes the
+    whole gathered diff with no notion of what a byte cap later dropped, and stays the
+    single backward-compatible list it always was (#433 review C1/C2)."""
+
+    model_config = ConfigDict(extra="forbid")
+    withheld_paths: list[str] = Field(
+        default_factory=list,
+        description="Files whose hunk was dropped whole (path looked secret-bearing, "
+        "e.g. `.env`). Encounter order.",
+    )
+    masked_paths: list[str] = Field(
+        default_factory=list,
+        description="Files sent with >=1 inline secret-looking value replaced by a "
+        "marker. Encounter order.",
+    )
+    inline_masks: int = Field(
+        default=0,
+        ge=0,
+        description="Emitted replacement markers, not raw pattern matches — "
+        "overlapping candidates merge into one marker first. >= len(masked_paths); "
+        "zero iff masked_paths is empty.",
+    )
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> RedactionSummary:
+        # Every real inline_masks increment (DiffRedactor.commit_pending's "mask"
+        # branch) also adds its path to masked_paths (deduped) — so the two can never
+        # disagree: a non-empty masked_paths needs at least one mask per listed path,
+        # and an empty masked_paths can never carry a nonzero count (#433 review C4).
+        if self.masked_paths:
+            if self.inline_masks < len(self.masked_paths):
+                raise ValueError(
+                    "inline_masks must be >= len(masked_paths) when masked_paths is non-empty"
+                )
+        elif self.inline_masks:
+            raise ValueError("inline_masks must be 0 when masked_paths is empty")
+        return self
+
+
 class Coverage(BaseModel):
     """What the review actually covered — the disclosure that makes `verdict`
     interpretable (#319). Untracked counts are pathspec-scoped and null outside
-    working_tree scope; `detected == included + omitted` where applicable."""
+    working_tree scope; `detected == included + omitted` where applicable.
+    `redaction` breaks down the `redacted` omission reason when it fired; null
+    otherwise, including on every Coverage persisted before this field existed."""
 
     model_config = ConfigDict(extra="forbid")
     status: CoverageStatus
     untracked_files_detected: int | None = None
     untracked_files_included: int | None = None
     untracked_files_omitted: int | None = None
+    # `= None` is load-bearing (#433): without an explicit default pydantic v2 makes
+    # this field REQUIRED, and every Coverage persisted before this field existed —
+    # replayed from a stored result.json — would then fail model_validate.
+    redaction: RedactionSummary | None = None
     omission_reasons: list[CoverageOmissionReason] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -828,6 +889,13 @@ class Coverage(BaseModel):
             and detected != included + omitted
         ):
             raise ValueError("untracked_files_detected must equal included + omitted")
+        # #433 review F1: `redaction` and the `redacted` omission reason are two views
+        # of the SAME fact (build_coverage derives both from one predicate — see its own
+        # comment), and the model must reject the case a producer disagreeing about
+        # them would otherwise be able to construct: a populated disclosure for a
+        # reason that never fired.
+        if self.redaction is not None and "redacted" not in self.omission_reasons:
+            raise ValueError("coverage.redaction requires 'redacted' in omission_reasons")
         return self
 
 

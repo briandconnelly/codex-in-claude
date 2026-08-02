@@ -1,5 +1,5 @@
 {
-  "result_format": 7,
+  "result_format": 8,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -2638,6 +2638,17 @@
               "title": "Omission Reasons",
               "type": "array"
             },
+            "redaction": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RedactionSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "status": {
               "enum": [
                 "complete",
@@ -3343,6 +3354,33 @@
           "title": "RawResponse",
           "type": "object"
         },
+        "RedactionSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "inline_masks": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Inline Masks",
+              "type": "integer"
+            },
+            "masked_paths": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Masked Paths",
+              "type": "array"
+            },
+            "withheld_paths": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Withheld Paths",
+              "type": "array"
+            }
+          },
+          "title": "RedactionSummary",
+          "type": "object"
+        },
         "Usage": {
           "additionalProperties": false,
           "properties": {
@@ -3622,8 +3660,19 @@
       "assumptions": [],
       "confidence": "medium",
       "coverage": {
-        "omission_reasons": [],
-        "status": "complete",
+        "omission_reasons": [
+          "redacted"
+        ],
+        "redaction": {
+          "inline_masks": 2,
+          "masked_paths": [
+            "src/app.py"
+          ],
+          "withheld_paths": [
+            ".env"
+          ]
+        },
+        "status": "partial",
         "untracked_files_detected": 0,
         "untracked_files_included": 0,
         "untracked_files_omitted": 0

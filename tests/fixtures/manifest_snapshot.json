@@ -904,7 +904,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-74",
+            "default": "codex-in-claude/0.1/schema-75",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1462,7 +1462,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-74",
+                "default": "codex-in-claude/0.1/schema-75",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2586,7 +2586,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-74",
+            "default": "codex-in-claude/0.1/schema-75",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3269,7 +3269,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-74",
+            "default": "codex-in-claude/0.1/schema-75",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -5251,6 +5251,35 @@
                     },
                     "type": "array"
                   },
+                  "redaction": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "inline_masks": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "masked_paths": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "withheld_paths": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "status": {
                     "enum": [
                       "complete",
@@ -6794,6 +6823,35 @@
                       "type": "string"
                     },
                     "type": "array"
+                  },
+                  "redaction": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "inline_masks": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "masked_paths": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "withheld_paths": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "status": {
                     "enum": [

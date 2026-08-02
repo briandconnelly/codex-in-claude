@@ -79,6 +79,7 @@
         "confidence": "medium",
         "coverage": {
           "omission_reasons": [],
+          "redaction": null,
           "status": "complete",
           "untracked_files_detected": 0,
           "untracked_files_included": 0,
@@ -143,6 +144,7 @@
           "omission_reasons": [
             "truncated"
           ],
+          "redaction": null,
           "status": "partial",
           "untracked_files_detected": null,
           "untracked_files_included": null,
@@ -279,6 +281,7 @@
         "confidence": "medium",
         "coverage": {
           "omission_reasons": [],
+          "redaction": null,
           "status": "complete",
           "untracked_files_detected": 0,
           "untracked_files_included": 0,
@@ -343,6 +346,7 @@
           "omission_reasons": [
             "truncated"
           ],
+          "redaction": null,
           "status": "partial",
           "untracked_files_detected": null,
           "untracked_files_included": null,

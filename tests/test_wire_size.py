@@ -100,7 +100,22 @@ from codex_in_claude.server import mcp
 # the previewed PAID tool's own `_async` counterpart verbatim instead, a longer but
 # genuinely more correct disclosure, not flab): 86,749 bytes (+331 B) — over budget;
 # budget raised to the next 500 above the measured value.
-TOOLS_LIST_BYTE_BUDGET = 87_000
+# Measured again 2026-08-02 (#433: `Coverage` gained `redaction: RedactionSummary |
+# None`, a new nested object with three properties, on both `codex_review_changes`'
+# and `codex_dry_run`'s outputSchema). Field descriptions on RedactionSummary are NOT
+# in `_KEPT_DESCRIPTIONS`, so they cost nothing here — the whole delta is JSON Schema
+# STRUCTURE: the object is INLINED directly into `coverage.redaction` (no `$ref`/`$defs`
+# on the wire — verified against the live `tools/list` payload; `$defs` exists only in
+# the result-format snapshot's separate pydantic-schema view), so the anyOf-null
+# wrapper plus three typed properties are duplicated in full across both tools'
+# outputSchema: 87,257 bytes (+508 B) — over budget; budget raised to the next 500 above
+# the measured value.
+# Measured again 2026-08-02 (#433 review C4: `RedactionSummary.inline_masks` gained a
+# `Field(ge=0)` constraint — a validated invariant, not description prose, so it DOES
+# reach the wire as a `"minimum":0` property, duplicated across the same two tools'
+# outputSchema as the row above): 87,281 bytes (+24 B) — still within budget, no
+# further change.
+TOOLS_LIST_BYTE_BUDGET = 87_500
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -112,7 +127,7 @@ TOOLS_LIST_BYTE_BUDGET = 87_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 86_749
+TOOLS_LIST_BYTE_TARGET = 87_281
 
 
 def _budget_failure_message(measured: int) -> str:
