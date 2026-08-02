@@ -7,6 +7,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **`initialize` advertised the `io.modelcontextprotocol/ui` extension (MCP Apps) even though this
+  server implements no UI/Apps code** (#424). FastMCP's `LowLevelServer.get_capabilities`
+  unconditionally injects `UI_EXTENSION_ID` into `ServerCapabilities.model_extra`; a host probing
+  for MCP Apps support would find the capability advertised but nothing behind it. The existing
+  `get_capabilities` monkeypatch seam — already used to null out the unused `prompts` capability
+  (#F5-audit) — now also nulls `extensions`, and is renamed
+  `_get_capabilities_without_prompts_or_extensions` to reflect both suppressions. Removing a
+  falsely-advertised capability is a correction, not a removal of implemented behavior — nothing a
+  client could actually use is taken away — so this bumps `FINGERPRINT` (`schema-69` → `schema-70`)
+  but is **not breaking**; `RESULT_FORMAT` is unchanged (`initialize` is not persisted).
 - **The three sync tools' Progress & recovery paragraphs undersold job-record recovery**
   (#414). `codex_consult`/`codex_review_changes`/`codex_delegate` already recorded every sync
   call as a job, but the paragraph's recovery sentence named only `codex_job_list`→

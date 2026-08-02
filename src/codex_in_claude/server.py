@@ -243,16 +243,25 @@ mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=_
 # null out prompts only — never remove shared request handlers. Guarded by
 # test_initialize_does_not_advertise_prompts, so a FastMCP upgrade that changes this
 # seam fails loudly.
+#
+# #424 (audit): FastMCP's LowLevelServer.get_capabilities also unconditionally
+# advertises the io.modelcontextprotocol/ui extension (MCP Apps) — it lands in
+# ServerCapabilities.model_extra since that model is extra="allow". This server has
+# no UI/Apps implementation, so null out extensions too. Today ui is the only
+# extension FastMCP injects, so nulling the whole key is equivalent to stripping it;
+# if a legitimate extension is ever added, this must change to strip only the ui key
+# and keep the rest. Guarded by test_initialize_does_not_advertise_the_ui_extension,
+# so a FastMCP upgrade that changes this seam fails loudly.
 _lowlevel_server = mcp._mcp_server
 _orig_get_capabilities = _lowlevel_server.get_capabilities
 
 
-def _get_capabilities_without_prompts(*args: Any, **kwargs: Any) -> Any:
+def _get_capabilities_without_prompts_or_extensions(*args: Any, **kwargs: Any) -> Any:
     caps = _orig_get_capabilities(*args, **kwargs)
-    return caps.model_copy(update={"prompts": None})
+    return caps.model_copy(update={"prompts": None, "extensions": None})
 
 
-_lowlevel_server.get_capabilities = _get_capabilities_without_prompts  # ty: ignore[invalid-assignment]
+_lowlevel_server.get_capabilities = _get_capabilities_without_prompts_or_extensions  # ty: ignore[invalid-assignment]
 
 # Pydantic v2 (which FastMCP uses to generate tool input schemas) targets this dialect.
 # Sourced from the one shared constant so the advertised input dialect can never drift

@@ -2235,7 +2235,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-69"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-70"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4527,6 +4527,24 @@ async def test_initialize_does_not_advertise_prompts(clean_env):
     assert "prompts" not in wire
 
 
+# --- initialize: no unimplemented ui extension (#424) -------------------------
+async def test_initialize_does_not_advertise_the_ui_extension(clean_env):
+    """FastMCP's LowLevelServer.get_capabilities unconditionally advertises the
+    io.modelcontextprotocol/ui extension (MCP Apps), but this server implements no
+    UI/Apps code. Advertising it is a false capability claim (#424)."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        caps = client.initialize_result.capabilities
+    assert caps.model_extra is None or "extensions" not in caps.model_extra
+    assert caps.tools is not None  # the override must not clobber siblings
+    assert caps.resources is not None
+    # Same reasoning as the prompts guard above: confirm the key is actually absent
+    # from the wire representation, not just parsed back to None/omitted.
+    wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert "extensions" not in wire
+
+
 # --- advertised error codes must be MCP-reachable (#92) -----------------------
 # A code whose only production path is an out-of-enum value on a Literal-typed param
 # is rejected by FastMCP validation before the handler runs, so a real MCP caller can
@@ -6090,7 +6108,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-69")
+    assert result["fingerprint"].endswith("schema-70")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

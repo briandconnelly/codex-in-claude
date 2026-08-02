@@ -896,7 +896,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-69",
+            "default": "codex-in-claude/0.1/schema-70",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1448,7 +1448,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-69",
+                "default": "codex-in-claude/0.1/schema-70",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2083,9 +2083,6 @@
   "initialize": {
     "capabilities": {
       "experimental": {},
-      "extensions": {
-        "io.modelcontextprotocol/ui": {}
-      },
       "logging": {},
       "resources": {
         "listChanged": true,
@@ -2575,7 +2572,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-69",
+            "default": "codex-in-claude/0.1/schema-70",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3258,7 +3255,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-69",
+            "default": "codex-in-claude/0.1/schema-70",
             "title": "Fingerprint",
             "type": "string"
           },
