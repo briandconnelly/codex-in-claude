@@ -159,6 +159,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Tracked Codex version bumped to `0.146`.** `SUPPORTED_VERSIONS` now tracks `(0, 146)`; a
+  `0.145` CLI still runs and now warns as untracked (the gate is advisory and never blocks).
+  `docs/UPGRADING-CODEX.md` was run end to end against `codex-cli 0.146.0`, A/B'd against a
+  side-by-side `0.145.0`, and required no code change: `codex`/`exec`/`review`/`exec review` help
+  text is byte-identical, all eleven `ALWAYS_SEND_FLAGS` and the three sandbox values are present,
+  the drift/auth signatures still match observed output, `KNOWN_MODEL_SLUGS` is unchanged, and the
+  live integration suite passes. Semantics were re-verified rather than assumed: `read-only` still
+  blocks writes, `workspace-write` still allows in-workspace writes while blocking network egress,
+  `--output-last-message` still receives the final message, `-c model_reasoning_effort` is still
+  applied (the backend rejection still carries both bracketed markers), and structured output still
+  conforms. `docs/codex-help/0.146.0/` carries fresh snapshots. Four upstream deltas were reviewed
+  and none is consumed: `codex app-server --help` gained `--code-mode-host`; two new v2 app-server
+  messages appeared (`ExternalAgentConfigImportHistoryRecord{Params,Response}`); the consumed
+  schemas changed only additively (an optional `providerId` this plugin does not send, and an
+  `ent26` value added to `PlanType`, which is read as a free-form capped string rather than an
+  enum); and `codex features list` gained `in_app_updates` (stable, default-on),
+  `deferred_tool_world_state`, `guardianv2`, and `mcp_2026_07_28` (all under development,
+  default-off), while `item_ids` moved from under-development to removed-and-always-on — verified
+  by A/B to be upstream bookkeeping with no observable JSONL change, since `item.id` was already
+  emitted by `0.145.0`. `remote_plugin` remains a known, default-on feature, so the
+  `--disable remote_plugin` isolation guarantee still applies and still fails closed (an unknown
+  feature name still prints `Unknown feature flag`). No agent-visible surface change, so no
+  `FINGERPRINT` or `RESULT_FORMAT` bump.
+
 - **The skills-discovery disclosure now reads identically everywhere it appears** (#427). Every
   egress-caveat prose site — the server instructions, the `codex_status` caveat, the six
   `ToolCapability.returns` clauses, `codex_capabilities`' `negative_scope`, and the six egress
@@ -200,6 +224,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   FULL-exclusion check alone would miss — pinning `_REQUIRED_GUARANTEES`' deliberate subset.
 
 ### Fixed
+
+- **`COMPATIBILITY.md` understated what auto-loads into Codex's context.** The implicit-context
+  observation table recorded that an `AGENTS.md` *above* the git root is **not** loaded. Re-probing
+  the previous `0.145.0` binary alongside `0.146.0` shows it **is**, on both — so this corrects the
+  earlier observation rather than recording a `0.146` change, and it corrects in the unsafe
+  direction. A negative control confirms it is real rather than model confabulation: removing the
+  parent `AGENTS.md` makes its codeword disappear from the answer while the project one remains.
+  Documentation only; the plugin's agent-visible egress caveat still says "the resolved workspace's
+  `AGENTS.md`" and so remains narrower than observed behavior — widening that published text is
+  tracked separately because it carries its own `FINGERPRINT` bump.
 
 - **An ordinary URL whose query or fragment carries an `@` is no longer masked as
   userinfo** (#442). The named-username connection-string matcher had TWO independent
