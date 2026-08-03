@@ -6,7 +6,7 @@ incorporating one takes the lockstep procedure in
 [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md), not a single edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.145.0`.
+Verified against `codex-cli 0.146.0`.
 
 ## Platform support
 
@@ -63,7 +63,7 @@ Two flows reach the `app-server` surface: `codex_transfer` (transcript import) a
 rate-limit read (`account/rateLimits/read`, added for #321 when codex 0.144 moved quota off the
 `codex exec` stream). Both are quarantined the same way: the surface is experimental upstream, so
 every assumption lives in `cli_contract.py` and `appserver.py`, neither call spends model tokens, and
-no paid call depends on either. The rate-limit read verifies against **codex-cli 0.145.0** (probe:
+no paid call depends on either. The rate-limit read verifies against **codex-cli 0.146.0** (probe:
 drive `codex app-server` and confirm `account/rateLimits/read` returns a quota block; an integration
 test does this live). See "Session transfer" below for the import flow.
 
@@ -119,9 +119,9 @@ skill's body loads when the skill is selected):
 
 It needs no tool-directed read, and every model-bearing call in this plugin runs `codex exec`, so
 that content can reach OpenAI even when the caller's prompt never mentions those files. Verified
-empirically against codex-cli 0.145.0 (2026-07-21, issues #300 and #358) — including an A/B against
-0.144.1, which behaved identically despite 0.145 shipping the new default-on `skill_search` feature,
-so the user-global discovery is pre-existing rather than new. The behavior is invisible in
+empirically against codex-cli 0.146.0 (2026-08-02, issues #300 and #358) — including an A/B against
+0.145.0, whose presence matrix was identical, so the user-global discovery is pre-existing rather
+than new. The behavior is invisible in
 `codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
 upstream changes to it. Upstream docs:
 [AGENTS guidance](https://developers.openai.com/codex/concepts/customization#agents-guidance) and
@@ -184,15 +184,26 @@ either positive control comes back false, record nothing from that run: fix the 
 And read a difference conservatively — the backend model is an uncontrolled variable, so a change is
 *associated* with the binary, not proven caused by it. Reproduce it before concluding.
 
-Observed under codex-cli 0.145.0 with the flag set above (observations, not guarantees — re-run the
-probe rather than assuming they still hold):
+Observed under codex-cli 0.146.0 with the flag set above, A/B'd against 0.145.0 with an identical
+presence matrix (observations, not guarantees — re-run the probe rather than assuming they still
+hold):
 
 | Question | Observed |
 |---|---|
 | `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes**, body content reached the model |
 | Project `.claude/skills/` discovered? | **No** |
-| Parent-directory `AGENTS.md` above the git root loaded? | **No** (probed with `--cd` == git root; the cwd ≠ root case was not disambiguated) |
+| Parent-directory `AGENTS.md` above the git root loaded? | **Yes** (probed with `--cd` == git root; see the correction below) |
 | `project_doc_max_bytes=0` fully disables loading? | **Not verified — do not assume** |
+
+**Correction (2026-08-02).** The 0.145.0 run recorded that third row as **No**. Re-probing the same
+0.145.0 binary alongside 0.146.0 shows **Yes** on both, so this is a correction to the earlier
+observation rather than a 0.146 change — and it corrects in the *unsafe* direction, because it means
+an `AGENTS.md` **above** the resolved workspace also reaches the model. It is not model
+confabulation: with the parent `AGENTS.md` removed, its codeword disappears from the answer while
+the project one remains, so the file is genuinely loaded. The plugin's agent-visible egress caveat
+still describes only "the resolved workspace's `AGENTS.md`" and so understates this; widening that
+disclosure is tracked separately (it changes published text, so it carries its own `FINGERPRINT`
+bump).
 
 ## Flag classes
 
@@ -205,8 +216,8 @@ probe rather than assuming they still hold):
 
 ## Reasoning-effort control (`model_reasoning_effort`, #309)
 
-`codex exec` 0.145.0 has no dedicated reasoning-effort flag (verified against
-`codex exec --help`, 2026-07-21 — byte-identical to 0.144.1's), so the per-call
+`codex exec` 0.146.0 has no dedicated reasoning-effort flag (verified against
+`codex exec --help`, 2026-08-02 — byte-identical to 0.145.0's), so the per-call
 `reasoning_effort` parameter and
 `CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
 `-c model_reasoning_effort="<value>"`, with the value **TOML-string-encoded** (JSON string syntax,
@@ -320,10 +331,11 @@ so an event-schema change degrades metadata rather than breaking a run.
 `Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
 labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
 every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
-`appserver.py`. Verified against `codex-cli 0.145.0` via `codex app-server generate-json-schema --out <DIR>`.
-The 0.144.1 → 0.145.0 schema diff is additive only for the consumed surface (an optional
-`migrationSource`, a `MEMORY` item type, an optional `memory` details array, an optional
-`subErrorType` on failures), so nothing this plugin sends or reads changed.
+`appserver.py`. Verified against `codex-cli 0.146.0` via `codex app-server generate-json-schema --out <DIR>`.
+The 0.145.0 → 0.146.0 schema diff is additive only for the consumed surface (an optional
+`providerId` on the import params, which this plugin does not send, and an `ent26` value added to
+the `PlanType` enum, read as a free-form capped string rather than an enum), so nothing this
+plugin sends or reads changed.
 
 The flow: `initialize` (with `capabilities.experimentalApi=true`) → `initialized` notification → one
 `externalAgentConfig/import` request carrying a single `SESSIONS` migration item → wait for the
