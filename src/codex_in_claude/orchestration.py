@@ -92,7 +92,13 @@ def build_coverage(*, scope: str, diff: DiffResult) -> Coverage:
     #     enforces the field⇒reason direction only, never the converse — and this is
     #     exactly that case: the reason can fire on the legacy signal alone while the
     #     field stays `None`.
-    redacted_via_split = bool(diff.withheld_paths or diff.masked_paths)
+    # `inline_masks` is part of the split-field signal too (#433 Copilot review of
+    # #470, comment 4): a synthetic DiffResult with a nonzero count but empty
+    # withheld_paths/masked_paths must not be silently treated as unredacted — it
+    # should instead flow into RedactionSummary construction below and fail loudly
+    # via that model's own iff invariant, rather than this predicate quietly
+    # dropping the count on the floor.
+    redacted_via_split = bool(diff.withheld_paths or diff.masked_paths or diff.inline_masks)
     redacted_something = bool(diff.redacted_paths) or redacted_via_split
     redaction = (
         RedactionSummary(

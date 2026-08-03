@@ -241,6 +241,23 @@ def test_coverage_legacy_union_only_still_trips_the_redacted_reason():
     assert cov.redaction is None
 
 
+def test_coverage_synthetic_inline_masks_without_masked_paths_fails_loudly():
+    # #433 Copilot review of #470 (comment 4): `redacted_via_split` ignored
+    # `diff.inline_masks` entirely — a synthetic DiffResult with `inline_masks > 0`
+    # but empty `masked_paths`/`withheld_paths`/`redacted_paths` was silently treated
+    # as NOT redacted at all (status="complete", a false-complete), since neither
+    # predicate noticed the nonzero count. The predicate now includes `inline_masks`,
+    # so this inconsistent shape flows into `RedactionSummary` construction and fails
+    # LOUDLY via its own `iff` invariant (#433 review C4) instead of being silently
+    # dropped — never producible by a real `gather_diff`, but not something
+    # `build_coverage` may quietly paper over either.
+    with pytest.raises(ValidationError):
+        o.build_coverage(
+            scope="working_tree",
+            diff=_diff(untracked_detected=0, untracked_included=0, inline_masks=1),
+        )
+
+
 def test_coverage_redaction_reports_one_withheld_file():
     # (a) a diff with one withheld file — no inline masks at all.
     cov = o.build_coverage(
@@ -343,11 +360,22 @@ def test_redaction_summary_rejects_inline_masks_with_no_masked_paths():
         RedactionSummary(masked_paths=[], inline_masks=1)
 
 
+def test_redaction_summary_rejects_a_path_in_both_withheld_and_masked():
+    # #433 Copilot review of #470 (comment 2): the docstring promises withheld_paths/
+    # masked_paths are mutually exclusive, but nothing validated it — RedactionSummary
+    # is wire-contract constructible from arbitrary external JSON (e.g. a replayed
+    # stored result), not only from DiffRedactor's own construction path.
+    with pytest.raises(ValidationError):
+        RedactionSummary(withheld_paths=["a.py"], masked_paths=["a.py"], inline_masks=1)
+
+
 def test_redaction_summary_accepts_consistent_shapes():
     RedactionSummary()  # all-empty/zero — valid
     RedactionSummary(withheld_paths=[".env"])  # withheld-only — valid
     RedactionSummary(masked_paths=["a.py"], inline_masks=1)  # exact boundary — valid
     RedactionSummary(masked_paths=["a.py", "b.py"], inline_masks=5)  # >= floor — valid
+    # Disjoint withheld + masked, distinct paths — valid.
+    RedactionSummary(withheld_paths=["a.py"], masked_paths=["b.py"], inline_masks=1)
 
 
 def test_replay_of_a_pre_b1_stored_review_result_still_validates():

@@ -1206,6 +1206,42 @@ def test_bounded_accumulator_excludes_a_withheld_file_whose_marker_falls_past_th
     assert acc.redacted_paths == [".env"]
 
 
+def test_bounded_accumulator_uncommitted_late_withhold_leaves_earlier_mask_intact():
+    # #433 Copilot review of #470 (comment 5), the C2 staging interplay: the
+    # masked->withheld MOVE (a later withhold demotes an earlier mask, subtracting
+    # its count back out of inline_masks) must itself respect commit gating — it may
+    # only happen once the withhold actually COMMITS, not merely once it's staged.
+    # Here "config.py" is masked and RETAINED (fits the cap), then a later
+    # `diff --git a/id_rsa b/config.py` header — a withhold for the SAME target path
+    # (`_diff_path_from_header`'s "b/"-side rule, same collision the DiffRedactor-level
+    # regression test uses) — is fed, but the cap is sized so THAT line does not fit at
+    # all: the withhold is staged but never committed. The earlier mask's
+    # masked_paths/inline_masks contribution must be left completely untouched.
+    lines = [
+        "diff --git a/config.py b/config.py",
+        "--- a/config.py",
+        "+++ b/config.py",
+        "@@ -1 +1 @@",
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa",
+        "diff --git a/id_rsa b/config.py",
+    ]
+    probe = DiffRedactor()
+    retained_out: list[str] = []
+    for line in lines[:5]:
+        retained_out.extend(probe.feed(line))
+    max_bytes = len("\n".join(retained_out).encode("utf-8"))
+
+    acc = gitdiff._BoundedDiffAccumulator(max_bytes)  # type: ignore[attr-defined]
+    for line in lines:
+        acc.feed(line)
+    assert acc.truncated
+    assert acc.text() == "\n".join(retained_out)
+    assert acc.masked_paths == ["config.py"]  # the earlier, RETAINED commit stands
+    assert acc.inline_masks == 1  # NOT subtracted — the later withhold never committed
+    assert acc.withheld_paths == []  # the staged withhold was discarded, not applied
+    assert acc.redacted_paths == ["config.py"]  # deduped either way
+
+
 # ---------------------------------------------------------------------------
 # F1b: explicitly-named untracked file materialized whole (streaming fix)
 # ---------------------------------------------------------------------------

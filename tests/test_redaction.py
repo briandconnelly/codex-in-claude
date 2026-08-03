@@ -2210,6 +2210,33 @@ def test_diff_redactor_a_path_withheld_under_one_header_stays_only_withheld_late
     assert r.inline_masks == 0
 
 
+def test_diff_redactor_a_masked_path_becomes_withheld_by_a_later_header():
+    # #433 Copilot review of #470 (comment 5): C3's dominance rule covered
+    # withhold->mask but not the REVERSE — mask->withhold. A path masked under an
+    # earlier header, then WITHHELD under a later header for the identical target
+    # path (the same rename-target collision the test above uses — a normal
+    # config.py header followed by an `a/id_rsa b/config.py` rename header, both
+    # resolving to "config.py" via `_diff_path_from_header`'s "b/"-side rule), used to
+    # land in BOTH lists. First-wins is the WRONG rule here: the later withhold means
+    # the file's hunks are dropped entirely, so keeping the path masked-only would
+    # OVER-CLAIM coverage — the unsafe direction. Withholding must dominate BOTH ways:
+    # the path moves to withheld_paths, and its already-committed masks are
+    # subtracted back out of inline_masks.
+    diff = (
+        "diff --git a/config.py b/config.py\n"
+        "--- a/config.py\n+++ b/config.py\n@@ -1 +1 @@\n"
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa\n"
+        "diff --git a/id_rsa b/config.py\n"
+    )
+    r = redaction.DiffRedactor()
+    for line in diff.splitlines():
+        r.feed(line)
+    assert r.withheld_paths == ["config.py"]
+    assert r.masked_paths == []  # moved OUT of masked_paths, not left in both
+    assert r.inline_masks == 0  # the earlier commit's count is subtracted back out
+    assert r.redacted == ["config.py"]  # still deduped — no duplicate from the move
+
+
 def test_diff_redactor_headerless_stream_does_not_count_untracked_inline_masks():
     # #433 review F3: `inline_masks` used to increment before the `_current_path`
     # guard, so a body-shaped line with no PRECEDING `diff --git` header (this class

@@ -131,10 +131,12 @@ defense-in-depth, not a guarantee**: it covers content the plugin itself surface
 may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
 
 For a gathered diff specifically, `codex_review_changes`/`codex_dry_run`'s `coverage.redaction`
-(present whenever the `redacted` omission reason fires, `null` otherwise) breaks the redaction down
-further: `withheld_paths` names files whose hunk was dropped whole, `masked_paths` names files sent
-with inline values replaced, and `inline_masks` counts the markers actually emitted. `meta.redacted_paths`
-stays the flat, backward-compatible union of both path lists.
+breaks the `redacted` omission reason down further when a structured breakdown is available:
+`withheld_paths` names files whose hunk was dropped whole, `masked_paths` names files sent with
+inline values replaced, and `inline_masks` counts the markers actually emitted. The reason CAN fire
+with no breakdown — a legacy-shaped producer, or a disclosure dropped entirely by byte-cap
+truncation — but `redaction` is never non-null without the reason also firing (enforced).
+`meta.redacted_paths` stays the flat, backward-compatible union of both path lists.
 
 ### Detail levels
 

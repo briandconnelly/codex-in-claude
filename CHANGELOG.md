@@ -16,8 +16,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   count of markers actually EMITTED by the span-merge redaction engine, not raw
   pattern-candidate matches, since overlapping candidates merge into one marker) — is
   carried on `Coverage.redaction: RedactionSummary | None = None`, populated only when
-  the `redacted` reason fires. `meta.redacted_paths` and `DryRunResult.redacted_paths`/
-  `redacted_paths_count` are unchanged — still the single backward-compatible union of
+  the structured split is available — the `redacted` reason CAN fire with `redaction`
+  still null (a legacy-shaped producer that only sets the flat path union, or a
+  disclosure dropped entirely by byte-cap truncation), but `redaction` is never
+  non-null without the reason also firing (enforced). `meta.redacted_paths` and
+  `DryRunResult.redacted_paths`/`redacted_paths_count` are unchanged — still the
+  single backward-compatible union of
   both path lists — and `codex_delegate`, which carries no `Coverage`, keeps
   `meta.redacted_paths` as its only redaction disclosure. The `= None` default is
   load-bearing, not merely convenient: without it every `Coverage` a worker persisted
@@ -76,6 +80,31 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   the whole PR); `RESULT_FORMAT` stays `8` — verified the `serialized` view is
   byte-identical across every review round; only the `schemas` view (the JSON-Schema
   representation `minimum` reaches) moved.
+
+  A GitHub Copilot review of the PR found six more, all folded in here (no schema
+  change, so `FINGERPRINT`/`RESULT_FORMAT` are unaffected — verified byte-identical):
+  three wording fixes (`docs/REFERENCE.md`, `Coverage`'s own docstring, this entry)
+  that had drifted into promising `redaction` is present whenever the `redacted`
+  reason fires — the enforced direction is the other one, and the reason CAN fire
+  with no breakdown (a legacy union-only producer, or a disclosure dropped entirely
+  by truncation); `RedactionSummary`'s own `withheld_paths`/`masked_paths`
+  disjointness, promised by its docstring but never validated (it is wire-contract
+  constructible from arbitrary external JSON, not only from `DiffRedactor`'s own
+  construction path) — added to the model validator; `build_coverage`'s predicate for
+  the `redaction` field ignored `diff.inline_masks`, so a synthetic `DiffResult` with
+  a nonzero count but empty path lists silently reported `status="complete"` instead
+  of failing loudly through `RedactionSummary`'s own invariant; and the substantive
+  one — the dominance rule covered a later mask on an already-withheld path (C3) but
+  not the REVERSE, a path masked under an earlier header then withheld under a later
+  one for the same target (the same rename-target collision), which used to land in
+  BOTH lists. First-wins is the wrong rule there: the later withhold means the file's
+  hunks are now dropped, so leaving the path masked-only would over-claim coverage —
+  the unsafe direction. `DiffRedactor` now tracks per-path committed mask counts
+  internally and, on a late withhold for an already-masked path, moves it to
+  `withheld_paths` and subtracts its committed masks back out of `inline_masks`,
+  gated by the same C2 commit discipline (the move only happens once the withhold
+  itself actually commits, not merely once it's staged). An 80k-case randomized
+  (diff × cap) sweep over both dominance directions found 0 invariant violations.
 - **`codex_capabilities()` now declares the targeted MCP protocol revision** via a new
   `protocol_revision` field (`"2025-11-25"`), previously derivable only by inspecting the
   `initialize` wire response (#423). Its description points to the new

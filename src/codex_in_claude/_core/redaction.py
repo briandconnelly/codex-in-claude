@@ -1041,20 +1041,25 @@ class DiffRedactor:
     file touched" (``redact()``, ``meta.redacted_paths``). ``withheld_paths`` and
     ``masked_paths`` split that union into WHOLE-FILE drops (the file path itself looked
     secret-bearing) vs files that were sent with one or more inline values replaced
-    (#433); the two are DISJOINT, and WITHHOLDING IS DOMINANT (#433 review C2/C3): once
-    a path is in ``withheld_paths`` — including via a later ``diff --git`` header for
-    the identical path, e.g. a rename target (``_diff_path_from_header`` resolves to
-    the rename's "b/" side for both the rename header and any later plain header naming
-    that same path) — it is FINAL for that path. A later inline match on an
-    already-withheld path lists the path in neither list, bumps ``inline_masks`` by
-    NOTHING, and ``redacted`` never gains a duplicate entry for it; the marker still
-    reaches the returned OUTPUT text either way (the text is not the disclosure). Each
-    list otherwise preserves its own encounter order. ``inline_masks`` counts the total
-    EMITTED replacement markers across every KNOWN, non-withheld masked file — see
-    ``_redact_secret_values`` for why that differs from a raw candidate-match count; a
-    match on a body line seen before any ``diff --git`` header (headerless stream) is
-    still redacted in the returned text but counted nowhere, since there is no path to
-    attribute it to.
+    (#433); the two are DISJOINT, and WITHHOLDING IS DOMINANT BOTH WAYS (#433 review
+    C2/C3, sharpened by Copilot review of #470 comment 5): a path can reach the
+    identical target string via a LATER ``diff --git`` header, e.g. a rename target
+    (``_diff_path_from_header`` resolves to the rename's "b/" side for both the rename
+    header and any later plain header naming that same path), in either order —
+    - withhold, then a later mask attempt: the mask counts NOWHERE (bumps
+      ``inline_masks`` by nothing, never lists the path in ``masked_paths``);
+    - mask (committed), then a later withhold: the path MOVES from ``masked_paths`` to
+      ``withheld_paths``, and its already-committed contribution is subtracted back
+      out of ``inline_masks`` — leaving it masked-only after a later withhold would
+      OVER-CLAIM coverage the file no longer has, the unsafe direction.
+    Either way ``redacted`` never gains a duplicate entry, and the marker still reaches
+    the returned OUTPUT text regardless of which list (if any) ends up naming the path
+    — the text is not the disclosure. Each list otherwise preserves its own encounter
+    order. ``inline_masks`` counts the total EMITTED replacement markers across every
+    KNOWN, currently-non-withheld masked file — see ``_redact_secret_values`` for why
+    that differs from a raw candidate-match count; a match on a body line seen before
+    any ``diff --git`` header (headerless stream) is still redacted in the returned
+    text but counted nowhere, since there is no path to attribute it to.
 
     ``feed``'s ``track`` parameter (default ``True``) decides whether ``withheld_paths``/
     ``masked_paths``/``inline_masks`` — NOT ``.redacted``, see below — are updated
@@ -1091,6 +1096,11 @@ class DiffRedactor:
         # than a two-branch union). None when the line produced no event, or the
         # event was already applied/discarded (#433 C2).
         self._pending: tuple[str, str, int] | None = None
+        # Per-path COMMITTED mask count, keyed by path in `masked_paths` — lets a
+        # later withhold on the same path (#433 Copilot review of #470, comment 5)
+        # subtract exactly what it contributed to `inline_masks` when it moves the
+        # path to `withheld_paths`, without touching any other path's count.
+        self._masked_counts: dict[str, int] = {}
 
     def feed(self, line: str, *, track: bool = True) -> list[str]:
         self._pending = None
@@ -1104,11 +1114,17 @@ class DiffRedactor:
             if self._skipping:
                 path = self._current_path or spec
                 # `.redacted` (the legacy union `meta.redacted_paths`/`redact()` read)
-                # stays UNCONDITIONAL — it has always described the WHOLE stream, with
-                # no notion of a byte cap, and #433's brief requires it stay exactly as
-                # it was. Only `withheld_paths`/`masked_paths`/`inline_masks` (the new
-                # #433 fields) are gated by `track`/`commit_pending` (review C2).
-                self.redacted.append(path)
+                # updates UNCONDITIONALLY — regardless of `track` — it has always
+                # described the WHOLE stream, with no notion of a byte cap, and #433's
+                # brief requires it stay exactly as it was. Only
+                # `withheld_paths`/`masked_paths`/`inline_masks` (the new #433 fields)
+                # are gated by `track`/`commit_pending` (review C2). Deduped against
+                # itself the same way the mask branch below is: a path masked under an
+                # earlier header and withheld under a LATER one for the identical
+                # target (#433 Copilot review of #470, comment 5) is already in
+                # `.redacted` from that earlier mask — this must not add a duplicate.
+                if path not in self.redacted:
+                    self.redacted.append(path)
                 self._pending = ("withhold", path, 0)
                 if track:
                     self.commit_pending()
@@ -1147,16 +1163,34 @@ class DiffRedactor:
         """Apply the disclosure event staged by the most recent `feed(..., track=False)`
         call, then clear it. A no-op when nothing is staged. Only touches
         `withheld_paths`/`masked_paths`/`inline_masks` — `.redacted` (the legacy union)
-        already applied unconditionally inside `feed()` (#433 review C2)."""
+        already applied unconditionally inside `feed()` (#433 review C2).
+
+        A withhold DOMINATES a prior mask too, not only the other direction C3
+        covers (#433 Copilot review of #470, comment 5): if `path` is already in
+        `masked_paths` when its withhold commits, the later withhold means the
+        file's hunks are now dropped entirely, so leaving it masked-only would
+        OVER-CLAIM coverage — the unsafe direction. It moves to `withheld_paths` and
+        its already-committed masks are subtracted back out of `inline_masks`, via
+        `_masked_counts` (keeps `RedactionSummary`'s `iff`/`>=len` invariants true by
+        construction — no separate reconciliation needed). Deliberately living HERE,
+        not in `feed()`'s staging step: the move must only happen once the withhold
+        is actually COMMITTED, matching the C2 gating discipline everywhere else in
+        this class — a withhold that was merely STAGED (its own output fell in a
+        byte-capped dropped tail, so it was never committed) must leave an earlier
+        commit's masked_paths/inline_masks contribution untouched."""
         pending = self._pending
         self._pending = None
         if pending is None:
             return
         kind, path, count = pending
         if kind == "withhold":
+            if path in self.masked_paths:
+                self.masked_paths.remove(path)
+                self.inline_masks -= self._masked_counts.pop(path, 0)
             self.withheld_paths.append(path)
         else:
             self.inline_masks += count
+            self._masked_counts[path] = self._masked_counts.get(path, 0) + count
             if path not in self.masked_paths:
                 self.masked_paths.append(path)
 

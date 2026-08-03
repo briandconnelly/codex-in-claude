@@ -840,6 +840,14 @@ class RedactionSummary(BaseModel):
 
     @model_validator(mode="after")
     def _check_invariants(self) -> RedactionSummary:
+        # The docstring promises withheld_paths/masked_paths are mutually exclusive
+        # (withholding dominates — see `DiffRedactor`), but this model is wire-contract
+        # constructible from arbitrary external JSON, not only from DiffRedactor's own
+        # construction path, so the promise must be enforced here too (#433 Copilot
+        # review of #470, comment 2).
+        overlap = set(self.withheld_paths) & set(self.masked_paths)
+        if overlap:
+            raise ValueError(f"withheld_paths and masked_paths must be disjoint: {sorted(overlap)}")
         # Every real inline_masks increment (DiffRedactor.commit_pending's "mask"
         # branch) also adds its path to masked_paths (deduped) — so the two can never
         # disagree: a non-empty masked_paths needs at least one mask per listed path,
@@ -858,8 +866,12 @@ class Coverage(BaseModel):
     """What the review actually covered — the disclosure that makes `verdict`
     interpretable (#319). Untracked counts are pathspec-scoped and null outside
     working_tree scope; `detected == included + omitted` where applicable.
-    `redaction` breaks down the `redacted` omission reason when it fired; null
-    otherwise, including on every Coverage persisted before this field existed."""
+    `redaction`, when non-null, breaks down the `redacted` omission reason — but the
+    reason can fire with `redaction` still null (a legacy-shaped producer that only
+    sets the flat path union, or a disclosure dropped entirely by byte-cap
+    truncation; every Coverage persisted before this field existed is one such case).
+    The enforced direction is the other one: `redaction` is never populated without
+    the `redacted` reason also present."""
 
     model_config = ConfigDict(extra="forbid")
     status: CoverageStatus
