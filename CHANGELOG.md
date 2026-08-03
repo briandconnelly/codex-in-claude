@@ -5,913 +5,290 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-02
+
+A secret-redaction release. The inline redactor was rebuilt around merged candidate spans so no
+matcher can strand part of a secret another one covers whole; its labelled-secret pattern now
+reaches quoted-JSON and bracket-subscripted keys without scrubbing ordinary source out of reviewed
+diffs; two quadratic patterns were bounded; and a replacement that may be incomplete now says so
+instead of advertising a completeness it doesn't have. Alongside that, `codex_review_changes` and
+`codex_dry_run` disclose *how* a diff was redacted — files withheld whole versus files sent with
+values masked inline — `codex_capabilities` declares the targeted MCP protocol revision and its
+`readOnlyHint` reading, and the dry-run tools warn when the call they preview may exceed the
+synchronous deadline. The tracked Codex version moves to `0.146`. One breaking change: a blank
+`question` or `task` is now rejected before any spend. The agent-visible surface changed nine times
+(result `fingerprint`
+`codex-in-claude/0.1/schema-66` → `schema-75`, and the persisted `RESULT_FORMAT` `7` → `8`), so
+pre-1.0 this is a minor release; clients that cache by `fingerprint` re-fetch the contract.
+
 ### Added
 
-- **`coverage.redaction` now distinguishes withheld files from inline masks** on
-  `codex_review_changes` and `codex_dry_run` (#433). Previously the `redacted` omission
-  reason and `meta.redacted_paths` conflated two different things a secret-looking diff
-  can trigger: a whole file dropped (its path itself looked secret-bearing, e.g. `.env`)
-  vs a file sent with one or more inline values masked. The new `RedactionSummary` field
-  — `withheld_paths`, `masked_paths` (both encounter order), and `inline_masks` (the
-  count of markers actually EMITTED by the span-merge redaction engine, not raw
-  pattern-candidate matches, since overlapping candidates merge into one marker) — is
-  carried on `Coverage.redaction: RedactionSummary | None = None`, populated only when
-  the structured split is available — the `redacted` reason CAN fire with `redaction`
-  still null (a legacy-shaped producer that only sets the flat path union, or a
-  disclosure dropped entirely by byte-cap truncation), but `redaction` is never
-  non-null without the reason also firing (enforced). `meta.redacted_paths` and
-  `DryRunResult.redacted_paths`/`redacted_paths_count` are unchanged — still the
-  single backward-compatible union of
-  both path lists — and `codex_delegate`, which carries no `Coverage`, keeps
-  `meta.redacted_paths` as its only redaction disclosure. The `= None` default is
-  load-bearing, not merely convenient: without it every `Coverage` a worker persisted
-  before this field existed would fail replay (`ReviewResult.model_validate`), which a
-  committed pre-B1 fixture (`tests/fixtures/pre_b1_review_result.json`, taken
-  byte-for-byte from the pre-#433 `result_format_snapshot.json`) pins directly.
-  `FINGERPRINT` bumps `schema-74` → `schema-75` (`tool_output_schemas`); additive field,
-  **not breaking**. `RESULT_FORMAT` bumps `7` → `8`: `Coverage` is persisted, and the
-  representative `review_success` envelope in `result_format_snapshot.py` now populates
-  a non-null, non-empty `RedactionSummary` (the null-fixtures convention, #400 — an
-  all-null/empty representative can't detect deletion of a populated field), which moves
-  the snapshot's `serialized` view in THREE places, not one: `coverage.redaction` itself
-  appears, `coverage.status` moves `"complete"` → `"partial"`, and
-  `coverage.omission_reasons` gains `"redacted"` — the latter two are forced by
-  `Coverage._check_invariants` (status must be `partial` iff `omission_reasons` is
-  non-empty, and `redaction` must not be populated without `"redacted"` in
-  `omission_reasons`, added by task review), not independent choices.
-
-  Two review rounds (task review, then a Codex branch review) refined the disclosure
-  further, all landing in this same commit:
-  - `build_coverage` derives the `"redacted"` REASON and the `redaction` FIELD from
-    deliberately asymmetric sources: the reason fires from
-    `redacted_paths OR withheld_paths OR masked_paths` (any signal), while the field
-    stays scoped to `withheld_paths`/`masked_paths` alone — a reason with no populated
-    field is fine (the model invariant is field⇒reason, never the converse), and it's
-    exactly what a "legacy-style" `DiffResult` (only `redacted_paths` set — a real,
-    reachable shape after the byte-cap fix below, not just a synthetic one) now
-    produces instead of a false `status="complete"`.
-  - `DiffRedactor`'s new `withheld_paths`/`masked_paths`/`inline_masks` now reflect
-    only content that actually lands in the RETAINED, byte-capped diff text — the
-    schema calls `masked_paths` "files SENT with a value replaced," so a mask (or a
-    withhold) whose output fell in the byte-capped, dropped tail no longer inflates
-    them. `meta.redacted_paths`/`DryRunResult.redacted_paths` are DELIBERATELY exempt
-    from this gating (they've never had a byte-cap-aware notion of "sent," and this
-    field's own brief requires they stay exactly what they always were), so the legacy
-    union can now be a strict superset of the two new path lists under truncation —
-    which is exactly the asymmetric-predicate fix above exists to keep honest.
-  - Withholding is now DOMINANT and consistent: a later inline match on an
-    already-withheld path (e.g. a rename target, where `_diff_path_from_header`
-    resolves both the rename header and a later plain header to the same "b/" path)
-    lists the path in neither list and does not bump `inline_masks` — previously the
-    count could be nonzero while `masked_paths` stayed empty, with no listed file to
-    attribute it to.
-  - `RedactionSummary.inline_masks` gained `Field(ge=0)` plus model invariants tying
-    the fields together: `inline_masks >= len(masked_paths)` when non-empty, and
-    `inline_masks == 0` iff `masked_paths == []` — both verified to hold for every
-    shape `DiffRedactor` can actually produce.
-
-  `TOOLS_LIST_BYTE_BUDGET`/`CATALOG_BYTE_CAP` both raised 87,000 → 87,500 for the new
-  object, INLINED directly into both `codex_review_changes`' and `codex_dry_run`'s
-  outputSchema (no `$ref`/`$defs` on the wire — field descriptions cost nothing there
-  either, not in `_KEPT_DESCRIPTIONS` — the delta is pure schema structure, duplicated
-  across both tools); `ge=0` then added a validated (not descriptive) `"minimum":0`
-  property, which DOES reach the wire, measured at +24 B on each figure — still within
-  the raised budget, no further raise. `FINGERPRINT` stays `schema-75` (one bump for
-  the whole PR); `RESULT_FORMAT` stays `8` — verified the `serialized` view is
-  byte-identical across every review round; only the `schemas` view (the JSON-Schema
-  representation `minimum` reaches) moved.
-
-  A GitHub Copilot review of the PR found six more, all folded in here (no schema
-  change, so `FINGERPRINT`/`RESULT_FORMAT` are unaffected — verified byte-identical):
-  three wording fixes (`docs/REFERENCE.md`, `Coverage`'s own docstring, this entry)
-  that had drifted into promising `redaction` is present whenever the `redacted`
-  reason fires — the enforced direction is the other one, and the reason CAN fire
-  with no breakdown (a legacy union-only producer, or a disclosure dropped entirely
-  by truncation); `RedactionSummary`'s own `withheld_paths`/`masked_paths`
-  disjointness, promised by its docstring but never validated (it is wire-contract
-  constructible from arbitrary external JSON, not only from `DiffRedactor`'s own
-  construction path) — added to the model validator; `build_coverage`'s predicate for
-  the `redaction` field ignored `diff.inline_masks`, so a synthetic `DiffResult` with
-  a nonzero count but empty path lists silently reported `status="complete"` instead
-  of failing loudly through `RedactionSummary`'s own invariant; and the substantive
-  one — the dominance rule covered a later mask on an already-withheld path (C3) but
-  not the REVERSE, a path masked under an earlier header then withheld under a later
-  one for the same target (the same rename-target collision), which used to land in
-  BOTH lists. First-wins is the wrong rule there: the later withhold means the file's
-  hunks are now dropped, so leaving the path masked-only would over-claim coverage —
-  the unsafe direction. `DiffRedactor` now tracks per-path committed mask counts
-  internally and, on a late withhold for an already-masked path, moves it to
-  `withheld_paths` and subtracts its committed masks back out of `inline_masks`,
-  gated by the same C2 commit discipline (the move only happens once the withhold
-  itself actually commits, not merely once it's staged). An 80k-case randomized
-  (diff × cap) sweep over both dominance directions found 0 invariant violations.
-- **`codex_capabilities()` now declares the targeted MCP protocol revision** via a new
+- **`coverage.redaction` distinguishes withheld files from inline masks** on
+  `codex_review_changes` and `codex_dry_run` (#433). The `redacted` omission reason previously
+  conflated two different things a secret-looking diff can trigger: a whole file dropped (its path
+  itself looked secret-bearing, e.g. `.env`) versus a file sent with one or more values masked
+  inline. The new optional `RedactionSummary` — `withheld_paths`, `masked_paths`, and
+  `inline_masks` (markers actually emitted, after span merging, not raw pattern candidates) —
+  splits them, counting only content that lands in the retained, byte-capped diff text.
+  `meta.redacted_paths` and `DryRunResult.redacted_paths`/`redacted_paths_count` are unchanged:
+  still the single backward-compatible union of both path lists, and still `codex_delegate`'s only
+  redaction disclosure. The field is optional (so a `Coverage` persisted before it existed still
+  replays) and the `redacted` reason can fire without it — a legacy-shaped producer, or a
+  disclosure dropped entirely by byte-cap truncation — but the field is never populated without
+  the reason. `FINGERPRINT` `schema-74` → `schema-75`; `RESULT_FORMAT` `7` → `8` for the persisted
+  `Coverage`. Additive, not breaking.
+- **`codex_capabilities` declares the targeted MCP protocol revision** via a new
   `protocol_revision` field (`"2025-11-25"`), previously derivable only by inspecting the
-  `initialize` wire response (#423). Its description points to the new
+  `initialize` wire response (#423). Its description points at the new
   `docs/adr/0004-mcp-2026-07-28-migration.md`, which records why this server stays on 2025-11-25
-  (verified FastMCP/`mcp` SDK support and deployment compatibility — not any spec-granted support
-  window for the legacy revision, which the spec makes optional) and the per-feature migration plan
-  for the deprecated pieces already in use (roots; the 2025-11-25 revision itself once FastMCP
-  supports 2026-07-28). Also fixes a stale `_roots_from_ctx` docstring comment that called the
-  2026-07-28 spec an "RC" — it has been Final since 2026-07-28. The rest of #423's vendored-skill
-  sweep was already done by #448 (`.agents/skills/agent-friendly-mcp` rebased onto the final spec);
-  `tests/runs/` transcripts are immutable historical evidence by declared policy and were left
-  untouched. `FINGERPRINT` bumps `schema-70` → `schema-71` (`capabilities_payload`); additive field,
-  **not breaking**; `RESULT_FORMAT` unchanged (the capabilities payload is not persisted).
-- **`codex_capabilities()` now documents the server's `readOnlyHint` reading** via a new
-  `annotations_reading` field, previously stated only in `server.py` source comments and cross-
-  referenced agent-visibly only obliquely via `Meta.tier`'s description (#426). It states the
-  judgment call directly: `readOnlyHint` tracks whether a call changes observable state that
-  outlives the response (a job record, committed spend) rather than file I/O, which is why
-  `codex_consult`, `codex_review_changes`, and `codex_delegate` (and their `_async` variants) are
-  `readOnlyHint: false` even though consult and review never write files, while `codex_dry_run`
-  and `codex_delegate_dry_run`, which create no job record, stay `readOnlyHint: true`. Consistency
-  guards (`test_sync_active_tools_are_not_read_only`, `test_dry_run_tools_are_read_only`) assert
-  the claim against the live tool annotations. `FINGERPRINT` bumps `schema-71` → `schema-72`
-  (`capabilities_payload`); additive field, **not breaking**; `RESULT_FORMAT` unchanged (the
-  capabilities payload is not persisted).
-- **`codex_dry_run` and `codex_delegate_dry_run` now advise when a previewed call may exceed the
+  (verified FastMCP/`mcp` SDK support, not any spec-granted support window) and the per-feature
+  migration plan for the deprecated pieces already in use. `FINGERPRINT` `schema-70` →
+  `schema-71`; additive, not breaking.
+- **`codex_capabilities` documents the server's `readOnlyHint` reading** via a new
+  `annotations_reading` field, previously stated only in source comments (#426). The hint tracks
+  whether a call changes observable state that outlives the response (a job record, committed
+  spend) rather than file I/O — which is why `codex_consult`, `codex_review_changes`, and
+  `codex_delegate` are `readOnlyHint: false` even though consult and review never write files,
+  while the two dry-run tools, which create no job record, stay `true`. Consistency guards assert
+  the claim against the live tool annotations. `FINGERPRINT` `schema-71` → `schema-72`; additive,
+  not breaking.
+- **`codex_dry_run` and `codex_delegate_dry_run` advise when the previewed call may exceed the
   synchronous deadline** via a new `deadline_advisory` field, described identically on both
-  (#342). Non-null exactly when the previewed call would actually run the model AND either its
-  prompt exceeds 100,000 bytes or its resolved `reasoning_effort` is `"high"`/`"xhigh"` (an exact,
-  case-sensitive match — an unrecognized effort string, including a near-miss like `"HIGH "` or
-  `"Xhigh"`, is deliberately not treated as high); null whenever the call would run no model at
-  all (`codex_dry_run`'s `would_call_model=false` on an empty diff; `codex_delegate_dry_run` has
-  no such short-circuit, since a blank task is already rejected before this point). It is a hint,
-  not a refusal — `would_call_model` and every other field are unaffected — and names, verbatim,
-  the **previewed paid tool's own** `_async` counterpart (`codex_review_changes_async` from
-  `codex_dry_run`, `codex_delegate_async` from `codex_delegate_dry_run`) — never the dry-run
-  tool's own name, which has no `_async` variant. A pre-release Codex review (concerns/1, medium)
-  caught an earlier draft that instead said "this tool's `_async` variant" — read from the
-  dry-run caller's own perspective, that generic phrase pointed at the nonexistent
-  `codex_dry_run_async`/`codex_delegate_dry_run_async`, the exact wrong-tool failure this field
-  exists to prevent; fixed before this field ever shipped. `codex_consult` has no dry-run preview
-  at all; the field's own description carries a one-clause pointer to `codex_consult_async` for a
-  high-effort or broad repo-grounded consult instead. The 100,000-byte threshold is grounded in
-  the same deadline datapoints as the
-  180→300s `timeout_seconds` raise (#338/#341): comfortably below the 200,000-byte default
-  `max_input_bytes` ceiling, inside the range of the mid-tier consult/review runs observed
-  exceeding the old 180s cap, and short of the still-unremoved >~420s cliff the `_async` variants
-  exist to absorb. `FINGERPRINT` bumps `schema-73` → `schema-74` (`tool_output_schemas`,
-  `tool_descriptions`); additive field, **not breaking**; `RESULT_FORMAT` unchanged — dry-run
-  results are never persisted (`result_format_snapshot.py` covers only the four run envelopes, not
-  either dry-run preview).
+  (#342). Non-null exactly when the previewed call would run the model *and* either its prompt
+  exceeds 100,000 bytes or its resolved `reasoning_effort` is `high`/`xhigh` (an exact match — a
+  near-miss like `"Xhigh"` is deliberately not treated as high); null whenever the call would run
+  no model at all. It is a hint, not a refusal, and it names the previewed **paid** tool's own
+  `_async` counterpart, never the dry-run tool's own name, which has none. `FINGERPRINT`
+  `schema-73` → `schema-74`; additive, not breaking.
 
 ### Changed
 
-- **Tracked Codex version bumped to `0.146`.** `SUPPORTED_VERSIONS` now tracks `(0, 146)`; a
-  `0.145` CLI still runs and now warns as untracked (the gate is advisory and never blocks).
-  `docs/UPGRADING-CODEX.md` was run end to end against `codex-cli 0.146.0`, A/B'd against a
-  side-by-side `0.145.0`, and required no code change: `codex`/`exec`/`review`/`exec review` help
-  text is byte-identical, all eleven `ALWAYS_SEND_FLAGS` and the three sandbox values are present,
-  the drift/auth signatures still match observed output, `KNOWN_MODEL_SLUGS` is unchanged, and the
-  live integration suite passes. Semantics were re-verified rather than assumed: `read-only` still
-  blocks writes, `workspace-write` still allows in-workspace writes while blocking network egress,
-  `--output-last-message` still receives the final message, `-c model_reasoning_effort` is still
-  applied (the backend rejection still carries both bracketed markers), and structured output still
-  conforms. `docs/codex-help/0.146.0/` carries fresh snapshots. Four upstream deltas were reviewed
-  and none is consumed: `codex app-server --help` gained `--code-mode-host`; two new v2 app-server
-  messages appeared (`ExternalAgentConfigImportHistoryRecord{Params,Response}`); the consumed
-  schemas changed only additively (an optional `providerId` this plugin does not send, and an
-  `ent26` value added to `PlanType`, which is read as a free-form capped string rather than an
-  enum); and `codex features list` gained `in_app_updates` (stable, default-on),
-  `deferred_tool_world_state`, `guardianv2`, and `mcp_2026_07_28` (all under development,
-  default-off), while `item_ids` moved from under-development to removed-and-always-on — verified
-  by A/B to be upstream bookkeeping with no observable JSONL change, since `item.id` was already
-  emitted by `0.145.0`. `remote_plugin` remains a known, default-on feature, so the
-  `--disable remote_plugin` isolation guarantee still applies and still fails closed (an unknown
-  feature name still prints `Unknown feature flag`). No agent-visible surface change, so no
-  `FINGERPRINT` or `RESULT_FORMAT` bump.
-
-- **The skills-discovery disclosure now reads identically everywhere it appears** (#427). Every
-  egress-caveat prose site — the server instructions, the `codex_status` caveat, the six
-  `ToolCapability.returns` clauses, `codex_capabilities`' `negative_scope`, and the six egress
-  tool docstrings — previously stated the same fact (Codex auto-loads the resolved workspace's
-  `AGENTS.md`, discovers skills in that workspace's `.agents/skills/` and in the user-global
-  `$CODEX_HOME/skills/`, and the plugin's isolation flags do not suppress any of it) in its own
-  independently-drifted wording. All fifteen sites now share one canonical sentence pair —
-  `SKILLS_DISCOVERY_FACT`/`SKILLS_DISCOVERY_FACT_FULL`/`SKILLS_ISOLATION_NOTE`, defined in
-  `cli_contract.py` beside the "RULE: every egress-caveat prose site" comment it implements,
-  since that module is already the single source of truth for every Codex CLI assumption and a
-  server.py-local copy would create a second hand-sync obligation with it. `server.py` imports
-  them; the three `_async` tool docstrings deliberately use the shorter fact alone, preserving
-  the lighter guarantee subset `_REQUIRED_GUARANTEES` already gives them. This is a deliberate
-  wording convergence,
-  not a byte-identical refactor: no carrier shared one sentence before, so unifying them
-  necessarily rewords the wire. `FINGERPRINT` bumps `schema-72` → `schema-73`
-  (`initialize_response`, `capabilities_payload`); reworded disclosure text only, no guarantee
-  removed or weakened (the freeze matrix in `tests/test_server.py` and the doc-side parse tests
-  in `tests/test_docs_disclosure.py` both pass unchanged before and after), so **not breaking**;
-  `RESULT_FORMAT` unchanged (none of this text is persisted in a job result). The canonical
-  pair and the delegate-specific addendum were also tightened — dropped "both"/"that
-  workspace's"/a redundant "your", and replaced the delegate addendum's restatement of
-  "tracked"/"seeded" (already disclosed earlier in the same text by the pre-existing
-  "throwaway worktree seeded from tracked state" sentence) with just the two facts that
-  addendum uniquely carries: for delegate, the resolved workspace IS the worktree, and
-  scrubbing it doesn't exclude `$CODEX_HOME/skills/`. `tools/list` grew from 84,818 to
-  84,975 bytes (+157 B, net of tightening) and the parallel `CATALOG_BYTE_CAP` wire measure
-  in `tests/test_schemas.py` from 84,835 to 84,992 bytes (+157 B) — both fit under their
-  existing 85,000 budgets, so neither gate moved. Also adds `TOOLS_LIST_BYTE_TARGET` beside
-  `TOOLS_LIST_BYTE_BUDGET` (`tests/test_wire_size.py`, set to the measured 84,975): the
-  budget assertion stays the only hard gate, but its failure message now reports the
-  measured size, the budget, and the target together so the distance from the last
-  deliberate measurement is visible on every run. New `tests/test_server.py` coverage pins
-  each egress tool docstring against the canonical constant with normalized (backtick- and
-  whitespace-insensitive) containment — the sync tools' docstrings must contain the full
-  fact (including the isolation-flags note), the `_async` tools' must contain the fact but
-  NOT the full form and NOT the isolation note as a standalone sentence either — the latter
-  catches a note injected on its own, outside the concatenated FULL form, which the
-  FULL-exclusion check alone would miss — pinning `_REQUIRED_GUARANTEES`' deliberate subset.
+- **Tracked Codex version is now `0.146`.** `SUPPORTED_VERSIONS` tracks `(0, 146)`; a `0.145` CLI
+  still runs and now warns as untracked (the gate is advisory and never blocks). The upgrade
+  procedure was run end to end against `codex-cli 0.146.0`, A/B'd against a side-by-side
+  `0.145.0`, and required no code change: help text for `codex`/`exec`/`review`/`exec review` is
+  byte-identical, every guarantee-bearing flag and sandbox value is present, the drift signatures
+  still match observed output, and the model catalog is unchanged. Semantics were re-probed rather
+  than assumed — `read-only` still blocks writes, `workspace-write` still writes in-workspace while
+  blocking network egress, `--output-last-message` still delivers, `-c model_reasoning_effort` is
+  still applied, and structured output still conforms. Upstream additions were reviewed and none is
+  consumed: a new `app-server --help` flag, two new app-server messages, an optional `providerId`
+  and an `ent26` `PlanType` value on the consumed schemas (the plan type is read as a free-form
+  capped string, not an enum), and four new feature flags — including `mcp_2026_07_28`, still
+  under development, which corroborates this release's decision to target MCP 2025-11-25.
+  `remote_plugin` remains default-on, so the `--disable remote_plugin` isolation guarantee still
+  applies and still fails closed.
+- **The skills-discovery egress caveat now reads identically everywhere it appears** (#427).
+  Fifteen prose sites — the server instructions, the `codex_status` caveat, six
+  `ToolCapability.returns` clauses, `codex_capabilities`' `negative_scope`, and six tool
+  docstrings — stated the same fact (Codex auto-loads the resolved workspace's `AGENTS.md` and
+  discovers skills in that workspace's `.agents/skills/` and in the user-global
+  `$CODEX_HOME/skills/`, and the plugin's isolation flags do not suppress any of it) in
+  independently drifted wording. All now share one canonical sentence pair defined in
+  `cli_contract.py`, already the single source of truth for every Codex CLI assumption. This is a
+  wording convergence, not a byte-identical refactor — no carrier shared one sentence before — and
+  no guarantee is removed or weakened; the three `_async` docstrings keep their deliberately
+  lighter subset. `tools/list` grew 157 bytes, inside its existing budget. `FINGERPRINT`
+  `schema-72` → `schema-73`; not breaking.
+- **`Meta.timeout_seconds` is now described** — it was the only semantically-loaded `Meta` member
+  published without a description (#413). It states which deadline the value is, by envelope: a
+  synchronous paid call reports that call's own resolved deadline, post-clamp (10–600s); a
+  background job's start handle, or a later `codex_job_result` fetch of that job's originating
+  run, reports the job-lifecycle ceiling instead (`job_max_seconds`, default 1800, clamped
+  60–7200); and `invalid_arguments` or `internal_error`, tied to no run, report the server's
+  configured sync deadline. Wording only: `FINGERPRINT` `schema-67` → `schema-68`,
+  `RESULT_FORMAT` unmoved, not breaking.
+- **The three sync tools' Progress & recovery paragraphs now describe job-record recovery
+  correctly** (#414). They named only `codex_job_list` → `codex_job_result`, omitting
+  `codex_job_status` as the polling step in between, and framed recovery as a fallback for a
+  dropped connection — when some MCP clients background a long tool call well before the server's
+  own deadline. Wording only: `FINGERPRINT` `schema-68` → `schema-69`, not breaking.
 
 ### Fixed
 
-- **`COMPATIBILITY.md` understated what auto-loads into Codex's context.** The implicit-context
-  observation table recorded that an `AGENTS.md` *above* the git root is **not** loaded. Re-probing
-  the previous `0.145.0` binary alongside `0.146.0` shows it **is**, on both — so this corrects the
-  earlier observation rather than recording a `0.146` change, and it corrects in the unsafe
-  direction. A negative control confirms it is real rather than model confabulation: removing the
-  parent `AGENTS.md` makes its codeword disappear from the answer while the project one remains.
-  Documentation only; the plugin's agent-visible egress caveat still says "the resolved workspace's
-  `AGENTS.md`" and so remains narrower than observed behavior — widening that published text is
-  tracked separately because it carries its own `FINGERPRINT` bump.
-
-- **An ordinary URL whose query or fragment carries an `@` is no longer masked as
-  userinfo** (#442). The named-username connection-string matcher had TWO independent
-  admissions of `?`/`#`, found and fixed across two review rounds, on the PASSWORD side
-  and the USERNAME side respectively:
-
-  - The password run: a run starting right after a port (or a bare name) and ending just
-    before a later `@` parsed as `user:password@` even when that `@` actually belonged to
-    a query string or fragment — `https://host.example:8443?email=user@example.com`
-    (host, port, an email in the query, no userinfo anywhere) masked its port and query
-    and partly hid its host.
-  - The username run (found by a follow-up Codex review of this same fix): a run reaching
-    a LATER `:` before the `@` parsed the text ahead of it as a username —
-    `https://host.example?foo:bar12345678@x.example` (an ordinary query string with a
-    colon in it — a `time=`/ratio-style value, `12:34`, `16:9` — no userinfo anywhere)
-    parsed `host.example?foo` as username, `bar12345678` as password, and masked both.
-
-  Per RFC 3986, `?` and `#` terminate the authority component, so nothing after either
-  one can be userinfo — on EITHER side of the `:` — and an `@` following one never
-  delimits a credential.
-
-  #440 had already fixed the password case for the *empty*-username arm
-  (`://:password@host`, the canonical Redis URL), because admitting `?`/`#` there
-  collided with an empty host's port serialization; it deliberately left the named arm's
-  wider class alone, reasoning that narrowing it would lose a real (if RFC-invalid)
-  password containing a raw `?` or `#`. #442 reverses that call for both slots: weighed
-  against the whole ordinary-URL false-positive class, the RFC-invalid userinfo shape is
-  the smaller loss on both sides of the `:`. All three connection-string userinfo
-  classes — the password run, the username run, and
-  `CONNECTION_STRING_USERNAME_TOKEN_PATTERN`'s bare-token run — now derive from one
-  shared exclusion set (`_CS_TERMINATORS`) instead of three independently hand-spelled
-  (and, for one review round, silently drifted) character classes; the
-  `(?(cs_user)...)` conditional that used to pick between two different password classes
-  is gone along with the now-pointless `cs_user` group name.
-
-  **The accepted trade, pinned by its own characterization test on each side:** a
-  password containing a literal `?`/`#` is no longer redacted — the toy case is
-  `x://u:ab?cd@h`, and a realistic one is a labelled connection string whose password
-  happens to contain a raw `?`: `postgres://app:s3cr3t?value@db.internal:5432/appdb` now
-  goes out with the password in the clear, no backstop, since nothing else in this file
-  recognizes a bare `postgres://` credential once the connection-string matcher itself
-  won't span it. A username containing a literal `?`/`#` is an even larger loss:
-  `x://u?v:pw123456@h` no longer redacts AT ALL — not just the malformed username, but
-  the well-formed trailing password beside it — because the match fails at the anchor
-  once the username run can no longer reach the mandatory `:` separator. RFC 3986 already
-  calls both shapes invalid userinfo (a real `?`/`#` there has to be percent-encoded),
-  which is why both trades are judged acceptable rather than regressions.
-
-  The differential sweeps this file already runs (#438/#440) cannot detect a false
-  positive like this one — they only catch a matcher that redacts *less*, and this bug
-  was a matcher redacting *more* — so the fix instead lands with its own false-positive
-  corpus: the issue's own URL, OAuth-redirect/email-in-query/fragment variants, a shape
-  where `?` and `#` both appear before the `@`, an OAuth `redirect_uri` carrying a full
-  nested URL (a second `://`), shapes with a path segment before the query, and (round 2)
-  a colon inside the query and inside the fragment before the `@` — thirteen lines in
-  total, each asserted byte-identical in both `exempt_code` modes.
-
-  Corpus sweep, old pattern vs. new, over every line (`text.split("\n")`, matching
-  `wc -l`) of two real corpora on this tree: the whole checked-out `.venv` (5,020 files,
-  1,849,015 lines — not just `site-packages`) shows **zero** behavior changes in either
-  direction, in both `exempt_code` modes; this repository's own tracked files show 25
-  differing lines, every one of them documentation prose — the illustrative examples in
-  this entry and in the code comments and tests (including a pre-existing #443 entry line
-  quoting the same shape), not independent code.
-
-- **A labelled match no longer swallows a later sensitive label's secret** (#436). The #434
-  swallow guard was conditioned on `key_bracket`, so it protected only bracketed candidates
-  (`cfg["token"] = ...`); the identical swallow reached ANY labelled match, bracketed or not —
-  `LABELLED_VALUE_PATTERN`'s value run is greedy and `re.sub` never revisits consumed text, so
-  an earlier weak label's value could absorb a later sensitive label whole and ship the real
-  secret behind it in the clear: `cfg "key": aaaaaaaaaaaaaaaaapassword = realsecret1234567890`
-  redacted `aaaa…password` and left `realsecret1234567890` untouched.
-
-  There are now TWO guards in sequence, not one, because a single formulation could not cover
-  both shapes without either regressing what `main` shipped or reopening the quadratic risk
-  #439 already taught this file to avoid. **Guard 1** is `#434`'s original guard, unchanged in
-  reach: conditioned on `key_bracket`, and genuinely UNBOUNDED — a bracketed swallow is caught
-  at ANY distance, exactly as before. **Guard 2** is new: unconditional, so it also covers
-  non-bracket swallows (a shape `main` never protected at all, at any distance), but bounded at
-  a new `_SWALLOW_GUARD_PEEK` (1024 `_VALUE_CHARS`) to stay flat on repeated-anchor input — see
-  below. Because guard 1 is untouched and guard 2 only ADDS coverage, **the branch is a strict
-  superset of `main`'s behavior for this pattern: nothing `main` protected is regressed**, only
-  bounded further out. Both guards share one refinement: a redactable-value tail on the
-  swallowed label's own value (the new shared `_MIN_SECRET_VALUE_LEN` constant, replacing two
-  hard-coded `16`s) so a guard only refuses when the inner label's value would itself clear the
-  redaction threshold — without it, `token = aaaaaaaaaaaakey=short` becomes a total miss (the
-  outer refuses, the inner's 5-char value is too short to match), a regression from what the
-  pre-#436 pattern still caught whole. Verified directly on `main`: its tail-less bracketed
-  guard has the identical bug for the bracketed shape — `cfg["token"] = aaaaaaaaaaaakey=short`
-  comes out byte-identical, untouched — so the shared tail is also a genuine improvement over
-  guard 1's pre-#436 form, not only new-coverage hygiene for guard 2; both are now pinned exact.
-  The accepted trade for guard 2 specifically, generalized from #434: a refused non-bracket
-  outer candidate's own value run survives on the page (`aaaa…password` above), and the engine
-  advances to redact the inner label instead — a narrower span, not a leak.
-
-  Making guard 2's two inner probes open-ended (`_VALUE_CHARS*` ahead of the inner label,
-  `{16,}` on its value) made IT quadratic on repeated-anchor input the same way #439's JWT
-  segment was (`"key="*20000`, 80k chars, 3.5s; `"key="*40000`, 160k, 14.2s — ~4x per 2x input);
-  both are now bounded, but the two bounds are **not** the same kind of change. The
-  value-length probe (shared by both guards) becomes an EXACT `_MIN_SECRET_VALUE_LEN` rather
-  than an open lower bound — semantics-preserving on both, since it only answers a yes/no
-  question ("is the inner value at least this long") that a fixed count answers identically to
-  an open one, at O(16) instead of O(remaining). Guard 2's peek ahead of the inner label becomes
-  bounded at `_SWALLOW_GUARD_PEEK` (1024) — and because guard 1 stays unbounded, this cap is
-  **not** a narrowing of anything `main` shipped: it bounds only the NEW non-bracket coverage,
-  which `main` had at no distance at all, so a non-bracket swallow chain whose gap exceeds 1024
-  chars is exactly as unprotected as it always was — a partial fix, not a regression. Pinned at
-  the exact cliff by `test_non_bracket_swallow_guard_peek_boundary_is_pinned`; guard 1's lack of
-  any such cliff is pinned separately by `test_bracketed_swallow_guard_has_no_distance_limit`
-  (redacted at gap 1025 and gap 100,000). 1024 — 2x the JWT first-segment bound, >12x the widest
-  peek distance any fixture in this file exercises, ~20x headroom under the 2.0s anti-quadratic
-  budget (measured on the mandated `"key="*20000` seed: 256 → 0.034s, 1024 → 0.103s,
-  4096 → 0.366s, linear in the cap; 4096's ~5.5x margin judged too thin for a slower CI runner).
-
-  Guard 1's own flatness is structural, not a bound: on `"key="*N` (the seed above), no
-  character is ever a bracket, so `key_bracket` is false at every anchor and guard 1's
-  unbounded branch never evaluates — only guard 2's O(cap) branch runs, giving O(N). On a
-  repeated-BRACKETED-anchor seed (`'x["key"]= ' * N`, the shape that actually exercises guard
-  1), it stays flat for a different reason: reaching `key_bracket` requires a quote and a `]`,
-  both outside `_VALUE_CHARS`, so guard 1's unbounded probe run from one bracketed anchor is
-  always terminated before the next bracketed anchor begins — no probe run spans two anchors,
-  so per-anchor cost cannot compound. Measured: 20,000 reps (200k chars) 0.029s, 40,000 (400k)
-  0.057s — linear. Both seeds kept flat by
-  `test_repeated_anchor_input_is_not_quadratic_for_any_pattern` and the new
-  `test_repeated_bracketed_anchor_input_is_not_quadratic`.
-
-  One more disclosed, accepted consequence, unchanged by the dual-guard formulation: on a diff
-  body line, a guard's refusal can hand the line to the #421 code-reference exemption, which
-  may then exempt it entirely — `password = application_api_key = resolve_credentialx(env)`
-  used to redact the first span; now the whole line reads as a code reference and nothing is
-  masked. 0 occurrences in the 713,126-line real third-party corpus swept for this change
-  (`.venv/site-packages`, `exempt_code=True`), and what stays unmasked in that shape is an
-  identifier, not a literal — arguably a false-positive reduction, not a loss.
-
-  Corpus A/B (old engine vs new, per line, both `exempt_code` modes): 249 repo text files /
-  77,370 lines and 3,033 real third-party source files / 713,126 lines. Real corpus: 0
-  redacts-less regressions and 0 newly-redacted lines in either mode. Repo files: 0 regressions
-  in prose mode; in code mode, 2 "regressions" that are self-referential — this repo's own
-  documentation (this entry, and the module comment above) quoting the code-reference-exemption
-  reproducer line verbatim, not real corpus occurrences. 9 newly-redacted repo lines in both
-  modes, all illustrative bug-example text in this module's own comments, this changelog entry,
-  and the new test file's docstrings — none a real secret. No agent-visible MCP surface changes
-  (a redacted-text VALUE, not a schema field), so no `fingerprint` bump.
-- **A redaction marker no longer claims completeness it doesn't have** (#446). A credential
-  carrying a character the connection-string userinfo matchers exclude (`/`, or `?`/`#` on the
-  arms that stop there) can never be SPANNED by those matchers — #445's span merge cannot fix
-  that, only widen coverage for values a single pattern CAN span — so when an earlier matcher
-  fires on its prefix, the remainder still ships beside the marker unredacted:
-  `redis://u:token=[redacted: secret value]%2Fmore/tail@host` looked complete while `/tail`
-  went out in the clear. The engine's single rebuild site now decides per merged interval
-  whether the replacement may be partial and, if so, emits
-  `[redacted: possibly partial secret value]` instead of the plain marker. Two checks, either
-  sufficient: **trailing** — the character right after the interval exists and is not a safe
-  terminator for that interval's TRAILING-EDGE CANDIDATE TYPE. Not one fixed set: a
-  userinfo/connection-string or vendor/JWT/PEM candidate (whose character class IS a specific
-  credential's own grammar) uses a wider set; a LABELLED or Bearer candidate (whose value
-  alphabet — `_VALUE_CHARS`, or Bearer's RFC 6750 `b64token` class — is not) uses a narrower
-  one, after a later Codex review round found the original single global set wrongly treated
-  `@`/`&`/`;`/`\` as safe there too. Exact membership lives on `_SAFE_TERMINATORS`/
-  `_LABELLED_SAFE_TERMINATORS` in `redaction.py`, the authoritative source — not restated here
-  to avoid a second copy drifting. **Leading** — the interval's earliest-starting candidate is
-  a whole-match one (no preserved group ahead of it) and the character right before it is in a
-  leading-continuation class (`_VALUE_CHARS` minus `=`, since `=` legitimately abuts a complete
-  vendor token like `token=ghp_…` while every other member can be an interior character of a
-  longer secret) — the case a bounded JWT match starting mid-token (`xxxeyJ…`) needs. Neither
-  check is a completeness proof: the plain marker means no affirmative sign of truncation was
-  found, not that completeness was verified, which this best-effort mechanism cannot do. Three
-  options were weighed: suppressing the marker entirely (rejected — it would hide that
-  redaction happened at all, which is worse than an honest partial marker); span-merging harder
-  (rejected — verified impossible, no pattern can produce a candidate covering the excluded
-  character in the first place, so there is nothing to merge); and this one, marking the
-  uncertainty instead of hiding it. The underlying miss — a userinfo credential the
-  connection-string matchers cannot span — remains this module's documented best-effort
-  boundary; this change is only about not letting the output claim otherwise. No agent-visible
-  MCP surface changes (this is a redacted-text VALUE, not a schema field), so no `fingerprint`
-  bump.
-- **`initialize` advertised the `io.modelcontextprotocol/ui` extension (MCP Apps) even though this
-  server implements no UI/Apps code** (#424). FastMCP's `LowLevelServer.get_capabilities`
-  unconditionally injects `UI_EXTENSION_ID` into `ServerCapabilities.model_extra`; a host probing
-  for MCP Apps support would find the capability advertised but nothing behind it. The existing
-  `get_capabilities` monkeypatch seam — already used to null out the unused `prompts` capability
-  (#F5-audit) — is renamed `_get_capabilities_without_prompts_or_extensions` and now also filters
-  the `extensions` mapping: it removes only the `io.modelcontextprotocol/ui` id, preserves any other
-  entry a future FastMCP version might legitimately add, and omits the `extensions` key entirely
-  only when nothing is left after filtering. Removing a falsely-advertised capability is a
-  correction, not a removal of implemented behavior — nothing a client could actually use is taken
-  away — so this bumps `FINGERPRINT` (`schema-69` → `schema-70`) but is **not breaking**;
-  `RESULT_FORMAT` is unchanged (`initialize` is not persisted).
-- **Secret redaction now merges every matcher's candidate spans instead of substituting them one
-  pass at a time, so no matcher can strand part of a secret another one covers whole** (#445). The
-  inline patterns used to be applied as sequential `re.sub` passes, each over the previous pass's
-  output. `re.sub` never revisits consumed text, so an earlier matcher with a NARROWER value class
-  could eat a prefix of a value a later matcher would have covered entirely, leaving the tail
-  beside a marker that looked complete: `token=ghp_<20 chars>-tailsegment` came out as
-  `token=[redacted: secret value]-tailsegment` (the `-` is outside the GitHub-token class but
-  inside the labelled pattern's), and `password=AKIA<16 chars>tailsegment` as
-  `password=[redacted: secret value]tailsegment`. #443 had already paid for one instance of this
-  by reordering the list, but an ordering only chooses which member of the class bites. Every
-  pattern is now run with `finditer` against the ORIGINAL line; each candidate contributes the
-  span it would replace; the spans are merged on strict overlap and the line is rebuilt with one
-  marker per merged interval. Touching spans deliberately stay separate, so abutting candidates
-  emit two markers exactly as two `re.sub` passes did, and a preserved prefix (a labelled key, an
-  `Authorization:` header, a connection string's `://user:`) survives because it lies outside
-  every merged span rather than because a replacement handed it back — which is precisely how a
-  wider candidate now absorbs a narrower one's leftovers. The order of the pattern list no longer
-  affects output at all. One behavioral delta comes with this and runs in the fail-closed
-  direction: the #421 code-reference exemption is now judged against the original line rather than
-  the partially substituted accumulator, so a line where an earlier marker had erased the evidence
-  (`+secretAKIA…_key = helper_function_name(x)`, whose marker hid the word `secret` from the
-  label scan) is redacted instead of exempted. Two neighbouring defects are deliberately NOT fixed
-  here and get their own changes: #436, the intra-pattern swallow, is one match's own span and
-  merging spans cannot widen a match; and #446 — a userinfo credential carrying a character both
-  connection-string runs exclude (`/`, or `?`/`#` on the arms that stop there) — still strands its
-  remainder, because no single pattern produces a candidate spanning it and there is nothing to
-  merge. The span projection itself now fails CLOSED: a candidate whose group 1 is not a leading,
-  participating prefix of its match — a pattern added later with a non-leading group, or an
-  alternation that leaves group 1 unmatched while `lastindex` reports another branch — has its
-  WHOLE match redacted rather than the slice the projection would compute, which in the first case
-  would copy the credential through as "preserved" text and in the second would slice from the
-  wrong end of the line and leave the secret intact beside a stray marker. No shipped pattern
-  triggers the fallback (all four grouped matchers are leading-group), so this is a guarantee for
-  future ones. No agent-visible surface changes, so no `fingerprint` bump.
-- **The three sync tools' Progress & recovery paragraphs undersold job-record recovery**
-  (#414). `codex_consult`/`codex_review_changes`/`codex_delegate` already recorded every sync
-  call as a job, but the paragraph's recovery sentence named only `codex_job_list`→
-  `codex_job_result`, omitting `codex_job_status` as the polling step in between. It also framed
-  recovery as a fallback for a dropped connection, when some MCP clients background a long tool
-  call before the server's own deadline — `timeout_seconds` bounds the run, not necessarily the
-  client's inline wait, and the job record is recoverable either way. Wording only, so it bumps
-  `FINGERPRINT` (`schema-68` → `schema-69`) without moving `RESULT_FORMAT`; not breaking.
-- **`Meta.timeout_seconds` published a bare, undescribed field** — the only semantically-loaded
-  member of `Meta` with no description, unlike its neighbours `roots_source` and `tier` (#413). It
-  now documents which deadline the value is, by envelope: a synchronous call that runs Codex
-  (`codex_consult`/`codex_review_changes`/`codex_delegate`) reports that call's own resolved
-  deadline, post-clamp (10-600s; an out-of-range value is coerced to the nearest bound, not
-  rejected). A background job — a `*_async` call's job-start handle, or a later
-  `codex_job_result`/`codex_job_consume_result` fetch of that job's ORIGINATING run — reports the
-  job's own deadline instead: the job-lifecycle ceiling (`config.job_max_seconds()`, default 1800,
-  clamped 60-7200), since a background job runs to that ceiling, not the sync clamp. A
-  `codex_job_*` call's own handler-generated lifecycle error (`job_not_found` and its siblings)
-  reports that same ceiling, present even when no job was resolved (`job_not_found`, where
-  `meta.job_kind` is omitted from the envelope, not null). Call-boundary argument validation
-  (`invalid_arguments`) and an unexpected `internal_error` — on any tool, not only `codex_job_*` —
-  instead report the server's configured sync deadline, still post-clamp; neither is tied to any
-  run or resolved job. A regression test now pins an async handle's `meta.timeout_seconds` to
-  `config.job_max_seconds()`, the one documented sub-case with no prior coverage. Wording only, so
-  it bumps `FINGERPRINT` (`schema-67` → `schema-68`) without moving `RESULT_FORMAT`; not breaking.
-- **A transfer or rate-limit read's `stderr_tail` no longer races the drain thread that
-  fills it for a terminated child** (#449). `_StderrDrain` reads a child's stderr on its own
-  daemon thread and kept no reference to it, so `transfer_session` and `read_rate_limits`
-  could build their outcome — snapshotting the drain — with zero synchronization against
-  that thread. On a loaded runner the scheduler could exit the child and let the outcome be
-  assembled before the last, most diagnostic line ever reached the capture, and a quiesce
-  placed in the `finally` could not fix it: Python evaluates a `return` expression before
-  `finally` runs, so the outcome was already built. The fix is a shared settle step
-  (`_settle_and_tail`) that every post-spawn exit in both functions now runs before
-  constructing its outcome — terminate the child, join the stdout reader, then give the
-  newly-tracked drain thread a bounded `quiesce()` (~2s, comfortably above the milliseconds
-  EOF normally takes once the child is dead) to catch up, and only then take the final
-  snapshot. This removes the race for the common case — a child that has actually
-  terminated. It does **not** promise a complete tail unconditionally: a stream that never
-  reaches EOF (a descendant that inherited the fd, or one whose progress resumes only after
-  the quiesce bound has already elapsed) still yields a bounded, possibly incomplete tail —
-  that boundary is deliberate and unchanged, and is now pinned by tests rather than left
-  implicit. `_terminate` is meant to run exactly once per child, not to be repeat-called:
-  after the first call has already reaped the leader, the OS is free to recycle that pid for
-  an unrelated process before a second call would run, so repeating it is not safe. The
-  settle step now tracks whether it already ran one so `finally` skips its own call on every
-  settled path; `finally` remains the sole teardown only for a path that raises instead of
-  returning. No agent-visible surface changed.
-
-- **The JWT redaction pattern's first segment is now bounded, so redaction is no longer quadratic
-  on repeated-anchor text** (#439). Same shape as #438's scheme run: an unbounded greedy class
-  ahead of a literal (`\.`) that never arrives. On text built from nothing but `eyJ`, every anchor
-  position scanned the unbounded first segment to the end of the run hunting a `.` that never
-  comes, then backtracked one character at a time before trying the next anchor — measured at
-  `"eyJ"*26666` (80k chars) 1432ms, `"eyJ"*53332` (160k) 5676ms, roughly 4x time per 2x input (the
-  regression test's own rep count was separately raised to 90000 on the implementation machine, so
-  the old pattern lands at least 8x over the test's 2.0s budget rather than merely exceeding it).
-  `redact_text` runs on untrusted model output via `redact_tree`, so input size and shape are
-  attacker-influenced — a liveness/DoS concern, since a sync tool that blows its deadline loses its
-  paid work. The fix bounds only the *first* segment, at `{8,512}` post-anchor characters (515
-  total including the `eyJ` anchor itself): capping seg1 caps per-anchor work *and* caps how many
-  anchors ever reach seg2, which is what kills the quadratic blowup rather than merely capping one
-  match's cost — the same two measurements after the fix: 18ms and 37ms, roughly linear. 512 is
-  deliberately generous: real JOSE headers are base64url of compact JSON, typically 20-60
-  characters and ~120 with `kid`/`jku`, so 512 is about 8x that; the `x5c`
-  certificate-chain-in-header outlier that can exceed it is the accepted, pinned boundary, and such
-  a token is still caught when labelled (`token=…`) or on an `Authorization: Bearer` line by those
-  patterns. seg2 and seg3 stay unbounded — payloads are legitimately KBs, seg3 has no follower to
-  backtrack against, and seg2's backtracking is transitively bounded once seg1 is capped. A
-  possessive quantifier (`{8,}+`) and an atomic group (`(?>...)`) both compile on this repo's
-  supported Pythons (3.11+), but neither fixes this: both only suppress backtracking *within one
-  match attempt*, not the fresh scan repeated at every successive anchor position, which is the
-  actual source of the quadratic blowup; a
-  `(?<![A-Za-z0-9_-])` left-context lookbehind does kill the blowup too but costs coverage of an
-  embedded `xxxeyJ…` match that redacts today, so it was rejected as the fix and used instead as
-  the differential sweep's sensitivity control.
-- **`gitdiff_error`'s `invalid_arguments` branch no longer echoes the rejected value in its
-  human-readable `message`** (#418). `InvalidArgument` and `ErrorDetail` both promise the rejected
-  value is never echoed — it may be a secret — and the machine fields already honored that for
-  `InvalidUntrackedError` (the branch's `reason`/`allowed_values` are built from `get_args(Untracked)`,
-  the known domain, not from the exception). The `message` alongside them did not: it was built from
-  `redact_text(str(exc))`, and `InvalidUntrackedError`'s text embeds the value verbatim
-  (`got {untracked!r}`), so one envelope both withheld the value in its structured fields and printed
-  it in prose next to them. The fix reuses that same value-free reason as `message` for this branch
-  only; the other seven `gitdiff_error` branches (`invalid_base`, `invalid_commit`, `invalid_paths`,
-  `invalid_scope`, `not_a_git_repo`, `git_unavailable`, and the `RuntimeError` fallback) keep echoing
-  `str(exc)` unchanged — only the `invalid_arguments` branch's guarantee text promises no echo. Those
-  seven don't uniformly carry caller-supplied refs/paths: `invalid_base`/`invalid_commit`/
-  `invalid_paths`/`invalid_scope`/`not_a_git_repo` do, but `git_unavailable` and the `RuntimeError`
-  fallback carry bounded, best-effort-redacted git diagnostics (a missing executable, git stderr, a
-  timeout) instead — left unchanged by this fix.
-
-- **`codex_delegate`/`codex_delegate_async` error envelopes no longer quote the deleted
-  worktree** (#420), closing the surface #412 left open: "Error envelopes on this path can
-  still quote a worktree path through git or Codex stderr." Two families of producer fed the
-  gap. `codex.classify_failure`'s `nonzero_exit` branch surfaces the raw
-  `event_error or run.stderr or run.stdout` — Codex runs with `cwd` set to the throwaway
-  worktree, so that text can name it directly. And `WorktreeError` messages built from raw
-  git argv/stderr in `_core/worktree.py` — staging, committing, capturing the diff, and (a
-  finding from the third review round) gitattributes filter-driver enumeration, which
-  `_hardening_flags` runs from *inside* both the seeding and capture paths, not only
-  pre-worktree. Both are now routed through `worktree.sanitize_prose`, the one composition
-  that safely relativizes worktree-absolute paths AND redacts secrets in the same pass — the
-  two operations reordered are each independently unsafe (redact-then-relativize can
-  fragment a `file://` alias past its delimiter; relativize-then-redact can shorten a
-  path-bearing secret below the redactor's 16-character floor), which is why `sanitize_prose`
-  exists as a single function rather than two calls a caller has to order correctly.
-  `classify_failure` gained an optional `sanitize` keyword that, when given, replaces its
-  internal `redact_text` call (never both — the sanitizer already redacts); omitted, its
-  behavior is byte-identical to before. `delegate.run_delegate` passes a worktree-aware
-  sanitizer built from the same aliases the success-path rewrite already uses. A
-  create-failure (`WorktreeError` before a worktree path even exists to bind to) needs no
-  caller-side change — `_core/worktree.py`'s own construction sites now sanitize at the
-  source. Fixing a leak in the shared `sanitize_prose`/`_replace_aliases` machinery along
-  the way (a `.` immediately ending a worktree-path reference, e.g. `... in <wt>.`, used to
-  be left completely unrewritten rather than relativized) also changes the #412 success-path
-  `summary`/`raw_response.text` rendering for that shape: a sentence-final worktree root now
-  renders as `[worktree].` instead of surviving as the dead absolute path. Internal API only:
-  no result `fingerprint` or `RESULT_FORMAT` change.
-
-- **The background worker now guards its own persistence boundary against a nonconformant
-  `invalid_arguments` envelope** (#419). `errors.make_error` enforces the `invalid_arguments`
-  contract for every envelope the server *builds* — a non-empty per-argument list, AND `details`
-  exactly mirroring that list's first entry — but the worker wrote whatever its dispatched producer
-  returned straight to `result.json` with no validation, and replay reconstructs stored records
-  through `ErrorResult.model_validate`, which deliberately bypasses that constructor guard so a
-  pre-existing record stays readable. A worker path that ever produced a listless
-  `invalid_arguments` envelope, or one whose `details` disagreed with its own list, would therefore
-  persist it, and replay would return it stamped with the *current* fingerprint — advertising a
-  conformance it never had. No worker path can mint one today, but nothing tied that property to
-  the invariant. `_worker.main` now normalizes any such envelope to a conformant `internal_error`
-  immediately before the atomic write, preserving the run's own meta; an envelope that satisfies
-  BOTH halves of the contract passes through unchanged, and a failure inside the guard itself falls
-  through to persisting the original payload rather than losing the record. No `FINGERPRINT` or
-  `RESULT_FORMAT` change — this is a runtime normalization on an already-broken path, not a schema
-  or description change.
-- **A marker from an earlier pattern no longer strands the rest of a connection-string
-  credential** (#443). The inline matchers are applied in order, one `re.sub` pass each, and `sub`
-  never revisits consumed text. Every matcher except the connection-string pair is
-  *substring-oriented* — it recognizes a credential's shape wherever it appears, including inside a
-  longer value — so when one of them fired within a connection-string password, its replacement
-  marker split the credential in two. The marker contains a space and a colon, and both userinfo
-  runs stop at whitespace, so neither could match what was left, and the tail shipped intact:
-  `redis://u:token=s3cr3tvalue0123456789%2Ftailsegment@host` came out as
-  `redis://u:token=[redacted: secret value]%2Ftailsegment@host`, sending `%2Ftailsegment` to the
-  model. It was reachable in all three userinfo shapes, and a second pass did not recover it — the
-  output was stable. The worse of the two harms is not the disclosure: **the output advertised
-  itself as fully redacted.** A reader, human or model, sees `[redacted: secret value]` and
-  reasonably concludes the credential was handled, so a partial redaction that looks complete
-  suppresses the reaction a bare secret would provoke. The fix is an ordering — both
-  connection-string matchers now run first, so the complete userinfo span is consumed before
-  anything can fragment it — because the defect is a property of the pipeline rather than of any
-  one matcher, and no per-pattern tweak reaches it. No regex, marker, or schema changed. Nothing is
-  lost by running them early: a later candidate is either inside the span they replace, where the
-  marker already covers it, or wholly outside it, since substitution rescans the whole string on
-  each pass. A candidate *straddling* the boundary is the only dangerous case, and it cannot arise,
-  because the boundary characters are the `:` opening the password and the `@` closing it and no
-  other matcher's **replaced** run contains either — where a `:` does appear in another match
-  (`Authorization:`, a labelled key) it sits in the preserved group. That narrow property is the
-  whole argument, it belongs to those other matchers rather than to the connection-string ones,
-  and it is pinned by a test rather than left as prose — deliberately, because two review rounds
-  each caught a broader version of the claim being false (the password run admits `:` on purpose,
-  so a multi-segment password redacts whole; and the private-key matcher's span contains spaces). Because an old-*pattern*
-  oracle — the instrument #438 and #440 used — is structurally incapable of seeing this bug (the
-  regexes are unchanged, so oracle and matcher agree by construction, and more fundamentally the old
-  pipeline cannot recognize its own partially redacted output, since the marker destroys the syntax
-  the oracle needs), the guard is a **sentinel sweep** instead: every credential in a 4,320-line
-  grammar product carries a unique tail that no matcher recognizes alone, and the assertion is that
-  the tail disappears. It runs in both code-exemption modes, with the pre-#443 ordering kept as a
-  control that must report leaks, and its hand-maintained payload set is *validated against the live
-  pattern list* by a completeness guard, so a matcher added ahead of the pair fails that guard rather
-  than silently going uncovered — the failure mode that made a previous sweep vacuous (#438/#439). Wider checks
-  run during development agreed: an A/B over 72,000 lines in both exemption modes lost no coverage
-  and improved 6,450 lines, against a deliberately broken control that reported 23,487 losses. Two
-  limits are stated rather than implied. This cannot repair input that arrives *already* fragmented,
-  since a marker is not recoverable. And it closes only credentials the userinfo runs can **span**:
-  one carrying a character they exclude (`/`, or `?`/`#` on the arms that stop there) was never
-  matchable at any position in the list, so an earlier matcher firing on its prefix still strands
-  the remainder — order-invariant, unchanged by this fix, characterized by a test and tracked
-  separately. The change also **enlarges the pre-existing false positive filed as #442**: running
-  the connection-string matchers first removes an accidental brake, because a labelled marker
-  landing inside a query used to stop the username arm from matching, so
-  `https://host.example:8443?token=<secret>@x.example` no longer keeps its port and query. That is
-  accepted rather than fixed here — the credential is still redacted either way, and what grows is
-  how much surrounding text is masked with it — because #442's remedy excludes `?`/`#` from that
-  class, which *narrows* a documented guarantee and needs its own false-positive corpus; folding a
-  narrowing into a security fix is the bundling this repo's conventions rule out. It is pinned by a
-  characterization test so #442's eventual fixer reads the current output instead of re-deriving it.
-- **A connection-string credential is now redacted in every userinfo position it can occupy**
-  (#440). The matcher required a non-empty username before the password, so `redis://:pass@host`
-  went out verbatim — and that is not an edge case but the *canonical* Redis URL, since Redis had
-  no usernames before ACLs in 6.0, so it is the shape most `REDIS_URL` values still take. Widening
-  the username class to `*` closes it. Reviewing that widening surfaced a second live gap in the
-  same syntax: the replacement preserves the username, so a token stored *there* with an empty
-  password (`https://<token>:@host`, the token-as-username idiom) was never redacted either. That
-  is now matched too, at 16+ characters — not a new constant, but the credential threshold this
-  module already uses for labelled values. The password side stays required: an empty password
-  holds no secret, and matching it would emit a marker claiming to have hidden a blank value.
-  The **bare** `://token@host` form is deliberately left alone at any threshold, because length
-  cannot establish credential semantics in that position — a 16+ rule masks
-  `git+ssh://deployment-automation@git.example.com/repo` (a documented pip VCS URL),
-  `ssh://continuous-integration@build...`, `https://first.last+alerts@example.com`, and
-  `docker://prometheus-operator@sha256:…` (a `NAME@DIGEST` reference, not userinfo at all), every
-  one an identity rather than a secret, and raising the threshold only changes which identities get
-  destroyed. That position already carries every credential shape this module *recognizes*, since
-  the vendor patterns match `ghp_`/`AKIA`/`sk-`/`xoxb-` wherever they appear; what remains is a
-  generic opaque string, which is exactly what cannot be told apart from a long username, so it
-  stays inside the module's documented best-effort boundary. `?` and `#` are excluded from the new
-  run although the password class admits them, because the two play different roles: this run is
-  the text being *replaced* and must stop at the end of the authority, or a query carrying an `@`
-  is masked as userinfo (`https://example.com?email=a.b+c@example.org` would collapse to
-  `https://[redacted: secret value]@example.org`, hiding the host), whereas a password may
-  legitimately contain both. The password run makes the same distinction *conditionally*, on
-  whether a username was present, and the two arms are not interchangeable: `://:` is also how an
-  empty host with a port serializes, so the new empty-username arm had to stop at `?`/`#` — without
-  that, `custom://:8080?email=a@b`, a query string carrying an `@` and no userinfo at all, came out
-  as `custom://:[redacted: secret value]@b`. The username arm keeps admitting both, byte-for-byte
-  as before, because narrowing *it* would stop redacting a password containing a raw `?`, a real
-  loss this change is not allowed to take. Because widening a matcher is how #432 and #434 each turned a false
-  negative into a *leak*, the change is pinned by the differential sweep this repo uses for
-  redaction work — the previous matcher kept as an oracle that must find nothing left in the new
-  pipeline's output. That sweep is explicitly scoped to the branch it can see: its oracle spells
-  the old `+`, so it never matches an empty username at all (0 oracle hits across every
-  empty-username line in its own grammar product, against 360 on the named ones), and shipping it
-  alone would have looked like coverage of the fix while being vacuous on precisely the fix. The
-  new branches are pinned by exact-output tests instead, which also catch the defect no oracle
-  sweep can see — a *partial* replacement, whose marker contains spaces and so destroys the URL
-  syntax the oracle needs in order to match. Wider checks run during development agreed: a
-  97,200-line sweep over the pattern's grammar slots lost nothing, against a deliberately narrowed
-  control that lost 816 spans to prove the sweep could see a loss at all, and an A/B over 60,000
-  real files changed only the target Redis shape. One control deliberately *fails* to fire and is
-  documented as such: dropping `]` from the password class leaks `postgres://u:pass]word@h` while
-  the sweep stays green, which is why the printable-domain walks are not redundant with it.
-- **Redacting a long line no longer takes quadratic time** (#438). The connection-string pattern
-  opened with a scheme run, `[a-zA-Z][\w+.-]*://`, whose character class holds everything a scheme
-  is made of. At every start position that run consumed the rest of the surrounding word and then
-  backtracked a character at a time looking for the `://` literal — work repeated at every position
-  of a long unbroken run, so cost grew with the square of the input: 100 KB of text took ~15 s, and
-  a few hundred KB would take minutes. That matters because `redact_text` runs over *untrusted model
-  output* (`raw_response.text`, summaries, finding fields), so the input's size and shape are
-  influenced by what the model returns rather than only by what the caller wrote, and a synchronous
-  call that blows its deadline is terminated with its paid work lost. The slowdown itself disclosed
-  nothing — it was a liveness bug — though the fix for it also closes a separate leak, described
-  below. The issue attributed the cost to the userinfo classes, which measurement
-  did not support — the scheme run alone accounted for 577 ms of a 583 ms match, and the userinfo
-  after a literal `://` for 0.0 ms — so capping the userinfo, the suggested remedy, would have fixed
-  nothing. The scan now simply starts at the `://`. That costs no coverage, because the scheme was
-  never part of the *replaced* span, only of the surrounding match: the old pattern captured it in
-  group 1 and the replacement handed it straight back, while the new one leaves it outside the match
-  altogether. Either way it survives verbatim, so output is byte-identical wherever the old pattern
-  matched. A committed test pins that invariant by keeping the old pattern as an oracle and requiring
-  it to find nothing in the current pipeline's output, over a product of the pattern's grammar slots
-  plus multi-candidate lines; because a negated character class cannot be policed by a corpus of
-  ordinary URLs, two further tests walk the whole printable domain of each userinfo class. Wider
-  differential sweeps run during development (599,040 single-candidate cases and 49,280 per-secret
-  span checks, both exemption modes), each against a deliberately narrowed control to confirm the
-  sweep could see a loss at all, found the same. Neither a possessive quantifier nor a bounded run was the answer: possessive removes the
-  backtrack but not the rescan (still quadratic, measured), and a bound only trades the blowup for a
-  magic constant. Anchoring also recognizes strictly more — userinfo whose `://` no letter-led run
-  reaches (`://u:pw@h`, `9://u:pw@h`) — which is the safe direction for a fail-closed boundary and
-  closes a genuine disclosure gap on the way: the patterns run in order over the same line, and when
-  the labelled-secret pattern had already replaced the text before the `://` with a marker, the
-  letters the scheme run needed were gone with it, so `key=<eaten>://user:pw@host` shipped its
-  password intact. That is a real leak on `main` today, fixed here. A regression test pins the liveness property with a budget ~275x
-  above the fixed timing and ~7x below the broken one. The JWT pattern is quadratic in the same way
-  under a repeated-anchor input and is tracked separately; a sweep of the remaining patterns found
-  no others.
-- **A generic secret under a bracket-subscripted key is now redacted** (#434). The labelled-secret
-  pattern learned to step over a key's closing quote in #432, but not over the `"]` that follows it
-  in a subscript, so `cfg["password"]["key"] = <secret>` matched nothing at all — in source *and* in
-  data files, where no code exemption is even in play. Like the quoted-key gap before it, this hit
-  the carrier the pattern exists for: a credential with no recognizable vendor shape, which every
-  other pattern misses by design. #434 was filed arguing the obvious widening was unsafe on its own —
-  that the match would then be *exempted* as a code reference, turning a false negative into a leak,
-  and so had to be paired with teaching the label scan to read across `"]["`. That premise did not
-  survive checking: it predates #432's own fail-closed guard. Putting the bracket **inside** the
-  `key_quote` group means reaching a `]` requires consuming a quote first, so a bracketed match
-  always populates that group and is rejected for the exemption before the label scan is consulted —
-  verified structurally (no match can consume a `]` while leaving `key_quote` empty) and pinned by an
-  invariant test, so moving the bracket out of the group fails CI even if every behavioral test still
-  passes. No `_LABEL_LEAD_RE` change was needed. The group also tolerates whitespace before the
-  bracket (`cfg["key" ] = …`), which costs nothing measurable and is valid syntax in every language
-  the source whitelist covers. A bracketed match matches *earlier* than the old pattern did, which
-  needed a second guard: substitution never revisits consumed text, so a bracketed candidate could
-  swallow a **later** sensitive label as its own value, sending out a secret the old pattern had
-  redacted — `cfg["token"] = application_specific_api_key = "<secret>"` matched at `token"]` and left
-  the real value intact. A bracketed match now refuses to start when its own value would contain a
-  further label and separator. Getting that guard right took two corrections, both found by review
-  rather than by the corpus A/B or an unstructured fuzz — random generation essentially never
-  produces the shapes involved. It has to look *inside* the value rather than past its end, because
-  the value character class contains `=`, so an unspaced `label=value` chain is absorbed whole. And
-  its label-to-separator step has to be the *same shape* as the pattern's own, including the closing
-  quote: a guard written as a bare separator cannot see a swallowed key wearing a `"`, which leaked
-  `cfg["token"] = "aws_secret_access_key": "<secret>"` — the exact input family #432 was written for,
-  and with the redaction marker landing on the harmless key name so the output read as successfully
-  redacted. That step is now written once and the guard's copy derived from it, so the two can differ
-  in capture groups but not in shape. Every form is pinned by a test, and each guard was
-  mutation-tested to confirm the test that claims to hold it actually fails without it. The
-  equivalent weakness for *non*-bracket matches is pre-existing — reachable on the pre-#434 pattern
-  too — and is tracked separately as #436 rather than widened into this change. The accepted cost is the mirror of the guarantee: a bracketed match
-  can never take the #421 exemption, so ordinary source assigning to a `key`/`token`-ish subscript is
-  masked out of a reviewed diff — and because the label alternatives are unanchored, that reaches
-  innocent suffixes such as `obj["monkey"]` too. Measured rather than assumed: an A/B of the old and
-  new redactors over 3124 real source files found **no** line that stopped being redacted and three
-  newly redacted, two of which the unsubscripted form (`client_secret = …`) already redacts today, so
-  only one is a genuinely new class. That trade is pinned by a test so it stays a deliberate policy
-  choice. Both places that had recorded the disproven analysis — this file's #432 entry and the
-  comment block in `_core/redaction.py` — are corrected, since left alone they would have sent the
-  next maintainer down the discarded two-part design.
-
-- **Secret redaction no longer scrubs ordinary source out of reviewed diffs** (#421). The
-  labelled-secret pattern matches any 16-or-more-character identifier run after a `key`/`token`-ish
-  label, so plain code tripped it: `token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)` reached
-  Codex as `token = [redacted: secret value] + _placeholder_seed(text)`. Sweeping this repository's
-  own tracked files found 35 lines matching that pattern and no other, about half of them innocuous —
-  including all six `idempotency_key: IdempotencyKeyParam = None,` handler signatures. Two harms
-  compounded: the reviewer could not see the code it was asked to review (in the reported case the
-  masked lines *were* the mechanism under review, so a "no findings" verdict rested on much less
-  evidence than it appeared to), and because any inline mask makes `coverage.status` partial, the
-  never-false-pass rule turned a model `pass` into `unknown` citing `redacted` — which reads as "this
-  file had secrets" when one innocuous assignment tripped a heuristic. A labelled match inside a diff
-  body line is now left intact when it is provably a code reference rather than a credential: the
-  separator must be followed by whitespace (so `api_key=value` in config, env, shell, or a query
-  string is never exempt), the label must not be from the password family (a human password may
-  legitimately end right before `(`), the value must be unquoted and a bare dotted identifier path
-  (no `+ / = ~ -`, which real base64-ish secrets carry), and it must be followed by a call, an
-  operand, or — only with a `:` separator — an annotation default. The password-family test reads the
-  whole logical label rather than the matched one, because the pattern can match a compound label's
-  tail: `password_key = …` matches only at `_key`, so testing the match alone would miss the
-  `password` and leak the value. `.` and `-` count as label characters there rather than boundaries,
-  so a properties/Spring/YAML key such as `config.password.key = …` or `app-secret-key = …` is judged
-  whole too. The exemption also applies only within a **recognized source file** — a whitelist of
-  code extensions, so an unknown extension keeps redaction. That gate is load-bearing rather than
-  belt-and-braces: every condition above is a claim about *code* syntax, and in YAML, properties, or
-  Markdown the identical text is a plain scalar, where `key: correcthorsebatterystaple(2024)` is a
-  password containing parentheses. Worse, YAML nests the sensitive label on a *preceding* line
-  (`secrets:` then `  key: …`), out of reach of any same-line test, so no label-scanning refinement
-  could have covered it. Redaction is not weakened: the exemption applies only to diff body lines and
-  never to `redact_text`'s arbitrary prose, where no syntax guarantee holds; a bare `Authorization:`
-  header is treated as prose too; and every vendor/JWT/PEM/connection-string pattern still runs on an
-  exempted line, so a value carrying a recognized secret shape is caught regardless. Verified against
-  19 realistic credential-bearing lines — including `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, and
-  `NPM_TOKEN` values with no vendor prefix, which this pattern is the last line of defense for — none
-  of which the exemption reaches. Two design traps are pinned by tests: the check runs in the
-  substitution callback rather than as a trailing lookahead, because a greedy value can match one
-  character short to satisfy an assertion (redacting `_placeholder_seed` and leaving `d(text)`), and
-  the annotation-default case is restricted to the `:` separator, because allowing it after `=` would
-  exempt `token = abcd1234abcd1234efgh = leftover`. Nine of the nineteen affected lines under `src/`
-  stop being redacted; the rest remain: quoted
-  identifier-ish constants such as `RATE_LIMIT_REACHED_TYPE_KEY = "rateLimitReachedType"`, which are
-  structurally identical to `API_KEY = "ghp_…"`. Shannon entropy does not separate them (innocuous
-  values measured 3.35–4.44 bits/char, realistic generic secrets 2.81–4.32, with an MD5-shaped secret
-  *below* several innocuous constants), so no cheap heuristic is safe there. Two residuals are
-  disclosed rather than fixed: a data or prose fragment *inside* a source file — a config blob in a
-  docstring, an example in a comment — is judged as code; and the sensitive-label list covers the
-  password family and `secret` but not `auth`/`private`/`session`, because widening it would re-break
-  exactly the code this change fixes (`auth_token = _build_token(session)`). The `redacted` omission
-  reason's documented meaning is also corrected: it claimed a whole file's hunk was dropped, but the
-  same disclosure has always covered inline masking too.
-
-- **A generic secret under a quoted JSON key is now redacted** (#432). The labelled-secret pattern
-  required its `:`/`=` separator immediately after the label, but JSON puts the key's closing quote
-  there first, so `"api_key": "…"` never matched while the unquoted `api_key: "…"` did. That silently
-  exempted the carrier this pattern exists for. It is the last line of defense for credentials with
-  no recognizable vendor shape — `AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, `NPM_TOKEN`, an internal
-  HMAC secret — and JSON is a very common carrier for exactly those: `.json` config, fixtures,
-  captured API responses, and the `raw_response.text` this redactor is applied to. A value carrying a
-  vendor prefix was caught anyway by its own pattern, which is why `"token": "ghp_…"` looked fine and
-  masked the gap. `redacted_paths` reported nothing in the missed cases, so `coverage` read
-  `complete`. The label group now accepts an optional closing quote, backslash-escaped or not, so a
-  JSON blob embedded in an unparsed string is covered on both sides — previously only the value's
-  opening quote was. Redaction is documented best-effort, so this was a gap rather than a broken
-  promise, but a gap in the pattern's core purpose. Crucially, a match that consumed a key quote is
-  never eligible for the code-reference exemption added in #421, so every newly reached form fails
-  closed. Widening the pattern without that guard would have converted the gap into a leak: a quoted
-  key marks data rather than an assignment the exemption can reason about, and source files carry
-  data freely, so `# captured: {"password": {"key": correcthorsebatterystaple(2024)}}` in a `.py`
-  file would have been exempted as a call. The nested form also defeats the sensitive-label guard
-  outright, since the label scan stops at the `"` and never sees `password` — the same compound-label
-  weakness #421's own review found, reappearing. Measured rather than assumed: across this
-  repository's 235 tracked files the change adds exactly two false positives (both benign
-  `"idempotency_key": "…"` literals, structurally indistinguishable from a real `"api_key":
-  "<generic secret>"`), the fail-closed guard adds none beyond those, and an A/B of the old and new
-  redactors over every tracked line found no line that stopped being redacted. Bracketed subscripts
-  (`cfg["password"]["key"] = …`) remained a known false negative here, deferred to #434 on the
-  reasoning that matching one would require reading the label across `"]["` — so `password` would go
-  unseen and the match would be exempted, turning a false negative into a leak. That reasoning was
-  wrong, and #434 (below) records why: the fail-closed guard described above already covers the
-  bracketed form, so no label-scan change was needed.
-
-- **`codex_delegate`'s prose no longer points into the deleted worktree** (#412). Codex runs with its
-  working directory set to the throwaway worktree, and that worktree is torn down before the caller
-  reads the result — so every absolute path Codex wrote into its summary was dead on arrival. A
-  reported run came back with ``Created [HELLO_SMOKE_TEST.md](/private/tmp/cic-worktree-8t22rdm3/tree/HELLO_SMOKE_TEST.md)``,
-  an invitation to open a file that no longer existed anywhere. The summary is the field an agent
-  reads first, and the failure it produces — a bare "no such file" — gives no hint that the path was
-  ephemeral by construction, so an agent that did not cross-reference `diff` could conclude the run
-  half-failed and waste a turn re-running it. Worktree-absolute paths are now rewritten to
-  repository-relative form (`./src/module.py`) on the way out, covering both `summary` and
-  `raw_response.text`, which are built from the same model text; the `file://` spelling and the
-  symlinked-ancestor spelling (macOS resolves `/tmp` to `/private/tmp`) are rewritten too, since
-  either can be the form Codex reports. Paths stay *relative* rather than being re-rooted at the live
-  repository on purpose: the diff is not applied, so a live absolute path would be equally dead for a
-  new file and, for an existing one, would point at real content that differs from what Codex
-  described. The delegate prompt now also asks for repository-relative paths, making the rewrite a
-  backstop rather than the only mechanism. One deliberate limitation: a bare worktree root ending a
-  sentence (`... in <root>.`) is left alone, because rewriting it would emit `..` — the parent
-  directory, which is more misleading than the dead path it replaced. The rewrite is bounded to
-  places where prose punctuation brackets the path, so a similarly-named sibling
-  (`<root>+suffix`, `<root>@v2`) is never rewritten into the wrong file. It also composes with
-  secret redaction in the one order safe for both passes: a worktree path carrying a
-  secret-shaped label (`api_key=<root>/…`) is redacted rather than shortened, since shortening it
-  would drop the value below the redactor's length threshold and let the secret through. Both the
-  raw `file://<root>` spelling and the percent-encoded one (`file:///tmp/a%25b%20c/tree`, what a
-  path containing a space or `%` canonically encodes to) are covered. `diff`
-  was never affected; it
-  already carried correct `a/`/`b/` paths, and remains the authoritative source for what changed. No
-  result `fingerprint` or `RESULT_FORMAT` change: no schema, field description, or documented
-  guarantee moves — only the values populated at runtime. Error envelopes on this path can still
-  quote a worktree path through git or Codex stderr; that surface is tracked separately in #420.
-
-- **Every `invalid_arguments` envelope this release builds now carries the per-argument list** (#416). `docs/REFERENCE.md`
-  promises that an envelope with this code carries a list of `{field, reason, allowed_values}` per
-  offending argument, with `details` mirroring the first. Two producers omitted it: `codex_transfer`'s
-  rejection of an invalid `transcript_path` (which also left `details.reason` unset), and the
-  `untracked`-policy rejection reached by a direct call that bypasses the schema. A client branching on
-  that list per the documented contract found it absent on those envelopes. The rule now lives in the
-  one constructor every producer goes through, so a listless envelope is a loud programming error
-  rather than a silently non-conformant result, and `details` is always derived from the first entry —
-  supplying one for this code is itself rejected, which is what makes the documented mirror structural
-  rather than a convention each producer has to remember. The `untracked` entry states its allowed
-  values without echoing the rejected one, keeping `InvalidArgument`'s promise that a rejected value
-  is never copied into a machine-readable field. Replay of a stored job result is deliberately
-  untouched — a record written
-  before this rule is returned as it was written, since normalizing it would mean inventing repair
-  data the run never produced. No such record can exist through the MCP surface (the only stored
-  envelope that could carry this code comes from a schema-validated enum), so this is a statement
-  about provenance rather than a known gap. No result `fingerprint` or `RESULT_FORMAT` change: the
-  envelope's schema, error-code sets, and descriptions are unchanged — only the values populated at
-  runtime.
 
 - **BREAKING (agent surface): a blank `question` or `task` is now rejected before any spend**
   (#411). An empty or whitespace-only value passed validation and bought a real Codex run that
   could produce nothing — the prompt builders strip it, so the model received framing scaffolding
   and no ask (a reported `codex_consult(question="   ")` burned 23,120 tokens and returned
   `ok: true`). `codex_consult`, `codex_consult_async`, `codex_delegate`, `codex_delegate_async`,
-  and `codex_delegate_dry_run` now return `invalid_arguments` with `details.field` naming the
-  offending argument, the per-argument `invalid_arguments` list, and a `correct_arguments` repair
-  whose `repair.tool` names the tool that was called. Flagged breaking because it narrows an
-  accepted value set: input that previously returned `ok: true` now returns an error. Blankness is
-  Python's `str.strip()`, the same test the prompt builders apply, so U+00A0 and U+2003 are blank
-  while U+200B counts as content. The check sits after the byte-limit guard, so a whitespace-only
-  value past the limit still reports `input_too_large`. `codex_delegate_dry_run` rejects it exactly
-  as the paid call does rather than previewing it, keeping its promise that a failure in the free
-  preview is a failure the paid call would also hit. Result `fingerprint`
-  `codex-in-claude/0.1/schema-66` → `schema-67`; the persisted `RESULT_FORMAT` is unchanged.
+  and `codex_delegate_dry_run` now return `invalid_arguments` naming the offending argument, with
+  a `correct_arguments` repair. Flagged breaking because it narrows an accepted value set: input
+  that previously returned `ok: true` now returns an error. Blankness is Python's `str.strip()`,
+  so U+00A0 is blank while U+200B counts as content, and the check sits after the byte-limit
+  guard, so an oversize whitespace-only value still reports `input_too_large`. `FINGERPRINT`
+  `schema-66` → `schema-67`; `RESULT_FORMAT` unchanged.
+
+- **Redaction no longer strands part of a secret behind a marker that looks complete** (#443,
+  #445). The inline patterns ran as sequential `re.sub` passes, each over the previous pass's
+  output, and `sub` never revisits consumed text — so a matcher with a narrower value class could
+  eat a prefix of a value a later matcher would have covered entirely: `token=ghp_<20 chars>-tail`
+  came out as `token=[redacted: secret value]-tail`. The worse harm is not the disclosure but that
+  the output advertised itself as fully redacted, suppressing the reaction a bare secret would
+  provoke. Every pattern is now run with `finditer` against the **original** line, each candidate
+  contributes the span it would replace, the spans are merged on strict overlap, and the line is
+  rebuilt with one marker per merged interval — so the order of the pattern list no longer affects
+  output at all. Touching (non-overlapping) candidates deliberately stay separate, and a preserved
+  prefix (a labelled key, an `Authorization:` header, a connection string's `://user:`) survives
+  because it lies outside every merged span rather than because a replacement handed it back. The
+  span projection fails closed: a candidate whose group 1 is not a leading, participating prefix
+  of its match has its whole match redacted rather than the computed slice. One behavioral delta
+  comes with this, in the fail-closed direction — the code-reference exemption is now judged
+  against the original line, so a line whose evidence an earlier marker had erased is redacted
+  instead of exempted.
+- **A redaction marker no longer claims completeness it doesn't have** (#446). A credential
+  carrying a character the connection-string userinfo matchers exclude (`/`, or `?`/`#` on the
+  arms that stop there) can never be *spanned* by them, so span merging cannot help and an earlier
+  matcher firing on its prefix still ships the remainder beside a marker:
+  `redis://u:token=[redacted: secret value]%2Fmore/tail@host` looked complete while `/tail` went
+  out in the clear. The rebuild site now decides per merged interval whether the replacement may
+  be partial and emits `[redacted: possibly partial secret value]` instead. Two checks, either
+  sufficient: the character right after the interval is not a safe terminator for that interval's
+  trailing candidate type (a narrower set for labelled and Bearer candidates, whose value alphabet
+  is not a specific credential's own grammar), or the interval's earliest whole-match candidate is
+  preceded by a value-continuation character. Neither is a completeness proof — the plain marker
+  means no affirmative sign of truncation was found, not that completeness was verified, which
+  this best-effort mechanism cannot do.
+- **The labelled-secret pattern now reaches quoted and bracket-subscripted keys** (#432, #434). It
+  required its `:`/`=` separator immediately after the label, so JSON's closing quote
+  (`"api_key": "…"`) and a subscript's `"]` (`cfg["password"]["key"] = …`) each defeated it
+  entirely — silently exempting the carrier this pattern exists for: a credential with no
+  recognizable vendor shape (`AWS_SECRET_ACCESS_KEY`, `CI_JOB_TOKEN`, an internal HMAC secret), in
+  exactly the carriers that hold those — `.json` config, fixtures, captured API responses, and the
+  `raw_response.text` this redactor is applied to. A value carrying a vendor prefix was caught
+  anyway by its own pattern, which masked the gap. The label group now accepts an optional closing
+  quote and a bracket subscript. Both widenings fail closed by construction: reaching either
+  requires consuming a quote, and a match that consumed a key quote is never eligible for the
+  code-reference exemption below — pinned by an invariant test, so moving the bracket out of the
+  quote group fails CI even if every behavioral test still passes. The accepted cost is the mirror
+  of that guarantee: ordinary source assigning to a `key`/`token`-ish subscript is masked out of a
+  reviewed diff, including innocent suffixes such as `obj["monkey"]`. Measured rather than
+  assumed — an A/B over 3,124 real source files found no line that stopped being redacted and
+  three newly redacted, only one of them a genuinely new class.
+- **A labelled match no longer swallows a later sensitive label's secret** (#434, #436). The
+  pattern's value run is greedy and `re.sub` never revisits consumed text, so an earlier weak
+  label's value could absorb a later sensitive label whole and ship the real secret behind it in
+  the clear: `cfg "key": aaaa…password = realsecret1234567890` redacted the filler and left the
+  secret untouched. Two guards now run in sequence, because no single formulation covered both
+  shapes without reopening the quadratic risk below: the original guard for bracketed candidates,
+  unbounded at any distance, and a new unconditional one covering non-bracket swallows — a shape
+  never protected before, at any distance — bounded at 1024 value characters to stay linear on
+  repeated-anchor input. Both share one refinement: a guard refuses only when the inner label's
+  own value would itself clear the redaction threshold, so `token = aaaa…key=short` is not turned
+  into a total miss. The accepted trade is that a refused candidate's own value run survives on
+  the page and the engine advances to redact the inner label instead — a narrower span, not a
+  leak. A non-bracket swallow chain whose gap exceeds the peek is exactly as unprotected as it
+  always was, tracked as #465.
+- **Secret redaction no longer scrubs ordinary source out of reviewed diffs** (#421). The
+  labelled-secret pattern matches any 16-or-more-character identifier run after a `key`/`token`-ish
+  label, so plain code tripped it: `token = _PLACEHOLDER_PREFIX + _placeholder_seed(text)` reached
+  Codex masked. Two harms compounded — the reviewer could not see the code it was asked to review,
+  and because any inline mask makes `coverage.status` partial, the never-false-pass rule turned a
+  model `pass` into `unknown` citing `redacted`, which reads as "this file had secrets" when one
+  innocuous assignment tripped a heuristic. A labelled match inside a diff body line is now left
+  intact when it is provably a code reference: the separator must be followed by whitespace (so
+  `api_key=value` in config, env, shell, or a query string is never exempt), the label must not be
+  from the password family — read across the whole logical label, so `config.password.key = …` is
+  judged whole — the value must be an unquoted bare dotted identifier path, and it must be
+  followed by a call, an operand, or, only with a `:` separator, an annotation default. The
+  exemption applies only within a recognized source extension, because every one of those
+  conditions is a claim about *code* syntax: in YAML the identical text is a plain scalar, and
+  YAML nests the sensitive label on a *preceding* line, out of reach of any same-line test.
+  Redaction is not weakened elsewhere — the exemption never applies to `redact_text`'s arbitrary
+  prose, and every vendor/JWT/PEM/connection-string pattern still runs on an exempted line.
+- **A connection-string credential is redacted in every userinfo position it can occupy** (#440).
+  The matcher required a non-empty username, so `redis://:pass@host` went out verbatim — not an
+  edge case but the *canonical* Redis URL, since Redis had no usernames before ACLs in 6.0 — and a
+  token stored as the username with an empty password (`https://<token>:@host`, the
+  token-as-username idiom) was never redacted either. Both are now matched, the latter at 16+
+  characters, the credential threshold this module already uses. The password side stays required:
+  an empty password holds no secret, and matching it would emit a marker claiming to have hidden a
+  blank value. The bare `://token@host` form is deliberately left alone at any threshold, because
+  length cannot establish credential semantics in that position — a 16+ rule masks
+  `git+ssh://deployment-automation@git.example.com/repo` and `docker://prometheus-operator@sha256:…`,
+  identities rather than secrets, and raising the threshold only changes which identities get
+  destroyed.
+- **An ordinary URL whose query or fragment carries an `@` is no longer masked as userinfo**
+  (#442). Per RFC 3986, `?` and `#` terminate the authority component, so nothing after either can
+  be userinfo — but the named-username matcher admitted both, on the password side and on the
+  username side: `https://host.example:8443?email=user@example.com` (an email in the query, no
+  userinfo anywhere) masked its port and query and partly hid its host, and
+  `https://host.example?foo:bar12345678@x.example` (an ordinary query string carrying a colon)
+  masked both slots. All three connection-string userinfo runs now derive their terminators from
+  one shared exclusion set instead of three independently hand-spelled character classes. The
+  accepted trade, pinned by a characterization test on each side: a password or username
+  containing a literal `?`/`#` — already invalid userinfo per RFC 3986 without percent-encoding —
+  is no longer redacted. An old-versus-new sweep over 1,849,015 lines of third-party source found
+  zero behavior changes in either direction, in both code-exemption modes.
+- **Redaction is no longer quadratic on long or repeated-anchor text** (#438, #439). Two patterns
+  opened with an unbounded greedy run ahead of a literal that never arrives, so every start
+  position scanned to the end of the run and then backtracked one character at a time: the
+  connection string's scheme run (`[a-zA-Z][\w+.-]*://`) took ~15s on 100 KB of text, and the JWT
+  first segment 5.7s on 160 KB of `eyJ`. This is a liveness concern rather than a disclosure —
+  `redact_text` runs over untrusted model output, so input size and shape are attacker-influenced,
+  and a synchronous call that blows its deadline is terminated with its paid work lost. The
+  connection-string scan now simply starts at the `://`, which costs no coverage (the scheme was
+  never part of the *replaced* span, so output is byte-identical wherever the old pattern matched)
+  and additionally recognizes userinfo whose `://` no letter-led run reaches — closing a real leak
+  on 0.16.0, where a preceding marker ate the scheme letters and `key=<eaten>://user:pw@host`
+  shipped its password intact. The JWT first segment is bounded at 512 post-anchor characters,
+  about 8x a realistic JOSE header; segments 2 and 3 stay unbounded, since capping the first also
+  caps how many anchors ever reach them. Both are roughly linear after the fix and pinned by
+  timing budgets.
+- **`codex_delegate`'s prose and error envelopes no longer point into the deleted worktree**
+  (#412, #420). Codex runs with its working directory set to the throwaway worktree, and that
+  worktree is torn down before the caller reads the result, so every absolute path Codex wrote was
+  dead on arrival — a reported run returned ``Created
+  [HELLO_SMOKE_TEST.md](/private/tmp/cic-worktree-8t22rdm3/tree/HELLO_SMOKE_TEST.md)``, an
+  invitation to open a file that no longer existed anywhere. Worktree-absolute paths — plus the
+  `file://` spelling and the symlinked-ancestor spelling (macOS resolves `/tmp` to `/private/tmp`)
+  — are now rewritten to repository-relative form in `summary` and `raw_response.text`, and the
+  delegate prompt asks for relative paths so the rewrite is a backstop rather than the only
+  mechanism. Paths stay *relative* rather than re-rooted at the live repository on purpose: the
+  diff is not applied, so a live absolute path would be equally dead for a new file and would
+  point at differing content for an existing one. Error envelopes are covered too:
+  `classify_failure`'s `nonzero_exit` branch and the `WorktreeError` messages built from raw git
+  argv/stderr now route through `worktree.sanitize_prose`, the one composition that relativizes
+  and redacts in a single pass — the two operations reordered are each independently unsafe.
+  `diff` was never affected; it already carried correct `a/`/`b/` paths.
+- **`invalid_arguments` envelopes are now conformant wherever they are produced** (#416, #418,
+  #419). `docs/REFERENCE.md` promises an envelope with this code carries a per-argument list of
+  `{field, reason, allowed_values}`, with `details` mirroring the first entry; `codex_transfer`'s
+  rejection of an invalid `transcript_path` and the `untracked`-policy rejection reached by a
+  direct call both omitted it. The rule now lives in the one constructor every producer goes
+  through, so a listless envelope is a loud programming error rather than a silently
+  non-conformant result, and `details` is always derived from the first entry. The `gitdiff`
+  branch's human-readable `message` also stopped echoing the rejected value: its machine fields
+  already honored `InvalidArgument`'s promise that a rejected value — which may be a secret — is
+  never copied, while the prose beside them printed it verbatim. And the background worker now
+  normalizes a nonconformant `invalid_arguments` envelope to `internal_error` immediately before
+  the atomic write, so replay cannot return a never-conformant record stamped with the current
+  fingerprint. Replay of records written before these rules is deliberately untouched.
+- **`initialize` no longer advertises the `io.modelcontextprotocol/ui` extension (MCP Apps)**
+  (#424). FastMCP injects it unconditionally, so a host probing for MCP Apps support found the
+  capability advertised with nothing behind it — this server implements no UI/Apps code. The
+  existing `get_capabilities` seam now filters that one id, preserves any other entry a future
+  FastMCP version might legitimately add, and omits the `extensions` key entirely only when
+  nothing is left. Removing a falsely-advertised capability is a correction, not a removal of
+  implemented behavior. `FINGERPRINT` `schema-69` → `schema-70`; not breaking.
+- **A transfer or rate-limit read's `stderr_tail` no longer races the drain thread that fills it**
+  (#449). `_StderrDrain` reads a child's stderr on its own daemon thread and kept no reference to
+  it, so on a loaded runner an outcome could be assembled before the last, most diagnostic line
+  ever reached the capture — and a quiesce placed in the `finally` could not fix it, since Python
+  evaluates a `return` expression before `finally` runs. Every post-spawn exit in both functions
+  now runs a shared settle step before constructing its outcome: terminate the child, join the
+  stdout reader, give the newly-tracked drain thread a bounded (~2s) quiesce, then snapshot. A
+  stream that never reaches EOF still yields a bounded, possibly incomplete tail — that boundary
+  is deliberate and unchanged, and is now pinned by tests rather than left implicit.
+
+- **`COMPATIBILITY.md` understated what auto-loads into Codex's context.** Its implicit-context
+  table recorded that an `AGENTS.md` *above* the git root is not loaded. It is — and re-probing the
+  previous `0.145.0` binary shows the same, so this corrects a wrong earlier observation rather
+  than a behavior change, in the unsafe direction. A negative control rules out model
+  confabulation: removing the parent `AGENTS.md` makes its codeword disappear from the answer while
+  the project one remains. Documentation only — the published egress caveat still says "the
+  resolved workspace's `AGENTS.md`" and so remains narrower than observed behavior; widening that
+  text carries its own `FINGERPRINT` bump and is tracked separately.
 
 ## [0.16.0] - 2026-07-28
 
