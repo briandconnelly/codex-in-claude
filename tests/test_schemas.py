@@ -819,9 +819,21 @@ def _wire_catalog_bytes() -> int:
 # names the previewed PAID tool's own `_async` counterpart verbatim instead of a
 # generic, wrong-tool-pointing phrase): 86,435 -> 86,766 bytes (+331 B) — over cap;
 # cap raised to the next 500 above the measured value.
+# Measured again 2026-08-02 (#433: `Coverage` gained `redaction: RedactionSummary |
+# None` — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET/TARGET history for the
+# same field's justification, which applies identically here: a new nested object
+# INLINED (no `$ref`/`$defs` on the wire) into both `codex_review_changes`' and
+# `codex_dry_run`'s outputSchema, whose field descriptions cost nothing (not in
+# `_KEPT_DESCRIPTIONS`) — the delta is pure schema structure): 86,766 -> 87,274 bytes
+# (+508 B) — over cap; cap raised to the next 500 above the measured value.
+# Measured again 2026-08-02 (#433 review C4 — see tests/test_wire_size.py's
+# TOOLS_LIST_BYTE_BUDGET/TARGET history for the same constraint's justification, which
+# applies identically here: `RedactionSummary.inline_masks` gained `Field(ge=0)`, a
+# validated `"minimum":0` property, not description prose): 87,274 -> 87,298 bytes
+# (+24 B) — still within cap, no further change.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 87_000
+CATALOG_BYTE_CAP = 87_500
 
 
 def test_wire_catalog_under_cap():
@@ -980,7 +992,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-74"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-75"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

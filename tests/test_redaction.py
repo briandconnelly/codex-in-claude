@@ -970,7 +970,7 @@ def test_username_token_with_empty_password_exact_output(text, expected, exempt_
 def test_username_token_matcher_leaves_identities_alone(text, exempt_code):
     out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
     assert out == text
-    assert redacted is False
+    assert redacted == 0
 
 
 @pytest.mark.parametrize("char", ["@", " ", "\t", "/", "?", "#"])
@@ -1486,7 +1486,7 @@ _QUERY_FRAGMENT_FALSE_POSITIVES = [
 def test_ordinary_url_with_at_in_query_or_fragment_is_not_masked(text, exempt_code):
     out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
     assert out == text
-    assert redacted is False
+    assert redacted == 0
 
 
 @pytest.mark.parametrize("char", ["?", "#"])
@@ -1663,7 +1663,7 @@ _STRANDED_TAIL_CASES = [
 def test_a_narrow_matcher_does_not_strand_the_tail_of_a_wider_one(text, expected, exempt_code):
     out, redacted = redaction._redact_secret_values(text, exempt_code=exempt_code)
     assert out == expected
-    assert redacted is True
+    assert redacted > 0  # exact count varies by case (1 merged marker, or 2 separate ones)
     # Re-run the emitted line: the fix must not depend on a second pass, and must not
     # mangle its own output on one.
     again, _ = redaction._redact_secret_values(out, exempt_code=exempt_code)
@@ -1706,7 +1706,7 @@ def test_adjacent_spans_get_two_markers():
     assert out == (
         "[redacted: possibly partial secret value][redacted: possibly partial secret value]"
     )
-    assert redacted is True
+    assert redacted == 2  # two adjacent-but-not-merged candidates, two emitted markers
 
 
 def test_exemption_is_judged_against_the_original_line_not_the_accumulator():
@@ -1771,7 +1771,7 @@ def test_a_group_that_is_not_at_the_match_start_falls_back_to_the_full_span(monk
     monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", [malformed])
     out, redacted = redaction._redact_secret_values(text)
     assert out == "[redacted: secret value]"
-    assert redacted is True
+    assert redacted == 1
 
 
 def test_a_non_participating_group_1_falls_back_to_the_full_span(monkeypatch):
@@ -1791,7 +1791,7 @@ def test_a_non_participating_group_1_falls_back_to_the_full_span(monkeypatch):
     monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", [malformed])
     out, redacted = redaction._redact_secret_values(text)
     assert out == "xx [redacted: secret value] yy"
-    assert redacted is True
+    assert redacted == 1
 
 
 # --- #446: partial-marker honesty ---------------------------------------------
@@ -1959,7 +1959,7 @@ def test_tie_fold_prefers_partial_when_any_tied_candidate_is_whole_match(
     monkeypatch.setattr(redaction, "SECRET_VALUE_PATTERNS", patterns)
     out, redacted = redaction._redact_secret_values(text)
     assert out == "pfx[redacted: possibly partial secret value]"
-    assert redacted is True
+    assert redacted == 1
 
 
 def test_partial_marker_does_not_contain_the_plain_marker():
@@ -2102,6 +2102,154 @@ def test_diff_redactor_matches_redact():
         out_lines.extend(r.feed(line))
     assert "\n".join(out_lines) == expected_text
     assert r.redacted == expected_paths
+
+
+# --- #433: withheld vs masked disclosure ---------------------------------------
+# `DiffRedactor.redacted` collapsed a whole-file drop (`withheld_paths`) and an inline
+# value replacement (`masked_paths`) into one undifferentiated list. The split keeps
+# `.redacted` as the exact same encounter-ordered union (back-compat for
+# `meta.redacted_paths`/`DryRunResult.redacted_paths`) while exposing which files were
+# withheld, which were only masked, and how many markers were actually emitted.
+
+
+def test_diff_redactor_reports_one_withheld_file():
+    diff = (
+        "diff --git a/.env b/.env\n"
+        "--- /dev/null\n+++ b/.env\n@@ -0,0 +1 @@\n+API_TOKEN=abcdefghijklmnopqrst\n"
+    )
+    r = redaction.DiffRedactor()
+    for line in diff.splitlines():
+        r.feed(line)
+    assert r.withheld_paths == [".env"]
+    assert r.masked_paths == []
+    assert r.inline_masks == 0
+    assert r.redacted == [".env"]
+
+
+def test_diff_redactor_counts_two_emitted_inline_masks_in_one_file():
+    # Two DISTINCT, non-overlapping secrets in the same file: two separate markers are
+    # emitted, so inline_masks == 2 even though masked_paths lists the file once.
+    diff = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1,2 @@\n"
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa\n"
+        "+password=AKIAABCDEFGHIJKLMNOP\n"
+    )
+    r = redaction.DiffRedactor()
+    for line in diff.splitlines():
+        r.feed(line)
+    assert r.withheld_paths == []
+    assert r.masked_paths == ["src/app.py"]
+    assert r.inline_masks == 2
+    assert r.redacted == ["src/app.py"]
+
+
+def test_inline_masks_counts_emitted_intervals_not_raw_candidates():
+    # Control proving inline_masks counts EMITTED merged markers, not raw
+    # pattern-candidate matches: this line has >=2 candidate matches (the labelled
+    # `token=` pattern AND the narrower `ghp_...` vendor pattern both fire), but they
+    # overlap and merge into ONE interval, so exactly one marker is emitted.
+    text = "token=" + "ghp_" + "a" * 20 + "-tailsegment"
+    candidate_hits = sum(1 for p in redaction.SECRET_VALUE_PATTERNS for _ in p.finditer(text))
+    assert candidate_hits >= 2, "control no longer produces overlapping candidates"
+    out, count = redaction._redact_secret_values(text)
+    assert out == "token=[redacted: secret value]"
+    assert count == 1, "two merging candidates must still emit exactly one marker"
+
+
+def test_diff_redactor_withheld_and_masked_together_preserve_masked_before_withheld_order():
+    # The masked file's header appears BEFORE the withheld file's header. `.redacted`
+    # (the back-compat union `meta.redacted_paths` reads) must reflect TRUE encounter
+    # order — masked file first — not a naive withheld-then-masked concatenation.
+    diff = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+        '+api_key = "AKIAABCDEFGHIJKLMNOP"\n'
+        "diff --git a/.env b/.env\n"
+        "--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n+SECRET=topsecretvalue123456\n"
+    )
+    r = redaction.DiffRedactor()
+    for line in diff.splitlines():
+        r.feed(line)
+    assert r.masked_paths == ["app.py"]
+    assert r.withheld_paths == [".env"]
+    assert r.inline_masks == 1
+    assert r.redacted == ["app.py", ".env"]  # true encounter order, not withheld-first
+
+
+def test_diff_redactor_a_path_withheld_under_one_header_stays_only_withheld_later():
+    # #433 review F2 (reviewer repro): `_diff_path_from_header` always returns the
+    # RENAME TARGET (the "b/" side of the header), so a withheld rename header
+    # (`a/id_rsa b/config.py`, matched by the "id_rsa" substring in the raw header spec)
+    # and a later PLAIN header for the same target path (`a/config.py b/config.py`) both
+    # set `_current_path` to the identical string "config.py". `withheld_paths` and
+    # `masked_paths` must stay disjoint — the class docstring's own claim — and
+    # `.redacted` must not gain a duplicate entry: first encounter (withheld) wins,
+    # matching this class's PRE-#433 single-list dedup semantics exactly.
+    #
+    # #433 review C3 sharpened this further: withholding is DOMINANT, not merely
+    # "first encounter wins" for the PATH LISTS — a later inline mask on an
+    # already-withheld path must count NOWHERE, including `inline_masks`, or the count
+    # could never be reconciled against either path list (a count with no listed file
+    # to attribute it to).
+    diff = (
+        "diff --git a/id_rsa b/config.py\n"
+        "diff --git a/config.py b/config.py\n"
+        "--- a/config.py\n+++ b/config.py\n@@ -1 +1 @@\n"
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa\n"
+    )
+    r = redaction.DiffRedactor()
+    for line in diff.splitlines():
+        r.feed(line)
+    assert r.withheld_paths == ["config.py"]
+    assert r.masked_paths == []  # NOT also masked — withheld already claimed the path
+    assert r.redacted == ["config.py"]  # no duplicate entry
+    # The marker was still emitted in the actual output stream (header 2 is not
+    # skipping) — the text isn't the disclosure — but withholding is dominant (C3):
+    # the count is NOT bumped for a mask on a path that's already withheld.
+    assert r.inline_masks == 0
+
+
+def test_diff_redactor_a_masked_path_becomes_withheld_by_a_later_header():
+    # #433 Copilot review of #470 (comment 5): C3's dominance rule covered
+    # withhold->mask but not the REVERSE — mask->withhold. A path masked under an
+    # earlier header, then WITHHELD under a later header for the identical target
+    # path (the same rename-target collision the test above uses — a normal
+    # config.py header followed by an `a/id_rsa b/config.py` rename header, both
+    # resolving to "config.py" via `_diff_path_from_header`'s "b/"-side rule), used to
+    # land in BOTH lists. First-wins is the WRONG rule here: the later withhold means
+    # the file's hunks are dropped entirely, so keeping the path masked-only would
+    # OVER-CLAIM coverage — the unsafe direction. Withholding must dominate BOTH ways:
+    # the path moves to withheld_paths, and its already-committed masks are
+    # subtracted back out of inline_masks.
+    diff = (
+        "diff --git a/config.py b/config.py\n"
+        "--- a/config.py\n+++ b/config.py\n@@ -1 +1 @@\n"
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa\n"
+        "diff --git a/id_rsa b/config.py\n"
+    )
+    r = redaction.DiffRedactor()
+    for line in diff.splitlines():
+        r.feed(line)
+    assert r.withheld_paths == ["config.py"]
+    assert r.masked_paths == []  # moved OUT of masked_paths, not left in both
+    assert r.inline_masks == 0  # the earlier commit's count is subtracted back out
+    assert r.redacted == ["config.py"]  # still deduped — no duplicate from the move
+
+
+def test_diff_redactor_headerless_stream_does_not_count_untracked_inline_masks():
+    # #433 review F3: `inline_masks` used to increment before the `_current_path`
+    # guard, so a body-shaped line with no PRECEDING `diff --git` header (this class
+    # starts closed — its own docstring's caveat) silently inflated `inline_masks`
+    # against an empty `masked_paths`, making the count unreconcilable with either path
+    # list. The emitted marker must still reach the output; only the bookkeeping is
+    # gated on having a known current path.
+    r = redaction.DiffRedactor()
+    out = r.feed("+token=ghp_aaaaaaaaaaaaaaaaaaaa")
+    assert out == ["+token=[redacted: secret value]"]  # the marker still reaches output
+    assert r.inline_masks == 0
+    assert r.masked_paths == []
+    assert r.redacted == []
 
 
 def test_diff_redactor_drops_secret_file_hunks():

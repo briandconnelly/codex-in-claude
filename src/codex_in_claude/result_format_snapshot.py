@@ -34,6 +34,7 @@ from codex_in_claude.schemas import (
     DelegateResult,
     ErrorResult,
     Meta,
+    RedactionSummary,
     ReviewResult,
     dump_success,
 )
@@ -88,11 +89,21 @@ def build_snapshot() -> dict:
             ReviewResult(
                 summary="s",
                 review_status="completed",
+                # Coverage populated with a REDACTED, non-empty RedactionSummary (#433,
+                # not "complete" with all-null counts) per the null-fixtures convention
+                # (#400): a snapshot whose optional fields are all null/empty can't
+                # detect deletion of a populated one.
                 coverage=Coverage(
-                    status="complete",
+                    status="partial",
                     untracked_files_detected=0,
                     untracked_files_included=0,
                     untracked_files_omitted=0,
+                    omission_reasons=["redacted"],
+                    redaction=RedactionSummary(
+                        withheld_paths=[".env"],
+                        masked_paths=["src/app.py"],
+                        inline_masks=2,
+                    ),
                 ),
                 meta=_representative_meta(),
             )

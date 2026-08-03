@@ -28,6 +28,7 @@ from codex_in_claude.schemas import (
     InvalidArgument,
     Meta,
     RawResponse,
+    RedactionSummary,
     ReviewResult,
     ReviewScope,
     Untracked,
@@ -71,7 +72,44 @@ def build_coverage(*, scope: str, diff: DiffResult) -> Coverage:
         det = inc = omt = None
     if diff.truncated:
         reasons.append("truncated")
-    if diff.redacted_paths:
+    # The `redacted` REASON and the `redaction` FIELD read from deliberately
+    # DIFFERENT, asymmetric predicates (#433 review F1 + C1):
+    #   * The reason fires from `redacted_paths OR withheld_paths OR masked_paths` —
+    #     any signal that redaction touched something. `redacted_paths` (the legacy
+    #     union `DiffRedactor.redacted` always populates, unconditionally — see its
+    #     own docstring) can be non-empty while the split fields stay empty: a
+    #     "legacy-style" DiffResult that only sets the flat union (constructible with
+    #     defaults — test_server.py's `test_dry_run_preview` fixture does exactly
+    #     this), or — reachable from a REAL gather_diff since #433 review C2 — a
+    #     byte-capped diff whose redaction happened entirely past the retained text,
+    #     leaving withheld_paths/masked_paths empty while redacted_paths still
+    #     reports the full stream. Either way, coverage must never silently report
+    #     `complete` when SOMETHING was redacted (C1).
+    #   * The `redaction` field stays scoped to the split fields ONLY: it is a
+    #     structured breakdown of what a reader of the RETAINED text actually sees,
+    #     so it must never fabricate withheld/masked detail for content nobody can
+    #     see. A reason with no populated field is fine — `Coverage._check_invariants`
+    #     enforces the field⇒reason direction only, never the converse — and this is
+    #     exactly that case: the reason can fire on the legacy signal alone while the
+    #     field stays `None`.
+    # `inline_masks` is part of the split-field signal too (#433 Copilot review of
+    # #470, comment 4): a synthetic DiffResult with a nonzero count but empty
+    # withheld_paths/masked_paths must not be silently treated as unredacted — it
+    # should instead flow into RedactionSummary construction below and fail loudly
+    # via that model's own iff invariant, rather than this predicate quietly
+    # dropping the count on the floor.
+    redacted_via_split = bool(diff.withheld_paths or diff.masked_paths or diff.inline_masks)
+    redacted_something = bool(diff.redacted_paths) or redacted_via_split
+    redaction = (
+        RedactionSummary(
+            withheld_paths=diff.withheld_paths,
+            masked_paths=diff.masked_paths,
+            inline_masks=diff.inline_masks,
+        )
+        if redacted_via_split
+        else None
+    )
+    if redacted_something:
         reasons.append("redacted")
     return Coverage(
         status="partial" if reasons else "complete",
@@ -79,6 +117,7 @@ def build_coverage(*, scope: str, diff: DiffResult) -> Coverage:
         untracked_files_included=inc,
         untracked_files_omitted=omt,
         omission_reasons=reasons,
+        redaction=redaction,
     )
 
 

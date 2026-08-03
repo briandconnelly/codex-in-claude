@@ -72,7 +72,7 @@ Codex inspects the diff **read-only** and returns a structured result envelope (
   "verdict": "concerns",
   "confidence": "high",
   "review_status": "completed",
-  "coverage": { "status": "complete", "untracked_files_detected": 0, "untracked_files_omitted": 0, "omission_reasons": [] },
+  "coverage": { "status": "complete", "untracked_files_detected": 0, "untracked_files_omitted": 0, "omission_reasons": [], "redaction": null },
   "summary": "The retry path is correct, but the backoff delay leaks between calls and the new branch has no test coverage.",
   "findings": [
     {

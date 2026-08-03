@@ -1103,6 +1103,146 @@ def test_f3_long_line_secret_beyond_per_line_cap_redacted(repo, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# #433 review C2: the redaction disclosure must reflect only RETAINED text —
+# `masked_paths` documents files SENT with a value replaced, so a file (or a mask
+# within a file) that lands entirely in the byte-capped, DROPPED tail must not appear
+# in withheld_paths/masked_paths, and must not count toward inline_masks.
+# ---------------------------------------------------------------------------
+
+
+def test_bounded_accumulator_excludes_disclosure_for_a_file_entirely_past_the_cap():
+    # Two files. The cap holds exactly file a's lines and nothing from file b
+    # onward, so file b's header never even reaches the retained text.
+    lines = [
+        "diff --git a/a.py b/a.py",
+        "--- a/a.py",
+        "+++ b/a.py",
+        "@@ -1 +1 @@",
+        "+x = 1",
+        "diff --git a/b.py b/b.py",
+        "--- a/b.py",
+        "+++ b/b.py",
+        "@@ -1 +1 @@",
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa",
+    ]
+    max_bytes = len("\n".join(lines[:5]).encode("utf-8"))
+    acc = gitdiff._BoundedDiffAccumulator(max_bytes)  # type: ignore[attr-defined]
+    for line in lines:
+        acc.feed(line)
+    assert acc.truncated
+    assert acc.text() == "\n".join(lines[:5])
+    assert "b.py" not in acc.text()
+    assert acc.withheld_paths == []
+    assert acc.masked_paths == []  # b's mask must not appear — its content was never sent
+    assert acc.inline_masks == 0
+    # `redacted_paths` (the legacy union) is DELIBERATELY unaffected by C2's fix — it
+    # has never had a byte-cap-aware "sent" notion, and #433's brief requires
+    # `meta.redacted_paths` stay exactly what it always was, so it still includes b.py.
+    assert acc.redacted_paths == ["b.py"]
+
+
+def test_bounded_accumulator_mid_file_cap_only_counts_the_retained_mask():
+    # ONE still-open file with two secrets on separate lines. The cap holds the
+    # header plus the FIRST masked line exactly, so the second secret's line lands
+    # in the dropped tail — the pinned choice for this case: only fully-retained
+    # output lines contribute to the disclosure, even within an already-partially-
+    # sent file. (The marker for the retained line still reaches `text()`.)
+    lines = [
+        "diff --git a/app.py b/app.py",
+        "--- a/app.py",
+        "+++ b/app.py",
+        "@@ -1,2 +1,2 @@",
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa",
+        "+password=AKIAABCDEFGHIJKLMNOP",
+    ]
+    # Compute the exact retained size (header lines + the FIRST line's redacted
+    # form) via a standalone redactor, so the cap is derived, not hand-counted.
+    probe = DiffRedactor()
+    retained_out: list[str] = []
+    for line in lines[:5]:
+        retained_out.extend(probe.feed(line))
+    max_bytes = len("\n".join(retained_out).encode("utf-8"))
+
+    acc = gitdiff._BoundedDiffAccumulator(max_bytes)  # type: ignore[attr-defined]
+    for line in lines:
+        acc.feed(line)
+    assert acc.truncated
+    assert acc.text() == "\n".join(retained_out)
+    assert "AKIA" not in acc.text()  # the dropped line's secret never reached text()
+    assert acc.withheld_paths == []
+    assert acc.masked_paths == ["app.py"]  # the file DID send one retained mask
+    assert acc.inline_masks == 1  # only the RETAINED mask counts, not the dropped one
+    assert acc.redacted_paths == ["app.py"]
+
+
+def test_bounded_accumulator_excludes_a_withheld_file_whose_marker_falls_past_the_cap():
+    # Re-review gap (#433, scoped re-review of 0fd150f): the two C2 tests above only
+    # exercise the MASK branch of the truncation gating — neither constructs a case
+    # where a secret-looking (withheld) path's own header line FITS but its
+    # "[redacted: secret-looking file not sent]" marker line does NOT, so neither
+    # would catch a regression that committed a withhold unconditionally past the cap.
+    #
+    # A withheld file's `feed()` call returns TWO output lines (header, then marker)
+    # from ONE call, so this is exactly the within-call, header-fits-marker-doesn't
+    # boundary `_BoundedDiffAccumulator.feed`'s own comment describes. The cap is
+    # sized to the header's exact byte length, so the header alone fits and the
+    # marker (16 bytes longer) does not.
+    header = "diff --git a/.env b/.env"
+    marker = "[redacted: secret-looking file not sent]"
+    max_bytes = len(header.encode("utf-8"))
+    acc = gitdiff._BoundedDiffAccumulator(max_bytes)  # type: ignore[attr-defined]
+    acc.feed(header)
+    assert acc.truncated
+    assert acc.text() == header  # only the header made it in; the marker did not
+    assert marker not in acc.text()
+    # The withhold must NOT be disclosed as such — it was dropped by truncation, not
+    # sent as a withheld-file marker the reader can see.
+    assert acc.withheld_paths == []
+    assert acc.masked_paths == []
+    assert acc.inline_masks == 0
+    # `.redacted` (the legacy union) stays the deliberate, cap-unaware exemption
+    # (#433 review C2): it still names ".env" even though nothing about the withhold
+    # reached the retained text.
+    assert acc.redacted_paths == [".env"]
+
+
+def test_bounded_accumulator_uncommitted_late_withhold_leaves_earlier_mask_intact():
+    # #433 Copilot review of #470 (comment 5), the C2 staging interplay: the
+    # masked->withheld MOVE (a later withhold demotes an earlier mask, subtracting
+    # its count back out of inline_masks) must itself respect commit gating — it may
+    # only happen once the withhold actually COMMITS, not merely once it's staged.
+    # Here "config.py" is masked and RETAINED (fits the cap), then a later
+    # `diff --git a/id_rsa b/config.py` header — a withhold for the SAME target path
+    # (`_diff_path_from_header`'s "b/"-side rule, same collision the DiffRedactor-level
+    # regression test uses) — is fed, but the cap is sized so THAT line does not fit at
+    # all: the withhold is staged but never committed. The earlier mask's
+    # masked_paths/inline_masks contribution must be left completely untouched.
+    lines = [
+        "diff --git a/config.py b/config.py",
+        "--- a/config.py",
+        "+++ b/config.py",
+        "@@ -1 +1 @@",
+        "+token=ghp_aaaaaaaaaaaaaaaaaaaa",
+        "diff --git a/id_rsa b/config.py",
+    ]
+    probe = DiffRedactor()
+    retained_out: list[str] = []
+    for line in lines[:5]:
+        retained_out.extend(probe.feed(line))
+    max_bytes = len("\n".join(retained_out).encode("utf-8"))
+
+    acc = gitdiff._BoundedDiffAccumulator(max_bytes)  # type: ignore[attr-defined]
+    for line in lines:
+        acc.feed(line)
+    assert acc.truncated
+    assert acc.text() == "\n".join(retained_out)
+    assert acc.masked_paths == ["config.py"]  # the earlier, RETAINED commit stands
+    assert acc.inline_masks == 1  # NOT subtracted — the later withhold never committed
+    assert acc.withheld_paths == []  # the staged withhold was discarded, not applied
+    assert acc.redacted_paths == ["config.py"]  # deduped either way
+
+
+# ---------------------------------------------------------------------------
 # F1b: explicitly-named untracked file materialized whole (streaming fix)
 # ---------------------------------------------------------------------------
 

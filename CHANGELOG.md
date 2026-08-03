@@ -7,6 +7,104 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **`coverage.redaction` now distinguishes withheld files from inline masks** on
+  `codex_review_changes` and `codex_dry_run` (#433). Previously the `redacted` omission
+  reason and `meta.redacted_paths` conflated two different things a secret-looking diff
+  can trigger: a whole file dropped (its path itself looked secret-bearing, e.g. `.env`)
+  vs a file sent with one or more inline values masked. The new `RedactionSummary` field
+  — `withheld_paths`, `masked_paths` (both encounter order), and `inline_masks` (the
+  count of markers actually EMITTED by the span-merge redaction engine, not raw
+  pattern-candidate matches, since overlapping candidates merge into one marker) — is
+  carried on `Coverage.redaction: RedactionSummary | None = None`, populated only when
+  the structured split is available — the `redacted` reason CAN fire with `redaction`
+  still null (a legacy-shaped producer that only sets the flat path union, or a
+  disclosure dropped entirely by byte-cap truncation), but `redaction` is never
+  non-null without the reason also firing (enforced). `meta.redacted_paths` and
+  `DryRunResult.redacted_paths`/`redacted_paths_count` are unchanged — still the
+  single backward-compatible union of
+  both path lists — and `codex_delegate`, which carries no `Coverage`, keeps
+  `meta.redacted_paths` as its only redaction disclosure. The `= None` default is
+  load-bearing, not merely convenient: without it every `Coverage` a worker persisted
+  before this field existed would fail replay (`ReviewResult.model_validate`), which a
+  committed pre-B1 fixture (`tests/fixtures/pre_b1_review_result.json`, taken
+  byte-for-byte from the pre-#433 `result_format_snapshot.json`) pins directly.
+  `FINGERPRINT` bumps `schema-74` → `schema-75` (`tool_output_schemas`); additive field,
+  **not breaking**. `RESULT_FORMAT` bumps `7` → `8`: `Coverage` is persisted, and the
+  representative `review_success` envelope in `result_format_snapshot.py` now populates
+  a non-null, non-empty `RedactionSummary` (the null-fixtures convention, #400 — an
+  all-null/empty representative can't detect deletion of a populated field), which moves
+  the snapshot's `serialized` view in THREE places, not one: `coverage.redaction` itself
+  appears, `coverage.status` moves `"complete"` → `"partial"`, and
+  `coverage.omission_reasons` gains `"redacted"` — the latter two are forced by
+  `Coverage._check_invariants` (status must be `partial` iff `omission_reasons` is
+  non-empty, and `redaction` must not be populated without `"redacted"` in
+  `omission_reasons`, added by task review), not independent choices.
+
+  Two review rounds (task review, then a Codex branch review) refined the disclosure
+  further, all landing in this same commit:
+  - `build_coverage` derives the `"redacted"` REASON and the `redaction` FIELD from
+    deliberately asymmetric sources: the reason fires from
+    `redacted_paths OR withheld_paths OR masked_paths` (any signal), while the field
+    stays scoped to `withheld_paths`/`masked_paths` alone — a reason with no populated
+    field is fine (the model invariant is field⇒reason, never the converse), and it's
+    exactly what a "legacy-style" `DiffResult` (only `redacted_paths` set — a real,
+    reachable shape after the byte-cap fix below, not just a synthetic one) now
+    produces instead of a false `status="complete"`.
+  - `DiffRedactor`'s new `withheld_paths`/`masked_paths`/`inline_masks` now reflect
+    only content that actually lands in the RETAINED, byte-capped diff text — the
+    schema calls `masked_paths` "files SENT with a value replaced," so a mask (or a
+    withhold) whose output fell in the byte-capped, dropped tail no longer inflates
+    them. `meta.redacted_paths`/`DryRunResult.redacted_paths` are DELIBERATELY exempt
+    from this gating (they've never had a byte-cap-aware notion of "sent," and this
+    field's own brief requires they stay exactly what they always were), so the legacy
+    union can now be a strict superset of the two new path lists under truncation —
+    which is exactly the asymmetric-predicate fix above exists to keep honest.
+  - Withholding is now DOMINANT and consistent: a later inline match on an
+    already-withheld path (e.g. a rename target, where `_diff_path_from_header`
+    resolves both the rename header and a later plain header to the same "b/" path)
+    lists the path in neither list and does not bump `inline_masks` — previously the
+    count could be nonzero while `masked_paths` stayed empty, with no listed file to
+    attribute it to.
+  - `RedactionSummary.inline_masks` gained `Field(ge=0)` plus model invariants tying
+    the fields together: `inline_masks >= len(masked_paths)` when non-empty, and
+    `inline_masks == 0` iff `masked_paths == []` — both verified to hold for every
+    shape `DiffRedactor` can actually produce.
+
+  `TOOLS_LIST_BYTE_BUDGET`/`CATALOG_BYTE_CAP` both raised 87,000 → 87,500 for the new
+  object, INLINED directly into both `codex_review_changes`' and `codex_dry_run`'s
+  outputSchema (no `$ref`/`$defs` on the wire — field descriptions cost nothing there
+  either, not in `_KEPT_DESCRIPTIONS` — the delta is pure schema structure, duplicated
+  across both tools); `ge=0` then added a validated (not descriptive) `"minimum":0`
+  property, which DOES reach the wire, measured at +24 B on each figure — still within
+  the raised budget, no further raise. `FINGERPRINT` stays `schema-75` (one bump for
+  the whole PR); `RESULT_FORMAT` stays `8` — verified the `serialized` view is
+  byte-identical across every review round; only the `schemas` view (the JSON-Schema
+  representation `minimum` reaches) moved.
+
+  A GitHub Copilot review of the PR found six more, all folded in here (no schema
+  change, so `FINGERPRINT`/`RESULT_FORMAT` are unaffected — verified byte-identical):
+  three wording fixes (`docs/REFERENCE.md`, `Coverage`'s own docstring, this entry)
+  that had drifted into promising `redaction` is present whenever the `redacted`
+  reason fires — the enforced direction is the other one, and the reason CAN fire
+  with no breakdown (a legacy union-only producer, or a disclosure dropped entirely
+  by truncation); `RedactionSummary`'s own `withheld_paths`/`masked_paths`
+  disjointness, promised by its docstring but never validated (it is wire-contract
+  constructible from arbitrary external JSON, not only from `DiffRedactor`'s own
+  construction path) — added to the model validator; `build_coverage`'s predicate for
+  the `redaction` field ignored `diff.inline_masks`, so a synthetic `DiffResult` with
+  a nonzero count but empty path lists silently reported `status="complete"` instead
+  of failing loudly through `RedactionSummary`'s own invariant; and the substantive
+  one — the dominance rule covered a later mask on an already-withheld path (C3) but
+  not the REVERSE, a path masked under an earlier header then withheld under a later
+  one for the same target (the same rename-target collision), which used to land in
+  BOTH lists. First-wins is the wrong rule there: the later withhold means the file's
+  hunks are now dropped, so leaving the path masked-only would over-claim coverage —
+  the unsafe direction. `DiffRedactor` now tracks per-path committed mask counts
+  internally and, on a late withhold for an already-masked path, moves it to
+  `withheld_paths` and subtracts its committed masks back out of `inline_masks`,
+  gated by the same C2 commit discipline (the move only happens once the withhold
+  itself actually commits, not merely once it's staged). An 80k-case randomized
+  (diff × cap) sweep over both dominance directions found 0 invariant violations.
 - **`codex_capabilities()` now declares the targeted MCP protocol revision** via a new
   `protocol_revision` field (`"2025-11-25"`), previously derivable only by inspecting the
   `initialize` wire response (#423). Its description points to the new
