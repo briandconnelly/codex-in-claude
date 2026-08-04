@@ -4,7 +4,9 @@
 Scope: SKILL.md, references/*.md, and tests/scenarios.md — the surfaces an
 agent reads as current guidance.  Deliberately excluded: references/
 mcp-2025-11-25-compat.md (its purpose is cataloging the old revision),
-decisions/ (historical records), and tests/runs/ (immutable evidence).
+decisions/ (historical records), and tests/runs/ (recorded evidence, which
+states the contract in force at its own date — see the Results policy in
+tests/scenarios.md).
 
 A hit is a retired term on a line that does not signal historical framing
 (markers like "no longer", "removed", "2025-11-25").  The marker filter keeps

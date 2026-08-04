@@ -45,8 +45,14 @@ A static design/audit assertion — "the contract describes a symbolic error cod
 - [ ] A capability summary exists stating what the server does NOT do (§1/§2 negative scope).
 - [ ] Pagination is cursor-based and provenance-correct: a tool's own list-shaped result payload may use the `has_more` house convention, while native list methods (`tools/list`, etc.) use `nextCursor` (omission = done) — not a house convention; responses also have a concise default with a `detail` toggle (§8).
 - [ ] Annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) are present and honest — e.g., create-issue is not marked read-only or idempotent (§3).
-- [ ] Tool definitions publish an `outputSchema`, and success results are described as `structuredContent` conforming to it, with `content` kept as a textual fallback (§3 output contract).
+- [ ] **(Scored — per tool, not per catalog.)** Every tool definition the run produces is scored independently against every requirement of `[3.output-schema]`.
+  Scenario premise: the tasks this prompt implies — search, read, create, update, comment, label — all return machine-contract fields, as does any discovery or capability-summary tool a run chooses to add, so no tool here is expected to reach that rule's carve-out.
+  Fail any tool that violates any part of the rule, and evaluate each claimed carve-out independently.
 - [ ] **(Scored.)** The error path is contract-correct and distinct from the success shape: `isError: true` results carry the §6 error envelope in `structuredContent` (with a `content` textual fallback), and `outputSchema` is scoped to **success** results — stated as this skill's reading of an unsettled spec point, not as settled MCP law (`[3.output-schema-scope]`). The design does one of: documents a success-only `outputSchema` with the error envelope validated separately, or unions success and error branches into `outputSchema`. A text-only error carrier counts only when disclosed as a degraded mode (`[6.degraded-carrier]`).
+
+- [ ] **(Scored — disposition honesty.)** Scenario premise: the prompt supplies no runnable server or eval harness.
+  The output must therefore satisfy the Step 9 `not-run` disposition in `design-workflow.md`.
+  Silently omitting Step 9 or claiming measured improvement fails this assertion.
 
 **Expected baseline failures:** endpoint-mirroring (one tool per endpoint), prose-only error descriptions, no negative scope, no pagination contract, missing or dishonest annotations, no output schema / free-text results, and error results that reuse the success `structuredContent` shape or omit the structured error envelope entirely.
 
@@ -211,16 +217,69 @@ Unlike Scenarios 1–6, this scenario tests whether the skill's `description` fi
 
 **Expected description weaknesses (findings against the skill if seen):** T8 (symptom without "MCP server") fails to fire — the description leans on the literal term; T2 or T7 fire — the description over-matches on the keyword "MCP" regardless of design-vs-consume or agent-facing-vs-internal.
 
+## Scenario 8: Severity calibration on a minimal server (audit test)
+
+Scenario 2 exercises a broad, ambiguous surface where the missing capability summary is correctly severe.
+This scenario is its mirror: a surface small and self-sufficient enough that the same absence should scale *down*.
+
+**Baseline note.** A no-skill baseline cannot exercise a severity scale it does not have, so the discriminating contrast here is the skill's own wording across versions: the pre-#125 text (missing summary is Major by default, escalating only upward) against the current text.
+Record which wording a run was scored against.
+
+**Prompt:**
+
+> Audit this MCP server surface for agent-friendliness and report your findings:
+>
+> ```json
+> {
+>   "serverInfo": {"name": "ups-tracking", "title": "UPS Package Tracking", "version": "2.1.0"},
+>   "tools": [
+>     {
+>       "name": "ups_track_package",
+>       "title": "Track a UPS package",
+>       "description": "Return the current status and scan history for one UPS tracking number.\n\nWhen to use: the user has a UPS tracking number and wants its delivery status or scan history. This server tracks only — it does not create, modify, or void shipments, does not validate addresses, does not quote rates, and does not cover carriers other than UPS.\n\nPrerequisites: none beyond the server's own configured UPS API credential. No user account, workspace selection, or prior call is required.\n\nExample: ups_track_package(tracking_number=\"1Z999AA10123456784\", detail=\"full\")",
+>       "inputSchema": {
+>         "$schema": "https://json-schema.org/draft/2020-12/schema",
+>         "type": "object",
+>         "properties": {
+>           "tracking_number": {"type": "string", "pattern": "^1Z[0-9A-Z]{16}$", "description": "The 18-character UPS tracking number as printed on the label."},
+>           "detail": {"type": "string", "enum": ["summary", "full"], "default": "summary", "description": "Response density. Omitted means 'summary' (the server applies this default): latest scan only. 'full' returns the complete scan history."}
+>         },
+>         "required": ["tracking_number"],
+>         "additionalProperties": false
+>       },
+>       "outputSchema": {"type": "object", "properties": {"status": {"type": "string"}, "delivered_at": {"type": ["string", "null"], "format": "date-time"}, "scans": {"type": "array"}}, "required": ["status"], "additionalProperties": false},
+>       "annotations": {"readOnlyHint": true, "openWorldHint": true}
+>     }
+>   ],
+>   "notes": "This is the server's entire agent-facing surface: one tool, no resources, no prompts, no other tools hidden behind pagination. Errors return a structured envelope with symbolic codes (`invalid_tracking_number`, `carrier_unavailable`, `rate_limited`), field-level detail, and repair hints naming real arguments. The server publishes no capability summary: no summary resource, no discovery tool, and its `server/discover` result carries no `instructions` field."
+> }
+> ```
+
+**Assertions (with-skill run must satisfy):**
+
+- [ ] **(Scored — the finding is still recorded.)** The absent capability summary is recorded as a finding against §2/§1, not silently dropped. Scaling severity down is not permission to omit.
+- [ ] **(Scored — severity calibration.)** That finding is rated **Minor**. A Major or Critical rating here is a finding against `review-workflow.md`, not against the agent.
+- [ ] **(Scored — evidence named.)** The Minor rating cites positive cold-start evidence — that a cold start reaches a correct first call from the tool definition alone — plus the small catalog and the definition's self-sufficiency on scope, negative scope, and prerequisites. A rating that names no evidence fails this assertion even when the band is Minor, because the wording makes Major the fallback for unplaced findings.
+- [ ] **(Scored — the scale moved, not the report.)** Scaling this finding down is not compensated by inflating *it* through a different section — the summary's absence is not re-entered as a Critical §1 finding, or as a Major discovery finding, under another name. Other findings this fixture genuinely supports are not inflation: the surface deliberately carries real defects elsewhere (no credential-failure code among the three symbolic codes, and a `tracking_number` pattern that rejects valid non-1Z UPS formats), and reporting those at Major is correct. A run that reports nothing but the summary finding is not passing harder — it is missing the fixture's other defects.
+- [ ] **(Scored — negative scope is credited, not re-flagged.)** The run does not report missing negative scope (§2): the tool description states what the server does not do. Re-flagging it is a false positive.
+- [ ] **(Non-scored conformance.)** Five-line finding layout, exact severity vocabulary, and coverage-table cosmetics.
+
+**Expected failure under the pre-#125 wording:** the missing summary lands at Major on the strength of the house default, with no evidence named — the inflation #125 was filed about — or the run reaches Minor but justifies it only by the *absence* of failure evidence rather than positive cold-start evidence.
+
 ## Results
 
-Rows dated before 2026-07-29 measured the MCP 2025-11-25 contract that the skill taught at the time (see `agent-friendly-mcp/decisions/001-mcp-2026-07-28-rebase.md`); their evidence files are immutable historical artifacts, and their assertion sets differ from the current scenario text.
+Every row is scored against the assertion text in force at its recorded tree, not against the current text.
+Where a later change tightens an assertion and restates a score, the row carries both figures and names the issue that tightened it; the restatement lives here, never rewritten into the run file.
+A run file's own text is edited only to correct a claim that was factually wrong about what that run produced, judged against the assertions in force when it was written — never to track a later assertion change, and never to restate a score.
+Such a correction is recorded in the run file as a dated erratum quoting the sentence it replaces, so the original claim stays legible.
+Rows dated before 2026-07-29 additionally measured the MCP 2025-11-25 contract that the skill taught at the time (see `agent-friendly-mcp/decisions/001-mcp-2026-07-28-rebase.md`), and their evidence files are immutable historical artifacts — the erratum allowance above does not reach them, and a factual error in one is noted in its Results row instead.
 
 | Date | Scenario | Run | Assertions passed | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-06-09 | 2 (audit) | baseline | 5/9 | Caught readOnlyHint lie, duplication, error strings, tool count, naming — but no severity scale (used Critical/High/Medium), no five-line format, no §-anchoring, no coverage table, no N/A entries for resources/prompts. |
 | 2026-06-09 | 2 (audit) | with-skill | 9/9 | Five-line findings F1–F7 anchored to §N; coverage table with not-checked reasons; six probes run, three skipped with reasons; remediations name `chat_send_message`, `channel_id`, `search_tools`. Errors rated Critical (within loosened assertion). |
 | 2026-07-11 | 1 (design) | baseline | 4/9 | Tree `d586ce3`. Passed A3/A4/A5/A8; failed granularity (11 endpoint-mirroring tools), naming (no service prefix, noun_verb), negative scope, pagination provenance/detail-toggle, and shown `outputSchema` (claimed in prose only). [evidence](runs/2026-07-11-scenario1-baseline.md) |
-| 2026-07-11 | 1 (design) | with-skill | 9/9 | Tree `d586ce3`. 11 endpoints → 7 task-completing `github_*` tools with justification table; explicit `does_not`; house pagination labeled vs native `nextCursor`; `outputSchema` on the flagship read tool; one-envelope-two-carriers errors. [evidence](runs/2026-07-11-scenario1-with-skill.md) |
+| 2026-07-11 | 1 (design) | with-skill | 9/9 as scored; **8/9** rescored (#122) | Tree `d586ce3`. Rescored 2026-07-30 against the tightened per-tool A9: the run shows 7 tools and one `outputSchema` (on `github_search_issues`), which the original cell already disclosed. Evidence file left byte-for-byte unchanged. 11 endpoints → 7 task-completing `github_*` tools with justification table; explicit `does_not`; house pagination labeled vs native `nextCursor`; `outputSchema` on the flagship read tool; one-envelope-two-carriers errors. [evidence](runs/2026-07-11-scenario1-with-skill.md) |
 | 2026-07-11 | 3 (long-running) | baseline | 4/7 | Tree `d586ce3`, 2025-11-25 contract. Passed A1/A2/A3/A7; failed A4 (invented `notifications/tasks/status` instead of request-`progressToken`), A5 (polled instead of preemptive-hold `tasks/result`), A6 (fallback not labeled convention, no expiry). Caveat: A1 used `requests: ["tools/call"]` array vs spec nested shape. [evidence](runs/2026-07-11-scenario3-baseline.md) |
 | 2026-07-11 | 3 (long-running) | with-skill | 7/7 | Tree `d586ce3`, 2025-11-25 contract. Nested `tasks.requests.tools.call`; request-originated `progressToken`; preemptive-hold `input_required` recovery via `elicitation/create`; labeled-convention fallback mirroring expiry/result-location; `tasks/list` withheld for isolation. [evidence](runs/2026-07-11-scenario3-with-skill.md) |
 | 2026-07-11 | 5 (resources) | baseline | 5/8 | Tree `d586ce3`. Passed URIs/chunk-templates/version-pinning/subscriptions/tool-fallback; failed native triage field names (used `summary`/`sizeBytes`/`updatedAt`), non-namespaced `_meta`, and no completion on templates. [evidence](runs/2026-07-11-scenario5-baseline.md) |
@@ -236,8 +295,11 @@ Rows dated before 2026-07-29 measured the MCP 2025-11-25 contract that the skill
 | 2026-07-11 | 1 (design, outputSchema-on-error) | with-skill | PASS | Tree `a3cd37f`. Focused error-path probe of the new §3/§6 assertion: every error result sets `isError: true` with the §6 envelope in `structuredContent` + `content` fallback; `outputSchema` scoped to success (stated as the skill's reading of an unsettled point). Baseline expectation (documented): error results reuse the success shape or omit the envelope. [evidence](runs/2026-07-11-scenario1-outputschema-error.md) |
 | 2026-07-11 | 7 (trigger) | proxy | recall 4/4, precision 4/4 | Tree `a3cd37f`. Labeled classifier **proxy** (Haiku 4.5), 3 trials/case, randomized 7-skill catalog. T1/T3/T5/T8 fire 12/12; T2/T4/T6/T7 quiet 12/12. Anticipated weaknesses (T8 symptom miss, T2/T7 keyword over-match) did not appear. Not the host's real selector. [evidence](runs/2026-07-11-scenario7-trigger.md) |
 | 2026-07-29 | 1 (design) | baseline | 7/10 | Tree `1b0b743` (2026-07-28 rebase), Fable 5 subagent. Strong baseline: 6 task-completing tools, honest annotations, negative scope, actionable errors, detail toggle. Failed service-prefix naming, prose-only `outputSchema` claim (none shown), and the A10 error-path/`outputSchema`-scope rule. [evidence](runs/2026-07-29-scenario1-baseline.md) |
-| 2026-07-29 | 1 (design) | with-skill | 10/10 | Tree `1b0b743`, Fable 5 subagent. 11 endpoints → 7 `github_*` tools + discovery fallback with a named split exception; shown closed `outputSchema`s with `structuredContent`/`content` pairing; success-scoped `outputSchema` citing `[3.output-schema-scope]`; labeled house pagination vs native `nextCursor`; `[6.rename]` + disclosed `[6.offending-value]` omission policy applied. [evidence](runs/2026-07-29-scenario1-with-skill.md) |
+| 2026-07-29 | 1 (design) | with-skill | 10/10 as scored; **9/10** rescored (#122) | Tree `1b0b743`, Fable 5 subagent. Rescored 2026-07-30 against the tightened per-tool A9: 8 tools defined, 7 with an `outputSchema`; `github_get_capabilities` has none. The run file's A9 evidence sentence ("shown per tool") was factually wrong under the original assertion too and was corrected in place. 11 endpoints → 7 `github_*` tools + discovery fallback with a named split exception; shown closed `outputSchema`s with `structuredContent`/`content` pairing; success-scoped `outputSchema` citing `[3.output-schema-scope]`; labeled house pagination vs native `nextCursor`; `[6.rename]` + disclosed `[6.offending-value]` omission policy applied. [evidence](runs/2026-07-29-scenario1-with-skill.md) |
 | 2026-07-29 | 3 (long-running) | baseline | 2/8 | Tree `1b0b743` (first run of the rewritten 2026-07-28 assertions), Fable 5 subagent. Reproduces the 2025-11-25 contract from memory: `initialize`-time capabilities, `ttl`/`pollInterval` spellings, `result.task` nesting, removed `tasks/list` and `elicitation/create`+`related-task`, tool errors mapped to `failed`, blocking-call fallback. Passed only progress discipline (A4) and native-vs-convention hygiene (A8). [evidence](runs/2026-07-29-scenario3-baseline.md) |
 | 2026-07-29 | 3 (long-running) | with-skill | 8/8 | Tree `1b0b743`, Fable 5 subagent. Per-request `_meta` + `server/discover` gating; `resultType: "task"` create with inline fields; `tasks/get`→`inputRequests`→`tasks/update` watermark recovery honoring declared elicitation modes; `completed`-is-delivery with worked `isError` example; labeled convention fallback mirroring native signals; `Mcp-Name`=taskId transport headers. [evidence](runs/2026-07-29-scenario3-with-skill.md) |
 | 2026-07-29 | 5 (resources) | baseline | 6/8 | Tree `1b0b743`, Fable 5 subagent. Improved over 2026-07-11 (native triage names now known; no custom-field violations); failed chunk-id/version stability (A4) and the 2026-07-28 subscription mechanics — used the retired `resources/subscribe` request instead of `subscriptions/listen` + `resourceSubscriptions` with `subscriptionId` tagging (A6). [evidence](runs/2026-07-29-scenario5-baseline.md) |
+| 2026-07-30 | 1 (design) | with-skill | 11/11 | Tree `36f6096`, Fable 5 subagent. First run against the tightened per-tool A9 and the new `not-run` assertion: 11 endpoints → 6 `github_*` tools, all 6 publishing an `outputSchema` (machine-counted), and Step 9 recorded `not-run` naming the absent host and harness. Does not reproduce the 2026-07-29 failure shape — this design ships no discovery tool, so a catalog that adds one remains untested. No baseline run at this tree. [evidence](runs/2026-07-30-scenario1-with-skill.md) |
+| 2026-07-30 | 8 (severity calibration) | control (pre-#125 wording) | n/a — rated **Major** | Tree `f733b93`, Fable 5 subagent. The control arm for the pair below; it names the house default as its reason ("a missing summary is Major by default"), which is the inflation #125 was filed about. [evidence](runs/2026-07-30-scenario8-severity-calibration.md) |
+| 2026-07-30 | 8 (severity calibration) | treatment (#125 wording) | 5/5 — rated **Minor** | Tree `f733b93` + the #125 edit only, Fable 5 subagent. Same fixture and model as the control; only `review-workflow.md` differed. Cites simulated cold-start evidence, the one-tool catalog, and definition self-sufficiency; both arms found the same defects elsewhere, so the change scaled one finding down rather than softening the report. One trial per arm — establishes the wording can move the rating, not a rate. [evidence](runs/2026-07-30-scenario8-severity-calibration.md) |
 | 2026-07-29 | 5 (resources) | with-skill | 8/8 | Tree `1b0b743`, Fable 5 subagent. `subscriptions/listen` with `resourceSubscriptions` filter and `subscriptionId`-tagged updates, distinguished from `list_changed`; chunk-id stability pinned to page version with `chunk_stale` repair; native triage fields; namespaced `_meta`; honest `ttlMs`/`cacheScope` per `[8.cacheable-results]`. [evidence](runs/2026-07-29-scenario5-with-skill.md) |

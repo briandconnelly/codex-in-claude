@@ -5,6 +5,11 @@
 - **Mode:** with-skill (fresh general-purpose subagent on `claude-fable-5`; read `SKILL.md` + all eight `references/` files, explicitly forbidden from `tests/` and `decisions/`; 11 tool-uses, all reads)
 - **Score:** 10/10
 
+**Erratum, 2026-07-30 (#122).** The A9 evidence cell below originally read "Closed `outputSchema` shown per tool."
+That overstated what this run produced: 8 tool definitions appear below and 7 carry an `outputSchema`, with `github_get_capabilities` publishing none.
+The sentence was wrong under the assertion in force at the time, independent of any later tightening, so the factual claim is corrected here.
+The score is not restated in this file — #122's restatement of it lives in the Results table of `../scenarios.md`, per the policy recorded there.
+
 ## Exact prompt given
 
 Same GitHub Issues prompt as the baseline (see `2026-07-29-scenario1-baseline.md`), preceded by an instruction to read `agent-friendly-mcp/SKILL.md` and every file under `references/` as authoritative guidance, and **not** to read anything under `tests/` or `decisions/`.
@@ -21,7 +26,7 @@ Same GitHub Issues prompt as the baseline (see `2026-07-29-scenario1-baseline.md
 | A6 | Capability summary with negative scope | **PASS** | `does_not` block (no PR management, no label/milestone objects, no deletes/transfers, no push notifications) served via resource, tool, and advisory `instructions`. |
 | A7 | Pagination provenance-correct with detail toggle | **PASS** | `has_more`/`next_cursor` explicitly labeled "House pagination convention, not protocol" inside tool payloads (`[8.house-pagination]`); native `nextCursor` reserved for list methods; `detail: summary\|full` toggle is density-only with server-applied default. |
 | A8 | Honest annotations | **PASS** | Reads carry only `readOnlyHint: true` (+`[3.annotation-defaults]` omission of the mutation hints); `github_create_issue` `idempotentHint: false` with the `idempotency_key` rationale; `github_update_issue` `destructiveHint: true` justified by body/label replacement; the observable-scope `readOnlyHint` reading is declared in the summary. |
-| A9 | `outputSchema` published; success `structuredContent` + `content` fallback | **PASS** | Closed `outputSchema` shown per tool; "success results return `structuredContent` conforming to a published `outputSchema` (closed), with the same JSON serialized in `content[0].text` as fallback". |
+| A9 | `outputSchema` published; success `structuredContent` + `content` fallback | **PASS** | Closed `outputSchema` shown on 7 of the 8 tools defined below, with the pairing prose stated: "success results return `structuredContent` conforming to a published `outputSchema` (closed), with the same JSON serialized in `content[0].text` as fallback". `github_get_capabilities` publishes none — see the erratum above. |
 | A10 | **(Scored.)** Error path distinct; `outputSchema` scoped to success, attributed to the skill's reading, or a documented union | **PASS** (caveat) | "`isError: true` results carry the §6 error envelope instead — `outputSchema` scopes to success only, documented per tool (`[3.output-schema-scope]`)"; envelope in `structuredContent` with a text mirror. Caveat: attributes the scoping to the checklist rule by id rather than verbalizing "unsettled spec point" — attribution satisfied, hedge not repeated. |
 
 **Passed:** all (10/10).

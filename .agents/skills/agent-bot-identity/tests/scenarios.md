@@ -46,7 +46,7 @@ An assertion the with-skill run misses is a finding against the skill, not again
 - [ ] Token minting: short-lived installation tokens via app JWT; cache file created `0600` atomically (no write-then-chmod window); expiry taken from the response's `expires_at`, not assumed.
 - [ ] git auth via per-project env (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`, `GIT_CONFIG_*` with credential-helper reset + bot helper, org-scoped `insteadOf` SSH→HTTPS rewrite, `commit.gpgsign false`) — no shell dotfile edits.
 - [ ] gh auth via a SessionStart hook that writes `export GH_TOKEN="$(...)"` to `$CLAUDE_ENV_FILE` (sourced before every Bash command), NOT a `gh` PATH shim in shell dotfiles; rationale notes Claude Code freezes PATH into a snapshot built from a non-login `$HOME/.zshrc` (ignoring `ZDOTDIR`), and that `GH_TOKEN` is dynamic so it cannot be a static `settings.local.json` env value.
-- [ ] Verification covers both directions: bot active inside an opted-in agent session (`GH_TOKEN` starts `ghs_`; `gh api installation/repositories`, not `gh api user`) AND personal terminal unchanged (helper, signing, SSH push) — the latter is true by construction since no dotfile changes.
+- [ ] Verification covers both directions: bot active inside an opted-in agent session (`GH_TOKEN` starts `ghs_`; the Phase 5 membership assertion — the session repo present in the paginated `installation/repositories` list — not `gh api user` or a bare repo count) AND personal terminal unchanged (helper, signing, SSH push) — the latter is true by construction since no dotfile changes.
 - [ ] Security statement says local scoping is attribution, not containment: the agent can still read the App key, call binaries by full path, and act as the human with personal credentials from any session — so the human-review gate binds the bot token, not the agent (approval-laundering risk named or clearly described).
 - [ ] Calls for repo-side enforcement: ruleset audit on installed repos — bot never a bypass actor, required reviews >= 1 with self-approval not counted, and the `required_signatures` interaction (unsigned bot pushes rejected) checked per repo.
 - [ ] Caveat present: local commits pushed with an App token are NOT auto-verified; only commits created through the App's API path get the verified badge.
@@ -201,6 +201,10 @@ An assertion the with-skill run misses is a finding against the skill, not again
 **Expected baseline failures:** treats `SessionStart` failure as sufficient because the hook printed an error; keeps the executable preflight in the hook instead of moving it into the per-command guard; misses that the incident is silent human attribution, not just hook reliability; verifies only happy-path bot activation and not the broken-guard abort path.
 
 ## Results
+
+> [!NOTE]
+> **Phase 5 token-check criterion change (2026-07-30, issue #135).** A live wrong-installation incident showed the count check (`gh api installation/repositories --jq .total_count`) passes for any valid installation token of the App — two installations with equal repo counts are indistinguishable — so Phase 5's harness-neutral check became a membership assertion (session repo present in the paginated `installation/repositories` list) and Scenario 1's assertion 7 was updated to match.
+> Prior Scenario 1 with-skill rows scored the count form; they are retained as history and do not reflect the current assertion until re-run — the re-run is owed.
 
 > [!IMPORTANT]
 > **Mechanism change (2026-06-10, after real-world deployment).** The original skill activated `gh` with a PATH shim loaded from a shell dotfile (`~/.zshenv`).
@@ -422,6 +426,9 @@ For the with-skill run, the treatment subagent reads both `SKILL.md` and `refere
 >
 > Scope footnote: no branch was pushed and no `gh pr create` was run under Codex.
 > Check 4 exercised the authenticated HTTPS-rewrite path via `git ls-remote` and check 5 made a local commit; the write path to GitHub rides the same token and helper but was not exercised end-to-end.
+>
+> Criterion-change footnote (2026-07-30, issue #135): check 2's PASS above was scored under the prior count criterion, which any valid installation token of the App satisfies — including one from a wrong installation.
+> The check's current form is the SKILL Phase 5 membership assertion; it has not been live-run under Codex, and the core-routing gate no longer counts check 2 as current evidence until it is.
 
 ### Codex scenario results
 
