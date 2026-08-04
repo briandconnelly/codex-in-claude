@@ -70,6 +70,7 @@ What each part does:
 
 These env keys are static, so they live in `settings.local.json`.
 `GH_TOKEN` is dynamic (1h expiry), so it cannot be a static value here — that is why it goes through the hook + `$CLAUDE_ENV_FILE` instead.
+If this project's repos belong to an account other than `bot-token`'s default installation, also pin `"BOT_INSTALL_ID": "<numeric id>"` in the `env` block — the SKILL Phase 3 selection contract; it is a static per-project fact, so the static surface is the right home for it here.
 
 Static also means the env follows the session, not the directory: commands that leave the project mid-session (a scratch clone, an unrelated repo) still carry the bot author env, so commits there are bot-attributed until the work moves to its own session.
 That is the recoverable direction (amendable, and the org-scoped rewrite and host-gated helper do not activate elsewhere), but know it is Variant A behavior; Variant B re-decides per command instead.
@@ -96,7 +97,8 @@ Register the hook in `~/.claude/settings.json` (applies to all projects; replace
 
 The hook entry uses exec form (`args: []`) so the absolute script path is passed directly instead of shell-tokenized.
 Install `scripts/claude/bot-env-hook.sh` and `scripts/bot-env` from this skill's bundled resources.
-Customize `bot-env` with the org, bot name, and bot noreply email.
+Customize `bot-env` with the bot name, the bot noreply email, and the account→installation map (`ORG_INSTALLS`) — one `account:id` line per GitHub account the bot serves.
+The map is also the activation gate: a repo whose remotes match a mapped account gets the bot verdict and that account's installation, per the SKILL Phase 3 `BOT_INSTALL_ID` selection contract (whose semantics — fail-closed resolution, clearing, ambiguity — live there, not here).
 
 `bot-env-hook.sh` installs one unevaluated guard line into `$CLAUDE_ENV_FILE`.
 The guard line itself checks that `bot-env` exists and is executable before every Bash command, then captures `bot-env` output, aborts on script failure, and only then evaluates the emitted shell.

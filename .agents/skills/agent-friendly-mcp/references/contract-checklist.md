@@ -210,6 +210,13 @@ Audit prompt: On the clients this server actually targets, what must an agent lo
   Log each coercion so the shim stays a measured, droppable workaround rather than a permanent invisible layer.
 
 - `[3.output-schema]` **Publish an `outputSchema` and return `structuredContent` when targeting MCP versions that support them.** This is the normative target, not an optional nicety: when a tool declares an `outputSchema`, servers MUST return conforming `structuredContent` on success results, and clients SHOULD validate against it (the `isError: true` carve-out is the next item).
+  The obligation is per tool, not per catalog: evaluate every tool independently against this rule, and one worked example on a flagship tool does not discharge it for the rest.
+  The carve-out is narrow: it reaches only a tool whose success result carries nothing a caller parses or branches on — a rendered image, an audio clip, a prose answer.
+  What it permits is exactly one thing: a qualifying tool may ship no `outputSchema` and return no `structuredContent`.
+  Nothing else in this rule is waived.
+  Ask what the result contains, not where the tool puts it: data a caller parses out of `content` is machine-contract data misplaced (`[3.content-types]`), not an absent contract, so omitting `structuredContent` never establishes the carve-out.
+  Note a qualifying omission in the tool's description.
+  Evaluate `resource_link` results under `[3.resource-links]`.
   Keep parser-compatible JSON in `content` as a fallback for older or weaker clients; support varies across MCP versions, so the fallback stays useful — but it is the fallback, not the contract.
 
 - `[3.output-schema-scope]` **Scope `outputSchema` to success results — a deliberate reading of an unsettled point.** The spec does not say whether `outputSchema` binds `isError: true` results.

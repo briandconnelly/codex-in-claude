@@ -4,7 +4,7 @@ metadata:
     github-path: agent-bot-identity
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: 08552e9bb83c7d29b0854009c995030005a059cf
+    github-tree-sha: 3de0747c00f7e9a228f3a9d2b99d48f2bfd3b406
 name: agent-bot-identity
 ---
 # Agent Bot Identity
@@ -75,7 +75,9 @@ Never present this setup as a sandbox.
    An org member who is admin of the target repos can install an App that requests no organization permissions (this App requests none); otherwise it files an installation request for an owner to approve.
 2. Choose **"Only select repositories"** and pick the target repos.
    This list is the real blast-radius limit; enrolling a repo in the program means adding it here.
-3. Note the **Installation ID** from the post-install URL (`.../settings/installations/<id>`), via `gh api orgs/{org}/installations` with an org-admin user token, or via app JWT (`gh api /app/installations` — a normal user token will not work on `/app/*` endpoints).
+3. Note the **Installation ID** from the post-install URL (`.../settings/installations/<id>`), via `gh api orgs/{org}/installations` with an org-admin user token, or via app JWT (a normal user token will not work on app-JWT endpoints).
+   The accessible app-JWT route is `gh api repos/{owner}/{repo}/installation`: it needs no org role, answers the question that matters when debugging — which installation covers this repo — and 404s when the repo is not enrolled anywhere; `gh api /app/installations` lists every installation of the App.
+   Installations are per account, not per App: an App installed on an org and on a personal account has two installation IDs, and `bot-token` must be configured with the one whose account owns the repos being worked.
 4. Get the bot's user ID for commit attribution: `gh api 'users/acme-agent%5Bbot%5D' --jq .id`.
    The bot's commit email is `<BOT_UID>+acme-agent[bot]@users.noreply.github.com`; using it makes commits render with the bot's avatar.
 
@@ -98,14 +100,21 @@ Use these resources:
 
 Each harness adapter (Phase 4) adds its own glue scripts on top of these; see the adapter doc.
 
-Customize `bot-token` with the App ID, installation ID, key path, and cache path.
-Its cache defaults to `~/.cache/acme-agent/token.json`, deliberately outside the key-and-scripts directory: a sandboxed harness can then grant write access to the cache without also granting it to `key.pem` and the fail-closed scripts (see the Codex adapter's sandbox profile).
+Customize `bot-token` with the App ID, the default installation ID, the key path, and the cache location.
+`bot-token` mints for its default installation unless the environment carries `BOT_INSTALL_ID`, the numeric id of another installation of the same App — the selection contract adapters use when one machine serves more than one GitHub account (installations are per account, Phase 2).
+It refuses a non-numeric id — including the unreplaced placeholder — rather than minting, because the id reaches both the API URL and the cache filename.
+An adapter that sets `BOT_INSTALL_ID` must resolve it from the repo's raw remotes and fail closed: an unmapped account gets a hard error or the personal verdict, never a fallback to another entry's id — a fallback mints a *valid* token for the wrong installation, which 404s on the repo instead of failing at auth.
+The Claude adapter's Variant B implements this resolution inside `bot-env`'s existing remote parse and clears the variable on personal and ambiguous verdicts so a selection never leaks from a previously visited repo; Variant A can pin a per-project value in its static env; the Codex adapter performs no selection (single-installation — see its doc).
+The cache lives at `~/.cache/acme-agent/token-<installation id>.json`, deliberately outside the key-and-scripts directory: a sandboxed harness can then grant write access to the cache without also granting it to `key.pem` and the fail-closed scripts (see the Codex adapter's sandbox profile).
+The cache filename is keyed by the installation id because a cache entry must be keyed by every input that changes what its token can reach; a token minted for one installation must never be served to a caller working under another.
+Upgrading from a pre-keying install: delete the old unkeyed `token.json` once — nothing reads it.
 It parses `expires_at`, writes the token cache through a `0600` temp file swapped in with `os.replace()`, and sets a request timeout so a hung mint does not hang git or `gh` indefinitely.
 It refuses to print an empty token — from the cache or from the API — because an empty `GH_TOKEN` is the fail-open case every caller here guards against.
 The `uv run` shebang requires `uv` on PATH where the script is invoked; use an absolute path to `uv` if that is not guaranteed.
 On a cache hit this runs in well under 100 ms, cheap enough to call before every Bash command.
 There is no lock around the mint: concurrent cold-cache invocations may each mint a token — duplicate API work, not a correctness problem, since both tokens are valid and the last cache write wins.
-Optional hardening: pass a `"repositories"` field in the token request to scope each token to the repo being worked, at the cost of the shared cache.
+Optional hardening: pass a `"repositories"` field in the token request to scope each token to the repo being worked.
+If you do, extend the cache key with a digest of the scoping fields, per the keying rule above: a cache keyed only by installation silently serves a token minted for one repo's scope to a caller needing another — no error, for the whole cache-validity window.
 
 Keep `git-credential-bot` host-gated.
 For an eligible `https://github.com` request, a crashed or empty mint must return the complete invalid credential `username=x-access-token` and `password=BOT-TOKEN-MINT-FAILED` so Git cannot fall through to askpass, terminal prompting, or a personal credential source.
@@ -130,6 +139,7 @@ An adapter for a local agent harness must supply all of the following, without e
 - Command-scope `GIT_CONFIG_*`: credential-helper reset plus the bot helper, org-scoped `insteadOf`, `commit.gpgsign false`.
 - A dynamic `GH_TOKEN` re-minted across hour-plus sessions.
 - A fail-closed substitute when minting fails: a non-empty invalid token, never an empty value.
+- When the machine serves more than one GitHub account: installation selection per Phase 3's `BOT_INSTALL_ID` contract.
 
 A harness missing one of these capabilities is pending, not approximated — a half-wired adapter fails open to the personal identity.
 Do not port an adapter mechanically: Claude Code's per-command env-file evaluation has no assumed equivalent elsewhere.
@@ -147,6 +157,7 @@ Implemented adapters:
 | Fail-closed routing | ✅ guard aborts / sentinel token | ✅ sentinel token (routing only) |
 | Automatic user-level routing | ✅ Variant B | ❌ pending |
 | `as-me` authorship escape | ✅ | ❌ (sandbox denies non-literal-git `.git` writes) |
+| Installation selection (multi-account, Phase 3) | ✅ Variant B map / Variant A pinned env | ❌ pending (default installation only) |
 | Verification status | Scenarios 1–5 tested | Partially verified; GitHub write path not exercised; scenarios C1–C2 tested |
 
 ("Fail-closed" is scoped to routing, never containment.)
@@ -157,10 +168,13 @@ In a fresh agent session in an opted-in repo:
 
 - Run your adapter's activation checks first — see the adapter doc.
 - Do not begin git or `gh` work until your adapter's token check and the command-scope credential-helper check pass — see the adapter doc for which token check applies.
-- If the adapter injects `GH_TOKEN` into the session env (Claude Code): `echo "${GH_TOKEN:0:4}"` → `ghs_`, proving the adapter injected the installation token.
+- If the adapter injects `GH_TOKEN` into the session env (Claude Code): `echo "${GH_TOKEN:0:4}"` → `ghs_`, proving the adapter injected *an* installation token — which installation it came from is what the membership check below establishes.
   This check does not port: under a per-invocation shim adapter (Codex CLI) a session-level `GH_TOKEN` is an audit *smell*, not a pass — the shim exports it per invocation.
-- `gh api installation/repositories --jq '.total_count'` → the count of enrolled repos, proving `gh` acts as the bot. Use this, not `gh api user` — an installation token has no user and 403s on `/user`.
-  This is the harness-neutral token check both adapters share; prefer it when writing adapter-agnostic runbooks.
+- Membership: `gh api --paginate installation/repositories --jq '.repositories[].full_name' | grep -iFx 'acme/<this-repo>'` → prints the repo, proving the token belongs to the installation that covers this session's repo.
+  Match case-insensitively (`-i`): GitHub's namespace is case-insensitive and `full_name` returns canonical casing, so a hand-written expected name that differs only in case would otherwise false-negative.
+  Write the expected `owner/repo` from what you know the session repo to be; deriving it through the token under test (e.g. `gh repo view`) can fail before the assertion runs.
+  This is the harness-neutral token check both adapters share, and the only check here that a wrong-installation token fails: the `ghs_` prefix, an enrolled-repo *count*, and a direct `gh api repos/{owner}/{repo}` read on a public repo all pass for any valid installation token of the App — a count is a diagnostic, never a pass (`--paginate` matters: the endpoint pages at 30 repos).
+  Use this, not `gh api user` — an installation token has no user and 403s on `/user`.
 - `git config --show-scope credential.helper` → bot helper at `command` scope (proves env-scoped, no file changed).
 - `GIT_SSH_COMMAND=/usr/bin/false git ls-remote origin` → succeeds, proving the HTTPS-rewrite-plus-token path is in use (SSH is disabled for that invocation).
 - Test commit → author `acme-agent[bot]`, unsigned (`git log -1 --format='%an <%ae> %G?'`).
@@ -171,6 +185,18 @@ In a fresh agent session in an opted-in repo:
 - `gh pr checks` → returns status (proves Checks and Actions read).
 - Negative: `git ls-remote https://github.com/acme/<private-non-enrolled-repo>.git` → fails, proving the installation boundary.
   The probe repo must be private — public repos are readable over unauthenticated HTTPS, so a success there proves nothing.
+  Run it only after the membership check has passed: a wrong-installation or under-scoped token also fails here, so without the positive assertion this failure cannot distinguish the working boundary from a broken setup.
+
+When a Phase 5 check or a later bot operation fails, triage before changing config — the failure statuses overlap:
+
+| Symptom | Distinguish with | Cause |
+| --- | --- | --- |
+| 401 and the credential is `BOT-TOKEN-MINT-FAILED` | — | Mint failed; the fail-closed sentinel is working as designed — debug `bot-token` |
+| 404 on a repo you believe is enrolled | `gh api repos/{owner}/{repo}/installation` under an app JWT (Phase 2) vs the configured Installation ID | IDs differ → token minted from the wrong installation |
+| ↳ that lookup also 404s | — | Repo not enrolled in any installation of this App |
+| Membership check passes but a call 403s with `Resource not accessible by integration` | The App's granted permissions (Phase 1) | Missing permission (e.g. `actions: read` for `gh pr checks`) |
+
+The app-JWT lookup is an out-of-band diagnostic: run it from a personal terminal with explicit JWT auth, never through the adapter's `gh` path, which replaces the JWT with the installation token.
 
 Run your adapter's own routing checks in addition to these — for an automatic adapter, that includes the gate's fail direction (ambiguity resolves to bot, broken guard aborts, mid-session flips). See the adapter doc.
 
@@ -241,11 +267,13 @@ Not enforced — the part everyone overstates:
 | Mistake | Reality |
 | --- | --- |
 | Letting a failed mint leave `GH_TOKEN` empty | `gh` treats empty as unset and silently falls back to the personal stored credentials; substitute a non-empty invalid token so the failure surfaces as an auth error |
-| Probing identity with `gh api user` | Installation tokens have no user and 403 there; use `gh api installation/repositories` |
+| Probing identity with `gh api user` | Installation tokens have no user and 403 there; run the Phase 5 membership assertion instead |
+| Verifying the token with a repo count or the `ghs_` prefix | Both pass for any valid installation token of the App — including one minted from the wrong installation when the App is installed on more than one account; only Phase 5's membership assertion discriminates |
 | Self-assigning issues to signal the bot is working them | A GitHub App bot actor is not a valid assignee, so `gh issue edit --add-assignee` with the bot as target fails — and `Issues: write` is already the max grant, so no wider permission exists; signal work-in-progress with a claim label (e.g. `agent:in-progress`) via `--add-label` instead |
 | Granting Checks read without Actions read | Under an App token `gh pr checks` needs both — the status rollup traverses each check suite's workflow run |
 | Granting Workflows: write "to be safe" | Hands a prompt-injected agent the ability to rewrite CI |
 | Write token cache, then chmod | umask window exposes the token; create `0600` atomically |
+| One shared token cache across installations or scopes | A cached token minted under one authority is silently served to callers needing another for the whole cache window; key the cache per Phase 3's rule |
 | Assuming one-hour token life | Parse `expires_at` from the response |
 | Leaving the personal GPG key signing bot commits | Attribution mismatch — human signature on bot-authored work; set `commit.gpgsign false` |
 | Expecting the Verified badge on bot commits | Local commits pushed with an App token are not auto-verified; only API-path commits (e.g. GraphQL `createCommitOnBranch`) get the badge |

@@ -8,8 +8,10 @@ Most mechanism claims below trace to recorded probes against `codex-cli 0.143.0`
 
 Variant A is **partially verified; the GitHub write path was not exercised**, and it has a documented `as-me` limitation; Variant B is pending.
 
-Checks 1–5, 7, and 8 of the verification list below passed for PATH takeover, static identity env, per-invocation `gh` minting, the credential-helper rewrite, sandbox minting, fail-closed token handling, and the installation access boundary.
+Checks 1, 3–5, 7, and 8 of the verification list below passed for PATH takeover, static identity env, the credential-helper rewrite, sandbox minting, fail-closed token handling, and the installation access boundary.
+Check 2 (the token-identity check) passed only in its superseded count form — proving the shim minted a valid installation token, not that it was the right installation's; its current membership form (SKILL Phase 5, changed for issue #135) has not been live-run under Codex.
 One known capability limitation is `as-me` — see the `as-me` limitation section: under this Codex version's sandbox the human-authorship override cannot run, so collaborated authorship happens outside Codex.
+This adapter also performs no installation selection: the shim mints with `bot-token`'s default installation, so multi-account use (the SKILL Phase 3 `BOT_INSTALL_ID` contract) is **pending** here — serve one GitHub account per Codex install.
 
 Scope of the live verification, stated honestly: no branch was pushed and no `gh pr create` was run under Codex.
 Check 4 proved the authenticated HTTPS-rewrite path with `git ls-remote` and check 5 made a local commit; the write path to GitHub (push, PR creation) rides the same token and credential helper but was not exercised end-to-end here.
@@ -174,8 +176,8 @@ What each is for, from the minting probes:
   A cache hit needs no network, but the profile keeps it enabled because the invocation cannot know cold-vs-warm in advance.
 - The `~/.cache/uv` writable root is required on **every** run, cold or warm — the `bot-token` script is a `uv run --script` shebang, and `uv` must write to its own cache (`sdists-v9/.git`) just to resolve the script's environment before the token-cache logic runs.
   Omitting it fails immediately: `failed to open file .../uv/sdists-v9/.git: Operation not permitted`.
-- The `~/.cache/acme-agent` writable root is the single leaf directory `bot-token` writes its `token.json` cache into.
-  It need not exist beforehand: a cold mint with the directory absent creates it and succeeds (verified).
+- The `~/.cache/acme-agent` writable root is the single leaf directory `bot-token` writes its per-installation `token-<id>.json` cache files into.
+  It need not exist beforehand: a cold mint with the directory absent creates it and succeeds (verified against the pre-keying `token.json` layout; the keyed filenames live in the same directory, so the root is unchanged).
 
 **Grant these two roots and nothing else.**
 Do **not** make the bot *config* directory (`~/.config/acme-agent`) writable: under the SKILL's flat-install recommendation it holds `key.pem` **and** every fail-closed script — `bot-token`, `git-credential-bot`, and this `gh` shim.
@@ -204,13 +206,14 @@ Verified in Check 4: `GIT_SSH_COMMAND=/usr/bin/false git ls-remote origin` succe
 ## Verification
 
 Run these together with the SKILL's Phase 5 checks, from a fresh invocation through the launcher's absolute path.
-Skip the SKILL's `GH_TOKEN`-prefix and `as-me` bullets; checks 2 and 6 below replace them.
+Skip the SKILL's `GH_TOKEN`-prefix and `as-me` bullets; check 6 below replaces the latter, and check 2 is the SKILL's own Phase 5 membership assertion (the prefix check has no Codex equivalent).
 (A session-level `GH_TOKEN` is an audit smell here, not a pass: the shim exports it per invocation.)
 Sandboxed checks use `/Users/<you>/.config/acme-agent/bin/codex-bot sandbox -c 'sandbox_mode="workspace-write"' sh -c '<cmd>'`; the commit checks use `/Users/<you>/.config/acme-agent/bin/codex-bot exec -s workspace-write --skip-git-repo-check '<prompt>'`.
-Ten checks were run live; each is one line with its expected result.
+Each check is one line with its expected result; the 2026-07-07 run exercised all ten in their then-current form, and check 2's criterion has since changed, so its entry is pending rather than passed.
 
 1. Launch by the absolute `codex-bot` path, then run `command -v gh` → the shim path (`~/.config/acme-agent/bin/gh`), proving the launcher selected the profile and the shim wins PATH. (PASS)
-2. `gh api installation/repositories --jq .total_count` → the count of enrolled repos, proving `gh` acts as the bot. (PASS)
+2. The SKILL's Phase 5 membership assertion, exactly as Phase 5 states it. **Pending: not yet live-run under Codex.**
+   The 2026-07-07 run executed the prior count form (`gh api installation/repositories --jq .total_count` → enrolled count, PASS), which any valid installation token of the App satisfies and which no longer gates (issue #135).
 3. `git config --show-scope credential.helper` → bot helper at `command` scope, proving env-scoped with no file changed. (PASS)
 4. `GIT_SSH_COMMAND=/usr/bin/false git ls-remote origin` → succeeds via the HTTPS rewrite + bot token, with SSH disabled. (PASS)
 5. Real `codex exec` empty commit on a scratch branch → author and committer are the bot, `%G?` is `N` (unsigned), matching `commit.gpgsign=false`. (PASS)
@@ -220,8 +223,8 @@ Ten checks were run live; each is one line with its expected result.
 9. Untrusted fresh clone (a directory Codex has never trusted) → behaves identically to the enrolled clone; `codex sandbox` never gates on directory trust. **Recorded behavior, not a pass/fail gate.**
 10. Bypass smell: `/opt/homebrew/bin/gh api user --jq .login` (real `gh` by absolute path) → returns the **personal** account, confirming routing-not-enforcement. **Recorded behavior, not a pass/fail gate.**
 
-Checks 1–5, 7, and 8 are the pass/fail gate and all pass; Check 6's failure is the documented limitation; Checks 9 and 10 are recorded behaviors, not gates.
-Branch push, `gh pr create`, `gh pr checks`, and GitHub-side commit and PR actor verification remain explicit completion gates before this adapter can be labeled fully verified.
+Checks 1, 3–5, 7, and 8 are the pass/fail gate and all pass; check 2 is pending in its current membership form, with only the superseded count form live-run; Check 6's failure is the documented limitation; Checks 9 and 10 are recorded behaviors, not gates.
+Branch push, `gh pr create`, `gh pr checks`, GitHub-side commit and PR actor verification, and a live run of check 2's membership form remain explicit completion gates before this adapter can be labeled fully verified.
 
 Audit smells — any of these means the adapter is mis-wired:
 

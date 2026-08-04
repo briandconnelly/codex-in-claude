@@ -4,7 +4,7 @@ metadata:
     github-path: agent-friendly-mcp
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: 41620733bd3de1fe57d94a26b3b477d9db2f447f
+    github-tree-sha: a07572d20ad77d5cc674f623638b0fb5ae3acd77
 name: agent-friendly-mcp
 ---
 # Agent-Friendly MCP

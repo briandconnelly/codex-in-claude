@@ -80,8 +80,7 @@ Write it before behavior.
 - Required vs optional discipline: required parameters are necessary; optional ones declare their omission semantics in the schema description, with `default` only where the server actually applies that value (§3).
 - Strict types: enums for fixed value sets; formats (`date-time`, `uri`, `email`); `integer` vs `number` chosen deliberately.
 - Schema dialect: declare it where supported, and close object schemas with `additionalProperties: false` unless extension fields are intentional.
-- Outputs: Publish an `outputSchema` and return `structuredContent` when targeting MCP versions that support them.
-  Keep parser-compatible JSON in `content` as the fallback for older or weaker clients.
+- Outputs: satisfy `[3.output-schema]`, which owns the per-tool scope of that obligation, its carve-out, and the `content` fallback.
 - Rich results: for large or binary outputs, plan `resource_link` or embedded `resource` content plus a concise `structuredContent` summary instead of inlining bulk data.
 - Disambiguating names: `user_id` not `user`, `started_after` not `since`, `channel_id` not `channel`.
 - Descriptions cover when to use, edge cases, and an example invocation.
@@ -204,5 +203,14 @@ Run the eval with an agent and read the transcripts; do not trust aggregate scor
 - Look for ineffective discovery: agents loading every definition, agents missing a tool that exists, agents picking the wrong namespace.
 - Each iteration should produce a measurable improvement in first-call correctness, first-repair correctness, or token consumption, without regressing first-call or first-repair correctness — if it doesn't, the change wasn't grounded.
 
-Output: revised schemas, descriptions, and discovery surface, with eval-measured improvement against the prior baseline.
+**When the eval cannot be run.** Designing a contract does not always come with somewhere to run it.
+Record the step as `not-run` when an execution prerequisite is genuinely unavailable — no runnable host or no eval harness — and name which one is missing.
+A `not-run` record claims no improvement and does not complete the step; it states what would have to exist before the step could run.
+
+`not-run` is available only when the prerequisite is actually absent.
+An eval that exists and could be run is not `not-run` because running it was inconvenient or because the author declared it outside the current scope.
+A missing *baseline* is not a qualifying prerequisite when the host and harness exist: run the suite and record that run as the baseline, because a baseline nobody creates would otherwise excuse the gate forever.
+Step 8 is unaffected: a suite is fixtures plus assertions, and authoring one needs no host.
+
+Output: revised schemas, descriptions, and discovery surface, with eval-measured improvement against the prior baseline — or a `not-run` record naming the missing prerequisite.
 Checkpoint: §1–§9 — walk the full checklist; iteration is the moment to catch contradictions any earlier checkpoint missed.
