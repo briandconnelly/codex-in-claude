@@ -7,9 +7,14 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore"
+    # Group identifiers appear in the PR title, which squash-merges into the
+    # commit subject — keep them lowercase/hyphenated so the result stays a
+    # valid Conventional Commit (scripts/check_commit_message.py).
     groups:
       python-dev:
         dependency-type: "development"
+      python-runtime:
+        dependency-type: "production"
 
   # GitHub Actions used in workflows (keeps SHA pins current).
   - package-ecosystem: "github-actions"
@@ -18,3 +23,10 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore"
+    # Majors are deliberately outside the group: excluding them here sends each
+    # one as its own PR, so a breaking Action major can be evaluated (and held)
+    # without blocking the safe minor/patch bumps batched alongside it.
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
