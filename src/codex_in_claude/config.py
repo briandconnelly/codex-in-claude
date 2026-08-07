@@ -168,10 +168,14 @@ ENV_PLACEHOLDER_REPAIR = (
 EXTRA_ARGS_ENV = f"{ENV_PREFIX}EXTRA_ARGS"
 
 # The allowlisted global options — all value-taking, and all verified `codex` global+exec options
-# (re-probed against codex-cli 0.146.0 on 2026-08-02: every form below parses, while a bare or
-# unknown flag is rejected as `unexpected argument`). Short `-c`/`-p` are accepted only
-# space-separated (an attached `-cKEY=VAL` is undocumented and rejected); the long forms accept
-# both `--config VAL` and `--config=VAL`.
+# (re-probed against codex-cli 0.147.0 on 2026-08-07: every form below parses, while a bare or
+# unknown flag is rejected as `unexpected argument`). THIS parser accepts short `-c`/`-p` only
+# space-separated — the attached `-cKEY=VAL` is refused here as an unknown flag, because the
+# attached-form split below fires only on long `--flag=value`. That is a deliberate narrowing of
+# ours, NOT a CLI limit: codex itself accepts `-cKEY=VAL` (clap's attached short-option value),
+# re-probed on both 0.146.0 and 0.147.0 on 2026-08-07. The narrowing is safe-direction — we pass
+# through strictly less than codex would take — so keep it, but do not restate it as a codex fact.
+# The long forms accept both `--config VAL` and `--config=VAL`.
 _EXTRA_CONFIG_FLAGS = ("-c", "--config")  # -c KEY=VALUE  (a dotted-path config override)
 _EXTRA_PROFILE_FLAGS = ("-p", "--profile")  # -p NAME       (layer a named config profile)
 _EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE

@@ -6,7 +6,7 @@ incorporating one takes the lockstep procedure in
 [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md), not a single edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.146.0`.
+Verified against `codex-cli 0.147.0`.
 
 ## Platform support
 
@@ -63,7 +63,7 @@ Two flows reach the `app-server` surface: `codex_transfer` (transcript import) a
 rate-limit read (`account/rateLimits/read`, added for #321 when codex 0.144 moved quota off the
 `codex exec` stream). Both are quarantined the same way: the surface is experimental upstream, so
 every assumption lives in `cli_contract.py` and `appserver.py`, neither call spends model tokens, and
-no paid call depends on either. The rate-limit read verifies against **codex-cli 0.146.0** (probe:
+no paid call depends on either. The rate-limit read verifies against **codex-cli 0.147.0** (probe:
 drive `codex app-server` and confirm `account/rateLimits/read` returns a quota block; an integration
 test does this live). See "Session transfer" below for the import flow.
 
@@ -119,8 +119,8 @@ skill's body loads when the skill is selected):
 
 It needs no tool-directed read, and every model-bearing call in this plugin runs `codex exec`, so
 that content can reach OpenAI even when the caller's prompt never mentions those files. Verified
-empirically against codex-cli 0.146.0 (2026-08-02, issues #300 and #358) — including an A/B against
-0.145.0, whose presence matrix was identical, so the user-global discovery is pre-existing rather
+empirically against codex-cli 0.147.0 (2026-08-07, issues #300 and #358) — including an A/B against
+0.146.0, whose presence matrix was identical, so the user-global discovery is pre-existing rather
 than new. The behavior is invisible in
 `codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
 upstream changes to it. Upstream docs:
@@ -184,7 +184,7 @@ either positive control comes back false, record nothing from that run: fix the 
 And read a difference conservatively — the backend model is an uncontrolled variable, so a change is
 *associated* with the binary, not proven caused by it. Reproduce it before concluding.
 
-Observed under codex-cli 0.146.0 with the flag set above, A/B'd against 0.145.0 with an identical
+Observed under codex-cli 0.147.0 with the flag set above, A/B'd against 0.146.0 with an identical
 presence matrix (observations, not guarantees — re-run the probe rather than assuming they still
 hold):
 
@@ -192,18 +192,25 @@ hold):
 |---|---|
 | `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes**, body content reached the model |
 | Project `.claude/skills/` discovered? | **No** |
-| Parent-directory `AGENTS.md` above the git root loaded? | **Yes** (probed with `--cd` == git root; see the correction below) |
+| Parent-directory `AGENTS.md` above the git root loaded? | **No** — the upward walk is git-root-bounded (see the correction below) |
 | `project_doc_max_bytes=0` fully disables loading? | **Not verified — do not assume** |
 
-**Correction (2026-08-02).** The 0.145.0 run recorded that third row as **No**. Re-probing the same
-0.145.0 binary alongside 0.146.0 shows **Yes** on both, so this is a correction to the earlier
-observation rather than a 0.146 change — and it corrects in the *unsafe* direction, because it means
-an `AGENTS.md` **above** the resolved workspace also reaches the model. It is not model
-confabulation: with the parent `AGENTS.md` removed, its codeword disappears from the answer while
-the project one remains, so the file is genuinely loaded. The plugin's agent-visible egress caveat
-still describes only "the resolved workspace's `AGENTS.md`" and so understates this; widening that
-disclosure is tracked separately (it changes published text, so it carries its own `FINGERPRINT`
-bump).
+**Correction (2026-08-07), superseding the 2026-08-02 correction.** That earlier note recorded the
+third row as **Yes** on both 0.145.0 and 0.146.0. It does not reproduce. Probing 0.146.0 and 0.147.0
+side by side, the parent codeword was absent from **both**, in three variants: with a project
+`AGENTS.md` present, with it removed (so no nearer file could mask the parent), and with `--cd` set
+to a subdirectory of the repo. That last variant is the one that explains the mechanism rather than
+just contradicting the record: from `repo/sub`, codex **did** load `repo/AGENTS.md` — so it walks
+upward from the resolved directory, but the walk stops at the git root and does not cross it. Both
+positive controls were green in every run, so the instrument was working.
+
+Read this as *the record was wrong*, not *0.147 changed*: new and old agree, and they disagree with
+what was written down. It corrects in the **safe** direction — less egress than documented, the
+opposite of the 2026-08-02 note's claim — so the plugin's "the resolved workspace's `AGENTS.md`"
+caveat is accurate as written for this row, and issue #472 (filed to widen it) rests on the
+observation now retracted. Nothing above the git root is implicated; an `AGENTS.md` in a
+**subdirectory-rooted** workspace still reaches up to the git root, which the existing caveat's
+"resolved workspace" wording already covers.
 
 ## Flag classes
 
@@ -216,8 +223,9 @@ bump).
 
 ## Reasoning-effort control (`model_reasoning_effort`, #309)
 
-`codex exec` 0.146.0 has no dedicated reasoning-effort flag (verified against
-`codex exec --help`, 2026-08-02 — byte-identical to 0.145.0's), so the per-call
+`codex exec` 0.147.0 has no dedicated reasoning-effort flag (verified against
+`codex exec --help`, 2026-08-07 — the sole 0.146.0 → 0.147.0 addition is the unrelated
+`--approve-for-me`, which this plugin never sends), so the per-call
 `reasoning_effort` parameter and
 `CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
 `-c model_reasoning_effort="<value>"`, with the value **TOML-string-encoded** (JSON string syntax,
@@ -331,11 +339,13 @@ so an event-schema change degrades metadata rather than breaking a run.
 `Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
 labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
 every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
-`appserver.py`. Verified against `codex-cli 0.146.0` via `codex app-server generate-json-schema --out <DIR>`.
-The 0.145.0 → 0.146.0 schema diff is additive only for the consumed surface (an optional
-`providerId` on the import params, which this plugin does not send, and an `ent26` value added to
-the `PlanType` enum, read as a free-form capped string rather than an enum), so nothing this
-plugin sends or reads changed.
+`appserver.py`. Verified against `codex-cli 0.147.0` via `codex app-server generate-json-schema --out <DIR>`.
+The 0.146.0 → 0.147.0 schema diff is additive only for the consumed surface (an optional
+`extensions` map on `InitializeParams`, which this plugin does not send; an optional `title` on the
+import progress/completed per-item results, which is read tolerantly and ignored; and two values
+added to the `PlanType` enum — `self_serve_business_prolite` and `enterprise_cbp_automation` — read
+as a free-form capped string rather than an enum), so nothing this plugin sends or reads changed.
+The inventory pass added ten unconsumed v2 `ThreadSection*` messages and removed none.
 
 The flow: `initialize` (with `capabilities.experimentalApi=true`) → `initialized` notification → one
 `externalAgentConfig/import` request carrying a single `SESSIONS` migration item → wait for the

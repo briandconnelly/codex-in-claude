@@ -115,8 +115,8 @@ def build_exec_command(
         tokens += ["--output-schema", output_schema_path]
     if model:
         tokens += [cli_contract.MODEL_FLAG, model]
-    # Reasoning effort rides the `model_reasoning_effort` config key (0.146 still has no
-    # dedicated flag — `codex exec --help` re-checked 2026-08-02). A config key cannot be
+    # Reasoning effort rides the `model_reasoning_effort` config key (0.147 still has no
+    # dedicated flag — `codex exec --help` re-checked 2026-08-07). A config key cannot be
     # help-gated, so it is sent whenever the
     # caller/server requested one — including an explicit "" after shared shape
     # validation. Loss of the shared `-c` flag fails loudly; a rename/removal of this

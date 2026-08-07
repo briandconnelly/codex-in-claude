@@ -5,6 +5,54 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
+  still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
+  procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
+  `0.146.0` from npm (the retrieved binary authenticated clean against the committed `0.146.0`
+  help snapshots, and an npm-vs-Homebrew diff of the new version retired the cross-channel
+  concern). Nothing this plugin sends or reads changed: all 11 `ALWAYS_SEND_FLAGS`, `--model`, and
+  the three sandbox values are present, and the guarantee semantics were re-probed live —
+  `read-only` blocked a write, `workspace-write` allowed the workspace write and blocked network
+  egress, `--output-last-message` received the final message, and an `--output-schema` run
+  validated against `FINDINGS_OUTPUT_SCHEMA`. The `model_reasoning_effort` config key is still
+  applied (the backend rejection carried both `[ReasoningEffortParam]` and `[reasoning.effort]`),
+  and `codex exec` still has no dedicated effort flag. Contract-drift stderr signatures still
+  match. `docs/codex-help/0.147.0/` carries fresh snapshots and the live `integration` suite
+  passes against the new binary.
+- **`KNOWN_MODEL_SLUGS` gains `gpt-5.6-sol-wm`.** The bundled advisory fallback is refreshed from
+  the `0.147.0`-written `models_cache.json`. The catalog is backend-served rather than shipped in
+  the binary, so this slug had already appeared under `0.146.0` — it is catalog drift the upgrade's
+  slug diff caught, not a `0.147` change. The reasoning-effort discovery fields still hold their
+  pinned shape.
+- **`--approve-for-me` (new in `0.147.0`) is deliberately not adopted**, and `cli_contract.py` now
+  records why alongside the other never-sent flags: it routes approval requests through an
+  automatic review under the `workspace-write` sandbox, which would let a read-only-tier run
+  acquire write capability without the caller electing a write tier.
+- App-server: the `0.146.0` → `0.147.0` generated-schema diff is additive only on the consumed
+  surface — an optional `extensions` map on `InitializeParams` (not sent), an optional `title` on
+  the import progress/completed per-item results (read tolerantly, ignored), and two new
+  `PlanType` values, `self_serve_business_prolite` and `enterprise_cbp_automation`, already read as
+  a free-form capped string. Ten unconsumed v2 `ThreadSection*` messages were added; none removed.
+
+### Fixed
+
+- **`COMPATIBILITY.md` retracts the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"
+  observation.** It does not reproduce on `0.146.0` or `0.147.0`: the parent codeword was absent
+  from both binaries with a project `AGENTS.md` present, with it removed, and with `--cd` set to a
+  repository subdirectory. That last variant shows the mechanism — codex walks *upward* from the
+  resolved directory (from `repo/sub` it loaded `repo/AGENTS.md`) but the walk stops at the git
+  root. Old and new agree, so the record was wrong rather than the behavior changed, and it was
+  wrong in the *unsafe* direction: the plugin discloses less egress than the retracted note
+  claimed, and the shipped "the resolved workspace's `AGENTS.md`" caveat is accurate as written.
+  No agent-visible text changed, so no `FINGERPRINT` bump.
+- **`config.py`'s extra-args comment no longer states a plugin-side narrowing as a codex fact.**
+  It claimed an attached `-cKEY=VAL` is "rejected"; codex accepts it (clap attached short-option
+  value) on both `0.146.0` and `0.147.0`. It is *this parser* that refuses it, because the
+  attached-form split fires only on long `--flag=value`. Behavior is unchanged and
+  safe-direction — the plugin passes through strictly less than codex would take.
+
 ## [0.17.0] - 2026-08-02
 
 A secret-redaction release. The inline redactor was rebuilt around merged candidate spans so no
