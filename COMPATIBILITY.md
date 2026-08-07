@@ -205,12 +205,23 @@ upward from the resolved directory, but the walk stops at the git root and does 
 positive controls were green in every run, so the instrument was working.
 
 Read this as *the record was wrong*, not *0.147 changed*: new and old agree, and they disagree with
-what was written down. It corrects in the **safe** direction — less egress than documented, the
-opposite of the 2026-08-02 note's claim — so the plugin's "the resolved workspace's `AGENTS.md`"
-caveat is accurate as written for this row, and issue #472 (filed to widen it) rests on the
-observation now retracted. Nothing above the git root is implicated; an `AGENTS.md` in a
-**subdirectory-rooted** workspace still reaches up to the git root, which the existing caveat's
-"resolved workspace" wording already covers.
+what was written down. What is retracted is the **mechanism** — "above the git root" — not the
+concern. The corrected boundary is the git root, and the walk still starts at the **resolved
+workspace directory**, which is not the same thing:
+
+> **`resolve_workspace` returns an explicit `workspace_root` unchanged** (`_core/workspace.py`), so
+> a caller may resolve the workspace to a *subdirectory* of a repository. The upward walk then
+> crosses **above that directory** on its way to the git root. A caller who narrows
+> `workspace_root` to `repo/sub` precisely in order to bound egress still ships `repo/AGENTS.md`,
+> a file it never named and that lies outside the directory it selected.
+
+So the published caveat — "the resolved workspace's `AGENTS.md`" — **does understate egress**, and
+issue #472's conclusion stands even though the observation it cited does not. Correcting the
+disclosure is a wording/meaning change to a `FINGERPRINT_COVERS` category and is tracked there, not
+here; this section records only the corrected behavior. (An earlier draft of this note argued the
+existing wording already covered the subdirectory case. It does not — "resolved workspace" is the
+selected directory, not the enclosing repository — and the `--cd repo/sub` probe above is the
+positive demonstration of exactly the egress path #472 describes.)
 
 ## Flag classes
 

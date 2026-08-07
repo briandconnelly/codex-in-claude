@@ -38,15 +38,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
-- **`COMPATIBILITY.md` retracts the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"
-  observation.** It does not reproduce on `0.146.0` or `0.147.0`: the parent codeword was absent
-  from both binaries with a project `AGENTS.md` present, with it removed, and with `--cd` set to a
-  repository subdirectory. That last variant shows the mechanism — codex walks *upward* from the
-  resolved directory (from `repo/sub` it loaded `repo/AGENTS.md`) but the walk stops at the git
-  root. Old and new agree, so the record was wrong rather than the behavior changed, and it was
-  wrong in the *unsafe* direction: the plugin discloses less egress than the retracted note
-  claimed, and the shipped "the resolved workspace's `AGENTS.md`" caveat is accurate as written.
-  No agent-visible text changed, so no `FINGERPRINT` bump.
+- **`COMPATIBILITY.md` corrects the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"
+  observation.** That mechanism does not reproduce on `0.146.0` or `0.147.0`: the parent codeword
+  was absent from both binaries with a project `AGENTS.md` present, with it removed, and with
+  `--cd` set to a repository subdirectory. The corrected behavior is that codex walks *upward* from
+  the resolved workspace directory and stops at the **git root**. What is retracted is the
+  mechanism, not the concern — because `resolve_workspace` returns an explicit `workspace_root`
+  unchanged, the resolved workspace can be a *subdirectory*, and the walk then crosses above it
+  (from `repo/sub`, codex loaded `repo/AGENTS.md`). The published "the resolved workspace's
+  `AGENTS.md`" caveat therefore still understates egress and issue #472's conclusion stands.
+  Correcting that published wording is a `FINGERPRINT`-bumping change tracked in #472, so this
+  entry changes no agent-visible text and carries no bump.
 - **`config.py`'s extra-args comment no longer states a plugin-side narrowing as a codex fact.**
   It claimed an attached `-cKEY=VAL` is "rejected"; codex accepts it (clap attached short-option
   value) on both `0.146.0` and `0.147.0`. It is *this parser* that refuses it, because the
