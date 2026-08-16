@@ -26,7 +26,7 @@ dependencies = [
     "anyio>=4",
     # TODO(M2 release): flip to the published PyPI pin (pontifex==0.2.0) and drop
     # the [tool.uv.sources] path override below before tagging 0.18.0.
-    "pontifex==0.2.0.dev0",
+    "pontifex==0.3.0.dev0",
     "fastmcp>=3.4",
     "pydantic>=2",
 ]

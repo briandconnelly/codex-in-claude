@@ -7,13 +7,10 @@ production behavior. Its job today is real-adapter validation of the
 PROVISIONAL protocol (pontifex freezes only after all three bridges' adapters
 fit); re-plumbing orchestration/_worker through it lands with the freeze.
 
-Protocol-fit findings for pontifex 0.3.0, discovered here:
+Protocol-fit findings, tracked for the freeze window (the events-payload
+finding this adapter raised landed in pontifex 0.3.0 — `RunOutcome.events` is
+now the opaque raw JSONL this backend's normalize layer parses tolerantly):
 
-* `RunOutcome.events: tuple[dict, ...]` does not fit Codex, whose normalize
-  layer consumes the raw JSONL text (tolerant parsing is deliberate — a
-  malformed line must degrade, not raise upstream of it). The adapter carries
-  the raw stream in `artifact_texts["events"]`; the protocol should let events
-  be an opaque per-backend payload.
 * `classify_failure` needs the run's dropped/gated-flag context to reconcile
   effort-vs-drift attribution; `RunRequest` carries enough today only because
   `config.extra_args()` is re-read ambiently.
@@ -90,7 +87,7 @@ class CodexBackend:
 
     def finalize(self, outcome: RunOutcome, request: RunRequest) -> ExecResult:
         answer = outcome.artifact_texts.get("last-message") or ""
-        raw_events = outcome.artifact_texts.get("events", "")
+        raw_events = outcome.events
         usage, session_id = normalize.parse_event_metadata(raw_events)
         structured = normalize.parse_structured(answer) if request.schema is not None else None
         return ExecResult(
@@ -110,7 +107,7 @@ class CodexBackend:
         info = codex.classify_failure(
             outcome.run,
             last_message=outcome.artifact_texts.get("last-message"),
-            events=outcome.artifact_texts.get("events"),
+            events=outcome.events or None,
             reasoning_effort=request.reasoning_effort,
         )
         return ClassifiedFailure(

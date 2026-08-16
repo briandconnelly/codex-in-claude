@@ -149,7 +149,8 @@ def test_finalize_extracts_structured_answer_and_usage():
     )
     outcome = RunOutcome(
         run=CommandRun(stdout=events, stderr="", exit_code=0, elapsed_ms=5, timed_out=False),
-        artifact_texts={"last-message": '{"summary": "fine"}', "events": events},
+        events=events,
+        artifact_texts={"last-message": '{"summary": "fine"}'},
     )
     result = BACKEND.finalize(outcome, request)
     assert result.answer == '{"summary": "fine"}'

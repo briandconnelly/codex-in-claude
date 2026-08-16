@@ -599,6 +599,7 @@ PONTIFEX_CONTRACT = _pontifex_contract.BackendContract(
     # the `-c model_reasoning_effort` KEY drifts silently, which the UPGRADING-CODEX
     # probe covers. Local validation is therefore shape-only, not enumerated.
     effort_silently_ignored_upstream=False,
+    effort_validation="shape_only",
     usage_event_markers=USAGE_EVENT_MARKERS,
     failure_signatures=_pontifex_contract.FailureSignatures(
         auth=tuple(f"(?i){re.escape(p)}" for p in AUTH_FAILURE_PATTERNS),
