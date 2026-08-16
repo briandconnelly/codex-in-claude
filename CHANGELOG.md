@@ -17,6 +17,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- Multi-line private-key blocks (PEM/PKCS8/OpenSSH/PGP) in gathered diffs and
+  returned prose are now redacted statefully (via pontifex 0.4.0): the
+  BEGIN/END markers stay visible, every body line between them is dropped, and
+  an unterminated block fails closed. Previously only the BEGIN marker was
+  masked while the entire base64 body was sent.
 - Redaction preserves the diff's trailing newline, so delegate diffs are
   `git apply`-able again (ports moonbridge's fix; behavioral round-trip fixture
   included).
