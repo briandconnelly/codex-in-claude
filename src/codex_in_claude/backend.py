@@ -86,9 +86,12 @@ class CodexBackend:
                 env=self.scrub_env(dict(os.environ), request.config_mode),
                 cwd=request.cwd,
                 stdin_text=request.prompt,
-                # artifacts[0] is ALWAYS the last-message path; the schema file, when
-                # staged, follows it. run_codex_exec reads the answer positionally.
                 artifacts=tuple(p for p in (last_msg_path, schema_path) if p),
+                artifact_paths={
+                    name: path
+                    for name, path in (("last-message", last_msg_path), ("schema", schema_path))
+                    if path
+                },
                 dropped_flags=tuple(dropped),
             )
 

@@ -193,8 +193,9 @@ async def run_codex_exec(
             on_stdout_line=on_event,
             max_output_bytes=config.max_output_bytes(),
         )
-        # artifacts[0] is the last-message path — the adapter's documented layout.
-        last_message = _read_last_message(prepared.artifacts[0])
+        # Named lookup, inside the context on purpose: the staged temp dir (and the
+        # last-message file with it) is torn down when prepare() exits.
+        last_message = _read_last_message(prepared.artifact_paths["last-message"])
     return CodexExecResult(
         run=run,
         last_message=last_message,
