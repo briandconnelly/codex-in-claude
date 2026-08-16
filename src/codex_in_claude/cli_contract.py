@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from pontifex.backend import contract as _pontifex_contract
+
 CODEX_BIN = "codex"
 
 # Core non-interactive invocation. `exec` runs Codex headlessly; if it disappears
@@ -548,3 +550,59 @@ def parse_retry_after_ms(*texts: str | None) -> int | None:
     if match is None or (match.group(2) or "").lower() not in _SECOND_UNITS:
         return None
     return int(match.group(1)) * 1000
+
+
+# --- Shared-library contract (pontifex) -------------------------------------------
+# Wire prose that would contradict this contract. Two classes: cross-bridge
+# contamination canaries (this code now shares a library with the Kimi and Claude
+# bridges, so wrong-direction vocabulary can ride a backport — exactly how
+# moonbridge shipped "kimi exec"), and claims of a mechanism this plugin refuses
+# (delegate NEVER applies its diff; nothing here bypasses sandbox/approvals).
+FORBIDDEN_SURFACE_PHRASES = (
+    "kimi",
+    "moonbridge",
+    "applies the diff to your working tree",
+    "--dangerously-bypass",
+)
+
+# The declarative half of this contract, in the shared shape the pontifex
+# conformance/honesty kits consume. Values are DERIVED from the constants above —
+# tests/test_surface_honesty.py pins the derivations so the two can never drift.
+# Behavior (command build, classification) still lives in codex.py; migrating it
+# onto the pontifex AgentBackend lifecycle is the planned next step while the
+# protocol is provisional.
+PONTIFEX_CONTRACT = _pontifex_contract.BackendContract(
+    backend_id="codex",
+    display_name="Codex",
+    bin_name=CODEX_BIN,
+    env_prefix="CODEX_IN_CLAUDE_",
+    exec_argv_prefix=EXEC_SUBCOMMAND,
+    always_send_flags=tuple(sorted(ALWAYS_SEND_FLAGS)),
+    help_gated_flags=tuple(sorted(HELP_GATED_FLAGS)),
+    forbidden_surface_phrases=FORBIDDEN_SURFACE_PHRASES,
+    supported_features=frozenset({"delegate", "transfer", "usage_accounting"}),
+    readonly_honesty_statement=(
+        "Read-only runs under codex's --sandbox read-only OS sandbox. Redaction of "
+        "gathered diffs and returned output is best-effort defense-in-depth; it never "
+        "covers supplied inputs or files Codex reads itself."
+    ),
+    implicit_context_disclosure=SKILLS_DISCOVERY_FACT_FULL,
+    structured_output="argv_flag",
+    model_catalog=_pontifex_contract.ModelCatalog(
+        strategy="cache_with_static_fallback",
+        model_identifier_authority="advisory",
+        effort_metadata_authority="advisory",
+    ),
+    isolation_policy=_pontifex_contract.IsolationPolicy.SANDBOX_FLAG,
+    needs_orphan_sweep=False,
+    # Codex rejects a bad effort VALUE loudly via the backend path; only a rename of
+    # the `-c model_reasoning_effort` KEY drifts silently, which the UPGRADING-CODEX
+    # probe covers. Local validation is therefore shape-only, not enumerated.
+    effort_silently_ignored_upstream=False,
+    usage_event_markers=USAGE_EVENT_MARKERS,
+    failure_signatures=_pontifex_contract.FailureSignatures(
+        auth=tuple(f"(?i){re.escape(p)}" for p in AUTH_FAILURE_PATTERNS),
+        contract_drift=tuple(f"(?i){re.escape(p)}" for p in CONTRACT_DRIFT_STDERR_PATTERNS),
+        rate_limited=tuple(f"(?i){re.escape(p)}" for p in RATE_LIMIT_PATTERNS),
+    ),
+)
