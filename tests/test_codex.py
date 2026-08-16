@@ -7,10 +7,10 @@ import tomllib
 
 import anyio
 import pytest
+from pontifex.core import worktree
+from pontifex.core.runtime import CommandRun
 
 from codex_in_claude import cli_contract, codex
-from codex_in_claude._core import worktree
-from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.preflight import FlagSupport
 
 _ALL_FLAGS = FlagSupport(
@@ -422,7 +422,7 @@ def test_run_codex_exec_forwards_on_event(monkeypatch):
         cmd, *, cwd, timeout_seconds, stdin_text=None, on_stdout_line=None, max_output_bytes=None
     ):
         captured["on_stdout_line"] = on_stdout_line
-        from codex_in_claude._core.runtime import CommandRun
+        from pontifex.core.runtime import CommandRun
 
         return CommandRun("", "", 0, 1, False)
 

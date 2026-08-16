@@ -36,8 +36,11 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
-    from codex_in_claude._core.jobs import JobStore
+    from pontifex.core.jobs import JobStore
 
+
+from pontifex.core import gitdiff, idempotency, redaction, workspace, worktree
+from pontifex.core.jobs import DiscardOutcome
 
 from codex_in_claude import (
     __version__,
@@ -53,8 +56,6 @@ from codex_in_claude import (
     prompts,
     rate_limit,
 )
-from codex_in_claude._core import gitdiff, idempotency, redaction, workspace, worktree
-from codex_in_claude._core.jobs import DiscardOutcome
 from codex_in_claude.codex_models import read_model_catalog
 from codex_in_claude.errors import make_error, serialize_error, serialize_error_info
 from codex_in_claude.schemas import (

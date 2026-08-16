@@ -11,8 +11,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pontifex.core.jsoncache import read_bounded_json
+
 from codex_in_claude import cli_contract
-from codex_in_claude._core.jsoncache import read_bounded_json
 from codex_in_claude.schemas import ModelCatalogResult, ModelInfo
 
 _ADVISORY = (

@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import sys
 
+from pontifex.core import runtime
+
 from codex_in_claude import cli_contract, config, preflight
-from codex_in_claude._core import runtime
 
 OK = "OK  "
 WARN = "WARN"

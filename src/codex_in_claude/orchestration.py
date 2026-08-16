@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast, get_args
 
+from pontifex.core import gitdiff, redaction
+
 from codex_in_claude import codex, normalize, prompts
-from codex_in_claude._core import gitdiff, redaction
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     CONSULT_OUTPUT_SCHEMA,
@@ -38,7 +39,7 @@ from codex_in_claude.schemas import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from codex_in_claude._core.gitdiff import DiffResult
+    from pontifex.core.gitdiff import DiffResult
 
 
 def build_coverage(*, scope: str, diff: DiffResult) -> Coverage:

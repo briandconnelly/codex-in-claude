@@ -12,10 +12,10 @@ import json
 from pathlib import Path
 
 import pytest
+from pontifex.core.gitdiff import DiffResult, DiffSummary
 from pydantic import ValidationError
 
 from codex_in_claude import orchestration as o
-from codex_in_claude._core.gitdiff import DiffResult, DiffSummary
 from codex_in_claude.schemas import Coverage, RedactionSummary, ReviewResult
 
 _FIXTURES = Path(__file__).parent / "fixtures"

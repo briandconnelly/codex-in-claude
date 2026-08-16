@@ -16,8 +16,9 @@ import re
 import time
 from dataclasses import dataclass
 
+from pontifex.core import runtime
+
 from codex_in_claude import cli_contract
-from codex_in_claude._core import runtime
 
 _LONG_FLAG_RE = re.compile(r"--[a-z][a-z0-9-]+")
 

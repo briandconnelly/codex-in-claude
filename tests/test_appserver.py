@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pontifex.core import streamcap
 from tests.fake_app_server import LEAKY_MESSAGE, LONG_CODEX_HOME, OVERSIZED_CODEX_HOME, SECRET
 
 from codex_in_claude import appserver, cli_contract
-from codex_in_claude._core import streamcap
 from codex_in_claude.appserver import (
     RateLimitReadStatus,
     ThreadIdSource,

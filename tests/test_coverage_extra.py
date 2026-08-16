@@ -5,9 +5,9 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from pontifex.core import runtime
 
 from codex_in_claude import config, orchestration, prompts, server
-from codex_in_claude._core import runtime
 
 
 async def _run_review_direct(tmp_path, *, scope="working_tree", base=None, commit=None):
@@ -243,7 +243,7 @@ def test_status_flags_warning(monkeypatch, clean_env):
 
 # --- review: extra branches --------------------------------------------------
 async def test_review_git_unavailable(monkeypatch, clean_env, tmp_path):
-    from codex_in_claude._core import gitdiff
+    from pontifex.core import gitdiff
 
     def boom(*a, **k):
         raise gitdiff.GitUnavailableError("git not found")
@@ -255,7 +255,7 @@ async def test_review_git_unavailable(monkeypatch, clean_env, tmp_path):
 
 
 async def test_review_generic_git_runtime_error(monkeypatch, clean_env, tmp_path):
-    from codex_in_claude._core import gitdiff
+    from pontifex.core import gitdiff
 
     def boom(*a, **k):
         raise RuntimeError("git diff timed out after 60s")
@@ -267,7 +267,7 @@ async def test_review_generic_git_runtime_error(monkeypatch, clean_env, tmp_path
 
 
 async def test_review_commit_scope_label(monkeypatch, clean_env, tmp_path):
-    from codex_in_claude._core import gitdiff
+    from pontifex.core import gitdiff
 
     monkeypatch.setattr(
         gitdiff,

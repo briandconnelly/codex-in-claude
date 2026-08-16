@@ -22,9 +22,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from pontifex.core import redaction
+from pontifex.core.jobs import ActivityRecorder
+
 from codex_in_claude import delegate, orchestration
-from codex_in_claude._core import redaction
-from codex_in_claude._core.jobs import ActivityRecorder
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     ErrorResult,

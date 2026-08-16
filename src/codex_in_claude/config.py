@@ -9,9 +9,19 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from pontifex.core import redaction, worktree
+from pontifex.core.jobs import JobStore
+
 from codex_in_claude import cli_contract
-from codex_in_claude._core import redaction, worktree
-from codex_in_claude._core.jobs import JobStore
+
+# This bridge's pinned worktree knobs. The values predate the pontifex extraction
+# and are git-visible (temp-dir names a job runner constrains cleanup to; baseline
+# commit authorship in delegate worktree history), so they must never drift.
+WORKTREE_CONFIG = worktree.WorktreeConfig(
+    prefix="cic-worktree-",
+    identity_name="codex-in-claude",
+    identity_email="codex-in-claude@local",
+)
 
 ENV_PREFIX = "CODEX_IN_CLAUDE_"
 
@@ -447,7 +457,7 @@ def job_store() -> JobStore:
         max_seconds=job_max_seconds(),
         max_count=job_max_count(),
         cleanup_root=Path(tempfile.gettempdir()),
-        cleanup_prefix=worktree.WORKTREE_PREFIX,
+        cleanup_prefix=WORKTREE_CONFIG.prefix,
     )
 
 

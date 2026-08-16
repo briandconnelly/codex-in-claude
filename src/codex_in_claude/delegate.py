@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pontifex.core import redaction, worktree
+
 from codex_in_claude import codex, config, normalize, prompts
-from codex_in_claude._core import redaction, worktree
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     ContextSummary,
@@ -96,7 +97,12 @@ async def run_delegate(
     diff (None → the configured default) so a large change cannot flood the agent's
     context; the diffstat still reflects the full diff."""
     try:
-        wt = worktree.create(cwd, timeout=git_timeout, on_parent=on_worktree_parent)
+        wt = worktree.create(
+            cwd,
+            timeout=git_timeout,
+            on_parent=on_worktree_parent,
+            config=config.WORKTREE_CONFIG,
+        )
     except worktree.NotAGitRepoError as exc:
         return serialize_error(
             ErrorResult(
@@ -157,7 +163,7 @@ async def run_delegate(
                 sanitize=lambda t: worktree.sanitize_prose(t, wt_aliases) or "",
             )
             return serialize_error(ErrorResult(error=err, meta=meta))
-        diff = worktree.capture_diff(wt.path, timeout=git_timeout)
+        diff = worktree.capture_diff(wt.path, timeout=git_timeout, config=config.WORKTREE_CONFIG)
     except worktree.WorktreeError as exc:
         return serialize_error(
             ErrorResult(

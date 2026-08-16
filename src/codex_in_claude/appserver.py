@@ -35,8 +35,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from pontifex.core import redaction, streamcap
+
 from codex_in_claude import __version__, cli_contract
-from codex_in_claude._core import redaction, streamcap
 from codex_in_claude.schemas import RateLimitSnapshot, RateLimitWindowSnapshot
 
 # Claude Code writes session transcripts under ~/.claude/projects/<cwd-slug>/. We only

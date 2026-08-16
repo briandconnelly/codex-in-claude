@@ -14,12 +14,11 @@ def test_job_store_configures_worktree_cleanup(clean_env):
     import tempfile
     from pathlib import Path
 
-    from codex_in_claude._core import worktree
-
     store = config.job_store()
-    # The store may clean up only the throwaway-worktree temp area.
+    # The store may clean up only the throwaway-worktree temp area — THIS bridge's
+    # pinned prefix, not the library default.
     assert store.cleanup_root == Path(tempfile.gettempdir())
-    assert store.cleanup_prefix == worktree.WORKTREE_PREFIX
+    assert store.cleanup_prefix == config.WORKTREE_CONFIG.prefix == "cic-worktree-"
 
 
 def test_defaults_builtin(clean_env):
