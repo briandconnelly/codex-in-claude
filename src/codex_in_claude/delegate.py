@@ -136,6 +136,7 @@ async def run_delegate(
     try:
         result = await codex.run_codex_exec(
             prompts.build_delegate_prompt(task),
+            kind="delegate",
             cwd=wt.path,
             sandbox=sandbox,
             isolation=isolation,

@@ -7,6 +7,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- Every model-bearing run now goes through the pontifex `AgentBackend` adapter:
+  `codex.run_codex_exec` stages via `CodexBackend.prepare()` (temp artifacts,
+  argv from the shared builder, prompt over stdin, help-gate drops surfaced on
+  the new `PreparedRun.dropped_flags`) and keeps only the execution step —
+  timeouts, output byte caps, and event streaming stay this bridge's. The
+  consult-only `--skip-git-repo-check` moved from an inline call-site flag to
+  backend policy derived from the canonical `kind`, pinned by the argv
+  differential test (which now compares against true production argv — it
+  previously validated a variant without the flag). Wire snapshots are
+  byte-identical; argv is unchanged for every tier.
+
 - Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
   `gitproc`, `streamcap`, `idempotency`, `workspace`, `jsoncache`) now comes from
   the shared [pontifex](https://github.com/briandconnelly/pontifex) library

@@ -397,6 +397,9 @@ async def run_consult(
     prompt = prompts.build_consult_prompt(question, extra_context or "")
     result = await codex.run_codex_exec(
         prompt,
+        # kind drives backend policy in CodexBackend.prepare — including the
+        # consult-only repo-check skip that used to be passed inline here.
+        kind="consult",
         cwd=cwd,
         sandbox=sandbox,
         isolation=isolation,
@@ -404,9 +407,6 @@ async def run_consult(
         model=model,
         reasoning_effort=reasoning_effort,
         output_schema=CONSULT_OUTPUT_SCHEMA,
-        # consult is read-only Q&A; repo membership is irrelevant, so never let a
-        # non-repo workspace block the run.
-        skip_git_repo_check=True,
         on_event=on_event,
     )
     return finalize_consult(result, meta=meta)
@@ -521,6 +521,7 @@ async def run_review(
     )
     result = await codex.run_codex_exec(
         prompt,
+        kind="review_changes",
         cwd=cwd,
         sandbox=sandbox,
         isolation=isolation,
