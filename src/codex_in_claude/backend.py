@@ -1,0 +1,133 @@
+"""CodexBackend: this bridge's adapter on the pontifex AgentBackend protocol.
+
+A faithful thin layer over the proven functions in `codex.py` — command
+construction, artifact staging, extraction, and classification all delegate to
+the same code the orchestration paths run, so the adapter cannot drift from
+production behavior. Its job today is real-adapter validation of the
+PROVISIONAL protocol (pontifex freezes only after all three bridges' adapters
+fit); re-plumbing orchestration/_worker through it lands with the freeze.
+
+Protocol-fit findings for pontifex 0.3.0, discovered here:
+
+* `RunOutcome.events: tuple[dict, ...]` does not fit Codex, whose normalize
+  layer consumes the raw JSONL text (tolerant parsing is deliberate — a
+  malformed line must degrade, not raise upstream of it). The adapter carries
+  the raw stream in `artifact_texts["events"]`; the protocol should let events
+  be an opaque per-backend payload.
+* `classify_failure` needs the run's dropped/gated-flag context to reconcile
+  effort-vs-drift attribution; `RunRequest` carries enough today only because
+  `config.extra_args()` is re-read ambiently.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from pontifex.backend.protocol import ClassifiedFailure, ExecResult, PreparedRun, Usage
+
+from codex_in_claude import codex, codex_models, config, normalize, preflight
+from codex_in_claude.cli_contract import PONTIFEX_CONTRACT
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from pontifex.backend.protocol import RunOutcome, RunRequest
+
+CONTRACT = PONTIFEX_CONTRACT
+
+
+class CodexBackend:
+    """The behavior half of the Codex contract (facts live on PONTIFEX_CONTRACT)."""
+
+    def validate_request(self, request: RunRequest) -> ClassifiedFailure | None:
+        # Same pre-spend shape guard the server applies to the resolved effort
+        # (argv-hostile values must never reach Popen). Value-level validation is
+        # deliberately upstream's: codex rejects a bad effort loudly.
+        if request.reasoning_effort is not None:
+            reason = config.reasoning_effort_shape_error(request.reasoning_effort)
+            if reason is not None:
+                return ClassifiedFailure(
+                    code="invalid_reasoning_effort",
+                    detail=f"the requested reasoning_effort {reason}.",
+                )
+        return None
+
+    @contextlib.asynccontextmanager
+    async def prepare(self, request: RunRequest) -> AsyncIterator[PreparedRun]:
+        """Stage exactly what `codex.run_codex_exec` stages: a temp dir holding the
+        --output-last-message target and the optional --output-schema file, argv
+        from the shared builder, prompt over stdin."""
+        with tempfile.TemporaryDirectory(prefix="codex-in-claude-") as tmp:
+            last_msg_path = str(Path(tmp) / "last-message.txt")
+            schema_path: str | None = None
+            if request.schema is not None:
+                schema_path = str(Path(tmp) / "schema.json")
+                Path(schema_path).write_text(json.dumps(request.schema), encoding="utf-8")
+            tier = "propose" if request.kind == "delegate" else "consult"
+            cmd, _dropped = codex.build_exec_command(
+                cwd=request.cwd,
+                sandbox=request.access or config.sandbox_for_tier(tier),
+                isolation=request.isolation or config.defaults().isolation,
+                output_last_message_path=last_msg_path,
+                model=request.model,
+                reasoning_effort=request.reasoning_effort,
+                output_schema_path=schema_path,
+                extra_args=config.extra_args().tokens,
+                flag_support=preflight.flag_support(),
+            )
+            yield PreparedRun(
+                argv=tuple(cmd),
+                env=self.scrub_env(dict(os.environ), request.config_mode),
+                cwd=request.cwd,
+                stdin_text=request.prompt,
+                artifacts=tuple(p for p in (last_msg_path, schema_path) if p),
+            )
+
+    def finalize(self, outcome: RunOutcome, request: RunRequest) -> ExecResult:
+        answer = outcome.artifact_texts.get("last-message") or ""
+        raw_events = outcome.artifact_texts.get("events", "")
+        usage, session_id = normalize.parse_event_metadata(raw_events)
+        structured = normalize.parse_structured(answer) if request.schema is not None else None
+        return ExecResult(
+            answer=answer,
+            structured=structured,
+            usage=Usage(
+                input_tokens=getattr(usage, "input_tokens", None),
+                output_tokens=getattr(usage, "output_tokens", None),
+                total_tokens=getattr(usage, "total_tokens", None),
+            )
+            if usage is not None
+            else None,
+            session_id=session_id,
+        )
+
+    def classify_failure(self, outcome: RunOutcome, request: RunRequest) -> ClassifiedFailure:
+        info = codex.classify_failure(
+            outcome.run,
+            last_message=outcome.artifact_texts.get("last-message"),
+            events=outcome.artifact_texts.get("events"),
+            reasoning_effort=request.reasoning_effort,
+        )
+        return ClassifiedFailure(
+            code=info.code,
+            detail=info.message,
+            retry_after_ms=info.retry_after_ms,
+        )
+
+    def list_models(self) -> tuple[str, ...]:
+        return tuple(m.slug for m in codex_models.read_model_catalog().models)
+
+    def auth_probe(self) -> bool | None:
+        authenticated, _method = codex.login_status()
+        return authenticated
+
+    def scrub_env(self, env: dict[str, str], config_mode: str | None) -> dict[str, str]:  # noqa: ARG002 — protocol signature; codex has no config modes
+        # Codex inherits the caller's environment unchanged: auth rides
+        # $CODEX_HOME, and connector suppression is argv (`--disable
+        # remote_plugin`), not env.
+        return env

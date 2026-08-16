@@ -5,12 +5,17 @@ Conventions for any agent (or human) working in this repository.
 ## What this is
 
 A Claude Code plugin that calls the OpenAI Codex CLI via a FastMCP server. The Python package
-is `codex_in_claude` under `src/`. Generic, CLI-agnostic machinery lives in
-`codex_in_claude/_core/` and is designed for later extraction into a shared `agent-bridge`
-package.
+is `codex_in_claude` under `src/`. Generic, CLI-agnostic machinery lives in the shared
+[`pontifex`](https://github.com/briandconnelly/pontifex) library (`pontifex.core`), which this
+package consumes as a dependency — the planned extraction of the old in-repo `_core/` happened.
 
-- **Rule:** `_core` must never import from its parent package (one-way dependency; this is what
-  keeps it extractable).
+- **Rule:** this bridge pins its externally visible core knobs explicitly
+  (`config.WORKTREE_CONFIG`: worktree prefix, baseline-commit identity) rather than inheriting
+  pontifex defaults; changing them is a behavior change, not a refactor.
+- The declarative half of the CLI contract also lives as `cli_contract.PONTIFEX_CONTRACT`
+  (the shared `BackendContract` shape) with tests pinning its derivation from the legacy
+  constants, and `backend.CodexBackend` adapts this bridge onto the provisional pontifex
+  `AgentBackend` protocol.
 
 ## Tooling
 

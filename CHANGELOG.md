@@ -7,6 +7,34 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
+  `gitproc`, `streamcap`, `idempotency`, `workspace`, `jsoncache`) now comes from
+  the shared [pontifex](https://github.com/briandconnelly/pontifex) library
+  instead of the vendored `_core/` package. This bridge's worktree knobs
+  (`cic-worktree-` prefix, `codex-in-claude@local` baseline identity) are pinned
+  in `config.WORKTREE_CONFIG`, so git-visible behavior is unchanged; all wire
+  snapshots are byte-identical.
+
+### Fixed
+
+- Redaction preserves the diff's trailing newline, so delegate diffs are
+  `git apply`-able again (ports moonbridge's fix; behavioral round-trip fixture
+  included).
+
+### Added
+
+- `cli_contract.PONTIFEX_CONTRACT` — the declarative CLI contract in the shared
+  `BackendContract` shape, derivation-pinned against the legacy constants.
+- Surface-honesty gates via `pontifex.testing`: `FORBIDDEN_SURFACE_PHRASES`
+  (cross-bridge contamination canaries and refused-mechanism claims) enforced
+  against the built manifest.
+- `backend.CodexBackend` — this bridge's adapter on the provisional pontifex
+  `AgentBackend` protocol, validated by an argv differential against the
+  production command builder. Orchestration re-plumbing lands with the protocol
+  freeze.
+
+### Changed
+
 - **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
   still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
   procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
