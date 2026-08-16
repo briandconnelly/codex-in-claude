@@ -2100,7 +2100,13 @@ def test_diff_redactor_matches_redact():
     out_lines: list[str] = []
     for line in diff.splitlines():
         out_lines.extend(r.feed(line))
-    assert "\n".join(out_lines) == expected_text
+    # Parity is over the redacted CONTENT. `redact` additionally preserves the input's
+    # trailing newline (without it a delegate diff will not `git apply`), which this
+    # manual line-join reconstruction has to mirror to compare like with like.
+    streamed = "\n".join(out_lines)
+    if diff.endswith("\n") and streamed:
+        streamed += "\n"
+    assert streamed == expected_text
     assert r.redacted == expected_paths
 
 
@@ -2860,3 +2866,49 @@ def test_bracket_key_redacts_ordinary_code_by_design():
     # marker; the point of this test is that it is masked at all, not the marker text.
     assert _any_marker_in(out)
     assert paths == ["app.py"]
+
+
+def test_redact_preserves_the_trailing_newline():
+    """`git apply` rejects a patch whose final line is unterminated ("corrupt patch at
+    line N"). Found live: an async delegate returned a correct-looking diff that would not
+    apply, because splitlines()+join dropped the final newline."""
+    diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n a\n+b\n"
+    out, _ = redaction.redact(diff)
+    assert out.endswith("\n")
+
+
+def test_redact_does_not_invent_a_trailing_newline():
+    # A diff that genuinely lacks one must not gain one: that would change the patch.
+    diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n a\n+b"
+    out, _ = redaction.redact(diff)
+    assert not out.endswith("\n")
+
+
+def test_redact_of_empty_input_stays_empty():
+    assert redaction.redact("") == ("", [])
+
+
+def test_a_redacted_diff_still_applies(tmp_path):
+    """End-to-end: build a real repo, produce a real diff, redact it, and apply it."""
+    import subprocess
+
+    def git(*args, cwd=tmp_path):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@t.t")
+    git("config", "user.name", "T")
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    (tmp_path / "calc.py").write_text(
+        "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n"
+    )
+    raw = git("diff").stdout
+    redacted, _ = redaction.redact(raw)
+
+    git("checkout", "--", "calc.py")
+    patch = tmp_path / "p.diff"
+    patch.write_text(redacted)
+    git("apply", str(patch))
+    assert "def mul" in (tmp_path / "calc.py").read_text()

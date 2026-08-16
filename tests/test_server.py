@@ -1257,9 +1257,10 @@ async def test_delegate_small_diff_not_truncated(monkeypatch, clean_env, tmp_pat
     diff = "diff --git a/x b/x\n+small\n"
     res = await _delegate_with_diff(monkeypatch, tmp_path, diff)
     assert res["ok"] is True
-    # Returned intact and untruncated. Redaction normalizes the trailing newline
-    # (same as the review path), so compare against the rstripped form.
-    assert res["diff"] == diff.rstrip("\n")
+    # Returned byte-for-byte intact. The trailing newline is part of the contract: without
+    # it `git apply` rejects the patch, so a "normalized" diff would be one the caller
+    # cannot actually use. (This assertion previously encoded the stripping as intended.)
+    assert res["diff"] == diff
     assert res["meta"]["truncated"] is False
     assert res["meta"]["truncation_hint"] is None
 

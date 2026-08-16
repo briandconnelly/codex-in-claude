@@ -1196,9 +1196,18 @@ class DiffRedactor:
 
 
 def redact(diff: str) -> tuple[str, list[str]]:
-    """Redact secret-looking files and inline values. Returns (text, paths)."""
+    """Redact secret-looking files and inline values. Returns (text, paths).
+
+    The trailing newline is preserved. `splitlines()` + `"\\n".join()` silently drops it,
+    and for a unified diff that is not cosmetic: `git apply` rejects a patch whose last
+    line is unterminated with "corrupt patch at line N", so every delegate diff came back
+    unappliable — the one thing a returned diff has to be good for.
+    """
     redactor = DiffRedactor()
     out_lines: list[str] = []
     for line in diff.splitlines():
         out_lines.extend(redactor.feed(line))
-    return "\n".join(out_lines), redactor.redacted
+    text = "\n".join(out_lines)
+    if diff.endswith(("\n", "\r")) and text:
+        text += "\n"
+    return text, redactor.redacted
