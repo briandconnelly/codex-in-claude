@@ -144,7 +144,7 @@ def _server_version_field() -> Any:
 
 # Default poll/backoff interval (ms) shared by job handles and the job_running
 # error's retry_after_ms, so the "when to retry" hint stays consistent in one place.
-# Sourced from _core (the lower layer that owns the value) so a live job record's
+# Sourced from pontonier.core (the lower layer that owns the value) so a live job record's
 # poll_after_ms and this constant can never drift.
 JOB_POLL_AFTER_MS = DEFAULT_POLL_AFTER_MS
 

@@ -19,7 +19,7 @@ sources of truth. The server builds each `Field(description=...)` from ``summary
 and the resource body from ``full``.
 
 This is codex-specific surface (the semantics describe *these* tools), so it lives
-in the package rather than in ``_core``.
+in the package rather than in the shared ``pontonier.core`` library.
 """
 
 from __future__ import annotations
