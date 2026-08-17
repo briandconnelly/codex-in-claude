@@ -5,6 +5,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- `cli_contract.PONTONIER_CONTRACT` — the declarative CLI contract in the shared
+  `BackendContract` shape, derivation-pinned against the legacy constants.
+- Surface-honesty gates via `pontonier.testing`: `FORBIDDEN_SURFACE_PHRASES`
+  (cross-bridge contamination canaries and refused-mechanism claims) enforced
+  against the built manifest.
+
 ### Changed
 
 - Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
