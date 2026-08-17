@@ -390,7 +390,14 @@ def test_login_status_unknown_when_missing(monkeypatch):
 
 async def test_run_codex_exec_reads_last_message(monkeypatch, tmp_path):
     async def fake_run_async(
-        cmd, *, cwd, timeout_seconds, stdin_text, on_stdout_line=None, max_output_bytes=None
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
     ):
         # Emulate codex writing the final message to --output-last-message.
         out_path = cmd[cmd.index("--output-last-message") + 1]
@@ -402,14 +409,15 @@ async def test_run_codex_exec_reads_last_message(monkeypatch, tmp_path):
         return CommandRun('{"type":"token_count","usage":{"input_tokens":3}}\n', "", 0, 7, False)
 
     monkeypatch.setattr(codex.runtime, "run_async", fake_run_async)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
     result = await codex.run_codex_exec(
         "q",
+        kind="review_changes",
         cwd=str(tmp_path),
         sandbox="read-only",
         isolation="inherit",
         timeout_seconds=30,
         output_schema={"type": "object"},
-        flag_support=_ALL_FLAGS,
     )
     assert result.run.exit_code == 0
     assert "summary" in (result.last_message or "")
@@ -419,7 +427,14 @@ def test_run_codex_exec_forwards_on_event(monkeypatch):
     captured = {}
 
     async def fake_run_async(
-        cmd, *, cwd, timeout_seconds, stdin_text=None, on_stdout_line=None, max_output_bytes=None
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
     ):
         captured["on_stdout_line"] = on_stdout_line
         from pontonier.core.runtime import CommandRun
@@ -427,10 +442,12 @@ def test_run_codex_exec_forwards_on_event(monkeypatch):
         return CommandRun("", "", 0, 1, False)
 
     monkeypatch.setattr(codex.runtime, "run_async", fake_run_async)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
     sentinel = lambda _l: None  # noqa: E731
     anyio.run(
         lambda: codex.run_codex_exec(
             "p",
+            kind="consult",
             cwd=".",
             sandbox="read-only",
             isolation="inherit",
@@ -863,3 +880,35 @@ def test_classify_effort_markers_beat_incidental_descriptor_match():
         reasoning_effort="totally-bogus-effort",
     )
     assert err.code == "invalid_reasoning_effort"
+
+
+async def test_run_codex_exec_surfaces_help_gate_drops_from_the_adapter(monkeypatch, tmp_path):
+    """The dropped-flags channel now rides PreparedRun.dropped_flags. A wiring bug
+    (e.g. always-empty) would silently kill compat warnings and model-provenance
+    reconciliation, so a real gated drop is pinned end to end."""
+
+    async def fake_run_async(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        assert "--model" not in cmd  # the gate really dropped it from argv
+        return CommandRun("", "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_async", fake_run_async)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _NO_MODEL)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=10,
+        model="gpt-5.6-sol",
+    )
+    assert result.dropped_flags == ["--model"]
