@@ -1,4 +1,4 @@
-"""CodexBackend: real-adapter validation of the provisional pontonier protocol.
+"""CodexBackend: real-adapter validation of the frozen pontonier protocol.
 
 The load-bearing test is the argv differential: the adapter's PreparedRun must
 build the SAME command the production `codex.run_codex_exec` path builds
