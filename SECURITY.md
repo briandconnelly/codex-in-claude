@@ -19,7 +19,8 @@ on this repository rather than opening a public issue.
 
 ## Secret redaction is best-effort
 
-The plugin redacts secret-looking files and inline values from diffs it gathers (`_core/redaction.py`).
+The plugin redacts secret-looking files and inline values from diffs it gathers
+(`pontonier.core.redaction`).
 This is **defense-in-depth, not a guarantee**:
 
 - It only covers the diff text the server gathers. During any active call — consult, review, or

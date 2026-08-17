@@ -37,6 +37,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   in `config.WORKTREE_CONFIG`, so git-visible behavior is unchanged; all wire
   snapshots are byte-identical.
 
+- **Docs and code comments retire the deleted `_core/` package.** `CONTRIBUTING.md`'s one-way
+  import rule named a directory that no longer exists, and `SECURITY.md` / `COMPATIBILITY.md`
+  cited `_core/redaction.py` / `_core/workspace.py` as the authority for security-relevant
+  behavior; all now point at `pontonier.core`. Eight source and test comments were updated the
+  same way, and `tests/test_backend.py` no longer calls the protocol "provisional" while every
+  other doc calls it frozen. No agent-visible surface changed — the built manifest is
+  byte-identical, so no `FINGERPRINT` bump.
 - **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
   still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
   procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
@@ -70,8 +77,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 - Multi-line private-key blocks (PEM/PKCS8/OpenSSH/PGP) in gathered diffs and
   returned prose are now redacted statefully (via pontonier): the BEGIN/END
-  markers stay visible, every body line between them is dropped, and an
-  unterminated block fails closed. Previously only the BEGIN marker was masked
+  markers stay visible, every body line between them is replaced with a
+  `[redacted: secret value]` marker, and an unterminated block fails closed. Previously only the BEGIN marker was masked
   while the entire base64 body was sent.
 - Redaction preserves the diff's trailing newline, so delegate diffs are
   `git apply`-able again (ports moonbridge's fix).

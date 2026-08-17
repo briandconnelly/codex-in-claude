@@ -364,7 +364,7 @@ SUPPORTED_EFFORTS_MAX_ENTRIES = 16
 # so we never reject a slug merely because it is absent here.
 MODELS_CACHE_FILENAME = "models_cache.json"
 # Defensive bounds for that env-controlled file (consumed in codex_models via
-# _core.jsoncache). The real file is ~150 KB; 1 MB is generous headroom.
+# pontonier.core.jsoncache). The real file is ~150 KB; 1 MB is generous headroom.
 MODELS_CACHE_MAX_BYTES = 1_000_000
 MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # A conservative slug shape; entries failing it are dropped (defends against a

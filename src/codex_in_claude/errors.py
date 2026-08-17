@@ -1,7 +1,7 @@
 """Central construction and serialization of the error envelope.
 
 One place owns the §6 symbolic-repair mapping and the null-stripping policy so every
-error path emits the identical, machine-actionable shape. Nothing in `_core` imports
+error path emits the identical, machine-actionable shape. Nothing in `pontonier.core` imports
 this module (it depends on the parent package's `schemas`)."""
 
 from __future__ import annotations
