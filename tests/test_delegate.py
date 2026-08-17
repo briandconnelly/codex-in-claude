@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 
+from pontonier.core.runtime import CommandRun
+
 from codex_in_claude import codex
-from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Meta
 
 # events string containing a token_count event with a rate_limits block
@@ -91,9 +92,9 @@ def test_run_delegate_forwards_on_event(monkeypatch):
     from types import SimpleNamespace
 
     import anyio
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
-    from codex_in_claude._core import worktree
 
     captured: dict = {}
 
@@ -135,8 +136,9 @@ def test_run_delegate_forwards_on_event(monkeypatch):
 
 async def test_run_delegate_not_a_git_repo(tmp_path, monkeypatch):
     """not_a_git_repo error uses new envelope shape with symbolic next_step."""
+    from pontonier.core import worktree
+
     from codex_in_claude import delegate
-    from codex_in_claude._core import worktree
     from codex_in_claude.schemas import Meta
 
     meta = Meta(
@@ -176,9 +178,9 @@ def test_run_delegate_forwards_reasoning_effort(monkeypatch):
     from types import SimpleNamespace
 
     import anyio
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
-    from codex_in_claude._core import worktree
 
     captured: dict = {}
 
@@ -221,9 +223,9 @@ def test_run_delegate_classifies_effort_rejection(monkeypatch):
     from types import SimpleNamespace
 
     import anyio
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
-    from codex_in_claude._core import worktree
 
     rejection = (
         '{"type":"error","message":"[ReasoningEffortParam] [reasoning.effort] '
@@ -274,9 +276,9 @@ def _run_delegate_with_message(monkeypatch, message: str, *, wt_path: str, diff:
     from types import SimpleNamespace
 
     import anyio
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
-    from codex_in_claude._core import worktree
 
     removed: list = []
 
@@ -387,9 +389,9 @@ def _run_delegate_with_failure(monkeypatch, stderr: str, *, wt_path: str, exit_c
     from types import SimpleNamespace
 
     import anyio
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
-    from codex_in_claude._core import worktree
 
     async def fake_exec(prompt, **kwargs):
         return codex.CodexExecResult(

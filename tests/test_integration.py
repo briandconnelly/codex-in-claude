@@ -9,9 +9,9 @@ tokens, so they are excluded from the default run.
 from __future__ import annotations
 
 import pytest
+from pontonier.core import runtime
 
 from codex_in_claude import cli_contract, codex, server
-from codex_in_claude._core import runtime
 
 pytestmark = pytest.mark.integration
 

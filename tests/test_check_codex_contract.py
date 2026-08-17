@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from codex_in_claude._core.runtime import BINARY_NOT_FOUND, TIMED_OUT, CommandRun
+from pontonier.core.runtime import BINARY_NOT_FOUND, TIMED_OUT, CommandRun
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_codex_contract.py"
 

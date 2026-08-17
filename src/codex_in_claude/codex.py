@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pontonier.core import redaction, runtime
+
 from codex_in_claude import cli_contract, config, normalize, preflight
-from codex_in_claude._core import redaction, runtime
 from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
 from codex_in_claude.schemas import ErrorDetail
@@ -18,7 +19,8 @@ from codex_in_claude.schemas import ErrorDetail
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from codex_in_claude._core.runtime import CommandRun
+    from pontonier.core.runtime import CommandRun
+
     from codex_in_claude.preflight import FlagSupport
     from codex_in_claude.schemas import ErrorInfo, Meta
 

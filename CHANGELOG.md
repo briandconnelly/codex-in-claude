@@ -7,6 +7,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
+  `gitproc`, `streamcap`, `idempotency`, `workspace`, `jsoncache`) now comes from
+  the shared [pontonier](https://github.com/briandconnelly/pontonier) library
+  instead of the vendored `_core/` package. This bridge's worktree knobs
+  (`cic-worktree-` prefix, `codex-in-claude@local` baseline identity) are pinned
+  in `config.WORKTREE_CONFIG`, so git-visible behavior is unchanged; all wire
+  snapshots are byte-identical.
+
 - **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
   still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
   procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
@@ -38,6 +46,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- Multi-line private-key blocks (PEM/PKCS8/OpenSSH/PGP) in gathered diffs and
+  returned prose are now redacted statefully (via pontonier): the BEGIN/END
+  markers stay visible, every body line between them is dropped, and an
+  unterminated block fails closed. Previously only the BEGIN marker was masked
+  while the entire base64 body was sent.
+- Redaction preserves the diff's trailing newline, so delegate diffs are
+  `git apply`-able again (ports moonbridge's fix).
 - **`COMPATIBILITY.md` corrects the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"
   observation.** That mechanism does not reproduce on `0.146.0` or `0.147.0`: the parent codeword
   was absent from both binaries with a project `AGENTS.md` present, with it removed, and with
@@ -54,6 +69,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   value) on both `0.146.0` and `0.147.0`. It is *this parser* that refuses it, because the
   attached-form split fires only on long `--flag=value`. Behavior is unchanged and
   safe-direction — the plugin passes through strictly less than codex would take.
+- **Shared-core diagnostics stay inside the server's log configuration.** Moving the core out of
+  `codex_in_claude._core` made its loggers siblings of the server namespace rather than children,
+  so `pontonier.core.*` records inherited none of the configured handlers and propagated to the
+  stdlib root logger instead — the exact escape `propagate = False` exists to prevent, since an
+  embedding host may have wired root to stdout (the stdio JSON-RPC channel). `obs.configure()` now
+  configures the `pontonier` namespace alongside `codex_in_claude`, so library diagnostics honor
+  `CODEX_IN_CLAUDE_LOG_LEVEL`/`CODEX_IN_CLAUDE_LOG_FILE` and reach the same stderr and file
+  handlers.
 
 ## [0.17.0] - 2026-08-02
 
