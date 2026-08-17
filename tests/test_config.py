@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import unicodedata
 
@@ -19,6 +20,29 @@ def test_job_store_configures_worktree_cleanup(clean_env):
     # pinned prefix, not the library default.
     assert store.cleanup_root == Path(tempfile.gettempdir())
     assert store.cleanup_prefix == config.WORKTREE_CONFIG.prefix == "cic-worktree-"
+
+
+def test_worktree_config_pins_every_externally_visible_knob():
+    # AGENTS.md: this bridge pins its worktree knobs explicitly rather than
+    # inheriting pontonier defaults, so changing one is a behavior change, not a
+    # refactor. The prefix leaks into temp paths a user sees and into job-store
+    # cleanup; the identity authors the baseline commit every delegate diff is
+    # taken against. Literal values on purpose — reading them back off
+    # WORKTREE_CONFIG would make this test agree with any edit.
+    assert config.WORKTREE_CONFIG.prefix == "cic-worktree-"
+    assert config.WORKTREE_CONFIG.identity_name == "codex-in-claude"
+    assert config.WORKTREE_CONFIG.identity_email == "codex-in-claude@local"
+    # `extra_excludes` is the one knob deliberately left at the library default.
+    assert config.WORKTREE_CONFIG.extra_excludes == ()
+    # Completeness: a knob added upstream must be answered here — pinned or
+    # consciously defaulted — rather than silently inheriting whatever pontonier
+    # chooses. A new field trips this until someone decides.
+    assert {f.name for f in dataclasses.fields(config.WORKTREE_CONFIG)} == {
+        "prefix",
+        "identity_name",
+        "identity_email",
+        "extra_excludes",
+    }
 
 
 def test_defaults_builtin(clean_env):
