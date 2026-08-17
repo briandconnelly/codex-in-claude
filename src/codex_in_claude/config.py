@@ -9,12 +9,12 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from pontifex.core import redaction, worktree
-from pontifex.core.jobs import JobStore
+from pontonier.core import redaction, worktree
+from pontonier.core.jobs import JobStore
 
 from codex_in_claude import cli_contract
 
-# This bridge's pinned worktree knobs. The values predate the pontifex extraction
+# This bridge's pinned worktree knobs. The values predate the pontonier extraction
 # and are git-visible (temp-dir names a job runner constrains cleanup to; baseline
 # commit authorship in delegate worktree history), so they must never drift.
 WORKTREE_CONFIG = worktree.WorktreeConfig(

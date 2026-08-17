@@ -7,7 +7,7 @@ import math
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pontifex.core.jobs import DEFAULT_POLL_AFTER_MS
+from pontonier.core.jobs import DEFAULT_POLL_AFTER_MS
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from codex_in_claude import __version__

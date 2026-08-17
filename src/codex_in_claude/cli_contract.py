@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from pontifex.backend import contract as _pontifex_contract
+from pontonier.backend import contract as _pontonier_contract
 
 CODEX_BIN = "codex"
 
@@ -552,7 +552,7 @@ def parse_retry_after_ms(*texts: str | None) -> int | None:
     return int(match.group(1)) * 1000
 
 
-# --- Shared-library contract (pontifex) -------------------------------------------
+# --- Shared-library contract (pontonier) -------------------------------------------
 # Wire prose that would contradict this contract. Two classes: cross-bridge
 # contamination canaries (this code now shares a library with the Kimi and Claude
 # bridges, so wrong-direction vocabulary can ride a backport — exactly how
@@ -565,13 +565,13 @@ FORBIDDEN_SURFACE_PHRASES = (
     "--dangerously-bypass",
 )
 
-# The declarative half of this contract, in the shared shape the pontifex
+# The declarative half of this contract, in the shared shape the pontonier
 # conformance/honesty kits consume. Values are DERIVED from the constants above —
 # tests/test_surface_honesty.py pins the derivations so the two can never drift.
 # Behavior (command build, classification) still lives in codex.py; migrating it
-# onto the pontifex AgentBackend lifecycle is the planned next step while the
+# onto the pontonier AgentBackend lifecycle is the planned next step while the
 # protocol is provisional.
-PONTIFEX_CONTRACT = _pontifex_contract.BackendContract(
+PONTONIER_CONTRACT = _pontonier_contract.BackendContract(
     backend_id="codex",
     display_name="Codex",
     bin_name=CODEX_BIN,
@@ -588,12 +588,12 @@ PONTIFEX_CONTRACT = _pontifex_contract.BackendContract(
     ),
     implicit_context_disclosure=SKILLS_DISCOVERY_FACT_FULL,
     structured_output="argv_flag",
-    model_catalog=_pontifex_contract.ModelCatalog(
+    model_catalog=_pontonier_contract.ModelCatalog(
         strategy="cache_with_static_fallback",
         model_identifier_authority="advisory",
         effort_metadata_authority="advisory",
     ),
-    isolation_policy=_pontifex_contract.IsolationPolicy.SANDBOX_FLAG,
+    isolation_policy=_pontonier_contract.IsolationPolicy.SANDBOX_FLAG,
     needs_orphan_sweep=False,
     # Codex rejects a bad effort VALUE loudly via the backend path; only a rename of
     # the `-c model_reasoning_effort` KEY drifts silently, which the UPGRADING-CODEX
@@ -601,7 +601,7 @@ PONTIFEX_CONTRACT = _pontifex_contract.BackendContract(
     effort_silently_ignored_upstream=False,
     effort_validation="shape_only",
     usage_event_markers=USAGE_EVENT_MARKERS,
-    failure_signatures=_pontifex_contract.FailureSignatures(
+    failure_signatures=_pontonier_contract.FailureSignatures(
         auth=tuple(f"(?i){re.escape(p)}" for p in AUTH_FAILURE_PATTERNS),
         contract_drift=tuple(f"(?i){re.escape(p)}" for p in CONTRACT_DRIFT_STDERR_PATTERNS),
         rate_limited=tuple(f"(?i){re.escape(p)}" for p in RATE_LIMIT_PATTERNS),

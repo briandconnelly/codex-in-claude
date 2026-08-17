@@ -22,8 +22,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from pontifex.core import redaction
-from pontifex.core.jobs import ActivityRecorder
+from pontonier.core import redaction
+from pontonier.core.jobs import ActivityRecorder
 
 from codex_in_claude import delegate, orchestration
 from codex_in_claude.errors import make_error, serialize_error

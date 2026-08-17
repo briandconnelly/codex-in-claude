@@ -1,4 +1,4 @@
-"""CodexBackend: this bridge's adapter on the pontifex AgentBackend protocol.
+"""CodexBackend: this bridge's adapter on the pontonier AgentBackend protocol.
 
 A faithful thin layer over the proven functions in `codex.py` — command
 construction, artifact staging, extraction, and classification all delegate to
@@ -24,21 +24,21 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pontifex.backend.protocol import ClassifiedFailure, ExecResult, PreparedRun, Usage
+from pontonier.backend.protocol import ClassifiedFailure, ExecResult, PreparedRun, Usage
 
 from codex_in_claude import codex, codex_models, config, normalize, preflight
-from codex_in_claude.cli_contract import PONTIFEX_CONTRACT
+from codex_in_claude.cli_contract import PONTONIER_CONTRACT
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from pontifex.backend.protocol import RunOutcome, RunRequest
+    from pontonier.backend.protocol import RunOutcome, RunRequest
 
-CONTRACT = PONTIFEX_CONTRACT
+CONTRACT = PONTONIER_CONTRACT
 
 
 class CodexBackend:
-    """The behavior half of the Codex contract (facts live on PONTIFEX_CONTRACT)."""
+    """The behavior half of the Codex contract (facts live on PONTONIER_CONTRACT)."""
 
     def validate_request(self, request: RunRequest) -> ClassifiedFailure | None:
         # Same pre-spend shape guard the server applies to the resolved effort

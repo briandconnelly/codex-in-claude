@@ -7,8 +7,8 @@ import tomllib
 
 import anyio
 import pytest
-from pontifex.core import worktree
-from pontifex.core.runtime import CommandRun
+from pontonier.core import worktree
+from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import cli_contract, codex
 from codex_in_claude.preflight import FlagSupport
@@ -437,7 +437,7 @@ def test_run_codex_exec_forwards_on_event(monkeypatch):
         max_output_bytes=None,
     ):
         captured["on_stdout_line"] = on_stdout_line
-        from pontifex.core.runtime import CommandRun
+        from pontonier.core.runtime import CommandRun
 
         return CommandRun("", "", 0, 1, False)
 

@@ -242,7 +242,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "fastmcp" },
-    { name = "pontifex" },
+    { name = "pontonier" },
     { name = "pydantic" },
 ]
 
@@ -262,7 +262,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4" },
     { name = "fastmcp", specifier = ">=3.4" },
-    { name = "pontifex", editable = "../pontifex" },
+    { name = "pontonier", editable = "../pontonier" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
@@ -880,9 +880,9 @@ wheels = [
 ]
 
 [[package]]
-name = "pontifex"
+name = "pontonier"
 version = "0.5.0.dev0"
-source = { editable = "../pontifex" }
+source = { editable = "../pontonier" }
 dependencies = [
     { name = "anyio" },
 ]

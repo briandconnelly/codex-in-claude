@@ -7,7 +7,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
-- Every model-bearing run now goes through the pontifex `AgentBackend` adapter:
+- Every model-bearing run now goes through the pontonier `AgentBackend` adapter:
   `codex.run_codex_exec` stages via `CodexBackend.prepare()` (temp artifacts,
   argv from the shared builder, prompt over stdin, help-gate drops surfaced on
   the new `PreparedRun.dropped_flags`) and keeps only the execution step —
@@ -20,7 +20,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 - Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
   `gitproc`, `streamcap`, `idempotency`, `workspace`, `jsoncache`) now comes from
-  the shared [pontifex](https://github.com/briandconnelly/pontifex) library
+  the shared [pontonier](https://github.com/briandconnelly/pontonier) library
   instead of the vendored `_core/` package. This bridge's worktree knobs
   (`cic-worktree-` prefix, `codex-in-claude@local` baseline identity) are pinned
   in `config.WORKTREE_CONFIG`, so git-visible behavior is unchanged; all wire
@@ -29,7 +29,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Fixed
 
 - Multi-line private-key blocks (PEM/PKCS8/OpenSSH/PGP) in gathered diffs and
-  returned prose are now redacted statefully (via pontifex 0.4.0): the
+  returned prose are now redacted statefully (via pontonier 0.4.0): the
   BEGIN/END markers stay visible, every body line between them is dropped, and
   an unterminated block fails closed. Previously only the BEGIN marker was
   masked while the entire base64 body was sent.
@@ -39,12 +39,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
-- `cli_contract.PONTIFEX_CONTRACT` — the declarative CLI contract in the shared
+- `cli_contract.PONTONIER_CONTRACT` — the declarative CLI contract in the shared
   `BackendContract` shape, derivation-pinned against the legacy constants.
-- Surface-honesty gates via `pontifex.testing`: `FORBIDDEN_SURFACE_PHRASES`
+- Surface-honesty gates via `pontonier.testing`: `FORBIDDEN_SURFACE_PHRASES`
   (cross-bridge contamination canaries and refused-mechanism claims) enforced
   against the built manifest.
-- `backend.CodexBackend` — this bridge's adapter on the provisional pontifex
+- `backend.CodexBackend` — this bridge's adapter on the provisional pontonier
   `AgentBackend` protocol, validated by an argv differential against the
   production command builder. Orchestration re-plumbing lands with the protocol
   freeze.

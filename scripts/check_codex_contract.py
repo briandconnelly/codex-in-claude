@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import sys
 
-from pontifex.core import runtime
+from pontonier.core import runtime
 
 from codex_in_claude import cli_contract, config, preflight
 

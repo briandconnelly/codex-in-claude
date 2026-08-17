@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from pontifex.core.runtime import CommandRun
+from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import codex
 from codex_in_claude.schemas import Meta
@@ -92,7 +92,7 @@ def test_run_delegate_forwards_on_event(monkeypatch):
     from types import SimpleNamespace
 
     import anyio
-    from pontifex.core import worktree
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
 
@@ -136,7 +136,7 @@ def test_run_delegate_forwards_on_event(monkeypatch):
 
 async def test_run_delegate_not_a_git_repo(tmp_path, monkeypatch):
     """not_a_git_repo error uses new envelope shape with symbolic next_step."""
-    from pontifex.core import worktree
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
     from codex_in_claude.schemas import Meta
@@ -178,7 +178,7 @@ def test_run_delegate_forwards_reasoning_effort(monkeypatch):
     from types import SimpleNamespace
 
     import anyio
-    from pontifex.core import worktree
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
 
@@ -223,7 +223,7 @@ def test_run_delegate_classifies_effort_rejection(monkeypatch):
     from types import SimpleNamespace
 
     import anyio
-    from pontifex.core import worktree
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
 
@@ -276,7 +276,7 @@ def _run_delegate_with_message(monkeypatch, message: str, *, wt_path: str, diff:
     from types import SimpleNamespace
 
     import anyio
-    from pontifex.core import worktree
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
 
@@ -389,7 +389,7 @@ def _run_delegate_with_failure(monkeypatch, stderr: str, *, wt_path: str, exit_c
     from types import SimpleNamespace
 
     import anyio
-    from pontifex.core import worktree
+    from pontonier.core import worktree
 
     from codex_in_claude import delegate
 

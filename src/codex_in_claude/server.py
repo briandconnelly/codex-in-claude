@@ -36,11 +36,11 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
-    from pontifex.core.jobs import JobStore
+    from pontonier.core.jobs import JobStore
 
 
-from pontifex.core import gitdiff, idempotency, redaction, workspace, worktree
-from pontifex.core.jobs import DiscardOutcome
+from pontonier.core import gitdiff, idempotency, redaction, workspace, worktree
+from pontonier.core.jobs import DiscardOutcome
 
 from codex_in_claude import (
     __version__,

@@ -6,8 +6,8 @@ import os
 import subprocess
 
 import pytest
-from pontifex.core import gitdiff
-from pontifex.core.runtime import CommandRun
+from pontonier.core import gitdiff
+from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import preflight
 

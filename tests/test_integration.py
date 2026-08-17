@@ -9,7 +9,7 @@ tokens, so they are excluded from the default run.
 from __future__ import annotations
 
 import pytest
-from pontifex.core import runtime
+from pontonier.core import runtime
 
 from codex_in_claude import cli_contract, codex, server
 
