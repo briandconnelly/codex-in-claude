@@ -24,9 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4",
-    # TODO(M2 release): flip to the published PyPI pin (pontonier==0.5.0) and drop
-    # the [tool.uv.sources] path override below before tagging 0.18.0.
-    "pontonier==0.5.0.dev0",
+    "pontonier==0.5.0",
     "fastmcp>=3.4",
     "pydantic>=2",
 ]
@@ -108,6 +106,3 @@ branch = true
 [tool.coverage.report]
 fail_under = 95
 show_missing = true
-
-[tool.uv.sources]
-pontonier = { path = "../pontonier", editable = true }
