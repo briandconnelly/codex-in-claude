@@ -1,6 +1,6 @@
 """Minimal one-shot `codex app-server` client for session transfer.
 
-Codex-specific (NOT under ``_core``): it encodes the experimental
+Codex-specific (NOT generic ``pontonier.core`` machinery): it encodes the experimental
 ``externalAgentConfig/import`` protocol used by ``codex_transfer`` to hand a Claude
 Code session transcript to a resumable Codex thread. It spawns ``codex app-server``,
 performs the ``initialize``/``initialized`` handshake, sends exactly ONE import
@@ -11,8 +11,8 @@ terminates the child. Deliberately single-request — no broker, no session reus
 Every wire assumption (method/notification names, field names, the ledger filename,
 the ``-32601`` sentinel) lives in :mod:`codex_in_claude.cli_contract`. This module
 maps the run to a plain :class:`TransferOutcome`; the server layer turns that into the
-result envelope. It may import from ``_core`` (one-way dependency) but nothing in
-``_core`` imports it.
+result envelope. It may import from ``pontonier.core`` (one-way dependency) but
+nothing in ``pontonier.core`` imports it.
 """
 
 from __future__ import annotations

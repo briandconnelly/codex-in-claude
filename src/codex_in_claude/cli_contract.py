@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from pontonier.backend import contract as _pontonier_contract
+
 CODEX_BIN = "codex"
 
 # Core non-interactive invocation. `exec` runs Codex headlessly; if it disappears
@@ -362,7 +364,7 @@ SUPPORTED_EFFORTS_MAX_ENTRIES = 16
 # so we never reject a slug merely because it is absent here.
 MODELS_CACHE_FILENAME = "models_cache.json"
 # Defensive bounds for that env-controlled file (consumed in codex_models via
-# _core.jsoncache). The real file is ~150 KB; 1 MB is generous headroom.
+# pontonier.core.jsoncache). The real file is ~150 KB; 1 MB is generous headroom.
 MODELS_CACHE_MAX_BYTES = 1_000_000
 MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # A conservative slug shape; entries failing it are dropped (defends against a
@@ -548,3 +550,60 @@ def parse_retry_after_ms(*texts: str | None) -> int | None:
     if match is None or (match.group(2) or "").lower() not in _SECOND_UNITS:
         return None
     return int(match.group(1)) * 1000
+
+
+# --- Shared-library contract (pontonier) -------------------------------------------
+# Wire prose that would contradict this contract. Two classes: cross-bridge
+# contamination canaries (this code now shares a library with the Kimi and Claude
+# bridges, so wrong-direction vocabulary can ride a backport — exactly how
+# moonbridge shipped "kimi exec"), and claims of a mechanism this plugin refuses
+# (delegate NEVER applies its diff; nothing here bypasses sandbox/approvals).
+FORBIDDEN_SURFACE_PHRASES = (
+    "kimi",
+    "moonbridge",
+    "applies the diff to your working tree",
+    "--dangerously-bypass",
+)
+
+# The declarative half of this contract, in the shared shape the pontonier
+# conformance/honesty kits consume. Values are DERIVED from the constants above —
+# tests/test_surface_honesty.py pins the derivations so the two can never drift.
+# Behavior (command build, classification) lives in codex.py and is reached through
+# `backend.CodexBackend` on the pontonier AgentBackend lifecycle, frozen at
+# contract_api_version = 1.
+PONTONIER_CONTRACT = _pontonier_contract.BackendContract(
+    backend_id="codex",
+    display_name="Codex",
+    bin_name=CODEX_BIN,
+    env_prefix="CODEX_IN_CLAUDE_",
+    exec_argv_prefix=EXEC_SUBCOMMAND,
+    always_send_flags=tuple(sorted(ALWAYS_SEND_FLAGS)),
+    help_gated_flags=tuple(sorted(HELP_GATED_FLAGS)),
+    forbidden_surface_phrases=FORBIDDEN_SURFACE_PHRASES,
+    supported_features=frozenset({"delegate", "transfer", "usage_accounting"}),
+    readonly_honesty_statement=(
+        "Read-only runs under codex's --sandbox read-only OS sandbox. Redaction of "
+        "gathered diffs and returned output is best-effort defense-in-depth; it never "
+        "covers supplied inputs or files Codex reads itself."
+    ),
+    implicit_context_disclosure=SKILLS_DISCOVERY_FACT_FULL,
+    structured_output="argv_flag",
+    model_catalog=_pontonier_contract.ModelCatalog(
+        strategy="cache_with_static_fallback",
+        model_identifier_authority="advisory",
+        effort_metadata_authority="advisory",
+    ),
+    isolation_policy=_pontonier_contract.IsolationPolicy.SANDBOX_FLAG,
+    needs_orphan_sweep=False,
+    # Codex rejects a bad effort VALUE loudly via the backend path; only a rename of
+    # the `-c model_reasoning_effort` KEY drifts silently, which the UPGRADING-CODEX
+    # probe covers. Local validation is therefore shape-only, not enumerated.
+    effort_silently_ignored_upstream=False,
+    effort_validation="shape_only",
+    usage_event_markers=USAGE_EVENT_MARKERS,
+    failure_signatures=_pontonier_contract.FailureSignatures(
+        auth=tuple(f"(?i){re.escape(p)}" for p in AUTH_FAILURE_PATTERNS),
+        contract_drift=tuple(f"(?i){re.escape(p)}" for p in CONTRACT_DRIFT_STDERR_PATTERNS),
+        rate_limited=tuple(f"(?i){re.escape(p)}" for p in RATE_LIMIT_PATTERNS),
+    ),
+)

@@ -1,6 +1,6 @@
 """Read Codex's on-disk model catalog for advisory `model`-slug discovery.
 
-Codex-specific glue around the generic _core.jsoncache reader: resolves $CODEX_HOME,
+Codex-specific glue around the generic pontonier.core.jsoncache reader: resolves $CODEX_HOME,
 reads models_cache.json, validates its shape defensively, and falls back to the bundled
 KNOWN_MODEL_SLUGS when the cache is absent/unreadable. Discovery only — the result is
 explicitly advisory; `codex exec` validates the real slug.

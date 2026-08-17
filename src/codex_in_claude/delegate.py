@@ -46,7 +46,7 @@ def _diffstat(diff: str) -> ContextSummary:
 
 def _bound_diff(diff: str, meta: Meta, max_bytes: int) -> str:
     """Cap an inline diff at max_bytes, stamping meta.truncated/truncation_hint when
-    it overflows. Mirrors the review-diff bound in `_core/gitdiff.py` so a delegate
+    it overflows. Mirrors the review-diff bound in `pontonier.core.gitdiff` so a delegate
     run never returns an unbounded diff into the agent's context."""
     encoded = diff.encode("utf-8", "replace")
     if len(encoded) <= max_bytes:
@@ -136,6 +136,7 @@ async def run_delegate(
     try:
         result = await codex.run_codex_exec(
             prompts.build_delegate_prompt(task),
+            kind="delegate",
             cwd=wt.path,
             sandbox=sandbox,
             isolation=isolation,

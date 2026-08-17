@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pontonier.backend.protocol import RunRequest
 from pontonier.core import redaction, runtime
 
 from codex_in_claude import cli_contract, config, normalize, preflight
@@ -148,6 +148,7 @@ def build_exec_command(
 async def run_codex_exec(
     prompt: str,
     *,
+    kind: str,
     cwd: str,
     sandbox: str,
     isolation: str,
@@ -155,51 +156,54 @@ async def run_codex_exec(
     model: str | None = None,
     reasoning_effort: str | None = None,
     output_schema: dict | None = None,
-    add_dirs: tuple[str, ...] = (),
-    skip_git_repo_check: bool = False,
-    ephemeral: bool = True,
-    flag_support: FlagSupport | None = None,
     on_event: Callable[[str], None] | None = None,
 ) -> CodexExecResult:
-    """Run `codex exec` for the sync path, managing the temp output files.
+    """Run `codex exec` through the CodexBackend adapter lifecycle.
 
-    Writes an optional JSON Schema to a temp file, runs codex with the prompt over
-    stdin, then reads the final agent message from --output-last-message. The temp
-    dir (and the schema/last-message files) are removed on exit."""
-    with tempfile.TemporaryDirectory(prefix="codex-in-claude-") as tmp:
-        last_msg_path = str(Path(tmp) / "last-message.txt")
-        schema_path: str | None = None
-        if output_schema is not None:
-            schema_path = str(Path(tmp) / "schema.json")
-            Path(schema_path).write_text(json.dumps(output_schema), encoding="utf-8")
-        cmd, dropped = build_exec_command(
-            cwd=cwd,
-            sandbox=sandbox,
-            isolation=isolation,
-            output_last_message_path=last_msg_path,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            output_schema_path=schema_path,
-            add_dirs=add_dirs,
-            skip_git_repo_check=skip_git_repo_check,
-            ephemeral=ephemeral,
-            # Read from the (worker-inherited) env here rather than threading raw tokens
-            # through the call chain / persisted job spec — keeps secret -c values off
-            # disk (#231). Already validated at the tool boundary before any spend.
-            extra_args=config.extra_args().tokens,
-            flag_support=flag_support,
-        )
+    The adapter's `prepare()` stages everything (temp last-message/schema files,
+    argv from the shared builder, prompt over stdin, help-gate drops); this
+    function owns only the execution step — `runtime.run_async` with the
+    consumer's own timeout/byte caps and event streaming — and folds the outcome
+    back into the bridge's `CodexExecResult`. `kind` is the canonical verb
+    ("consult" | "review_changes" | "delegate"); the backend policy it drives
+    from this entrypoint is the consult-only repo-check skip. (The adapter also
+    defaults the sandbox by `kind`, but only for a caller that leaves
+    `RunRequest.access` unset — `sandbox` is required here and always passed
+    through, so that fallback never fires on this path.)
+    """
+    # Runtime import: backend.py imports this module's builders, so a top-level
+    # import here would be a cycle. Cached by the import system after first use.
+    from codex_in_claude.backend import BACKEND  # noqa: PLC0415
+
+    request = RunRequest(
+        kind=kind,
+        prompt=prompt,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        schema=output_schema,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        access=sandbox,
+        isolation=isolation,
+    )
+    async with BACKEND.prepare(request) as prepared:
         run = await runtime.run_async(
-            cmd,
-            cwd=cwd,
+            list(prepared.argv),
+            cwd=prepared.cwd,
             timeout_seconds=timeout_seconds,
-            stdin_text=prompt,
+            stdin_text=prepared.stdin_text,
+            env=prepared.env,
             on_stdout_line=on_event,
             max_output_bytes=config.max_output_bytes(),
         )
-        last_message = _read_last_message(last_msg_path)
+        # Named lookup, inside the context on purpose: the staged temp dir (and the
+        # last-message file with it) is torn down when prepare() exits.
+        last_message = _read_last_message(prepared.artifact_paths["last-message"])
     return CodexExecResult(
-        run=run, last_message=last_message, events=run.stdout, dropped_flags=dropped
+        run=run,
+        last_message=last_message,
+        events=run.stdout,
+        dropped_flags=list(prepared.dropped_flags),
     )
 
 
