@@ -165,8 +165,11 @@ async def run_codex_exec(
     function owns only the execution step — `runtime.run_async` with the
     consumer's own timeout/byte caps and event streaming — and folds the outcome
     back into the bridge's `CodexExecResult`. `kind` is the canonical verb
-    ("consult" | "review_changes" | "delegate"); backend policy derived from it
-    (sandbox default, repo-check skip for consult) lives in the adapter.
+    ("consult" | "review_changes" | "delegate"); the backend policy it drives
+    from this entrypoint is the consult-only repo-check skip. (The adapter also
+    defaults the sandbox by `kind`, but only for a caller that leaves
+    `RunRequest.access` unset — `sandbox` is required here and always passed
+    through, so that fallback never fires on this path.)
     """
     # Runtime import: backend.py imports this module's builders, so a top-level
     # import here would be a cycle. Cached by the import system after first use.
