@@ -12,6 +12,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - Surface-honesty gates via `pontonier.testing`: `FORBIDDEN_SURFACE_PHRASES`
   (cross-bridge contamination canaries and refused-mechanism claims) enforced
   against the built manifest.
+- `backend.CodexBackend` — this bridge's adapter on the frozen pontonier
+  `AgentBackend` protocol (`contract_api_version = 1`), validated by an argv
+  differential against the production command builder.
 
 ### Changed
 
