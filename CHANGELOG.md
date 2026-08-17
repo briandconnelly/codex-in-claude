@@ -7,6 +7,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
+  `gitproc`, `streamcap`, `idempotency`, `workspace`, `jsoncache`) now comes from
+  the shared [pontonier](https://github.com/briandconnelly/pontonier) library
+  instead of the vendored `_core/` package. This bridge's worktree knobs
+  (`cic-worktree-` prefix, `codex-in-claude@local` baseline identity) are pinned
+  in `config.WORKTREE_CONFIG`, so git-visible behavior is unchanged; all wire
+  snapshots are byte-identical.
+
 - **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
   still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
   procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
@@ -38,6 +46,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- Multi-line private-key blocks (PEM/PKCS8/OpenSSH/PGP) in gathered diffs and
+  returned prose are now redacted statefully (via pontonier): the BEGIN/END
+  markers stay visible, every body line between them is dropped, and an
+  unterminated block fails closed. Previously only the BEGIN marker was masked
+  while the entire base64 body was sent.
+- Redaction preserves the diff's trailing newline, so delegate diffs are
+  `git apply`-able again (ports moonbridge's fix).
 - **`COMPATIBILITY.md` corrects the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"
   observation.** That mechanism does not reproduce on `0.146.0` or `0.147.0`: the parent codeword
   was absent from both binaries with a project `AGENTS.md` present, with it removed, and with

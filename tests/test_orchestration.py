@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 
 import anyio
+from pontonier.core import redaction
+from pontonier.core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
+from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import codex, orchestration
-from codex_in_claude._core import redaction
-from codex_in_claude._core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
-from codex_in_claude._core.runtime import CommandRun
 from codex_in_claude.schemas import Coverage, Meta
 
 # events string containing a token_count event with a rate_limits block
@@ -487,7 +487,7 @@ def test_run_review_forwards_on_event(monkeypatch):
 
     from types import SimpleNamespace
 
-    from codex_in_claude._core import gitdiff
+    from pontonier.core import gitdiff
 
     fake_diff = SimpleNamespace(
         summary=SimpleNamespace(files_changed=1, lines_added=1, lines_removed=0),
@@ -561,7 +561,7 @@ def test_run_consult_forwards_reasoning_effort(monkeypatch):
 def test_run_review_forwards_reasoning_effort(monkeypatch):
     from types import SimpleNamespace
 
-    from codex_in_claude._core import gitdiff
+    from pontonier.core import gitdiff
 
     captured: dict = {}
 

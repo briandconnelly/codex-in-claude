@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from pontonier.core.runtime import CommandRun
+
 from codex_in_claude import cli_contract, preflight
-from codex_in_claude._core.runtime import CommandRun
 
 _HELP = """
 Run Codex non-interactively

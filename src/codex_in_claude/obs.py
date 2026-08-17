@@ -16,7 +16,7 @@ import sys
 from codex_in_claude import config
 
 # All server loggers live under this namespace; handlers are attached here and
-# child loggers (e.g. codex_in_claude._core.runtime) inherit them by propagation.
+# child loggers (e.g. pontonier.core.runtime) inherit them by propagation.
 ROOT_LOGGER_NAME = "codex_in_claude"
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
