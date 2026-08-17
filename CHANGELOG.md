@@ -80,6 +80,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   markers stay visible, every body line between them is replaced with a
   `[redacted: secret value]` marker, and an unterminated block fails closed. Previously only the BEGIN marker was masked
   while the entire base64 body was sent.
+- **Bare provider tokens are now redacted.** The shared redactor adds patterns for `github_pat_`,
+  `glpat-`, `sk-ant-`, `npm_`, and `pypi-` tokens. These already redacted when written as a
+  labelled assignment (`token = "…"`), which the value-pattern matcher caught; what changed is the
+  *unlabelled* case — a bare token in prose or a diff line with no `key =` in front of it, which
+  the vendored redactor passed through verbatim. Measured old-vs-new over both spellings: five
+  improvements, and no payload where the new redactor leaks something the old one caught.
 - Redaction preserves the diff's trailing newline, so delegate diffs are
   `git apply`-able again (ports moonbridge's fix).
 - **`COMPATIBILITY.md` corrects the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"
