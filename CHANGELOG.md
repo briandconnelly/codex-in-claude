@@ -69,6 +69,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   value) on both `0.146.0` and `0.147.0`. It is *this parser* that refuses it, because the
   attached-form split fires only on long `--flag=value`. Behavior is unchanged and
   safe-direction — the plugin passes through strictly less than codex would take.
+- **Shared-core diagnostics stay inside the server's log configuration.** Moving the core out of
+  `codex_in_claude._core` made its loggers siblings of the server namespace rather than children,
+  so `pontonier.core.*` records inherited none of the configured handlers and propagated to the
+  stdlib root logger instead — the exact escape `propagate = False` exists to prevent, since an
+  embedding host may have wired root to stdout (the stdio JSON-RPC channel). `obs.configure()` now
+  configures the `pontonier` namespace alongside `codex_in_claude`, so library diagnostics honor
+  `CODEX_IN_CLAUDE_LOG_LEVEL`/`CODEX_IN_CLAUDE_LOG_FILE` and reach the same stderr and file
+  handlers.
 
 ## [0.17.0] - 2026-08-02
 
