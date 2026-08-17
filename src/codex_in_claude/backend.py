@@ -2,17 +2,17 @@
 
 A faithful thin layer over the proven functions in `codex.py` — command
 construction, artifact staging, extraction, and classification all delegate to
-the same code the orchestration paths run, so the adapter cannot drift from
-production behavior. The protocol it fits is frozen (contract_api_version = 1);
-`RunOutcome.events` carries the opaque raw JSONL this backend's normalize layer
-parses tolerantly. The adapter does not yet carry traffic — re-plumbing
-orchestration/_worker through it is the next commit.
+the same code they always ran. Since the freeze-window re-plumb, this adapter
+IS the hot path: `codex.run_codex_exec` stages every model-bearing run through
+`prepare()`, so the adapter can no longer drift from production behavior — it
+is production behavior. Two earlier protocol-fit findings landed upstream on
+the way here: `RunOutcome.events` became the opaque raw JSONL this backend's
+normalize layer parses tolerantly (0.3.0), and `PreparedRun.dropped_flags`
+carries the help-gated drops production surfaces as compat warnings (0.4.0).
 
-Remaining protocol-fit note:
-
-* `classify_failure` needs the run's dropped/gated-flag context to reconcile
-  effort-vs-drift attribution; `RunRequest` carries enough today only because
-  `config.extra_args()` is re-read ambiently.
+Remaining freeze-window note: `classify_failure` reconciles effort-vs-drift
+attribution with ambient `config.extra_args()` context rather than anything on
+`RunRequest`; acceptable while extra args are operator-owned process state.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class CodexBackend:
                 schema_path = str(Path(tmp) / "schema.json")
                 Path(schema_path).write_text(json.dumps(request.schema), encoding="utf-8")
             tier = "propose" if request.kind == "delegate" else "consult"
-            cmd, _dropped = codex.build_exec_command(
+            cmd, dropped = codex.build_exec_command(
                 cwd=request.cwd,
                 sandbox=request.access or config.sandbox_for_tier(tier),
                 isolation=request.isolation or config.defaults().isolation,
@@ -73,6 +73,11 @@ class CodexBackend:
                 model=request.model,
                 reasoning_effort=request.reasoning_effort,
                 output_schema_path=schema_path,
+                # Consult is read-only Q&A: repo membership is irrelevant, so a
+                # non-repo workspace must never block the run. Review/delegate are
+                # repo-grounded and keep the check. Backend policy derived from
+                # `kind` — the protocol deliberately does not carry this flag.
+                skip_git_repo_check=request.kind == "consult",
                 extra_args=config.extra_args().tokens,
                 flag_support=preflight.flag_support(),
             )
@@ -82,6 +87,12 @@ class CodexBackend:
                 cwd=request.cwd,
                 stdin_text=request.prompt,
                 artifacts=tuple(p for p in (last_msg_path, schema_path) if p),
+                artifact_paths={
+                    name: path
+                    for name, path in (("last-message", last_msg_path), ("schema", schema_path))
+                    if path
+                },
+                dropped_flags=tuple(dropped),
             )
 
     def finalize(self, outcome: RunOutcome, request: RunRequest) -> ExecResult:
@@ -127,3 +138,7 @@ class CodexBackend:
         # $CODEX_HOME, and connector suppression is argv (`--disable
         # remote_plugin`), not env.
         return env
+
+
+# The adapter is stateless; every production path shares this instance.
+BACKEND = CodexBackend()

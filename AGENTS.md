@@ -15,7 +15,8 @@ package consumes as a dependency — the planned extraction of the old in-repo `
 - The declarative half of the CLI contract also lives as `cli_contract.PONTONIER_CONTRACT`
   (the shared `BackendContract` shape) with tests pinning its derivation from the legacy
   constants, and `backend.CodexBackend` adapts this bridge onto the frozen pontonier
-  `AgentBackend` protocol (`contract_api_version = 1`).
+  `AgentBackend` protocol (`contract_api_version = 1`), which every model-bearing run is
+  staged through.
 
 ## Tooling
 

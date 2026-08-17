@@ -67,6 +67,11 @@ async def test_prepared_argv_matches_production_builder(monkeypatch, tmp_path, c
         model="gpt-5.6-sol",
         reasoning_effort="high",
         output_schema_path="/TMPDIR/schema.json",
+        # Backend policy pinned by this differential: consult always skips the
+        # repo check (read-only Q&A; repo membership irrelevant). Since the
+        # freeze-window re-plumb the adapter IS production, so this comparison
+        # pins the kind→flag mapping rather than mirroring a separate hot path.
+        skip_git_repo_check=True,
         extra_args=(),
         flag_support=_FULL_SUPPORT,
     )
