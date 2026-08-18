@@ -7,6 +7,41 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- The implicit-context marker probe in `COMPATIBILITY.md` now **proves** the model did not read the
+  markers itself, instead of asking it to say so. The discovery consult forbids shell commands and
+  file reads, keeps every codeword and synthetic skill name *out* of the prompt (asking for an
+  inventory and matching it out of band), and is captured with `codex exec --json` so the operator
+  can assert over the run's own event stream: the capture must parse whole, must carry a
+  `turn.completed`, and must contain no item beyond `agent_message`/`reasoning` — an unknown item
+  type fails the run rather than passing silently. A failure is inconclusive, not a negative. The
+  section also explains why the pre-existing controls were blind to tool-assisted reading (a
+  removal-based negative control behaves identically under both hypotheses, and rules out
+  confabulation, which was never the failure mode), records what counts as "present" per marker
+  (an `AGENTS.md` arrives as content, a skill only as a name), splits row 1 into the two
+  independent observations it actually needs, scopes the assertion away from the deliberately
+  tool-using body-egress run, and states what must be retained beside each capture for provenance.
+- `COMPATIBILITY.md` and the matching `cli_contract.py` comment no longer claim implicit context
+  "needs no tool-directed read". That is true of `AGENTS.md` content and skill name/description,
+  which are placed in context with no read at all, but a selected skill's **body** was observed
+  arriving through a read the model itself issues. Both are still egress the caller never asked
+  for; only the first is auto-loading. Docs and comments only — no agent-visible surface change,
+  and the disclosed wording already said "a selected skill's body can reach the model".
+- The probe gains an **unprompted-selection** consult, which is what actually establishes the
+  security claim the other two cannot: with a global skill whose *description* matches an ordinary
+  task, a prompt naming neither the skill nor the file nor the codeword still brought the body back,
+  the model having selected it on its auto-loaded description alone (codex-cli 0.147.0,
+  2026-08-18). The "egress the caller never asked for" wording is now carried by that observation
+  rather than by a prompted read.
+- `docs/UPGRADING-CODEX.md`'s two-binary A/B loop — the place the probe is actually run — now uses
+  `--json`, per-binary capture files named from each binary's own `--version`, the exit-status
+  check, and the same assertion. It previously ran a bare consult with none of them, so following
+  the upgrade procedure could reproduce the very defect this change fixes.
+- Rows 1-3 of the published implicit-context matrix were re-verified 2026-08-18 under the fixed
+  probe against **both** codex-cli 0.147.0 and 0.146.0 side by side; both captures passed the
+  assertion and the matrices are identical, so the cross-version "pre-existing, not new" conclusion
+  now rests on the corrected instrument rather than the old one. This includes the `--cd repo/sub`
+  upward-walk observation that issue #472 rests on — established with no tool item in the stream,
+  where before it came from a probe that could read.
 - `AGENTS.md` gains a **Package boundary** section — the single home for deciding whether a change
   belongs in this bridge or in upstream `pontonier`: the routing questions and their precedence,
   the mixed mechanism-plus-policy case, the import direction (the whole `pontonier` package, not

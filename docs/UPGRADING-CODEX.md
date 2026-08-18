@@ -193,14 +193,24 @@ Then compare the surfaces the snapshots don't cover:
 
     ```bash
     for bin in "$OLD" "$NEW"; do
-      echo "=== $bin ($("$bin" --version))"
-      "$bin" exec --cd "$FIXTURE" --ignore-user-config --sandbox read-only \
-        -c model=<the same slug for both runs> - <<< "$PROBE_PROMPT"
+      ver=$("$bin" --version | tr ' ' '-')
+      echo "=== $bin ($ver)"
+      "$bin" exec --json --sandbox read-only --ignore-user-config --ignore-rules --ephemeral \
+        --skip-git-repo-check --cd "$FIXTURE" -c model=<the same slug for both runs> \
+        - < "$DISCOVERY_PROMPT_FILE" > "$ver-discovery.jsonl" 2> "$ver-discovery.err"
+      rc=$?
+      [ "$rc" -eq 0 ] || echo "INCONCLUSIVE: $bin exited $rc"
+      jq -s -e -f no-tool-items.jq "$ver-discovery.jsonl"   # the check from COMPATIBILITY.md
     done
     ```
 
     `--ignore-user-config` is required, not incidental — COMPATIBILITY.md explains which table row
-    depends on it. `$FIXTURE` and `$PROBE_PROMPT` come from that section.
+    depends on it. **`--json` and the assertion are equally required**: without them the discovery
+    consult cannot tell context codex loaded from a file the model read with its own shell, which is
+    the defect that put a wrong row in that table until #478 retracted it (#480). `$FIXTURE`, `$DISCOVERY_PROMPT_FILE` (whose
+    text must name no codeword and no skill), and `no-tool-items.jq` all come from that section — as does
+    the separate body-egress consult, and the unprompted-selection consult, which this loop does not
+    cover and which you still run per binary.
   - Both binaries read the same `$CODEX_HOME`, so keep the temporary global-skill marker in place for
     **both** runs, and remove it only after the last one.
   - Hold everything else constant across the two runs — model, account, fixture, prompt, and flags.
