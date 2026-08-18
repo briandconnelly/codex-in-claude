@@ -5,6 +5,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-18
+
 ### Added
 
 - `cli_contract.PONTONIER_CONTRACT` — the declarative CLI contract in the shared
@@ -44,6 +46,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   same way, and `tests/test_backend.py` no longer calls the protocol "provisional" while every
   other doc calls it frozen. No agent-visible surface changed — the built manifest is
   byte-identical, so no `FINGERPRINT` bump.
+- **Runtime dependency bumps.** `fastmcp` 3.4.5 → 3.4.7. The built manifest is byte-identical
+  under the new version, so the agent-visible surface is unmoved and no `FINGERPRINT` bump follows.
 - **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
   still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
   procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
