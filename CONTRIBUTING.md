@@ -50,9 +50,10 @@ uv run pytest -m integration --no-cov
 - **The result contract** lives in `src/codex_in_claude/schemas.py`; the categories whose change
   triggers a `FINGERPRINT` bump are the `FINGERPRINT_COVERS` tuple in that file. Note every bump in
   `CHANGELOG.md`.
-- Generic, CLI-agnostic machinery lives in the shared [`pontonier`](https://github.com/briandconnelly/pontonier)
-  library, not in this package. Code here may import `pontonier.core`; the reverse never happens.
-  A fix that belongs to the generic layer goes to that repo.
+- **Package boundary:** [AGENTS.md](AGENTS.md) → Package boundary decides which repo a change
+  belongs in — this bridge or the shared [`pontonier`](https://github.com/briandconnelly/pontonier)
+  library — and carries the routing questions, the import direction, the cross-repo release order,
+  and where each side is tested.
 - **Picking up an issue:** check it's free first. It's taken if it has an assignee or carries the
   `agent:in-progress` label — that label means an AI agent session is actively working it, so
   don't start duplicate work. Claim by asking to be assigned; the agents' own comment-based claim

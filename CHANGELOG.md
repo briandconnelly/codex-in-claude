@@ -5,6 +5,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- `AGENTS.md` gains a **Package boundary** section — the single home for deciding whether a change
+  belongs in this bridge or in upstream `pontonier`: the routing questions and their precedence,
+  the mixed mechanism-plus-policy case, the import direction (the whole `pontonier` package, not
+  only `pontonier.core`), deference to upstream's frozen backend-protocol rules, the
+  release-before-pin order, this repo's independent `FINGERPRINT`/breaking judgment for values
+  that reach the wire from upstream, and where each side is tested. `CONTRIBUTING.md`'s partial
+  restatement is now a link to it. Docs only — no agent-visible surface change.
+
 ## [0.18.0] - 2026-08-18
 
 ### Added
