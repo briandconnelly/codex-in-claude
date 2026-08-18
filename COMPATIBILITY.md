@@ -117,11 +117,18 @@ skill's body loads when the skill is selected):
 - **`$CODEX_HOME/skills/`** (default `~/.codex/skills/`) — **user-global, discovered from outside
   the workspace**, so no choice of workspace excludes it.
 
-It needs no tool-directed read, and every model-bearing call in this plugin runs `codex exec`, so
-that content can reach OpenAI even when the caller's prompt never mentions those files. Verified
-empirically against codex-cli 0.147.0 (2026-08-07, issues #300 and #358) — including an A/B against
-0.146.0, whose presence matrix was identical, so the user-global discovery is pre-existing rather
-than new. The behavior is invisible in
+The caller directs none of it, and every model-bearing call in this plugin runs `codex exec`, so
+that content can reach OpenAI even when the caller's prompt never mentions those files. Be precise
+about *how* each part arrives, because the two differ: the `AGENTS.md` content and the skill
+name/description are already in the model's context when the turn begins — codex reads them itself
+while assembling the prompt, so the model issues no read for them — while a selected skill's
+**body** was observed arriving by a read the **model** itself issues (0.147.0). Both are egress the caller never
+asked for — a global skill's body came back from a prompt that named neither the skill nor the file,
+the model having selected it on its auto-loaded description alone (probed 2026-08-18) — but only the
+first is auto-loading. Verified
+empirically against codex-cli 0.147.0 (2026-08-07, issues #300 and #358) and re-verified 2026-08-18
+under the read-forbidding probe below — including an A/B against 0.146.0, whose presence matrix was
+identical under that same probe, so the user-global discovery is pre-existing rather than new. The behavior is invisible in
 `codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
 upstream changes to it. Upstream docs:
 [AGENTS guidance](https://developers.openai.com/codex/concepts/customization#agents-guidance) and
@@ -147,33 +154,153 @@ one, so the probe would report "unchanged" no matter what upstream did. Build th
 `<parent>/repo`, where `repo` is a scratch git repo (`git init` + one commit) and `<parent>` is
 **outside** it, with a distinct codeword in each of these five places:
 
-| Marker | Path | Tests |
-|---|---|---|
-| Project `AGENTS.md` | `repo/AGENTS.md` | positive control |
-| Project skill | `repo/.agents/skills/<name>/SKILL.md` | positive control |
-| Global skill | `$CODEX_HOME/skills/<name>/SKILL.md` — **temporary** | row 1 |
-| Claude-dir skill | `repo/.claude/skills/<name>/SKILL.md` | row 2 |
-| Parent `AGENTS.md` | `<parent>/AGENTS.md` (above the git root) | row 3 |
+| Marker | Path | Counts as present when | Tests |
+|---|---|---|---|
+| Project `AGENTS.md` | `repo/AGENTS.md` | its **codeword** is in context | positive control |
+| Project skill | `repo/.agents/skills/<name>/SKILL.md` | its **name** is in the skill inventory | positive control |
+| Global skill | `$CODEX_HOME/skills/<name>/SKILL.md` — **temporary** | its **name** is in the inventory (discovery); its **codeword** comes back after selection (body egress) | row 1 |
+| Claude-dir skill | `repo/.claude/skills/<name>/SKILL.md` | its **name** is in the skill inventory | row 2 |
+| Parent `AGENTS.md` | `<parent>/AGENTS.md` (above the git root) | its **codeword** is in context | row 3 |
+
+**The "present" column is not uniform, and that is the point.** An `AGENTS.md` auto-loads as
+*content*, so its codeword is the evidence; a skill auto-discovers as *name and description only*,
+so its name is. Recording one undifferentiated boolean per marker hides which observable moved —
+a matrix that reads "unchanged" while the underlying evidence changed from codeword to name is
+exactly the kind of false continuity this section exists to prevent.
 
 Each `SKILL.md` needs YAML frontmatter — `---` / `name: <name>` / `description: <one line>` / `---`
 — then the codeword in the body. **A skill without frontmatter is silently not discovered**, which
 would make a "not discovered" result indistinguishable from upstream having changed. The two
-positive controls are what make the negatives meaningful: if the project `AGENTS.md` codeword or the
-`.agents/skills/` marker fails to appear, the instrument is broken and every negative below is
-worthless — fix the fixture before recording anything.
+positive controls are what make the negatives meaningful: if the project `AGENTS.md` **codeword** or
+the `.agents/skills/` marker's **name** fails to appear, the instrument is broken and every negative
+below is worthless — fix the fixture before recording anything. Note the asymmetry: demanding a
+*codeword* from the `.agents/skills/` marker would fail every correct run, because a skill's body is
+not in context to begin with.
 
-Then run **two** consults with `--cd <parent>/repo` (a consult is single-turn, so this cannot be one
-call), neither mentioning those files:
+#### The probe must forbid reading, and prove it
 
-- **Discovery** — ask it to list every available skill by name and every codeword visible in
-  context, and to name explicitly which of the five markers it can and cannot see. Requesting each
-  marker by name is what separates "not discovered" from "the model did not bother to mention it".
+**The discovery consult measures what codex put in the model's context — not what the model can
+reach.** The run has a shell and read access to the whole fixture, so a model that reads a marker
+can then truthfully report seeing it, for a file codex never auto-loaded. The two answers are
+indistinguishable. Three requirements close this, and the last is the one that binds — the first two
+are requests to a model, the third is evidence about what it did:
+
+1. **Forbid it in the prompt.** Open the discovery prompt with: *"Do NOT run any shell command and
+   do NOT read any file. Answer purely from what is ALREADY in your context."*
+2. **Never put the evidence in the prompt.** Ask for the *inventory* — "list every skill available
+   to you" and "list verbatim every codeword already in your context" — and match the answer against
+   the fixture yourself, afterwards. A prompt that names a generated codeword or a synthetic skill
+   name lets the model repeat it back, which is the same confound one level up: the answer would
+   then prove only that the model can read the prompt.
+3. **Assert the prohibition held, over the run's own event stream.** Capture the run with `--json`
+   and require that it completed and carries no tool item:
+
+   ```sh
+   BIN=<path to the binary under test>   # never bare `codex`: the A/B must name each binary
+   TAG=<old|new>                         # which side of the A/B this is
+   VER=$("$BIN" --version | tr ' ' '-')
+   OUT="$TAG-$VER"                       # TAG *and* VER: two binaries can report one version
+
+   "$BIN" exec --json --sandbox read-only --ignore-user-config --ignore-rules --ephemeral \
+     --skip-git-repo-check --cd <parent>/repo - < discovery-prompt.txt \
+     > "$OUT-discovery.jsonl" 2> "$OUT-discovery.err"
+   rc=$?   # capture it here: the jq below would otherwise overwrite it
+   [ "$rc" -eq 0 ] || echo "INCONCLUSIVE: $BIN exited $rc — see $OUT-discovery.err"
+
+   # keep this program as `no-tool-items.jq` — docs/UPGRADING-CODEX.md's A/B loop reuses it
+   jq -s -e '
+     def items: [ .[] | select(.type == "item.started" or .type == "item.completed") | .item.type ];
+     def suspect: items | map(select(. != "agent_message" and . != "reasoning")) | unique;
+     if ([ .[] | select(.type == "turn.completed") ] | length) == 0
+     then error("INCONCLUSIVE: no turn.completed — the capture is truncated or the run failed")
+     elif (suspect | length) > 0
+     then error("NOT CLEAN: \(suspect | join(", "))")
+     else "clean" end
+   ' "$OUT-discovery.jsonl"
+   ```
+
+   **The run is clean only if both checks pass** — `rc` is 0 *and* the `jq` exits 0. A prompt-level
+   prohibition is a request, not a guarantee; the stream is the evidence. Three properties of that
+   `jq` are load-bearing, and each was verified against real captures before it was written down:
+
+   - **It fails, rather than printing a clean-looking zero.** `jq -s -e` parses the whole file at
+     once and exits non-zero, so malformed, empty, or truncated JSONL is an error — not the "no tool
+     calls found" a `grep | wc -l` pipeline would report for the same broken capture. Require
+     `turn.completed` for the same reason: a run killed mid-flight must not read as clean.
+   - **It allowlists non-tool items and fails closed on anything else.** `agent_message` and
+     `reasoning` are the model thinking and answering; every other item type — `command_execution`
+     among them, which is what a shell-based file read produces — fails the run, *including a type
+     this list has never seen*. Do not invert this into a denylist of known tool names: the next
+     codex release would then add a tool the check waves through in silence.
+   - **A failure is inconclusive, not a negative.** Discard the run, fix the cause, and re-probe.
+     Never record a matrix row from a capture that failed this check.
+
+**Why the older controls could not catch this.** The positive controls pass under both hypotheses —
+the model sees the project `AGENTS.md` codeword whether codex loaded it or the model read it. A
+removal-based negative control (delete the marker, watch the codeword vanish) behaves *identically*
+under both, because with the file gone the read returns nothing either. It rules out confabulation,
+which was never the failure mode. Tool-assisted reading is, and only the event stream discriminates.
+This is not hypothetical: the 2026-08-02 run's transcript shows the parent codeword arriving as a
+tool output after the model ran `sed` on `../AGENTS.md`, and the resulting "parent `AGENTS.md`
+loaded? **Yes**" row stood as published fact until it was retracted.
+
+Then run **three** consults with `--cd <parent>/repo` — a consult is single-turn, so this cannot be
+one call. Only the first is read-forbidden; the other two are tool-using by design, and each is
+worded so that what comes back is still evidence:
+
+- **Discovery** — under the three requirements above, ask it to list every skill available to it and
+  every codeword already in its context, then to answer SEEN/NOT-SEEN for each of the five markers
+  **described by its role** — "the user-global skill's codeword", "the `AGENTS.md` above the git
+  root" — never by the generated name or codeword itself. Asking role by role is what separates
+  "not discovered" from "the model did not bother to mention it"; keeping the generated values out
+  of the prompt is what keeps the answer evidence rather than an echo. **Rows 1-3 come from this
+  run**, except row 1's egress half (below); row 4 is not testable by this probe at all. A run that
+  fails the assertion is discarded, not interpreted.
 - **Body egress** — ask it to use the global marker skill by name and report the codeword in its
-  body. The codeword coming back confirms the body reached the model.
+  body. This run is **deliberately tool-using, so the assertion above does not apply to it**: on
+  0.147.0 the model reads the `SKILL.md` itself once it selects the skill. It demonstrates
+  *reachability* — a body outside the workspace reaching the model — and nothing else. In
+  particular it **cannot** establish discovery, because naming the skill in the prompt is what let
+  the model find the file: a read would have succeeded even if codex had never discovered that
+  root. Take discovery only from the discovery consult's unprompted inventory.
+- **Unprompted selection** — the run that matters for the egress claim, because the two above
+  cannot make it. Add a *second* temporary global skill whose `description` matches an ordinary
+  task, then ask for that task **without naming the skill, the file, or the codeword**: "I have a
+  messy CSV with inconsistent delimiters and duplicate rows — what is the recommended procedure? If
+  any house procedure applies, follow it." If the codeword comes back, a user-global skill body
+  reached the model on a prompt that never referred to it. This run is tool-using by design; what
+  makes it evidence is that the *prompt* contains nothing the model could have echoed. Remove this
+  marker with the other one.
 
-Run both with **`isolation=ignore-config`** (or the raw CLI flag set including
-`--ignore-user-config`). The plugin's default `isolation=inherit` does **not** send that flag, so a
-default-flags run cannot test the first row of the table — it would confirm the global skill loads
+**Row 1 therefore rests on two independent observations, and needs both.** The synthetic global
+skill's *name* appears in the discovery consult's inventory though nothing named it (auto-discovery,
+under `--ignore-user-config`), and its *codeword* comes back from the body-egress consult after
+selection (reachability). Neither observation implies the other: discovery could regress while a
+prompted read still succeeds, which would leave a "Yes" standing on nothing.
+
+**Drive the raw CLI, not this plugin's tools.** Only a raw invocation yields the `--json` stream the
+assertion needs, and `docs/UPGRADING-CODEX.md` step 2A already requires the raw CLI so each binary
+can be named explicitly.
+
+**Keep every capture, and keep enough around it to identify the run.** The JSONL is the
+*tool-activity* trace — it settles whether the model read anything, and nothing else. On its own it
+cannot establish provenance, so retain alongside it: the exact prompt, the full command, the binary
+path and `--version`, stderr, and the exit status. Give each capture a distinct name
+(`<tag>-<version>-discovery.jsonl`, `<tag>-<version>-body-egress.jsonl`, one set per binary) — a
+shared `run.jsonl` silently overwrites the other binary's evidence, and the A/B is the whole point.
+**Name them by the tag as well as the version**: two binaries can report the same `--version` (two
+build channels, a rebuild, a local build against the same tag), and comparing exactly those is a
+reasonable thing to want. Keyed on version alone, the second run would quietly clobber the first and
+the A/B would compare a capture against itself with no error to notice. With
+these artifacts kept, `--ephemeral` costs nothing and stays on: the capture, not the session file,
+is the record. Skipping this is what the retracted row cost — those runs were `--ephemeral` with no
+capture, so their instrument could not be re-examined and the probe had to be rebuilt from scratch
+to find the flaw.
+
+Run both with the raw CLI flag set including **`--ignore-user-config`** — the flag the plugin's
+`isolation=ignore-config` sends, though the plugin path is not interchangeable here, because it
+yields no `--json` stream to assert over. The plugin's default `isolation=inherit` does **not** send
+that flag at all, so a default-flags run cannot test the first row of the table — it would confirm the global skill loads
 while never exercising the isolation claim, and record a false positive on the exact point this
 section exists to hold. **Remove the temporary global skill afterwards.**
 
@@ -184,16 +311,22 @@ either positive control comes back false, record nothing from that run: fix the 
 And read a difference conservatively — the backend model is an uncontrolled variable, so a change is
 *associated* with the binary, not proven caused by it. Reproduce it before concluding.
 
-Observed under codex-cli 0.147.0 with the flag set above, A/B'd against 0.146.0 with an identical
-presence matrix (observations, not guarantees — re-run the probe rather than assuming they still
-hold):
+Observed under codex-cli 0.147.0 and A/B'd against 0.146.0 with an identical presence matrix
+(observations, not guarantees — re-run the probe rather than assuming they still hold). Rows 1-3
+were re-verified 2026-08-18 with the read-forbidding, assertion-backed probe above, run against
+**both** binaries side by side; each discovery capture passed the assertion, and the two matrices
+were identical. Row 4 is not testable by this probe and stayed unverified:
 
 | Question | Observed |
 |---|---|
-| `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes**, body content reached the model |
+| `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes** — its name was auto-discovered unprompted; after selection, its body reached the model through a model-issued read |
 | Project `.claude/skills/` discovered? | **No** |
 | Parent-directory `AGENTS.md` above the git root loaded? | **No** — the upward walk is git-root-bounded (see the correction below) |
 | `project_doc_max_bytes=0` fully disables loading? | **Not verified — do not assume** |
+
+Row 1 is the compound one: read it as *discovered, then reachable*, per the two observations above.
+The egress conclusion is unchanged — content from outside the workspace reaches OpenAI on a call
+whose prompt never named it — but do not read the row as "the body is auto-loaded into context".
 
 **Correction (2026-08-07), superseding the 2026-08-02 correction.** That earlier note recorded the
 third row as **Yes** on both 0.145.0 and 0.146.0. It does not reproduce. Probing 0.146.0 and 0.147.0
@@ -202,7 +335,12 @@ side by side, the parent codeword was absent from **both**, in three variants: w
 to a subdirectory of the repo. That last variant is the one that explains the mechanism rather than
 just contradicting the record: from `repo/sub`, codex **did** load `repo/AGENTS.md` — so it walks
 upward from the resolved directory, but the walk stops at the git root and does not cross it. Both
-positive controls were green in every run, so the instrument was working.
+positive controls were green in every run — which, by the reasoning above, does not by itself
+establish that the instrument was sound, since those runs could read. What settles it is the
+2026-08-18 re-run under the read prohibition and the no-tool-item assertion, which reproduced both
+halves on 0.147.0 with **no tool item** in either stream: from `repo` the parent codeword was absent,
+and from `repo/sub` the `repo/AGENTS.md` codeword was present in context with no read to explain
+it — so that one is auto-loading, not a tool-assisted read.
 
 Read this as *the record was wrong*, not *0.147 changed*: new and old agree, and they disagree with
 what was written down. What is retracted is the **mechanism** — "above the git root" — not the

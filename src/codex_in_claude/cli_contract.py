@@ -220,18 +220,22 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 #   - the workspace's `.agents/skills/` (project-level), and
 #   - `$CODEX_HOME/skills/` (default `~/.codex/skills/`) — user-global, discovered from
 #     OUTSIDE the workspace, so no workspace choice excludes it (#358).
-# It needs no tool-directed read, and every model-bearing call here runs `codex exec` —
+# The CALLER directs none of it, and every model-bearing call here runs `codex exec` —
 # so that content can reach OpenAI even when the caller's prompt never mentions those
-# files. Verified empirically against codex-cli 0.147.0 (2026-08-07) via marker probes —
-# including an A/B against 0.146.0, whose presence matrix was identical; the global-skill
-# discovery is pre-existing, not a 0.147 regression. Marker probes are the only way to see any
-# of this;
+# files. The two halves arrive differently: `AGENTS.md` content and skill name/description
+# are already in context when the turn begins — codex reads them itself while assembling
+# the prompt, so the MODEL issues no read for them — while a selected skill's BODY was
+# observed arriving via a read the MODEL issues (0.147.0). Both are unrequested egress; only the
+# first is auto-loading. Verified empirically against codex-cli 0.147.0 (2026-08-07)
+# via marker probes — including an A/B against 0.146.0, whose presence matrix was
+# identical; the global-skill discovery is pre-existing, not a 0.147 regression.
+# Marker probes are the only way to see any of this;
 # invisible in `codex exec --help` (no flag, no subcommand), so the mechanical
 # help-drift check CANNOT catch upstream changes to it. The isolation flags do NOT
 # suppress it: `--ignore-user-config` drops `$CODEX_HOME/config.toml` and
 # `--ignore-rules` drops execpolicy `.rules`; neither touches `AGENTS.md` or EITHER
-# skills root — a probe under `--ignore-user-config` still emitted a `$CODEX_HOME/skills/`
-# body. Upstream docs:
+# skills root — a probe under `--ignore-user-config` still discovered a `$CODEX_HOME/skills/`
+# skill by name, and its body still reached the model once selected. Upstream docs:
 # https://developers.openai.com/codex/concepts/customization#agents-guidance and
 # https://developers.openai.com/codex/concepts/customization#skills.
 # Reader-facing detail — the re-verification probe, the verified negatives, and what
