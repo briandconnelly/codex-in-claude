@@ -3411,7 +3411,7 @@ async def test_job_not_found_points_at_list(monkeypatch, clean_env, tmp_path):
 
 
 def test_job_poll_interval_has_single_source():
-    """The agent-visible JOB_POLL_AFTER_MS is the _core default, so a live job
+    """The agent-visible JOB_POLL_AFTER_MS is the pontonier.core default, so a live job
     record's poll_after_ms and the job_running retry_after_ms can't drift."""
     from pontonier.core import jobs
 

@@ -5,12 +5,18 @@ Conventions for any agent (or human) working in this repository.
 ## What this is
 
 A Claude Code plugin that calls the OpenAI Codex CLI via a FastMCP server. The Python package
-is `codex_in_claude` under `src/`. Generic, CLI-agnostic machinery lives in
-`codex_in_claude/_core/` and is designed for later extraction into a shared `agent-bridge`
-package.
+is `codex_in_claude` under `src/`. Generic, CLI-agnostic machinery lives in the shared
+[`pontonier`](https://github.com/briandconnelly/pontonier) library (`pontonier.core`), which this
+package consumes as a dependency — the planned extraction of the old in-repo `_core/` happened.
 
-- **Rule:** `_core` must never import from its parent package (one-way dependency; this is what
-  keeps it extractable).
+- **Rule:** this bridge pins its externally visible core knobs explicitly
+  (`config.WORKTREE_CONFIG`: worktree prefix, baseline-commit identity) rather than inheriting
+  pontonier defaults; changing them is a behavior change, not a refactor.
+- The declarative half of the CLI contract also lives as `cli_contract.PONTONIER_CONTRACT`
+  (the shared `BackendContract` shape) with tests pinning its derivation from the legacy
+  constants, and `backend.CodexBackend` adapts this bridge onto the frozen pontonier
+  `AgentBackend` protocol (`contract_api_version = 1`), which every model-bearing run is
+  staged through.
 
 ## Tooling
 
@@ -166,8 +172,9 @@ deliberate: update the classifiers, the CI matrix, and `requires-python` togethe
 - **A new parameter is new API surface, not just new behavior.** Test the documented invariants
   across the parameter's whole domain — the boundary values and the invalid ones — not only the
   values the current callers pass. Red-green covers the behavior you intended; the input domain
-  needs its own pass. This matters most in `_core/`, which is written for callers who do not exist
-  yet. (#273 added `BoundedCapture(head_bytes=...)` tested only at `None` and `0`, the two values
+  needs its own pass. This matters most for code written for callers who do not exist yet — which
+  is now `pontonier`'s side of the seam, so a parameter added there is tested in that repo under
+  this same rule. (#273 added `BoundedCapture(head_bytes=...)` tested only at `None` and `0`, the two values
   its callers used; `head_bytes > max_bytes` then retained ~15x the byte cap while reporting
   `truncated=False`, silently breaking the guarantee stated in that class's own docstring.)
 - The **95% coverage floor** is enforced in CI. Live tests that hit the real `codex` CLI are marked

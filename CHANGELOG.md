@@ -5,7 +5,29 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- `cli_contract.PONTONIER_CONTRACT` — the declarative CLI contract in the shared
+  `BackendContract` shape, derivation-pinned against the legacy constants.
+- Surface-honesty gates via `pontonier.testing`: `FORBIDDEN_SURFACE_PHRASES`
+  (cross-bridge contamination canaries and refused-mechanism claims) enforced
+  against the built manifest.
+- `backend.CodexBackend` — this bridge's adapter on the frozen pontonier
+  `AgentBackend` protocol (`contract_api_version = 1`), validated by an argv
+  differential against the production command builder.
+
 ### Changed
+
+- Every model-bearing run now goes through the pontonier `AgentBackend` adapter:
+  `codex.run_codex_exec` stages via `CodexBackend.prepare()` (temp artifacts,
+  argv from the shared builder, prompt over stdin, help-gate drops surfaced on
+  `PreparedRun.dropped_flags`) and keeps only the execution step — timeouts,
+  output byte caps, and event streaming stay this bridge's. The consult-only
+  `--skip-git-repo-check` moved from an inline call-site flag to backend policy
+  derived from the canonical `kind`, pinned by the argv differential test (which
+  now compares against true production argv — it previously validated a variant
+  without the flag). Wire snapshots are byte-identical; argv is unchanged for
+  every tier.
 
 - Generic core machinery (`jobs`, `worktree`, `gitdiff`, `redaction`, `runtime`,
   `gitproc`, `streamcap`, `idempotency`, `workspace`, `jsoncache`) now comes from
@@ -15,6 +37,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   in `config.WORKTREE_CONFIG`, so git-visible behavior is unchanged; all wire
   snapshots are byte-identical.
 
+- **Docs and code comments retire the deleted `_core/` package.** `CONTRIBUTING.md`'s one-way
+  import rule named a directory that no longer exists, and `SECURITY.md` / `COMPATIBILITY.md`
+  cited `_core/redaction.py` / `_core/workspace.py` as the authority for security-relevant
+  behavior; all now point at `pontonier.core`. Eight source and test comments were updated the
+  same way, and `tests/test_backend.py` no longer calls the protocol "provisional" while every
+  other doc calls it frozen. No agent-visible surface changed — the built manifest is
+  byte-identical, so no `FINGERPRINT` bump.
 - **Tracked Codex version is now `0.147`.** `SUPPORTED_VERSIONS` tracks `(0, 147)`; a `0.146` CLI
   still runs and only draws the advisory `codex_status` warning. The `docs/UPGRADING-CODEX.md`
   procedure was run end to end against `codex-cli 0.147.0`, A/B'd against a side-by-side
@@ -48,9 +77,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 - Multi-line private-key blocks (PEM/PKCS8/OpenSSH/PGP) in gathered diffs and
   returned prose are now redacted statefully (via pontonier): the BEGIN/END
-  markers stay visible, every body line between them is dropped, and an
-  unterminated block fails closed. Previously only the BEGIN marker was masked
-  while the entire base64 body was sent.
+  markers stay visible, every body line between them is replaced with a
+  `[redacted: secret value]` marker, and an unterminated block fails closed. Previously only the
+  BEGIN marker was masked while the entire base64 body was sent.
+- **Bare provider tokens are now redacted.** The shared redactor adds patterns for `github_pat_`,
+  `glpat-`, `sk-ant-`, `npm_`, and `pypi-` tokens. The vendored redactor already caught these in a
+  labelled assignment (`token = "…"`), because its value-pattern matcher keys on the label; what
+  changed is the *unlabelled* case — a bare token in prose, or a diff line with no `key =` in front
+  of it, which that redactor passed through verbatim. Measured old-vs-new over both spellings: five
+  improvements, and no payload where the new redactor leaks something the old one caught.
 - Redaction preserves the diff's trailing newline, so delegate diffs are
   `git apply`-able again (ports moonbridge's fix).
 - **`COMPATIBILITY.md` corrects the 2026-08-02 "parent `AGENTS.md` above the git root is loaded"

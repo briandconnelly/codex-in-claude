@@ -209,7 +209,7 @@ what was written down. What is retracted is the **mechanism** — "above the git
 concern. The corrected boundary is the git root, and the walk still starts at the **resolved
 workspace directory**, which is not the same thing:
 
-> **`resolve_workspace` returns an explicit `workspace_root` unchanged** (`_core/workspace.py`), so
+> **`resolve_workspace` returns an explicit `workspace_root` unchanged** (`pontonier.core.workspace`), so
 > a caller may resolve the workspace to a *subdirectory* of a repository. The upward walk then
 > crosses **above that directory** on its way to the git root. A caller who narrows
 > `workspace_root` to `repo/sub` precisely in order to bound egress still ships `repo/AGENTS.md`,
