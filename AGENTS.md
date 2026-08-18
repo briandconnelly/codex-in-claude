@@ -6,8 +6,9 @@ Conventions for any agent (or human) working in this repository.
 
 A Claude Code plugin that calls the OpenAI Codex CLI via a FastMCP server. The Python package
 is `codex_in_claude` under `src/`. Generic, CLI-agnostic machinery lives in the shared
-[`pontonier`](https://github.com/briandconnelly/pontonier) library (`pontonier.core`), which this
-package consumes as a dependency — the planned extraction of the old in-repo `_core/` happened.
+[`pontonier`](https://github.com/briandconnelly/pontonier) library (`pontonier.core` and the frozen
+`pontonier.backend` protocol), which this package consumes as a dependency — the planned
+extraction of the old in-repo `_core/` happened.
 
 - **Rule:** this bridge pins its externally visible core knobs explicitly
   (`config.WORKTREE_CONFIG`: worktree prefix, baseline-commit identity) rather than inheriting
@@ -17,6 +18,56 @@ package consumes as a dependency — the planned extraction of the old in-repo `
   constants, and `backend.CodexBackend` adapts this bridge onto the frozen pontonier
   `AgentBackend` protocol (`contract_api_version = 1`), which every model-bearing run is
   staged through.
+
+## Package boundary
+
+Which repo a change belongs in — this bridge or upstream `pontonier`. This section is the single
+home for that decision; other docs link here rather than restating it. `pontonier`'s own README
+lists what the shared library already exposes — read it there rather than keeping a copy of that
+list in this repo.
+
+Two questions route an ordinary change:
+
+1. **Does the code have to know it is talking to `codex`?** If yes, it stays here.
+2. **Does it extend an abstraction `pontonier` already exposes, or does another bridge have the
+   same confirmed need?** If yes, it goes upstream.
+
+Question 1 wins when both answer yes: Codex-aware code never moves upstream, and a change that
+needs both halves is the mixed change below. If neither question gives a yes, keep the code here.
+Absence of the word "codex" is not evidence that a mechanism is shared, and a second caller that
+does not exist yet is not a requirement.
+
+- **Rule: bridge policy stays here.** Codex CLI assumptions (`cli_contract`), the MCP surface and
+  its result semantics (`schemas`, `server`, tool descriptions), this bridge's pinned knobs
+  (`config.WORKTREE_CONFIG`), `cli_contract.PONTONIER_CONTRACT`, and `backend.CodexBackend`. Use of
+  a pontonier type does not make the policy around it shared.
+- **Rule: a mixed change lands in both repos.** A shared mechanism plus bridge-specific policy is
+  the normal case, not an exception — do not push the policy upstream to keep the change in one
+  PR. `codex_models` is the worked example: `pontonier.core.jsoncache` owns bounded JSON reading,
+  while this package owns `$CODEX_HOME` resolution, the cache shape, the fallback slugs, and the
+  MCP result.
+- **Rule: imports go one way.** This package may import from `pontonier` — `pontonier.core`,
+  `pontonier.backend`, and the `pontonier.conventions`/`pontonier.testing` helpers the tests use.
+  `pontonier` never imports `codex_in_claude`.
+- **Rule: the backend protocol is upstream policy.** For a change to `AgentBackend` or
+  `BackendContract`, follow that repo's `AGENTS.md` — it is frozen at `contract_api_version = 1`
+  and owns what the freeze permits. Do not restate its rules here. The concrete Codex
+  implementation and its differential tests stay in this repo.
+- **Rule: never merge a pin to an unpublished `pontonier` version.** `pyproject.toml` pins an
+  exact `pontonier==X.Y.Z`. Land the fix upstream, release it, and only then bump the pin and
+  refresh `uv.lock` here in a `chore(packaging)` change. An unpublished pin breaks installs for
+  the whole gap — the same failure the `.mcp.json` pin rule guards against (see Release
+  coordination).
+- **Rule: mark a downstream workaround taken while waiting on an upstream release.** Say in a
+  comment that it is a workaround and link the upstream issue, so the next reader can remove it.
+- **Rule: this repo judges its own observable surface.** An upstream release never decides this
+  package's `FINGERPRINT`, breaking status, `CHANGELOG.md` entry, or version — judge those from
+  the downstream observable effect under Versioning. A shared value can reach the wire from
+  upstream: `schemas.JOB_POLL_AFTER_MS` is `pontonier`'s `DEFAULT_POLL_AFTER_MS`, so a change to
+  it upstream moves an agent-visible field here.
+- **Rule: test behavior where it is owned.** The implementation and its full input domain are
+  tested upstream (see Testing); the adapter, the mapping, and the agent-visible regression are
+  tested here.
 
 ## Tooling
 
