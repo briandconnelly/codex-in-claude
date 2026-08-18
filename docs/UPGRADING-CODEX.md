@@ -192,15 +192,17 @@ Then compare the surfaces the snapshots don't cover:
     and echo which one you used, so the run records its own provenance:
 
     ```bash
-    for bin in "$OLD" "$NEW"; do
+    for spec in "old:$OLD" "new:$NEW"; do
+      tag=${spec%%:*}; bin=${spec#*:}
       ver=$("$bin" --version | tr ' ' '-')
-      echo "=== $bin ($ver)"
+      out="$tag-$ver"   # tag too: two binaries can report the same --version and clobber each other
+      echo "=== $tag: $bin ($ver)"
       "$bin" exec --json --sandbox read-only --ignore-user-config --ignore-rules --ephemeral \
         --skip-git-repo-check --cd "$FIXTURE" -c model=<the same slug for both runs> \
-        - < "$DISCOVERY_PROMPT_FILE" > "$ver-discovery.jsonl" 2> "$ver-discovery.err"
+        - < "$DISCOVERY_PROMPT_FILE" > "$out-discovery.jsonl" 2> "$out-discovery.err"
       rc=$?
       [ "$rc" -eq 0 ] || echo "INCONCLUSIVE: $bin exited $rc"
-      jq -s -e -f no-tool-items.jq "$ver-discovery.jsonl"   # the check from COMPATIBILITY.md
+      jq -s -e -f no-tool-items.jq "$out-discovery.jsonl"   # the check from COMPATIBILITY.md
     done
     ```
 

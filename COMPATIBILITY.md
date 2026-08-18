@@ -120,8 +120,9 @@ skill's body loads when the skill is selected):
 The caller directs none of it, and every model-bearing call in this plugin runs `codex exec`, so
 that content can reach OpenAI even when the caller's prompt never mentions those files. Be precise
 about *how* each part arrives, because the two differ: the `AGENTS.md` content and the skill
-name/description are placed in context with no read of any kind, while a selected skill's **body**
-was observed arriving by a read the model itself issues (0.147.0). Both are egress the caller never
+name/description are already in the model's context when the turn begins — codex reads them itself
+while assembling the prompt, so the model issues no read for them — while a selected skill's
+**body** was observed arriving by a read the **model** itself issues (0.147.0). Both are egress the caller never
 asked for — a global skill's body came back from a prompt that named neither the skill nor the file,
 the model having selected it on its auto-loaded description alone (probed 2026-08-18) — but only the
 first is auto-loading. Verified
@@ -196,13 +197,15 @@ are requests to a model, the third is evidence about what it did:
 
    ```sh
    BIN=<path to the binary under test>   # never bare `codex`: the A/B must name each binary
-   VER=$("$BIN" --version | tr ' ' '-')  # labels the capture with the binary that produced it
+   TAG=<old|new>                         # which side of the A/B this is
+   VER=$("$BIN" --version | tr ' ' '-')
+   OUT="$TAG-$VER"                       # TAG *and* VER: two binaries can report one version
 
    "$BIN" exec --json --sandbox read-only --ignore-user-config --ignore-rules --ephemeral \
      --skip-git-repo-check --cd <parent>/repo - < discovery-prompt.txt \
-     > "$VER-discovery.jsonl" 2> "$VER-discovery.err"
+     > "$OUT-discovery.jsonl" 2> "$OUT-discovery.err"
    rc=$?   # capture it here: the jq below would otherwise overwrite it
-   [ "$rc" -eq 0 ] || echo "INCONCLUSIVE: $BIN exited $rc — see $VER-discovery.err"
+   [ "$rc" -eq 0 ] || echo "INCONCLUSIVE: $BIN exited $rc — see $OUT-discovery.err"
 
    # keep this program as `no-tool-items.jq` — docs/UPGRADING-CODEX.md's A/B loop reuses it
    jq -s -e '
@@ -213,7 +216,7 @@ are requests to a model, the third is evidence about what it did:
      elif (suspect | length) > 0
      then error("NOT CLEAN: \(suspect | join(", "))")
      else "clean" end
-   ' "$VER-discovery.jsonl"
+   ' "$OUT-discovery.jsonl"
    ```
 
    **The run is clean only if both checks pass** — `rc` is 0 *and* the `jq` exits 0. A prompt-level
@@ -283,8 +286,12 @@ can be named explicitly.
 *tool-activity* trace — it settles whether the model read anything, and nothing else. On its own it
 cannot establish provenance, so retain alongside it: the exact prompt, the full command, the binary
 path and `--version`, stderr, and the exit status. Give each capture a distinct name
-(`<version>-discovery.jsonl`, `<version>-body-egress.jsonl`, one pair per binary) — a shared
-`run.jsonl` silently overwrites the other binary's evidence, and the A/B is the whole point. With
+(`<tag>-<version>-discovery.jsonl`, `<tag>-<version>-body-egress.jsonl`, one set per binary) — a
+shared `run.jsonl` silently overwrites the other binary's evidence, and the A/B is the whole point.
+**Name them by the tag as well as the version**: two binaries can report the same `--version` (two
+build channels, a rebuild, a local build against the same tag), and comparing exactly those is a
+reasonable thing to want. Keyed on version alone, the second run would quietly clobber the first and
+the A/B would compare a capture against itself with no error to notice. With
 these artifacts kept, `--ephemeral` costs nothing and stays on: the capture, not the session file,
 is the record. Skipping this is what the retracted row cost — those runs were `--ephemeral` with no
 capture, so their instrument could not be re-examined and the probe had to be rebuilt from scratch

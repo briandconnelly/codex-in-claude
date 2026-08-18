@@ -22,8 +22,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   tool-using body-egress run, and states what must be retained beside each capture for provenance.
 - `COMPATIBILITY.md` and the matching `cli_contract.py` comment no longer claim implicit context
   "needs no tool-directed read". That is true of `AGENTS.md` content and skill name/description,
-  which are placed in context with no read at all, but a selected skill's **body** was observed
-  arriving through a read the model itself issues. Both are still egress the caller never asked
+  which codex reads itself while assembling the prompt so that the model issues no read for them,
+  but a selected skill's **body** was observed arriving through a read the model itself issues. Both are still egress the caller never asked
   for; only the first is auto-loading. Docs and comments only — no agent-visible surface change,
   and the disclosed wording already said "a selected skill's body can reach the model".
 - The probe gains an **unprompted-selection** consult, which is what actually establishes the

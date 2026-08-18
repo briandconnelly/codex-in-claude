@@ -223,8 +223,9 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # The CALLER directs none of it, and every model-bearing call here runs `codex exec` —
 # so that content can reach OpenAI even when the caller's prompt never mentions those
 # files. The two halves arrive differently: `AGENTS.md` content and skill name/description
-# are placed in context with no read at all, while a selected skill's BODY was observed
-# arriving via a read the MODEL issues (0.147.0). Both are unrequested egress; only the
+# are already in context when the turn begins — codex reads them itself while assembling
+# the prompt, so the MODEL issues no read for them — while a selected skill's BODY was
+# observed arriving via a read the MODEL issues (0.147.0). Both are unrequested egress; only the
 # first is auto-loading. Verified empirically against codex-cli 0.147.0 (2026-08-07)
 # via marker probes — including an A/B against 0.146.0, whose presence matrix was
 # identical; the global-skill discovery is pre-existing, not a 0.147 regression.
