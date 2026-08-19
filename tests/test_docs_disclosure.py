@@ -620,7 +620,19 @@ def test_skill_privacy_and_independence_rules_carry_the_correction():
     text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
     start = text.index("- **Independence — draft placement:**")
     independence = _flat(text[start : text.index("\n- **Git state", start)])
-    assert "not a boundary" in independence, (
+    assert "not a read boundary" in independence, (
         "the Independence rules still treat draft placement as a boundary; under the "
         "corrected model Codex's reads are not bounded by the workspace"
     )
+    # The reclassification trigger must be something the agent can actually observe. The
+    # result contract carries no read audit (schemas.py's success envelopes expose final
+    # text, session, and model — nothing per-file), so a trigger keyed on whether Codex
+    # "reached" the draft is unfalsifiable and the independence claim rests on nothing.
+    assert "otherwise reached it" not in independence, (
+        "reclassification is keyed on an unobservable event; key it on the agent's own "
+        "tool calls and the returned output instead"
+    )
+    for observable in ("supplied to Codex or named to it", "returned output contains"):
+        assert observable in independence, (
+            f"the Independence rules dropped the observable trigger {observable!r}"
+        )

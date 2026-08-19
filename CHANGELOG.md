@@ -39,7 +39,16 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   word-presence check would pass a confident inversion, and a `read.*workspace` shape regex would
   reject the corrected sentence, which itself contains "read files outside the workspace"); the
   prose sides get the same rejection list plus affirmative matchers, each with guard-the-guard
-  cases. `tools/list` grew 2,417 bytes to 91,195 and the catalog to 91,212; both 89,000 gates moved
+  cases, and both reject a bound re-asserted *beside* the correct sentence — containment alone
+  stayed green on "…so no choice of workspace is a read boundary. Nevertheless, Codex is confined to
+  files under the workspace." The skill's binding rules are rebuilt on what an agent can actually
+  observe: machine-level read exposure is stated as a fact the operator accepted by installing and
+  authenticating the CLI (an agent cannot enumerate what the OS user can reach, so a rule asking it
+  to would always resolve to "proceed"), while the new per-call rule triggers on the transcript —
+  material *this session* identified as nondisclosable. Independence reclassification likewise drops
+  its unobservable "otherwise reached it" trigger for three checkable ones (supplied or named to
+  Codex; persisted in a path Codex was pointed at; the returned output carrying the draft's
+  content), since the result contract exposes no read audit. `tools/list` grew 2,417 bytes to 91,195 and the catalog to 91,212; both 89,000 gates moved
   to 92,000 — the sentence was deliberately not compressed to fit, because the only clause short
   enough to drop is the one that retires the "narrow the workspace to bound egress" mitigation.
 

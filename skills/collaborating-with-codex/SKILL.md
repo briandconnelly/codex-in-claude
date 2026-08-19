@@ -106,6 +106,12 @@ Facts to weigh before any active call:
   its date).
 - Redaction is best-effort protection for gathered diffs and returned output only. It never protects
   supplied input, implicitly loaded context, or files Codex reads.
+- The read exposure is a property of the machine, not of any single call: every active call can reach
+  anything the OS user running codex can read. Installing and authenticating this plugin on a machine
+  is the operator's acceptance of that machine-level exposure — an agent does not re-decide it per
+  call, and cannot narrow it by any choice of arguments. What the agent controls per call is what it
+  adds: the inputs it supplies, the workspace it selects, and whether the session has surfaced
+  material the exposure must not touch. The Privacy rules govern exactly those.
 
 ## Binding rules
 
@@ -121,6 +127,10 @@ Facts to weigh before any active call:
 - **Privacy — never justify a call by workspace placement:** Do not treat sensitive material as
   protected because it sits outside the chosen `workspace_root`. The workspace is not a read
   boundary (see Data exposure), so "it is not in the workspace" is never a reason a call is safe.
+- **Privacy — session-identified material:** Do not make an active call while this session has
+  identified specific material as nondisclosable — the user said so, or you found it handling their
+  data — and that material is readable by the OS user running codex, unless the user explicitly
+  approves that call first. Judge this from the transcript, not from where the material sits.
 - **Privacy — do not call:** Do not make an active call when any of these contains something you
   cannot disclose (see Data exposure): the supplied prompt; the supplied context; any file in the
   resolved workspace; an `AGENTS.md` in any ancestor directory up to the repository root; your
@@ -145,13 +155,20 @@ Facts to weigh before any active call:
 - **Polling — fetch:** Fetch a job's result only after `result_available` is true.
 - **Independence — ordering:** Finalize Claude's attempt before Codex's answer enters context:
   start the `_async` call and draft before fetching, or draft before a sync call.
-- **Independence — draft placement:** Keep the Claude draft out of the workspace and out of every
-  baseline Codex receives. This lowers the chance Codex encounters the draft; it is not a boundary,
-  because Codex's reads are not bounded by the workspace.
-- **Independence — reclassification:** If the draft was supplied to Codex, named to it, or
-  otherwise reached it, or Codex's answer arrived before Claude's attempt was finalized, classify
-  the operation as critique and do not claim independence. Judge this on what reached Codex, not on
-  where the file sat.
+- **Independence — draft placement:** Keep the Claude draft out of the resolved workspace, out of
+  every baseline or path supplied or named to any Codex call, and off disk entirely when the attempt
+  is small enough to hold in context. Placement outside those paths removes Codex's pointer to the
+  draft; it is not a read boundary.
+- **Independence — reclassification:** Classify the operation as critique — do not claim
+  independence — when any of these holds: the draft was supplied to Codex or named to it; the draft
+  was persisted, at any time before the job finished, inside the resolved workspace, the seeded
+  baseline, or a path passed to any Codex call for this job; Codex's answer entered context before
+  Claude's attempt was finalized; or Codex's returned output contains distinctive content of the
+  draft. Judge these from your own tool calls and the returned output; the result contract exposes
+  no read audit, so they are the only observable evidence.
+- **Independence — disclosure:** When the draft was persisted anywhere on disk while the Codex job
+  ran, state in the synthesis that independence rests on Codex having had no pointer to the draft,
+  not on a read boundary.
 - **Git state:** Never stash, commit, switch branches, or create a clean worktree solely to
   manufacture independence unless the user explicitly authorizes it and preservation checks show
   their state will remain safe.
