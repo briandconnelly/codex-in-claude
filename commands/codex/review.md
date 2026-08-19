@@ -11,7 +11,7 @@ Scope request: $ARGUMENTS
 Map the request to the tool's parameters: default `scope=working_tree`; for a branch
 review pass `scope=branch` and `base=<branch>`; for a single commit pass
 `scope=commit` and `commit=<sha>`. Pass the absolute repo path as `workspace_root`.
-Optionally call `codex_dry_run` first (free) to preview the scope and diff size.
+Optionally call `codex_dry_run` first (free) to preview the scope and diff size. That preview covers the input the plugin assembles; it does not invoke Codex, so it neither enumerates nor bounds the files the model itself reads and sends during the paid run.
 
 For a multi-file or whole-branch review that can exceed the synchronous deadline
 (built-in default 300s), use `codex_review_changes_async` instead and poll for the

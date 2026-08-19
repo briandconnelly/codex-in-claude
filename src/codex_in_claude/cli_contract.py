@@ -353,6 +353,47 @@ READ_SCOPE_FACT = (
     "choice of workspace is a read boundary."
 )
 
+# The dry-run previews (#513). `codex_dry_run` led with "Preview what a codex_review_changes
+# call would send" and `codex_delegate_dry_run` told callers to confirm scope; both read as a
+# bound on the paid call's egress. They are not one. A dry run does bound the half this plugin
+# assembles — it enforces the same max_input_bytes and reports `truncated` (see
+# DryRunResult/DelegateDryRunResult), and an oversize input fails the preview exactly where the
+# paid call would fail. What it cannot bound is the OTHER channel: the model's own reads. A dry
+# run never invokes Codex, so no read has happened yet and none can be listed; READ_SCOPE_FACT
+# above says how far those reads reach. The review docstring already made this move for
+# redaction ("a check on scope, not confirmation that no secret remains") — this is its
+# read-side twin.
+#
+# RULE (preview scope): every preview-scope carrier must state this fact, and none may present
+# a preview as evidence about the paid call's total egress. The runtime carriers are the
+# codex_dry_run and codex_delegate_dry_run docstrings, their two codex_capabilities
+# ToolCapability entries, a codex_capabilities negative_scope item, and CAPABILITY_SUMMARY's
+# preview sentence. The prose carriers are README.md, docs/REFERENCE.md, the
+# collaborating-with-codex skill (its binding rules as well as its
+# references/active-workflows.md background — a binding rule left narrower than the disclosure
+# is the #512 defect), and the commands/codex/dry-run.md and commands/codex/review.md
+# slash-command files, which steer to a dry run at the same decision point.
+# tests/test_server.py pins the runtime side by exact containment plus a contradiction sweep;
+# tests/test_docs_disclosure.py pins the prose sides, SECTION-scoped (README states the read
+# fact 50 lines below its dry-run bullets, so a file-wide check would pass vacuously).
+#
+# SECURITY.md and COMPATIBILITY.md are deliberately NOT carriers, unlike the read-scope RULE
+# above: neither file mentions a preview at all, so neither makes the claim being corrected.
+#
+# Scope the sentence to the model-initiated channel. An earlier draft said a dry run does not
+# "bound what the paid call sends", which is false for the assembled half and would have
+# retracted the true max_input_bytes/truncation guarantee those results document.
+#
+# The two dry-run docstrings hand-copy this AND READ_SCOPE_FACT for the FastMCP reason above.
+# They are not egress tools, so they carry no read-scope disclosure otherwise, and this fact
+# is three negatives: without the affirmative half a reader learns the preview is not a bound
+# but never what the unbounded channel actually reaches.
+PREVIEW_SCOPE_FACT = (
+    "A dry run reports metadata about the input this plugin would assemble; it does not "
+    "invoke Codex, and it neither enumerates nor bounds the files the model itself reads "
+    "and sends during the paid call."
+)
+
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
 # that use them and NEVER gated on `--help` parsing. If upstream removes/renames

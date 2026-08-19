@@ -21,7 +21,9 @@ Consult returns the shared active-result fields but no `verdict`, `confidence`, 
 Use `codex_review_changes` when the review target is represented in git. Select the appropriate
 working-tree, branch, or commit scope and narrow paths when useful. Run `codex_dry_run` first when
 scope, truncation, redaction, or repository selection is uncertain. A dry-run previews input; it
-does not prove that redaction catches every secret. For a multi-file or whole-branch review that can
+does not prove that redaction catches every secret. It also does not invoke Codex, so it neither
+enumerates nor bounds the files the model itself reads and sends during the paid run — a preview
+bounds the input the plugin assembles, not the run's total egress. For a multi-file or whole-branch review that can
 exceed the synchronous deadline, prefer `codex_review_changes_async`; a sync deadline expiry loses
 the paid run.
 
@@ -32,7 +34,8 @@ check against each finding's evidence and the actual code.
 
 Use `codex_delegate` for a self-contained implementation task in a repository with at least one
 commit. `codex_delegate_dry_run` previews the seeded baseline and prompt size without creating a
-worktree or spending. The real run creates a throwaway worktree seeded from `HEAD` plus replayable
+worktree or spending; like the review preview, it does not enumerate or bound the files Codex
+itself reads during the paid run. The real run creates a throwaway worktree seeded from `HEAD` plus replayable
 uncommitted tracked changes; untracked files are not copied. For a substantial or multi-file task
 that can exceed the synchronous deadline, prefer `codex_delegate_async`; a sync deadline expiry
 loses the paid run.

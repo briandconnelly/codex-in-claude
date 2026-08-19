@@ -185,6 +185,7 @@ CAPABILITY_SUMMARY = (
     "codex and the backend validate the real values). "
     "To preview a call without spending, use codex_dry_run for a review or "
     "codex_delegate_dry_run for a delegate's worktree baseline. "
+    f"{cli_contract.PREVIEW_SCOPE_FACT} "
     # Background context, last.
     "Background: each active tool has an _async variant (codex_consult_async / "
     "codex_review_changes_async / codex_delegate_async), polled via "
@@ -2152,7 +2153,8 @@ def codex_capabilities(
                 name="codex_dry_run",
                 cost="free",
                 use_when="Before codex_review_changes, to preview scope/diff size/"
-                "redactions without spending.",
+                "redactions without spending. "
+                f"{cli_contract.PREVIEW_SCOPE_FACT}",
                 key_optional_params=[
                     "scope",
                     "base",
@@ -2172,7 +2174,8 @@ def codex_capabilities(
                 name="codex_delegate_dry_run",
                 cost="free",
                 use_when="Before codex_delegate/codex_delegate_async, to preview the "
-                "seeded baseline, prompt size, and workspace without spending.",
+                "seeded baseline, prompt size, and workspace without spending. "
+                f"{cli_contract.PREVIEW_SCOPE_FACT}",
                 required_params=["task"],
                 key_optional_params=["workspace_root", "model", "reasoning_effort", "isolation"],
                 returns="The HEAD baseline (commit, tracked/uncommitted/untracked "
@@ -2229,6 +2232,11 @@ def codex_capabilities(
             f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
             "throwaway worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
             f"{cli_contract.SKILL_BODY_FACT}",
+            "Does not let a free dry run establish what a paid call will send. "
+            f"{cli_contract.PREVIEW_SCOPE_FACT} A preview does bound the half this "
+            "plugin assembles — it enforces the same max_input_bytes and reports "
+            "truncation — but the reads above are the other channel, and no preview "
+            "has run Codex yet.",
             "Delegate's no-network sandbox does NOT mean nothing leaves the machine: "
             "workspace-write blocks network egress only for commands Codex RUNS in the "
             "sandbox (so a delegated task cannot push/fetch/publish/install), but the "
@@ -3922,7 +3930,13 @@ async def codex_dry_run(
     the paid call would send (unvalidated). `deadline_advisory` is non-null when size
     or effort risks the synchronous deadline (null whenever `would_call_model` is
     False) and names `codex_review_changes_async` verbatim — the async counterpart of
-    the previewed call, not of this dry-run tool. A hint, not a refusal."""
+    the previewed call, not of this dry-run tool. A hint, not a refusal.
+
+    A dry run reports metadata about the input this plugin would assemble; it does not
+    invoke Codex, and it neither enumerates nor bounds the files the model itself reads
+    and sends during the paid call. Codex can read files outside the workspace — up to
+    everything the OS user running it can read — and send them to OpenAI. The sandbox
+    bounds writes, not reads, so no choice of workspace is a read boundary."""
     d = config.defaults()
     # Mirror _prepare_review's resolution so the preview reports what the paid call
     # would send: falsey-coalesced model, exact-None effort (#309).
@@ -4135,7 +4149,13 @@ async def codex_delegate_dry_run(
     call would send (unvalidated). `deadline_advisory` is non-null when size or
     reasoning effort risks the synchronous deadline and names `codex_delegate_async`
     verbatim — the async counterpart of the previewed call, not of this dry-run tool.
-    A hint, not a refusal."""
+    A hint, not a refusal.
+
+    A dry run reports metadata about the input this plugin would assemble; it does not
+    invoke Codex, and it neither enumerates nor bounds the files the model itself reads
+    and sends during the paid call. Codex can read files outside the workspace — up to
+    everything the OS user running it can read — and send them to OpenAI. The sandbox
+    bounds writes, not reads, so no choice of workspace is a read boundary."""
     d = config.defaults()
     # See codex_dry_run: mirror the paid call's resolution (#309).
     effort = reasoning_effort if reasoning_effort is not None else d.reasoning_effort
