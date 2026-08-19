@@ -197,11 +197,13 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   your task and repo context to OpenAI.
 - Supplied prompts and context (`question`, `task`, `extra_context`, and similar author input) are
   sent raw. During every active call — including consult — Codex may read other files in the
-  resolved workspace, and it also auto-loads context implicitly: the project's `AGENTS.md` and any
-  skills under `.agents/skills/`, **plus your user-global Codex skills under `$CODEX_HOME/skills/`**
-  (default `~/.codex/skills/`), can be sent to OpenAI even if your prompt never mentions them (for
-  delegate, the versions seeded into the throwaway worktree auto-load there; the user-global skills
-  load regardless of workspace, since they are discovered from outside it). The plugin's isolation
+  resolved workspace, and it also pulls in context implicitly: the project's `AGENTS.md` is
+  auto-loaded, while skills under `.agents/skills/` — **plus your user-global Codex skills under
+  `$CODEX_HOME/skills/`** (default `~/.codex/skills/`) — are auto-discovered by name and
+  description, and a skill the model then selects has its body read in as well. Either way the
+  content can be sent to OpenAI even if your prompt never mentions it (for delegate, the versions
+  seeded into the throwaway worktree apply there; the user-global skills are reachable regardless of
+  workspace, since they are discovered from outside it). The plugin's isolation
   flags do not suppress any of this — including `--ignore-user-config`, which drops
   `$CODEX_HOME/config.toml` but not `$CODEX_HOME/skills/`. Details, the verifying probe, and the
   remaining unverified edge cases are in [`COMPATIBILITY.md`](COMPATIBILITY.md). Best-effort redaction protects

@@ -90,11 +90,14 @@ Facts to weigh before any active call:
 - Every supplied prompt and context field is sent to OpenAI raw.
 - During every active call — including consult — Codex may read other files in the resolved
   workspace.
-- Codex auto-loads the workspace's `AGENTS.md` and `.agents/skills/` skills, and discovers your
-  user-global skills under `$CODEX_HOME/skills/` from outside the workspace, even if the prompt
-  never mentions them; the isolation flags do not suppress any of this.
+- Codex auto-loads the workspace's `AGENTS.md`, and auto-discovers skills in `.agents/skills/` and
+  your user-global `$CODEX_HOME/skills/` from outside the workspace, even if the prompt never
+  mentions them; the isolation flags do not suppress any of this.
+- A skill's **name and description** reach the model up front; its **body** follows through a read
+  the model itself issues once it selects the skill. Both are egress you did not ask for — a global
+  skill's body has come back from a prompt naming neither the skill nor the file.
 - Redaction is best-effort protection for gathered diffs and returned output only. It never protects
-  supplied input, auto-loaded context, or files Codex reads.
+  supplied input, implicitly loaded context, or files Codex reads.
 
 ## Binding rules
 

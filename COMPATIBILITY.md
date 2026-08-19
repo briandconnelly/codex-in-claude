@@ -142,8 +142,10 @@ but drops only `config.toml`, and a probe run *with* that flag still emitted a `
 skill body. (The plugin's default `isolation=inherit` does not even send the flag — see
 `config.isolation_flags`.) For the delegate tools the `AGENTS.md`/skills seeded into the throwaway
 worktree (committed content plus replayed uncommitted tracked changes; untracked files are not
-copied) auto-load there too, and the user-global skills load alongside them — neither tracked nor
-seeded, so scrubbing the worktree does not exclude them.
+copied) apply there too — that `AGENTS.md` auto-loads and those skills are discovered — and the
+user-global skills are discovered alongside them, neither tracked nor seeded, so scrubbing the
+worktree does not exclude them. A skill selected in the worktree has its body read there just the
+same.
 
 ### Re-verifying on a Codex upgrade
 
@@ -300,9 +302,9 @@ to find the flaw.
 Run both with the raw CLI flag set including **`--ignore-user-config`** — the flag the plugin's
 `isolation=ignore-config` sends, though the plugin path is not interchangeable here, because it
 yields no `--json` stream to assert over. The plugin's default `isolation=inherit` does **not** send
-that flag at all, so a default-flags run cannot test the first row of the table — it would confirm the global skill loads
-while never exercising the isolation claim, and record a false positive on the exact point this
-section exists to hold. **Remove the temporary global skill afterwards.**
+that flag at all, so a default-flags run cannot test the first row of the table — it would confirm
+that the global skill is discovered and its body reachable, while never exercising the isolation
+claim, and record a false positive on the exact point this section exists to hold. **Remove the temporary global skill afterwards.**
 
 **Record a run as a presence matrix, not as prose.** For each binary, write down its executable path,
 its `--version`, and one boolean per marker in the table above. Do **not** diff the raw answers —

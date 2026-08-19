@@ -573,7 +573,9 @@ _GUARANTEE_MATCHERS = {
     "files_read": lambda d: bool(_FILES_READ_DISCLOSED.search(d)),
     # The workspace AGENTS.md auto-loads (its content can be sent).
     "autoload_agents": lambda d: "agents.md" in d,
-    # The workspace .agents/skills/ skills auto-load.
+    # The workspace .agents/skills/ skills are auto-discovered (name/description up
+    # front; a selected skill's body follows via a model-issued read — see #498). The
+    # key name predates that distinction and is kept to bound the churn.
     "autoload_skills": lambda d: ".agents/skills" in d,
     # User-global skills under $CODEX_HOME/skills/ are discovered too — outside the
     # workspace, and not suppressed by the config-isolation flags (#358). Keyed on the

@@ -10,6 +10,7 @@ found and corrected by hand after #300 updated only some of them.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -78,3 +79,115 @@ def test_site_list_matches_the_authoritative_rule():
         f"only in tuple={enforced - set(expected.values())}, "
         f"only in RULE={set(expected.values()) - enforced}"
     )
+
+
+# --- The mechanism half of the disclosure (#498) ---------------------------------
+#
+# #480 established *how* each half of the implicit context arrives, and the two differ:
+# `AGENTS.md` content is auto-LOADED — already in context when the turn begins, with no
+# read issued for it — while a skill is auto-DISCOVERED by name and description, and its
+# BODY arrives only through a read the model itself issues once it selects the skill.
+# COMPATIBILITY.md and cli_contract.py were corrected to say so; the other disclosure
+# sites still called the whole thing "auto-loading", so the repo contradicted itself
+# about a security-relevant mechanism.
+#
+# Scoped to the markdown SECTION that names a skills root, not the whole file: every one
+# of these files uses "select" somewhere unrelated (route selection, workspace selection),
+# so a file-wide search would pass vacuously — see
+# test_mechanism_matcher_rejects_the_pre_498_wording for the red-green proof.
+_SELECTION_RE = re.compile(r"\bselect(s|ed|ion|ing)?\b", re.IGNORECASE)
+_METADATA_RE = re.compile(r"\b(descriptions?|metadata)\b", re.IGNORECASE)
+
+
+def _sections_disclosing_a_skills_root(text: str) -> list[str]:
+    """The markdown sections that name either skills root."""
+    sections, current = [], []
+    for line in text.splitlines():
+        if line.startswith("#"):
+            sections.append("\n".join(current))
+            current = []
+        current.append(line)
+    sections.append("\n".join(current))
+    return [
+        section
+        for section in sections
+        if _PROJECT_SKILLS_ROOT in section or _GLOBAL_SKILLS_ROOT in section
+    ]
+
+
+def _states_the_mechanism(section: str) -> bool:
+    """Does this section say metadata arrives up front and the body on selection?"""
+    return bool(_SELECTION_RE.search(section) and _METADATA_RE.search(section))
+
+
+@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+def test_doc_site_states_how_a_skill_body_arrives(relpath):
+    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8")
+    disclosing = _sections_disclosing_a_skills_root(text)
+    assert disclosing, f"{relpath} names no skills root at all"
+    assert any(_states_the_mechanism(section) for section in disclosing), (
+        f"{relpath} discloses a skills root without saying how a skill's body arrives: "
+        "name and description are auto-discovered, the body follows a model-issued read "
+        "once the skill is selected (see COMPATIBILITY.md). Calling it 'auto-loading' "
+        "contradicts that."
+    )
+
+
+def test_mechanism_matcher_rejects_the_pre_498_wording():
+    """Guard the guard: the matcher must fail on the wording #498 replaced.
+
+    Without this, a matcher that accepted everything would keep the test above green
+    forever. The first string is a verbatim pre-#498 disclosure; the second is the
+    corrected shape.
+    """
+    pre_498 = (
+        "## Data exposure\n"
+        "- Codex auto-loads the workspace's `AGENTS.md` and `.agents/skills/` skills, and\n"
+        "  discovers your user-global skills under `$CODEX_HOME/skills/` from outside the\n"
+        "  workspace, even if the prompt never mentions them."
+    )
+    assert _states_the_mechanism(pre_498) is False
+
+    corrected = (
+        "## Data exposure\n"
+        "- Codex auto-loads the workspace's `AGENTS.md` and auto-discovers skills in\n"
+        "  `.agents/skills/` and `$CODEX_HOME/skills/`: a skill's name and description\n"
+        "  reach the model up front, and its body follows once the model selects it."
+    )
+    assert _states_the_mechanism(corrected) is True
+
+    # A correct sentence still contains both "auto-loads" and "skills" — the mechanism
+    # it auto-loads is `AGENTS.md`. A co-occurrence blacklist would reject this, which
+    # is why the predicate asks what the prose STATES rather than which words it uses.
+    mixed = (
+        "## Safety\n"
+        "Codex auto-loads the resolved workspace's `AGENTS.md` and discovers skills in\n"
+        "`.agents/skills/` and `$CODEX_HOME/skills/` by name and description; a selected\n"
+        "skill's body is then read by the model itself."
+    )
+    assert _states_the_mechanism(mixed) is True
+
+
+def test_mechanism_matcher_ignores_unrelated_skill_discovery_prose():
+    """Guard the guard: passing must come from the disclosure, not from nearby text.
+
+    `README.md` and `SKILL.md` both use "select" for route and workspace selection, and
+    `README.md` separately describes Claude Code auto-discovering this plugin's own
+    skill. None of that says anything about Codex egress, so none of it may satisfy the
+    predicate — a section-scoped check is what keeps it from doing so.
+    """
+    unrelated = (
+        "## Skills\n"
+        "The plugin ships one Claude Code skill, auto-discovered from `skills/`.\n"
+        "It selects ordinary consult, review, delegate, transfer, and async tools\n"
+        "directly, and loads a reference only when one is needed."
+    )
+    assert _states_the_mechanism(unrelated) is False
+
+    # A section naming a skills root but flatly denying the egress must not pass either.
+    negated = (
+        "## Data exposure\n"
+        "Codex never discovers skills in `.agents/skills/` or `$CODEX_HOME/skills/`,\n"
+        "so no skill name or description is exposed."
+    )
+    assert _states_the_mechanism(negated) is False

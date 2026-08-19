@@ -180,7 +180,8 @@ Then compare the surfaces the snapshots don't cover:
     parsing is exactly the drift this pass exists to catch. Read the printed lines — do not infer the
     outcome from the loop's exit status.
 - **Behavior with no CLI surface at all.** Some upstream changes have no flag and no subcommand —
-  what auto-loads into context, and the feature flags that govern it. Run
+  what reaches model context implicitly (auto-loaded `AGENTS.md`, discovered skills), and the
+  feature flags that govern it. Run
   [`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Implicit Codex context" → "Re-verifying on a Codex
   upgrade" against **both** binaries and compare the two presence matrices it produces. This A/B is
   what separates "new in this release" from "always true and we never looked" — an absolute-terms run
@@ -234,7 +235,7 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
 - **Implicit context.** Refresh the observations table in [`COMPATIBILITY.md`](../COMPATIBILITY.md) →
   "Implicit Codex context" from the two-binary marker probe you ran in step 2A. `--help` structurally
   cannot see this surface (no flag, no subcommand), so the mechanical drift check above will not
-  catch a change to what auto-loads or where it loads from.
+  catch a change to what reaches context implicitly or where it comes from.
 - **New capabilities worth adopting or explicitly avoiding.** Don't stop at the script's flag `INFO`
   list — it only sees `codex exec` flags. Also scan the `Commands:` section of `codex --help` for new
   **subcommands** and run `codex features list` for new **feature flags** (the `--enable`/`--disable`
