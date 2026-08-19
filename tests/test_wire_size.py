@@ -135,7 +135,11 @@ from codex_in_claude.server import mcp
 # `project_doc_max_bytes=0`. This is what a client reads BEFORE it spends to decide what it
 # is about to send to OpenAI, so the bytes buy disclosure it can get nowhere else):
 # 88,682 bytes (+888 B) — over budget; budget raised to the next 500 above the measured
-# value.
+# value. Then +96 B on a Copilot review point, still inside that raise (88,778, no further
+# change): the canonical sentence said `$CODEX_HOME/AGENTS.override.md or AGENTS.md`, whose
+# bare second filename could be read as the workspace/ancestor file in a sentence that names
+# both — it now repeats the path and says `, else`, which also carries the masking precedence
+# `or` did not.
 TOOLS_LIST_BYTE_BUDGET = 89_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
@@ -148,7 +152,7 @@ TOOLS_LIST_BYTE_BUDGET = 89_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 88_682
+TOOLS_LIST_BYTE_TARGET = 88_778
 
 
 def _budget_failure_message(measured: int) -> str:

@@ -26,7 +26,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   the section that carries its skills-root disclosure. `COMPATIBILITY.md` gains the probe matrix and
   two extra fixture markers for the upgrade procedure; it also records `--cd` versus process cwd as
   making no difference, resolving one of that section's open unverified questions. `tools/list` grew
-  888 bytes to 88,682 and the catalog to 88,699; both 88,000 gates moved to 89,000.
+  974 bytes to 88,778 and the catalog to 88,795; both 88,000 gates moved to 89,000.
 
 - **The MCP wire surface now states HOW a skill's body reaches OpenAI, not just that skills are
   discovered.** #480 established that the two halves of Codex's implicit context arrive

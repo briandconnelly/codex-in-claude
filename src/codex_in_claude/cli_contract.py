@@ -284,8 +284,9 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # `test_async_tool_docstring_matches_fact_only_not_full`.
 SKILLS_DISCOVERY_FACT = (
     "Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor "
-    "AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md "
-    "or AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global "
+    "AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, "
+    "else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ "
+    "and user-global "
     "$CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace."
 )
 SKILLS_ISOLATION_NOTE = "The plugin's isolation flags don't suppress any of it."

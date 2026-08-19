@@ -2866,7 +2866,8 @@ async def codex_consult(
     your MCP roots, or the server's cwd as a fallback), so it may read files there and
     send their content too. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
     repository, ancestor `AGENTS.md` files through its root, plus a user-global
-    `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the workspace's
+    `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the
+    workspace's
     `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
     reachable from outside the workspace. The plugin's
     isolation flags don't suppress any of it. A skill's name and description arrive up
@@ -2969,7 +2970,8 @@ async def codex_review_changes(
     secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),
     and Codex may read and send other repo files. Codex auto-loads the resolved workspace's
     `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root, plus a
-    user-global `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the
+    user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers
+    skills in the
     workspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default
     `~/.codex/skills/`), reachable from outside the workspace. The plugin's isolation flags
     don't suppress any of it.
@@ -3063,7 +3065,8 @@ async def codex_delegate(
     model call still sends your `task` to OpenAI and lets Codex read tracked files in
     the worktree and send their content. Codex auto-loads the resolved workspace's `AGENTS.md`
     and, in a repository, ancestor `AGENTS.md` files through its root, plus a user-global
-    `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the workspace's
+    `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the
+    workspace's
     `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
     reachable from outside the workspace. The plugin's isolation flags don't suppress any of it.
     For delegate,
@@ -3155,7 +3158,8 @@ async def codex_delegate_async(
     machine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex
     read tracked files in the worktree and send their content. Codex auto-loads the resolved
     workspace's `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root,
-    plus a user-global `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in
+    plus a user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it
+    discovers skills in
     the workspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default
     `~/.codex/skills/`), reachable from outside the workspace. For delegate, that workspace is
     the worktree; scrubbing it
@@ -3746,8 +3750,9 @@ async def codex_consult_async(
     (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
     resolved working directory (`workspace_root`, your MCP roots, or the server cwd).
     Codex auto-loads the resolved workspace's `AGENTS.md` and, in a repository, ancestor
-    `AGENTS.md` files through its root, plus a user-global `$CODEX_HOME/AGENTS.override.md` or
-    `AGENTS.md`; it discovers skills in the workspace's `.agents/skills/` and user-global
+    `AGENTS.md` files through its root, plus a user-global `$CODEX_HOME/AGENTS.override.md`,
+    else `$CODEX_HOME/AGENTS.md`; it discovers skills in the workspace's `.agents/skills/` and
+    user-global
     `$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from outside the workspace. A
     skill's name and
     description arrive up front; selecting one makes the model read its body, which can
@@ -3821,7 +3826,8 @@ async def codex_review_changes_async(
     your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
     read other repo files. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
     repository, ancestor `AGENTS.md` files through its root, plus a user-global
-    `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the workspace's
+    `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the
+    workspace's
     `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
     reachable from outside the workspace. A skill's name
     and description arrive up front; selecting one makes the model read its body, which

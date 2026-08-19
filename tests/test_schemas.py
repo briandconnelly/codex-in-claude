@@ -841,6 +841,10 @@ def _wire_catalog_bytes() -> int:
 # sentence now names all THREE AGENTS.md sources, two of which the previous wording
 # omitted in the unsafe direction): 87,811 -> 88,699 bytes (+888 B) — over cap; cap
 # raised to the next 500 above the measured value.
+# Measured again 2026-08-19 (#472, Copilot review: the canonical sentence repeats
+# `$CODEX_HOME/` before the second guidance filename and says `, else` rather than `or`,
+# removing an ambiguity in the repo's most copy-propagated sentence): 88,699 -> 88,795 bytes
+# (+96 B) — still within cap, no further change.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
 CATALOG_BYTE_CAP = 89_000
