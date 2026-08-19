@@ -2232,7 +2232,7 @@ def codex_capabilities(
             f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
             "throwaway worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
             f"{cli_contract.SKILL_BODY_FACT}",
-            "Does not let a free dry run establish what a paid call will send. "
+            "Does not let a free dry run establish a paid call's total egress. "
             f"{cli_contract.PREVIEW_SCOPE_FACT} A preview does bound the half this "
             "plugin assembles — it enforces the same max_input_bytes and reports "
             "truncation — but the reads above are the other channel, and no preview "

@@ -852,9 +852,9 @@ def test_preview_steer_matcher_rejects_the_pre_513_wording():
 @pytest.mark.parametrize("relpath", _PREVIEW_SCOPE_DOC_SITES)
 def test_no_doc_site_presents_a_preview_as_an_egress_bound(relpath):
     """File-wide contradiction sweep — the misstatement half the word check cannot see."""
-    hit = _CONTRADICTS_PREVIEW_SCOPE_PROSE.search(_flat(_flat_text(relpath)))
+    hit = _preview_egress_bound_claim(_flat(_flat_text(relpath)))
     assert hit is None, (
-        f"{relpath} presents a preview as evidence about total egress (#513): {hit.group(0)!r}"
+        f"{relpath} presents a preview as evidence about total egress (#513): {hit!r}"
     )
 
 
@@ -872,9 +872,45 @@ _CONTRADICTS_PREVIEW_SCOPE_PROSE = re.compile(
     r"|\b(?:complete|full|exhaustive)\s+inventory\s+of\b[^.]{0,40}"
     r"\b(?:read|reads|files|egress|sent)\b"
     r"|\bsafe to (?:proceed|spend)\b"
-    r"|\bno (?:further|additional) disclosure review\b",
+    r"|\bno (?:further|additional) disclosure review\b"
+    # …or a certification that the preview clears the run. The completeness alternatives
+    # above are keyed on a quantifier ("everything…transmits"); a Codex review showed this
+    # shape needs none — "A clean preview certifies that no sensitive content will reach
+    # OpenAI" passed every guard. It is the operative claim #513 exists to stop.
+    r"|\b(?:certif(?:y|ies|ied)|confirms?|confirmed|assures?|proves?|guarantees?|"
+    r"establishes?|verifies|verified)\b[^.]{0,60}"
+    r"\bno\b[^.]{0,30}\b(?:sensitive|secrets?|confidential|disclosure|egress|"
+    r"private data)\b"
+    r"|\b(?:nothing sensitive|no sensitive \w+|no secrets?)\b[^.]{0,40}"
+    r"\b(?:will be sent|is sent|reaches?|reach|leaves?|will leave)\b",
     re.IGNORECASE,
 )
+
+
+# A denial of the claim is not the claim. "…not evidence that nothing sensitive will be
+# sent" contains the poison phrase verbatim, and the corrected carriers are FULL of such
+# denials — this repo has now been bitten three times by a matcher that reads a
+# strengthening sentence as the weakness it forbids (#502, the read-scope emphasis case,
+# and this one). So the regex finds candidate claims and this wrapper drops the ones a
+# negation governs, rather than the regex being weakened until it stops catching the
+# affirmative form.
+_DENIAL_PREFIX = re.compile(
+    r"\b(?:not|never|n't|no|rather than|instead of|neither|nor)\b(?:\s+\S+){0,12}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _preview_egress_bound_claim(text: str) -> str | None:
+    """The first affirmative claim that a preview bounds or clears the paid call's egress."""
+    for m in _CONTRADICTS_PREVIEW_SCOPE_PROSE.finditer(text):
+        # Sentence-scoped: a negation in a PREVIOUS sentence does not govern this claim,
+        # and "Do not present a clean preview as evidence that nothing sensitive will be
+        # sent" puts its negation seven words back — a fixed word window is the wrong
+        # instrument, the sentence is.
+        sentence_prefix = re.split(r"(?<=[.;:])\s+", text[: m.start()])[-1]
+        if not _DENIAL_PREFIX.search(sentence_prefix):
+            return m.group(0)
+    return None
 
 
 def test_preview_prose_contradiction_pattern_is_not_vacuous():
@@ -884,8 +920,10 @@ def test_preview_prose_contradiction_pattern_is_not_vacuous():
         "prompt_bytes is the full size of everything the paid call transmits to OpenAI.",
         "The preview is a complete security preflight.",
         "A clean preview means it is safe to proceed.",
+        "A clean preview certifies that no sensitive content will reach OpenAI.",
+        "The preview confirms no secrets are sent.",
     ):
-        assert _CONTRADICTS_PREVIEW_SCOPE_PROSE.search(_flat(poison)), poison
+        assert _preview_egress_bound_claim(_flat(poison)), poison
     for ok in (
         "Codex can read files outside the workspace — up to everything the OS user "
         "running it can read — and send them to OpenAI.",
@@ -893,7 +931,7 @@ def test_preview_prose_contradiction_pattern_is_not_vacuous():
         "the full UTF-8 size of the prompt that would be sent",
         "Use codex_capabilities for the full inventory.",
     ):
-        assert _CONTRADICTS_PREVIEW_SCOPE_PROSE.search(_flat(ok)) is None, ok
+        assert _preview_egress_bound_claim(_flat(ok)) is None, ok
 
 
 def test_skill_carries_a_binding_rule_not_only_background():

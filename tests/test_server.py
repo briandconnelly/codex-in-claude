@@ -9219,9 +9219,45 @@ _CONTRADICTS_PREVIEW_SCOPE = re.compile(
     r"|\b(?:complete|full|exhaustive)\s+inventory\s+of\b[^.]{0,40}"
     r"\b(?:read|reads|files|egress|sent)\b"
     r"|\bsafe to (?:proceed|spend)\b"
-    r"|\bno (?:further|additional) disclosure review\b",
+    r"|\bno (?:further|additional) disclosure review\b"
+    # …or a certification that the preview clears the run. The completeness alternatives
+    # above are keyed on a quantifier ("everything…transmits"); a Codex review showed this
+    # shape needs none — "A clean preview certifies that no sensitive content will reach
+    # OpenAI" passed every guard. It is the operative claim #513 exists to stop.
+    r"|\b(?:certif(?:y|ies|ied)|confirms?|confirmed|assures?|proves?|guarantees?|"
+    r"establishes?|verifies|verified)\b[^.]{0,60}"
+    r"\bno\b[^.]{0,30}\b(?:sensitive|secrets?|confidential|disclosure|egress|"
+    r"private data)\b"
+    r"|\b(?:nothing sensitive|no sensitive \w+|no secrets?)\b[^.]{0,40}"
+    r"\b(?:will be sent|is sent|reaches?|reach|leaves?|will leave)\b",
     re.IGNORECASE,
 )
+
+
+# A denial of the claim is not the claim. "…not evidence that nothing sensitive will be
+# sent" contains the poison phrase verbatim, and the corrected carriers are FULL of such
+# denials — this repo has now been bitten three times by a matcher that reads a
+# strengthening sentence as the weakness it forbids (#502, the read-scope emphasis case,
+# and this one). So the regex finds candidate claims and this wrapper drops the ones a
+# negation governs, rather than the regex being weakened until it stops catching the
+# affirmative form.
+_DENIAL_PREFIX = re.compile(
+    r"\b(?:not|never|n't|no|rather than|instead of|neither|nor)\b(?:\s+\S+){0,12}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _preview_egress_bound_claim(text: str) -> str | None:
+    """The first affirmative claim that a preview bounds or clears the paid call's egress."""
+    for m in _CONTRADICTS_PREVIEW_SCOPE.finditer(text):
+        # Sentence-scoped: a negation in a PREVIOUS sentence does not govern this claim,
+        # and "Do not present a clean preview as evidence that nothing sensitive will be
+        # sent" puts its negation seven words back — a fixed word window is the wrong
+        # instrument, the sentence is.
+        sentence_prefix = re.split(r"(?<=[.;:])\s+", text[: m.start()])[-1]
+        if not _DENIAL_PREFIX.search(sentence_prefix):
+            return m.group(0)
+    return None
 
 
 def test_preview_scope_matcher_positive_and_negative_controls():
@@ -9291,6 +9327,12 @@ def test_preview_contradiction_pattern_catches_a_completeness_claim():
         " This report is a complete security preflight.",
         " A clean preview means it is safe to proceed.",
         " No further disclosure review is needed before spending.",
+        # Reported by a Codex review of this very change: it passed BOTH contradiction
+        # patterns and every containment guard. No quantifier, no read bound, no
+        # "preflight" — just the operative claim #513 exists to stop.
+        " A clean preview certifies that no sensitive content will reach OpenAI.",
+        " This confirms no secrets are sent.",
+        " After a clean run, nothing sensitive will be sent.",
     ):
         poisoned = cli_contract.PREVIEW_SCOPE_FACT + tail
         assert _preview_scope_disclosed(poisoned) is True, (
@@ -9299,7 +9341,7 @@ def test_preview_contradiction_pattern_catches_a_completeness_claim():
         assert _CONTRADICTS_READ_SCOPE.search(_normalize(poisoned).lower()) is None, (
             f"precondition: the read-scope pattern cannot see {tail!r} either"
         )
-        assert _CONTRADICTS_PREVIEW_SCOPE.search(_normalize(poisoned)), tail
+        assert _preview_egress_bound_claim(_normalize(poisoned)), tail
 
     # It must NOT fire on the corrected wording, nor on the repo's legitimate uses of the
     # same vocabulary — the byte-size fields and the egress disclosures both say "sent".
@@ -9313,7 +9355,18 @@ def test_preview_contradiction_pattern_catches_a_completeness_claim():
         "Use codex_capabilities for the full inventory.",
         "Codex can read files outside the workspace and send them to OpenAI.",
     ):
-        assert _CONTRADICTS_PREVIEW_SCOPE.search(ok) is None, ok
+        assert _preview_egress_bound_claim(ok) is None, ok
+
+    # The wrapper must not become an escape hatch. A denial in a PREVIOUS sentence must not
+    # excuse an affirmative claim in this one — otherwise any carrier could earn immunity by
+    # stating the correct fact (which is full of negations) first, which is exactly what
+    # every real carrier does.
+    governed = "Do not present a clean preview as evidence that nothing sensitive will be sent."
+    assert _preview_egress_bound_claim(governed) is None, "a governed denial must be spared"
+    escaped = governed + " A clean preview certifies that no sensitive content reaches OpenAI."
+    assert _preview_egress_bound_claim(escaped), (
+        "a denial in an earlier sentence must not excuse the affirmative claim after it"
+    )
 
 
 def _runtime_preview_scope_carriers() -> dict[str, str]:
@@ -9353,9 +9406,9 @@ def test_no_runtime_preview_carrier_claims_the_preview_bounds_egress():
     """None may take the claim back — beside the fact or instead of it."""
     offenders = []
     for label, text in _runtime_preview_scope_carriers().items():
-        hit = _CONTRADICTS_PREVIEW_SCOPE.search(_normalize(text))
+        hit = _preview_egress_bound_claim(_normalize(text))
         if hit:
-            offenders.append(f"{label}: {hit.group(0)!r}")
+            offenders.append(f"{label}: {hit!r}")
     assert not offenders, (
         "these carriers present a preview as evidence about total egress (#513): "
         + "; ".join(offenders)
