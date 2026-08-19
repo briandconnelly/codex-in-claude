@@ -7,7 +7,7 @@ an upstream breaking change is centralized, greppable, and testable. Revising it
 takes the lockstep procedure in docs/UPGRADING-CODEX.md, not an edit to this file
 alone. See COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.147.0`.
+Verified against `codex-cli 0.148.0`.
 """
 
 from __future__ import annotations
@@ -40,8 +40,11 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
 # [experimental] and the import method rides behind the `experimentalApi` capability),
 # so every wire assumption lives here; see COMPATIBILITY.md. Verified against
-# codex-cli 0.147.0 on 2026-08-07 via `codex app-server generate-json-schema --out <DIR>`
-# (the generator requires an --out directory instead of writing to stdout). The 0.146.0 -> 0.147.0
+# codex-cli 0.148.0 on 2026-08-19 via `codex app-server generate-json-schema --out <DIR>`
+# (the generator requires an --out directory instead of writing to stdout). The 0.147.0 -> 0.148.0
+# diff added three v2 messages we do NOT consume (`NullableGetAccountTokenUsageParams`,
+# `ThreadQueueChangedNotification`, `ThreadRevertedNotification`) and left every consumed
+# schema byte-identical after canonicalization. The 0.146.0 -> 0.147.0
 # schema diff was additive only for the surface consumed here: an optional `extensions` map on
 # `InitializeParams` (MCP extension settings declared by the client; we do not send it, and the
 # pre-existing form-elicitation capability beside it is now documented as its legacy alias), an
@@ -111,7 +114,7 @@ JSONRPC_RESERVED_ERROR_MAX = -32000
 # counts remains). Quota moved onto the app-server protocol: `account/rateLimits/read`
 # (params: null) is a READ-ONLY, no-model-spend request that returns the current quota
 # snapshot after the same initialize/initialized handshake codex_transfer uses. Verified
-# against codex-cli 0.147.0 on 2026-08-07 via `codex app-server` (live read, the `integration`
+# against codex-cli 0.148.0 on 2026-08-19 via `codex app-server` (live read, the `integration`
 # suite's rate-limits roundtrip) and the generated schema. See #321, COMPATIBILITY.md.
 APP_SERVER_RATE_LIMITS_READ_METHOD = "account/rateLimits/read"
 # read response → `result.rateLimits` is the single-bucket RateLimitSnapshot. Its windows
@@ -188,7 +191,8 @@ IMPORT_LEDGER_MAX_RECORDS = 10_000
 # The `--sandbox` value is the capability boundary for a run. read-only is the safe
 # default; workspace-write is used only for the propose/apply tiers. We NEVER pass
 # danger-full-access or --dangerously-bypass-* by default.
-# Nor `--approve-for-me` (new in 0.147.0), which routes approval requests through an automatic
+# Nor `--approve-for-me` (added in 0.147.0, still present at 0.148.0), which routes approval
+# requests through an automatic
 # review under the workspace-write sandbox: it would let a read-only-tier run acquire write
 # capability without the caller electing a write tier, so it stays deliberately unadopted.
 SANDBOX_READ_ONLY = "read-only"
@@ -225,10 +229,10 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # files. The two halves arrive differently: `AGENTS.md` content and skill name/description
 # are already in context when the turn begins — codex reads them itself while assembling
 # the prompt, so the MODEL issues no read for them — while a selected skill's BODY was
-# observed arriving via a read the MODEL issues (0.147.0). Both are unrequested egress; only the
-# first is auto-loading. Verified empirically against codex-cli 0.147.0 (2026-08-07)
-# via marker probes — including an A/B against 0.146.0, whose presence matrix was
-# identical; the global-skill discovery is pre-existing, not a 0.147 regression.
+# observed arriving via a read the MODEL issues (0.147.0, 0.148.0). Both are unrequested egress;
+# only the first is auto-loading. Verified empirically against codex-cli 0.148.0 (2026-08-19)
+# via marker probes — including an A/B against 0.147.0, whose presence matrix was
+# identical; the global-skill discovery is pre-existing, not a 0.148 regression.
 # Marker probes are the only way to see any of this;
 # invisible in `codex exec --help` (no flag, no subcommand), so the mechanical
 # help-drift check CANNOT catch upstream changes to it. The isolation flags do NOT
@@ -312,9 +316,9 @@ HELP_GATED_FLAGS = {
 }
 
 # --- Reasoning-effort config override (issue #309) --------------------------------
-# `codex exec` 0.147.0 has no dedicated reasoning-effort flag (verified against
-# `codex exec --help` 2026-08-07; the only 0.146.0 -> 0.147.0 addition is the unrelated
-# `--approve-for-me`, which we never send); the only route is the
+# `codex exec` 0.148.0 has no dedicated reasoning-effort flag (verified against
+# `codex exec --help` 2026-08-19; the 0.147.0 -> 0.148.0 diff adds no exec flag at all —
+# only the `codex exec fork` subcommand, which we never invoke); the only route is the
 # `model_reasoning_effort`
 # config key, sent as `-c model_reasoning_effort=<value>`. A config KEY cannot be
 # help-gated — `--help` advertises flags, not config keys — so when a caller (or the
@@ -375,17 +379,18 @@ MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # malformed/hostile cache surfacing junk to an agent).
 MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Bundled advisory fallback used ONLY when the on-disk cache is absent/unreadable.
-# Copied from codex-cli 0.147.0's models_cache.json on 2026-08-07 (cache order preserved);
-# `gpt-5.6-sol-wm` was added in that refresh. The catalog is served by the backend, not shipped
-# in the binary, so a slug can appear without a CLI release: the 0.146.0-written cache already
-# carried this slug before 0.147.0 was installed. Re-diff the slug set on every upgrade anyway —
-# this is the pass that catches it.
+# Copied from codex-cli 0.148.0's models_cache.json on 2026-08-19 (cache order preserved);
+# `gpt-5.6-sol-wm` was DROPPED in that refresh (it had been added in the 0.147.0-era refresh).
+# The catalog is served by the backend, not shipped in the binary, so a slug CAN appear or vanish
+# without a CLI release. Whether THIS drop was such a move is not established: the only observation
+# is the 0.148.0-written cache, with no contemporaneous 0.147.0 read to compare (contrast the
+# 0.147 addition, where a 0.146.0-written cache already carried the slug). Re-diff the slug set on
+# every upgrade anyway — this is the pass that catches it.
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
 # live account's available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping
 # the CLI.
 KNOWN_MODEL_SLUGS: tuple[str, ...] = (
     "gpt-5.6-sol",
-    "gpt-5.6-sol-wm",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5",
@@ -399,11 +404,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.147.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.148.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 147)})
+SUPPORTED_VERSIONS = frozenset({(0, 148)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

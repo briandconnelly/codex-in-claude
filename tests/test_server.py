@@ -174,7 +174,7 @@ async def _run_delegate_direct(tmp_path, *, task="do work", **kw):
 
 # --- status / capabilities ---------------------------------------------------
 def test_status_ready(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
     res = server.codex_status()
     assert res["ok"] is True
@@ -204,7 +204,7 @@ def test_status_not_found(monkeypatch, clean_env):
 
 
 def test_status_not_authenticated(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
     res = server.codex_status()
     assert res["ready"] is False
@@ -214,7 +214,7 @@ def test_status_not_authenticated(monkeypatch, clean_env):
 def test_status_auth_indeterminate(monkeypatch, clean_env):
     """A probe that could not run (None) is not-ready, and says so without claiming
     the user is logged out (#252)."""
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (None, None))
     res = server.codex_status()
     assert res["ready"] is False
@@ -747,7 +747,7 @@ def test_capability_summary_discloses_global_skills():
 
 def test_status_caveat_discloses_global_skills(monkeypatch, clean_env):
     """The codex_status caveat names it too — it has no manifest-snapshot guard."""
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
     caveat = server.codex_status()["caveat"].lower()
     assert _GUARANTEE_MATCHERS["autoload_global_skills"](caveat)
@@ -888,7 +888,7 @@ def test_delegate_no_network_not_misread_as_no_egress():
 
 def test_status_caveat_names_review_and_delegate(monkeypatch, clean_env):
     """The status caveat discloses egress for review and delegate, not just consult (issue #114)."""
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
     caveat = server.codex_status()["caveat"].lower()
     assert "review" in caveat
@@ -4977,7 +4977,7 @@ def _force_not_ready(monkeypatch):
     'unknown' quota (not_ready()) without spawning the app-server for a live read (hermetic)."""
     from codex_in_claude import server
 
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
 
 
@@ -4987,7 +4987,7 @@ def test_codex_status_ready_uses_live_read(monkeypatch):
     from codex_in_claude import rate_limit, server
     from codex_in_claude.schemas import RateLimit
 
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
     called = {}
 
@@ -6308,7 +6308,7 @@ def test_capabilities_advertise_idempotency_on_spend_committing_tools(clean_env)
 
 
 def _ready_codex(monkeypatch):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
 
 
@@ -6454,7 +6454,7 @@ async def test_transfer_codex_not_found(monkeypatch):
 
 async def test_transfer_unauthenticated(monkeypatch):
     called = []
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
     monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: called.append(1))
     _patch_validation(monkeypatch)
@@ -6469,7 +6469,7 @@ async def test_transfer_auth_indeterminate(monkeypatch):
     """`codex login status` could not run: fail closed, but do not tell an
     already-authenticated user to run `codex login` (#252)."""
     called = []
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (None, None))
     monkeypatch.setattr(server.appserver, "transfer_session", lambda **_kw: called.append(1))
     _patch_validation(monkeypatch)
@@ -6710,7 +6710,7 @@ async def test_transfer_protocol_error_maps_to_cli_contract_changed(monkeypatch)
 
 
 def test_status_reports_valid_extra_args(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=litellm --profile work")
     res = server.codex_status()
@@ -6720,7 +6720,7 @@ def test_status_reports_valid_extra_args(monkeypatch, clean_env):
 
 
 def test_status_reports_invalid_extra_args(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
     monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "--json")  # not allowlisted
     res = server.codex_status()
@@ -6729,7 +6729,7 @@ def test_status_reports_invalid_extra_args(monkeypatch, clean_env):
 
 
 def test_status_unset_extra_args_defaults(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth."))
     res = server.codex_status()
     assert res["extra_args_configured"] is False
@@ -7001,7 +7001,7 @@ async def test_review_and_delegate_specs_carry_reasoning_effort(monkeypatch, cle
 
 async def test_status_reports_reasoning_effort_defaults(monkeypatch, clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_REASONING_EFFORT", "medium")
-    monkeypatch.setattr(server.codex, "codex_version", lambda *a, **k: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda *a, **k: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda *a, **k: (True, "ok"))
     res = server.codex_status()
     assert res["raw_defaults"]["reasoning_effort"] == "medium"
@@ -7009,7 +7009,7 @@ async def test_status_reports_reasoning_effort_defaults(monkeypatch, clean_env):
 
 
 async def test_status_reasoning_effort_default_null_when_unset(monkeypatch, clean_env):
-    monkeypatch.setattr(server.codex, "codex_version", lambda *a, **k: "codex-cli 0.147.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda *a, **k: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda *a, **k: (True, "ok"))
     res = server.codex_status()
     assert res["raw_defaults"]["reasoning_effort"] is None

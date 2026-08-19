@@ -6,7 +6,7 @@ incorporating one takes the lockstep procedure in
 [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md), not a single edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.147.0`.
+Verified against `codex-cli 0.148.0`.
 
 ## Platform support
 
@@ -63,7 +63,7 @@ Two flows reach the `app-server` surface: `codex_transfer` (transcript import) a
 rate-limit read (`account/rateLimits/read`, added for #321 when codex 0.144 moved quota off the
 `codex exec` stream). Both are quarantined the same way: the surface is experimental upstream, so
 every assumption lives in `cli_contract.py` and `appserver.py`, neither call spends model tokens, and
-no paid call depends on either. The rate-limit read verifies against **codex-cli 0.147.0** (probe:
+no paid call depends on either. The rate-limit read verifies against **codex-cli 0.148.0** (probe:
 drive `codex app-server` and confirm `account/rateLimits/read` returns a quota block; an integration
 test does this live). See "Session transfer" below for the import flow.
 
@@ -122,13 +122,14 @@ that content can reach OpenAI even when the caller's prompt never mentions those
 about *how* each part arrives, because the two differ: the `AGENTS.md` content and the skill
 name/description are already in the model's context when the turn begins — codex reads them itself
 while assembling the prompt, so the model issues no read for them — while a selected skill's
-**body** was observed arriving by a read the **model** itself issues (0.147.0). Both are egress the caller never
+**body** was observed arriving by a read the **model** itself issues (0.147.0, 0.148.0). Both are egress the caller never
 asked for — a global skill's body came back from a prompt that named neither the skill nor the file,
 the model having selected it on its auto-loaded description alone (probed 2026-08-18) — but only the
 first is auto-loading. Verified
-empirically against codex-cli 0.147.0 (2026-08-07, issues #300 and #358) and re-verified 2026-08-18
-under the read-forbidding probe below — including an A/B against 0.146.0, whose presence matrix was
-identical under that same probe, so the user-global discovery is pre-existing rather than new. The behavior is invisible in
+empirically against codex-cli 0.147.0 (2026-08-07, issues #300 and #358), re-verified 2026-08-18
+under the read-forbidding probe below, and re-verified again 2026-08-19 against codex-cli 0.148.0 —
+each A/B (against 0.146.0, then against 0.147.0) produced an identical presence matrix under that
+same probe, so the user-global discovery is pre-existing rather than new. The behavior is invisible in
 `codex exec --help` (no flag, no subcommand), so the mechanical help-drift check cannot catch
 upstream changes to it. Upstream docs:
 [AGENTS guidance](https://developers.openai.com/codex/concepts/customization#agents-guidance) and
@@ -260,7 +261,7 @@ worded so that what comes back is still evidence:
   fails the assertion is discarded, not interpreted.
 - **Body egress** — ask it to use the global marker skill by name and report the codeword in its
   body. This run is **deliberately tool-using, so the assertion above does not apply to it**: on
-  0.147.0 the model reads the `SKILL.md` itself once it selects the skill. It demonstrates
+  0.147.0 and 0.148.0 the model reads the `SKILL.md` itself once it selects the skill. It demonstrates
   *reachability* — a body outside the workspace reaching the model — and nothing else. In
   particular it **cannot** establish discovery, because naming the skill in the prompt is what let
   the model find the file: a read would have succeeded even if codex had never discovered that
@@ -313,11 +314,18 @@ either positive control comes back false, record nothing from that run: fix the 
 And read a difference conservatively — the backend model is an uncontrolled variable, so a change is
 *associated* with the binary, not proven caused by it. Reproduce it before concluding.
 
-Observed under codex-cli 0.147.0 and A/B'd against 0.146.0 with an identical presence matrix
+Observed under codex-cli 0.148.0 and A/B'd against 0.147.0 with an identical presence matrix
 (observations, not guarantees — re-run the probe rather than assuming they still hold). Rows 1-3
-were re-verified 2026-08-18 with the read-forbidding, assertion-backed probe above, run against
+were re-verified 2026-08-19 with the read-forbidding, assertion-backed probe above, run against
 **both** binaries side by side; each discovery capture passed the assertion, and the two matrices
-were identical. Row 4 is not testable by this probe and stayed unverified:
+were identical — as they were in the 2026-08-18 0.147.0-vs-0.146.0 A/B. Row 1's egress half was
+re-confirmed on 0.148.0 by both the body-egress and the unprompted-selection consults; the
+unprompted run returned the global skill's codeword on **both** binaries from a prompt naming
+neither the skill nor the file. (The 0.148.0 body-egress run located and read the marker
+`SKILL.md`; the paired 0.147.0 run gave up searching for it and returned no codeword. Read that as
+model search behavior on a tool-using run — the uncontrolled variable this section warns about —
+not as a boundary: 0.147.0's reachability is the 2026-08-18 observation, and its unprompted-selection
+run returned the codeword here.) Row 4 is not testable by this probe and stayed unverified:
 
 | Question | Observed |
 |---|---|
@@ -374,9 +382,9 @@ positive demonstration of exactly the egress path #472 describes.)
 
 ## Reasoning-effort control (`model_reasoning_effort`, #309)
 
-`codex exec` 0.147.0 has no dedicated reasoning-effort flag (verified against
-`codex exec --help`, 2026-08-07 — the sole 0.146.0 → 0.147.0 addition is the unrelated
-`--approve-for-me`, which this plugin never sends), so the per-call
+`codex exec` 0.148.0 has no dedicated reasoning-effort flag (verified against
+`codex exec --help`, 2026-08-19 — the 0.147.0 → 0.148.0 diff adds no `codex exec` flag at all, only
+the `codex exec fork` subcommand, which this plugin never invokes), so the per-call
 `reasoning_effort` parameter and
 `CODEX_IN_CLAUDE_REASONING_EFFORT` are sent as a **config override**:
 `-c model_reasoning_effort="<value>"`, with the value **TOML-string-encoded** (JSON string syntax,
@@ -490,8 +498,11 @@ so an event-schema change degrades metadata rather than breaking a run.
 `Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
 labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
 every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
-`appserver.py`. Verified against `codex-cli 0.147.0` via `codex app-server generate-json-schema --out <DIR>`.
-The 0.146.0 → 0.147.0 schema diff is additive only for the consumed surface (an optional
+`appserver.py`. Verified against `codex-cli 0.148.0` via `codex app-server generate-json-schema --out <DIR>`.
+The 0.147.0 → 0.148.0 schema diff left every consumed schema byte-identical after canonicalization;
+its inventory pass added three unconsumed v2 messages (`NullableGetAccountTokenUsageParams`,
+`ThreadQueueChangedNotification`, `ThreadRevertedNotification`) and removed none.
+The earlier 0.146.0 → 0.147.0 schema diff is additive only for the consumed surface (an optional
 `extensions` map on `InitializeParams`, which this plugin does not send; an optional `title` on the
 import progress/completed per-item results, which is read tolerantly and ignored; and two values
 added to the `PlanType` enum — `self_serve_business_prolite` and `enterprise_cbp_automation` — read

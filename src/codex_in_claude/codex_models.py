@@ -53,7 +53,7 @@ def _supported_efforts(raw: object) -> list[str] | None:
     """Effort tokens from a cache entry's supported_reasoning_levels, or None.
 
     The cache advertises a list of objects ({effort, description, ...}) — shape
-    re-verified against the 0.147 cache on 2026-08-07; only
+    re-verified against the 0.148 cache on 2026-08-19; only
     the effort tokens are surfaced (the descriptions are UI copy). Entries failing
     the defensive shape are dropped, duplicates are kept once (order preserved), and
     the list is capped. None = absent or unusable (a non-list, or a non-empty list
