@@ -90,9 +90,12 @@ Facts to weigh before any active call:
 - Every supplied prompt and context field is sent to OpenAI raw.
 - During every active call — including consult — Codex may read other files in the resolved
   workspace.
-- Codex auto-loads the workspace's `AGENTS.md` and auto-discovers skills in `.agents/skills/`; it
+- Codex auto-loads `AGENTS.md` from the resolved workspace, from every ancestor directory up to the
+  repository root when the workspace is in a repository, and from a user-global
+  `$CODEX_HOME/AGENTS.override.md` (else `$CODEX_HOME/AGENTS.md`). It auto-discovers skills in
+  `.agents/skills/`; it
   also auto-discovers your user-global `$CODEX_HOME/skills/` **from outside the workspace**, so no
-  choice of workspace excludes those. All of it applies even if the prompt never mentions them, and
+  choice of workspace excludes those or the user-global guidance file. All of it applies even if the prompt never mentions them, and
   the isolation flags do not suppress any of it.
 - A skill's **name and description** reach the model up front; its **body** follows through a read
   the model itself issues once it selects the skill. Both are egress you did not ask for — a global
@@ -113,10 +116,13 @@ Facts to weigh before any active call:
   references).
 - **Workspace:** Pass an absolute `workspace_root` for every repo-grounded call, including consult,
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
-- **Privacy:** Do not make an active call when the supplied prompt, the supplied context, any file
-  Codex may inspect in the resolved workspace, or your user-global skills under
-  `$CODEX_HOME/skills/` contain something you cannot disclose (see Data exposure). Changing the
-  workspace does not exclude those skills.
+- **Privacy:** Do not make an active call when any of these contains something you cannot disclose
+  (see Data exposure): the supplied prompt; the supplied context; any file Codex may inspect in the
+  resolved workspace; an `AGENTS.md` in any ancestor directory up to the repository root; your
+  user-global skills under `$CODEX_HOME/skills/`; or your user-global `$CODEX_HOME/AGENTS.override.md`
+  or `$CODEX_HOME/AGENTS.md`. Changing the workspace excludes neither the user-global skills nor the
+  user-global guidance file, and narrowing `workspace_root` to a subdirectory does not exclude the
+  ancestor `AGENTS.md` files above it.
 - **Verification:** Treat findings, summaries, verdicts, and proposed changes as unverified claims.
   Run the applicable project checks yourself; read-only consult/review is not proof tests ran.
 - **Delegation:** Never apply a delegated diff before reviewing it. The plugin does not apply it to

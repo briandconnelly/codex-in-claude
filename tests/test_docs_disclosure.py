@@ -260,3 +260,171 @@ def test_mechanism_matcher_requires_the_body_claim():
 
     with_body = metadata_only + "\nSelecting one makes the model read its body."
     assert _states_the_mechanism(with_body) is True
+
+
+# --- The AGENTS.md scope on the doc sites (#472) ----------------------------------
+#
+# The code-side constant is guarded in tests/test_cli_contract.py; these files restate
+# the fact in their own prose, so they need their own guard or the published docs can
+# drift back to the pre-#472 workspace-only claim while the wire stays correct.
+# Two sources are checked because each was separately understated:
+#   - the ancestor walk inside the repository (a workspace narrowed to a subdirectory
+#     still ships every ancestor `AGENTS.md` up to the repository root), and
+#   - the user-global `$CODEX_HOME` guidance file, which loads on every call from any
+#     workspace and which neither isolation flag nor `project_doc_max_bytes=0` suppresses.
+_ANCESTOR_RE = re.compile(r"\bancestor\b", re.IGNORECASE)
+_REPO_ROOT_RE = re.compile(r"\brepositor(y|ies)\b", re.IGNORECASE)
+_GLOBAL_AGENTS_RE = re.compile(r"\$CODEX_HOME/AGENTS")
+
+
+def _states_the_agents_md_scope(section: str) -> bool:
+    return bool(
+        _ANCESTOR_RE.search(section)
+        and _REPO_ROOT_RE.search(section)
+        and _GLOBAL_AGENTS_RE.search(section)
+    )
+
+
+@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+def test_doc_site_states_every_agents_md_source(relpath):
+    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8")
+    disclosing = _sections_disclosing_a_skills_root(text)
+    assert disclosing, f"{relpath} names no skills root at all"
+    assert any(_states_the_agents_md_scope(section) for section in disclosing), (
+        f"{relpath} understates which AGENTS.md files reach OpenAI: the load covers the "
+        "resolved workspace, every ancestor up to the repository root when the workspace "
+        "is in a repository, and a user-global $CODEX_HOME/AGENTS.override.md or "
+        "AGENTS.md (see COMPATIBILITY.md § 'Implicit Codex context')."
+    )
+
+
+def test_agents_md_scope_matcher_rejects_the_pre_472_wording():
+    """Guard the guard: the wording #472 replaces must FAIL this matcher.
+
+    The same acknowledged limit as every other word-presence guard in this module — it
+    catches OMISSION, not a confident misstatement. The exact-constant pins in
+    tests/test_cli_contract.py and tests/test_server.py cover the code carriers against a
+    false claim; on the prose sites COMPATIBILITY.md's probe table remains the authority.
+    """
+    pre_472 = (
+        "## Data exposure\n"
+        "Codex auto-loads the resolved workspace's `AGENTS.md` and discovers skills in\n"
+        "`.agents/skills/` and `$CODEX_HOME/skills/`, whose bodies the model reads once\n"
+        "it selects one by description."
+    )
+    assert _states_the_agents_md_scope(pre_472) is False
+
+    # Half-corrections fail too: the ancestor walk without the global guidance file…
+    ancestors_only = (
+        "## Data exposure\n"
+        "Codex auto-loads `AGENTS.md` from the workspace and every ancestor up to the\n"
+        "repository root, and discovers skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
+    )
+    assert _states_the_agents_md_scope(ancestors_only) is False
+
+    # …and the global file without the ancestor walk.
+    global_only = (
+        "## Data exposure\n"
+        "Codex auto-loads the workspace's `AGENTS.md` plus `$CODEX_HOME/AGENTS.md`, and\n"
+        "discovers skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
+    )
+    assert _states_the_agents_md_scope(global_only) is False
+
+    # The corrected shape passes.
+    corrected = (
+        "## Data exposure\n"
+        "Codex auto-loads `AGENTS.md` from the resolved workspace, from every ancestor\n"
+        "directory up to the repository root, and from a user-global\n"
+        "`$CODEX_HOME/AGENTS.override.md` (else `$CODEX_HOME/AGENTS.md`); it discovers\n"
+        "skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
+    )
+    assert _states_the_agents_md_scope(corrected) is True
+
+
+# --- The skill's BINDING rule, not just its background section (#472) --------------
+#
+# `test_doc_site_states_every_agents_md_source` above is satisfied by ANY one qualifying
+# section, which is right for a file whose disclosure lives in one place — and wrong for
+# the skill, where "Data exposure" is background and "Binding rules" is what an agent
+# actually applies before deciding to spend. A Codex review of this change caught exactly
+# that: the Data-exposure section had been widened while the Privacy rule still named only
+# `$CODEX_HOME/skills/`, so an agent following the binding rules could have approved a call
+# with a secret sitting in one of the two newly disclosed sources. A rule that is narrower
+# than the disclosure it enforces is the defect; this guard is scoped to the rule text.
+_SKILL_PATH = "skills/collaborating-with-codex/SKILL.md"
+
+
+def _privacy_rule_text() -> str:
+    """The Privacy bullet from the skill's binding-rules list, alone."""
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    start = text.index("- **Privacy:**")
+    nxt = text.index("\n- **", start + 1)
+    return text[start:nxt]
+
+
+# Both filenames, asserted independently. `_GLOBAL_AGENTS_RE` matches either one, so a
+# single search would accept a rule naming only `AGENTS.md` — and `AGENTS.override.md`
+# is the file that actually wins when both exist, so dropping it drops the one an agent
+# most needs to check. A Codex review caught this exact vacuity.
+_GLOBAL_GUIDANCE_FILES = ("$CODEX_HOME/AGENTS.override.md", "$CODEX_HOME/AGENTS.md")
+
+
+def _names_every_guidance_file(rule: str) -> bool:
+    """The production check, as a predicate the guard-the-guard cases can run.
+
+    Extracted so the half-correction fixtures below go through the SAME logic the real
+    assertion uses. Fixtures that only assert things about their own hard-coded strings
+    prove nothing about the guard — weakening `_GLOBAL_GUIDANCE_FILES` would leave them
+    green. A Codex review caught exactly that.
+    """
+    return all(filename in rule for filename in _GLOBAL_GUIDANCE_FILES)
+
+
+def test_privacy_rule_covers_every_agents_md_source():
+    rule = _privacy_rule_text()
+    for filename in _GLOBAL_GUIDANCE_FILES:
+        assert filename in rule, (
+            f"the Privacy rule omits {filename}, a user-global guidance file that reaches "
+            "OpenAI on every call from any workspace"
+        )
+    assert _names_every_guidance_file(rule)
+    assert _ANCESTOR_RE.search(rule) and _REPO_ROOT_RE.search(rule), (
+        "the Privacy rule omits the ancestor AGENTS.md files loaded up to the repository root"
+    )
+    # The rule it already carried must not be dropped while widening it.
+    assert "$CODEX_HOME/skills/" in rule
+
+
+def test_privacy_rule_guard_rejects_the_pre_472_rule():
+    """Guard the guard: the verbatim pre-#472 Privacy rule must fail every assertion above.
+
+    This is the shape that shipped — correct about skills, silent about both guidance
+    sources — so if it passes, the guard is vacuous.
+    """
+    pre_472 = (
+        "- **Privacy:** Do not make an active call when the supplied prompt, the supplied "
+        "context, any file Codex may inspect in the resolved workspace, or your user-global "
+        "skills under `$CODEX_HOME/skills/` contain something you cannot disclose (see Data "
+        "exposure). Changing the workspace does not exclude those skills."
+    )
+    assert _GLOBAL_AGENTS_RE.search(pre_472) is None
+    assert _ANCESTOR_RE.search(pre_472) is None
+
+    # Half-corrections must fail too, or the guard would accept a rule that names one
+    # guidance file and silently drops the other.
+    # Each half-correction is run through the SAME predicate the production assertion
+    # uses, so weakening `_GLOBAL_GUIDANCE_FILES` fails here too.
+    plain_only = (
+        "- **Privacy:** Do not make an active call when your user-global "
+        "`$CODEX_HOME/AGENTS.md` contains something you cannot disclose."
+    )
+    assert _names_every_guidance_file(plain_only) is False
+
+    override_only = (
+        "- **Privacy:** Do not make an active call when your user-global "
+        "`$CODEX_HOME/AGENTS.override.md` contains something you cannot disclose."
+    )
+    assert _names_every_guidance_file(override_only) is False
+
+    # …and the rule as it actually stands is accepted by that same predicate.
+    assert _names_every_guidance_file(_privacy_rule_text()) is True

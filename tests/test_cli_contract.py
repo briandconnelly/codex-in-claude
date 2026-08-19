@@ -198,3 +198,100 @@ def test_reasoning_effort_token_pattern_rejects_trailing_newline():
     # Codex-review regression (#309): `$` with re.match admits "high\n"; the pattern
     # must anchor with \Z so a malformed cache token cannot carry a control character.
     assert not cli_contract.REASONING_EFFORT_TOKEN_PATTERN.match("high\n")
+
+
+# --- The AGENTS.md scope in the canonical egress disclosure (#472) -----------------
+#
+# The published caveat used to scope the auto-loaded `AGENTS.md` to the resolved
+# workspace alone. Two probed behaviors are wider than that, and both are unsafe-direction
+# omissions — a caller reads this sentence to decide what it is about to send to OpenAI:
+#
+#   1. Inside a repository the load walks UP from the resolved workspace to the repository
+#      root, so narrowing `workspace_root` to a subdirectory to bound egress still ships
+#      every ancestor `AGENTS.md` inside that repository. Outside a repository there is no
+#      walk at all — only the workspace's own file loads.
+#   2. A user-global guidance file in `$CODEX_HOME` (`AGENTS.override.md` if present, else
+#      `AGENTS.md`) loads on EVERY call from ANY workspace — the `AGENTS.md` twin of the
+#      `$CODEX_HOME/skills/` hole (#358). Neither `--ignore-user-config` nor
+#      `project_doc_max_bytes=0` suppresses it, though the latter does suppress the
+#      project/ancestor files.
+#
+# COMPATIBILITY.md § "Implicit Codex context" owns the probe and its evidence; these
+# guards only hold the published sentence to what was probed.
+_AGENTS_SCOPE_REQUIRED = (
+    # the workspace's own file — the pre-#472 claim, still true and still required
+    "resolved workspace",
+    # the ancestor walk AND the bound that stops it
+    "ancestor",
+    "repository",
+    # the user-global guidance file, named by the path a reader can act on
+    "$CODEX_HOME/AGENTS",
+)
+
+
+def _states_the_agents_md_scope(text: str) -> bool:
+    """Does this text state all three AGENTS.md sources the probe found?
+
+    Word-presence, with the same acknowledged limit as the repo's other disclosure
+    matchers: it catches OMISSION — dropping the ancestor walk or the global file —
+    but not a confident misstatement, which is why every code carrier is ALSO pinned
+    to the exact constant and why `test_agents_md_scope_makes_no_overclaim` pins the
+    absence of the specific inversions this change could drift into.
+    """
+    return all(marker in text for marker in _AGENTS_SCOPE_REQUIRED)
+
+
+def test_skills_discovery_fact_states_every_agents_md_source():
+    assert _states_the_agents_md_scope(cli_contract.SKILLS_DISCOVERY_FACT)
+    # …and the FULL/whole-disclosure composites inherit it rather than restating it.
+    assert _states_the_agents_md_scope(cli_contract.SKILLS_DISCOVERY_FACT_FULL)
+    assert _states_the_agents_md_scope(cli_contract.IMPLICIT_CONTEXT_DISCLOSURE)
+
+
+def test_agents_md_scope_matcher_rejects_the_pre_472_wording():
+    """Guard the guard: the verbatim pre-#472 sentence must FAIL this matcher.
+
+    Without this control a matcher that accepted everything would hold the constant
+    green over the exact understatement #472 exists to correct.
+    """
+    pre_472 = (
+        "Codex auto-loads the resolved workspace's AGENTS.md and discovers skills in its "
+        ".agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), "
+        "reachable from outside the workspace."
+    )
+    assert _states_the_agents_md_scope(pre_472) is False
+    # Partial corrections must fail too: the ancestor walk without the global file…
+    ancestors_only = (
+        "Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, "
+        "ancestor AGENTS.md files through its root."
+    )
+    assert _states_the_agents_md_scope(ancestors_only) is False
+    # …and the global file without the ancestor walk.
+    global_only = (
+        "Codex auto-loads the resolved workspace's AGENTS.md plus a user-global "
+        "$CODEX_HOME/AGENTS.override.md or AGENTS.md."
+    )
+    assert _states_the_agents_md_scope(global_only) is False
+
+
+def test_agents_md_scope_makes_no_overclaim():
+    """The widened sentence must not claim MORE egress than the probe found.
+
+    A disclosure that overstates is not free: it is the failure that made the original
+    #472 evidence table wrong (a probe measured the model reading a file itself and
+    recorded it as auto-loading, publishing an above-the-repository-root claim that had
+    to be retracted). Two probed negatives bound the claim — nothing above the repository
+    root loads, and outside a repository no ancestor loads at all — so the phrasings that
+    would assert either must stay out of the constant.
+    """
+    for overclaim in (
+        "above the repository root",
+        "above the git root",
+        "every filesystem ancestor",
+        "any directory above",
+    ):
+        assert overclaim not in cli_contract.SKILLS_DISCOVERY_FACT, overclaim
+    # The ancestor claim is CONDITIONED on being in a repository, so a non-repository
+    # reader cannot infer a filesystem-wide walk. Pin the condition, not just the words.
+    fact = cli_contract.SKILLS_DISCOVERY_FACT
+    assert "in a repository, ancestor" in fact
