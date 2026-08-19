@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "Codex (for Claude Code)",
     "shortDescription": "Delegate to Codex, review changes, and get second opinions.",
-    "longDescription": "codex-in-claude lets Claude Code call the OpenAI Codex CLI for an independent second opinion, structured code review, and delegated coding tasks. Delegation runs in an isolated git worktree and returns a reviewable diff that is never applied to your working tree. Read-only by default.",
+    "longDescription": "codex-in-claude lets Claude Code call the OpenAI Codex CLI for an independent second opinion, structured code review, and delegated coding tasks. Delegation runs in an isolated git worktree and returns a reviewable diff that is never applied to your working tree. Read-only by default \u2014 which bounds what Codex writes, not what it can read.",
     "developerName": "Brian Connelly",
     "category": "Developer Tools",
     "capabilities": ["MCP", "Skills"],

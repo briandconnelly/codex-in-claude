@@ -9,7 +9,8 @@ result fields.
 Use `codex_consult` for a focused question, design critique, or one-off second opinion. Pass only the
 question and context needed for the decision. For repo-grounded work, pass an absolute
 `workspace_root`; the read-only Codex process can inspect files anywhere in that resolved workspace,
-including files not copied into the prompt. For a high-reasoning-effort or broad repo-grounded consult
+including files not copied into the prompt — and it is not confined to it, since read-only bounds
+writes rather than reads. For a high-reasoning-effort or broad repo-grounded consult
 that can exceed the synchronous deadline, prefer `codex_consult_async` (see
 [background jobs](background-jobs.md)); a sync deadline expiry loses the paid run.
 

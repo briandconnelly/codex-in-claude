@@ -355,11 +355,27 @@ _SKILL_PATH = "skills/collaborating-with-codex/SKILL.md"
 
 
 def _privacy_rule_text() -> str:
-    """The Privacy bullet from the skill's binding-rules list, alone."""
+    """The Privacy binding rules from the skill's rules list, and only those.
+
+    #509 split the single `- **Privacy:**` bullet into atomic ones (`Privacy — …`), so
+    this collects the whole contiguous Privacy GROUP rather than one bullet. The #472
+    enumeration it guards still has to appear somewhere in that group, which is the same
+    guarantee — but scoping to the group, rather than searching the file, is what keeps it
+    from being satisfied by prose in some other section (the #512 failure mode).
+    """
     text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
-    start = text.index("- **Privacy:**")
-    nxt = text.index("\n- **", start + 1)
-    return text[start:nxt]
+    bullets = []
+    start = text.index("- **Privacy")
+    cursor = start
+    while True:
+        nxt = text.index("\n- **", cursor + 1)
+        bullets.append(text[cursor:nxt])
+        if not text[nxt + 1 :].startswith("- **Privacy"):
+            break
+        cursor = nxt + 1
+    group = "".join(bullets)
+    assert "**Privacy" in group
+    return group
 
 
 # Both filenames, asserted independently. `_GLOBAL_AGENTS_RE` matches either one, so a
@@ -428,3 +444,95 @@ def test_privacy_rule_guard_rejects_the_pre_472_rule():
 
     # …and the rule as it actually stands is accepted by that same predicate.
     assert _names_every_guidance_file(_privacy_rule_text()) is True
+
+
+# --- #509: the read-scope correction on the prose sites ----------------------------
+# The prose sites restate the fact in their own words, so exact containment (what
+# tests/test_server.py pins on the code carriers) is the wrong instrument here. What
+# actually catches a regression on this side is the LEGACY-CLAUSE rejection: an inversion
+# would be phrased as the clause that was removed.
+_LEGACY_SCOPED_READ_PROSE = (
+    "may read other files in the resolved workspace.",
+    "may read files in the workspace itself",
+    "read tracked files in the throwaway worktree",
+    "can inspect files anywhere in that resolved workspace,",
+    "any file codex may inspect in the resolved workspace",
+    "a directory you approve for disclosure",
+)
+
+# Affirmative markers, required TOGETHER: a site must say reads reach outside the
+# workspace AND that the sandbox does not bound them. Requiring both is what stops a
+# site from naming the concept while asserting the old model.
+_OUTSIDE_READ_RE = re.compile(r"read[^.]{0,80}\boutside\b|\boutside\b[^.]{0,80}read", re.IGNORECASE)
+_NOT_A_READ_BOUNDARY_RE = re.compile(
+    r"bounds? writes,? not reads|not a read boundary|not confined to it"
+    r"|not what it can read|not bounded by the workspace",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+def test_doc_site_does_not_scope_codex_reads_to_the_workspace(relpath):
+    """No prose site may reuse a clause that presents the workspace as a read bound (#509)."""
+    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8").lower()
+    for clause in _LEGACY_SCOPED_READ_PROSE:
+        assert clause not in text, (
+            f"{relpath} still scopes Codex's reads with {clause!r} — read-only bounds "
+            "writes, not reads (#509; COMPATIBILITY.md owns the probe)"
+        )
+
+
+@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+def test_doc_site_states_reads_are_not_bounded_by_the_workspace(relpath):
+    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8")
+    assert _OUTSIDE_READ_RE.search(text), f"{relpath} never says Codex reads outside the workspace"
+    assert _NOT_A_READ_BOUNDARY_RE.search(text), (
+        f"{relpath} never says the workspace is not a read boundary"
+    )
+
+
+def test_read_scope_prose_guard_rejects_the_pre_509_wording():
+    """Guard the guard: the wording #509 replaced must fail, and the correction must pass.
+
+    Without this a matcher that accepted everything would hold the two tests above green
+    forever — the vacuity this file's other guard-the-guard cases exist to prevent.
+    """
+    pre_509 = (
+        "During every active call — including consult — Codex may read other files in the "
+        "resolved workspace."
+    )
+    assert _NOT_A_READ_BOUNDARY_RE.search(pre_509) is None
+    corrected = (
+        "Codex may read files outside the resolved workspace, up to everything the OS user "
+        "running codex can read: the sandbox bounds writes, not reads."
+    )
+    assert _OUTSIDE_READ_RE.search(corrected) and _NOT_A_READ_BOUNDARY_RE.search(corrected)
+    # The INVERSION must not satisfy the affirmative matcher.
+    inverted = "The sandbox bounds reads, not writes, so the workspace is a read boundary."
+    assert _NOT_A_READ_BOUNDARY_RE.search(inverted) is None
+
+
+def test_skill_privacy_and_independence_rules_carry_the_correction():
+    """The BINDING rules, not just the background section (#512's failure mode, again).
+
+    #509's premise is that readers treat the workspace enumeration as the decision
+    boundary. The Privacy rules are where that decision is actually made, and the
+    Independence rules keyed their whole argument on the same geometry — so widening the
+    Data-exposure bullet while leaving either narrow would reproduce the exact defect.
+    """
+    rules = _privacy_rule_text()
+    assert _NOT_A_READ_BOUNDARY_RE.search(rules) or "not the boundary" in rules.lower(), (
+        "the Privacy binding rules still present the workspace as the decision boundary"
+    )
+    assert "necessary, not sufficient" in rules, (
+        "the Privacy enumeration must say it is necessary but NOT sufficient — it lists "
+        "what an ordinary call reaches, not the limit of what can be reached"
+    )
+
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    start = text.index("- **Independence — draft placement:**")
+    independence = text[start : text.index("\n- **Git state", start)]
+    assert "not a boundary" in independence, (
+        "the Independence rules still treat draft placement as a boundary; under the "
+        "corrected model Codex's reads are not bounded by the workspace"
+    )

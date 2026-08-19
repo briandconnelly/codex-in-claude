@@ -12,7 +12,8 @@ member's attempt may be visible to the other before that other member's attempt 
    design or answer, `codex_delegate_async` for an independent implementation. The start is the one
    paid call; do not poll for the result yet.
 4. Produce and finalize Claude's attempt in full before any call that can return Codex's answer.
-   Keep the draft outside the resolved workspace and every baseline the selected tool received —
+   Keep the draft outside the resolved workspace and every baseline the selected tool received
+   (placement lowers exposure; it is not a boundary) —
    a running job can still read files there.
 5. Only after Claude's attempt is finalized, poll and fetch Codex's result per the background-jobs
    reference.
@@ -23,8 +24,11 @@ If only the sync tool is available, finalize Claude's attempt before making the 
 order cannot be repaired by intent: once Codex's answer is in context, everything drafted afterward
 is conditioned on it, and "I did not condition on it" is neither enforceable nor observable.
 
-Consult can read tracked and untracked files in its resolved workspace. Delegate works from the
-seeded worktree baseline. Independence is already lost if either route can see Claude's draft, or if
+Consult can read tracked and untracked files in its resolved workspace, and is not confined to it —
+read-only bounds writes, not reads. Delegate works from the seeded worktree baseline, which likewise
+bounds what it may write rather than what it may read. So placing the draft elsewhere on disk lowers
+the chance Codex encounters it but does not put it out of reach. Independence is already lost if
+either route did see Claude's draft, or if
 Codex's answer entered context before Claude's attempt was finalized; reclassify the call as
 ordinary critique and follow the one-call collaboration rules.
 

@@ -311,6 +311,47 @@ SKILLS_DISCOVERY_FACT_FULL = f"{SKILLS_DISCOVERY_FACT} {SKILLS_ISOLATION_NOTE}"
 # travel with the discovery fact or a contract consumer re-learns the wrong model.
 IMPLICIT_CONTEXT_DISCLOSURE = f"{SKILLS_DISCOVERY_FACT_FULL} {SKILL_BODY_FACT}"
 
+# --- Read scope (#509) ------------------------------------------------------------
+# A SEPARATE rule from the implicit-context one above, deliberately not folded into it:
+# that one is about two skills roots and how a skill body arrives, and its carrier set is
+# not this one's. This is about how far the model can DELIBERATELY read.
+#
+# Several agent-visible descriptions used to scope Codex's reads to the working directory
+# or the repo ("files Codex reads from its resolved working dir", "other repo files",
+# "tracked files in the worktree"). A reader takes that as a bound. It is not one:
+# `--sandbox read-only` bounds WRITES. Verified against codex-cli 0.148.0 under this
+# plugin's own ALWAYS_SEND flags, workspace a bare non-repo dir: the model shelled out and
+# read a file in $HOME — outside the workspace and outside any repo — on BOTH the
+# read-only and workspace-write tiers, while a write attempt in the same read-only run was
+# refused by the sandbox (so the sandbox was in force; it simply does not bound reads).
+# `view_image` reaches the same paths as the shell (#507). COMPATIBILITY.md owns the probe
+# detail and is the single home for it; do not restate probe results here.
+#
+# RULE: every read-scope carrier must state this fact, and none may re-scope reads to the
+# workspace, repo, or worktree. The carriers are the server instructions block, the
+# codex_status caveat, codex_capabilities' negative_scope, the six active tools' `returns`
+# and their six docstrings, `readonly_honesty_statement` below, the `extra_context`
+# parameter contract, and — doc-side, in their own prose — README.md, SECURITY.md,
+# COMPATIBILITY.md, docs/REFERENCE.md, and the collaborating-with-codex skill (its binding
+# Privacy and Independence rules as well as its background Data-exposure section: a
+# binding rule left narrower than the disclosure above it is the #512 defect).
+# tests/test_server.py pins the code side by exact containment plus a rejection list of
+# the removed clauses; tests/test_docs_disclosure.py pins the prose sides.
+#
+# The six egress docstrings hand-copy it for the same FastMCP reason as SKILL_BODY_FACT
+# (`__doc__` is captured eagerly, so an f-string cannot be a docstring); those copies are
+# pinned against this constant.
+#
+# "up to everything the OS user running it can read" is a CEILING, not a warrant that
+# every such file is reachable: the probe established reads far outside the workspace, not
+# universal reach, and a platform sandbox (macOS TCC) can still deny individual paths to
+# this process. Stating it as a ceiling is what the evidence supports.
+READ_SCOPE_FACT = (
+    "Codex can read files outside the workspace — up to everything the OS user running it "
+    "can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no "
+    "choice of workspace is a read boundary."
+)
+
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
 # that use them and NEVER gated on `--help` parsing. If upstream removes/renames
@@ -625,7 +666,7 @@ PONTONIER_CONTRACT = _pontonier_contract.BackendContract(
     readonly_honesty_statement=(
         "Read-only runs under codex's --sandbox read-only OS sandbox. Redaction of "
         "gathered diffs and returned output is best-effort defense-in-depth; it never "
-        "covers supplied inputs or files Codex reads itself."
+        f"covers supplied inputs or files Codex reads itself. {READ_SCOPE_FACT}"
     ),
     implicit_context_disclosure=IMPLICIT_CONTEXT_DISCLOSURE,
     structured_output="argv_flag",

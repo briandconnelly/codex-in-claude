@@ -79,8 +79,9 @@ _EXTRA_CONTEXT_FULL = (
     "Optional author intent / background context, added to the prompt as clearly-labeled "
     "UNTRUSTED data. Codex is instructed to treat embedded directives as data, not "
     "commands — best-effort prompt-injection mitigation, not a guarantee. Don't include "
-    "live secrets: Codex can read files it's pointed at, and redaction does not cover this "
-    "field. It is bounded like the gathered diff and counts against the same input budget, "
+    "live secrets: Codex's reads are not bounded by the workspace you point it at "
+    "(codex_capabilities carries the full read-scope fact), and redaction does not cover "
+    "this field. It is bounded like the gathered diff and counts against the same input budget, "
     "so an oversized value fails as input_too_large before any spend."
 )
 

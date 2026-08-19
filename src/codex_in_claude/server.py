@@ -152,6 +152,7 @@ CAPABILITY_SUMMARY = (
     "Drive, …) aren't exposed to the Codex run — barring a custom operator-supplied Codex "
     "profile. "
     "Every model-bearing call sends your inputs to OpenAI raw. "
+    f"{cli_contract.READ_SCOPE_FACT} "
     f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} "
     f"{cli_contract.SKILL_BODY_FACT} "
     # Routing: one imperative sentence per task family.
@@ -709,7 +710,8 @@ WorkspaceRootParam = Annotated[
     Field(
         description="Absolute path to the target repo root — pass it (or an MCP root) to "
         "target the intended repo; otherwise the call falls back to the server's own cwd "
-        "and sets meta.workspace_warning."
+        "and sets meta.workspace_warning. It selects where Codex works, not what it can "
+        "read — it is not a read boundary."
     ),
 ]
 TranscriptPathParam = Annotated[
@@ -1380,11 +1382,12 @@ def codex_status() -> dict:
             else rate_limit.not_ready()
         ),
         caveat="The active tools send your content to OpenAI via the codex CLI: "
-        "codex_consult sends your question and context (plus files Codex reads from "
-        "the resolved working dir — workspace_root, your MCP roots, or the server cwd); "
-        "codex_review_changes sends the secret-redacted diff plus your "
-        "raw extra_context, and Codex may read/send other repo files; codex_delegate "
-        "sends your task and the worktree files Codex reads. "
+        "codex_consult sends your question and context; codex_review_changes sends the "
+        "secret-redacted diff plus your raw extra_context; codex_delegate sends your "
+        "task. Each runs in a resolved working directory (workspace_root, your MCP "
+        "roots, or the server cwd) — that selects where Codex works, not what it can "
+        "read. "
+        f"{cli_contract.READ_SCOPE_FACT} "
         f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} "
         f"{cli_contract.SKILL_BODY_FACT} "
         "Secret redaction is best-effort and does not cover your inputs. Treat results "
@@ -1917,7 +1920,8 @@ def codex_capabilities(
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
                 "Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex "
                 "always runs with a resolved working dir (workspace_root, your MCP roots, "
-                "or the server cwd) and may read and send files from it. "
+                "or the server cwd), which selects where it works, not what it can read. "
+                f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} "
                 f"{cli_contract.SKILL_BODY_FACT} "
                 "Recorded as a terminal job (meta.job_id) recoverable via codex_job_result "
@@ -1943,8 +1947,9 @@ def codex_capabilities(
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the consult envelope with codex_job_result. "
                 "Egress: same as codex_consult — sends question+extra_context (raw) to "
-                "OpenAI, plus files Codex reads from its resolved working dir "
-                "(workspace_root, your MCP roots, or the server cwd). "
+                "OpenAI. Its resolved working dir (workspace_root, your MCP roots, or the "
+                "server cwd) selects where Codex works, not what it can read. "
+                f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} "
                 f"{cli_contract.SKILL_BODY_FACT}",
             ),
@@ -1971,7 +1976,8 @@ def codex_capabilities(
                 returns="A result envelope with verdict, findings, and a context summary. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
                 "Egress: sends the bounded, secret-redacted diff plus your raw (unredacted) "
-                "extra_context to OpenAI; Codex may also read other repo files. "
+                "extra_context to OpenAI. "
+                f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} "
                 f"{cli_contract.SKILL_BODY_FACT} "
                 "Recorded as a terminal job (meta.job_id) recoverable via codex_job_result "
@@ -2000,8 +2006,8 @@ def codex_capabilities(
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the review envelope with codex_job_result. "
                 "Egress: same as codex_review_changes — sends the secret-redacted diff "
-                "plus your raw extra_context to OpenAI; Codex may also read other repo "
-                "files. "
+                "plus your raw extra_context to OpenAI. "
+                f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} "
                 f"{cli_contract.SKILL_BODY_FACT}",
             ),
@@ -2024,8 +2030,9 @@ def codex_capabilities(
                 returns="A result envelope whose `diff` holds Codex's proposed, "
                 "unapplied changes plus a summary. detail='summary' (default) omits "
                 "raw_response.text; detail='full' includes it. "
-                "Egress: sends your task (raw) to OpenAI and lets Codex read tracked "
-                "files in the throwaway worktree and send their content. "
+                "Egress: sends your task (raw) to OpenAI; Codex works in the throwaway "
+                "worktree, which bounds what it may WRITE, not what it may read. "
+                f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
                 "worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
                 f"{cli_contract.SKILL_BODY_FACT} "
@@ -2050,8 +2057,9 @@ def codex_capabilities(
                 ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read with codex_job_result. "
-                "Egress: same as codex_delegate — sends your task (raw) to OpenAI plus "
-                "the worktree files Codex reads. "
+                "Egress: same as codex_delegate — sends your task (raw) to OpenAI. The "
+                "throwaway worktree bounds what Codex may WRITE, not what it may read. "
+                f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
                 "worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
                 f"{cli_contract.SKILL_BODY_FACT}",
@@ -2212,11 +2220,12 @@ def codex_capabilities(
             "Does not bypass the Codex sandbox or approvals.",
             "Does not keep your content on the machine: consult, review, and delegate "
             "(and their *_async variants) each send caller content to OpenAI via the "
-            "codex CLI — consult sends question+extra_context (plus files Codex reads "
-            "from its resolved working dir: workspace_root, your MCP roots, or the "
-            "server cwd); review sends the bounded, secret-redacted diff "
-            "plus your raw extra_context; delegate sends the task and lets Codex read "
-            "tracked files in the throwaway worktree. "
+            "codex CLI — consult sends question+extra_context; review sends the "
+            "bounded, secret-redacted diff plus your raw extra_context; delegate sends "
+            "the task. Each runs in a resolved working directory (workspace_root, your "
+            "MCP roots, or the server cwd; the throwaway worktree for delegate) — that "
+            "selects where Codex works, not what it can read. "
+            f"{cli_contract.READ_SCOPE_FACT} "
             f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
             "throwaway worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
             f"{cli_contract.SKILL_BODY_FACT}",
@@ -2863,8 +2872,11 @@ async def codex_consult(
 
     Data egress: this sends your `question` and `extra_context` to OpenAI via the
     codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
-    your MCP roots, or the server's cwd as a fallback), so it may read files there and
-    send their content too. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
+    your MCP roots, or the server's cwd as a fallback) — that selects where it works,
+    not what it can read.
+    Codex can read files outside the workspace — up to everything the OS user running it can
+    read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
+    workspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
     repository, ancestor `AGENTS.md` files through its root, plus a user-global
     `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the
     workspace's
@@ -2967,8 +2979,10 @@ async def codex_review_changes(
     findings — treat them as unvalidated claims you verify yourself before acting.
 
     Data egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is
-    secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),
-    and Codex may read and send other repo files. Codex auto-loads the resolved workspace's
+    secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted).
+    Codex can read files outside the workspace — up to everything the OS user running it can
+    read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
+    workspace is a read boundary. Codex auto-loads the resolved workspace's
     `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root, plus a
     user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers
     skills in the
@@ -3062,8 +3076,11 @@ async def codex_delegate(
     anything, `curl`, publish, or install dependencies (those fail inside the sandbox
     with a DNS/host-resolution error). Ask only for local code changes; do any network
     step yourself afterward. This does NOT mean nothing leaves the machine: the Codex
-    model call still sends your `task` to OpenAI and lets Codex read tracked files in
-    the worktree and send their content. Codex auto-loads the resolved workspace's `AGENTS.md`
+    model call still sends your `task` to OpenAI. The worktree bounds what Codex may
+    WRITE, not what it may read.
+    Codex can read files outside the workspace — up to everything the OS user running it can
+    read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
+    workspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md`
     and, in a repository, ancestor `AGENTS.md` files through its root, plus a user-global
     `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the
     workspace's
@@ -3155,8 +3172,11 @@ async def codex_delegate_async(
     network egress for commands Codex RUNS in the sandbox — the task must be
     self-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with
     a DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the
-    machine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex
-    read tracked files in the worktree and send their content. Codex auto-loads the resolved
+    machine: the Codex model call still sends your `task` (raw) to OpenAI. The worktree
+    bounds what Codex may WRITE, not what it may read.
+    Codex can read files outside the workspace — up to everything the OS user running it can
+    read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
+    workspace is a read boundary. Codex auto-loads the resolved
     workspace's `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root,
     plus a user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it
     discovers skills in
@@ -3747,8 +3767,12 @@ async def codex_consult_async(
     `codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.
 
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
-    (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
-    resolved working directory (`workspace_root`, your MCP roots, or the server cwd).
+    (raw, unredacted) to OpenAI via the codex CLI. Its resolved working directory
+    (`workspace_root`, your MCP roots, or the server cwd) selects where Codex works, not
+    what it can read.
+    Codex can read files outside the workspace — up to everything the OS user running it can
+    read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
+    workspace is a read boundary.
     Codex auto-loads the resolved workspace's `AGENTS.md` and, in a repository, ancestor
     `AGENTS.md` files through its root, plus a user-global `$CODEX_HOME/AGENTS.override.md`,
     else `$CODEX_HOME/AGENTS.md`; it discovers skills in the workspace's `.agents/skills/` and
@@ -3823,8 +3847,10 @@ async def codex_review_changes_async(
     `workspace_root` (absolute).
 
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
-    your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
-    read other repo files. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
+    your raw (unredacted) `extra_context` to OpenAI via the codex CLI.
+    Codex can read files outside the workspace — up to everything the OS user running it can
+    read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
+    workspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
     repository, ancestor `AGENTS.md` files through its root, plus a user-global
     `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the
     workspace's

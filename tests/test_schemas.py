@@ -847,7 +847,12 @@ def _wire_catalog_bytes() -> int:
 # (+96 B) — still within cap, no further change.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 89_000
+# Measured again 2026-08-19 (#509, the read-scope correction — every carrier now states
+# that Codex's reads are not bounded by the workspace, replacing the scoped clauses that
+# read as a bound): 88,795 -> 91,212 bytes (+2,417 B) — over cap; cap raised to the next
+# 1,000 above the measured value. See tests/test_wire_size.py for why the sentence was not
+# compressed to fit instead.
+CATALOG_BYTE_CAP = 92_000
 
 
 def test_wire_catalog_under_cap():
@@ -1006,7 +1011,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-77"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-78"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

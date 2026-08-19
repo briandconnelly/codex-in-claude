@@ -197,8 +197,11 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   your task and repo context to OpenAI.
 - **Do not target a workspace containing secrets you cannot disclose.** Supplied prompts and
   context (`question`, `task`, `extra_context`, and similar author input) are sent raw. During
-  every active call — including consult — Codex may read other files in the
-  resolved workspace, and it also pulls in context implicitly: `AGENTS.md` is auto-loaded from the
+  every active call — including consult — Codex may read files **outside** the resolved
+  workspace, up to everything the OS user running codex can read, and send them to OpenAI: the
+  sandbox bounds writes, not reads, so no choice of workspace is a read boundary, and a
+  prompt-injected repository can direct those reads anywhere that user can reach. Codex also
+  pulls in context implicitly: `AGENTS.md` is auto-loaded from the
   resolved workspace and — inside a repository — from **every ancestor directory up to the
   repository root**, so narrowing the workspace to a subdirectory does not exclude the repo-root
   file; **plus a user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`**,
@@ -272,7 +275,9 @@ and logs clean disconnects (EOF / broken pipe / `SIGINT` / `SIGTERM`) as shutdow
 — so the server logs tell you whether it died or was stopped.
 
 If the MCP server is down, you can fall back to the `codex` CLI directly for a read-only consult or
-review (prompt on stdin; set `WORKSPACE` to a directory you approve for disclosure):
+review (prompt on stdin; set `WORKSPACE` to the directory Codex should work in — note it
+selects where Codex works, not what it can read, so approve the exposure of anything the OS
+user can reach, not just that tree):
 
 ```sh
 WORKSPACE=/absolute/approved/path codex exec --sandbox read-only --ephemeral \
