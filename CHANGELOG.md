@@ -250,6 +250,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   that reach the wire from upstream, and where each side is tested. `CONTRIBUTING.md`'s partial
   restatement is now a link to it. Docs only — no agent-visible surface change.
 
+### Fixed
+
+- `COMPATIBILITY.md` no longer repeats the `recommended_plugins` paragraph. PR #511 re-added the
+  paragraph the #508 change had already placed in the "Image reading (`view_image`, #479)" section,
+  leaving two verbatim consecutive copies; the second is removed. Nothing else was lost in that
+  operation — the only other deletion there was the "Residual, unverified" paragraph, removed on
+  purpose when #507 closed. A regression guard lands with it: every Markdown file in the
+  repository tree (build and dependency directories aside) is scanned for a verbatim-repeated
+  prose paragraph, since every existing doc guard is presence-based (`"..." in text`) and a
+  presence check passes at one occurrence and at ten. The scan skips fenced code, tables, lists,
+  and headings, which recur by design. Its own blind spots were measured rather than assumed, and
+  three are closed: a `*` leader check hid every `**Rule:** ...` paragraph (432 of them here), a
+  two-physical-lines threshold hid every unwrapped paragraph (573), and a boolean fence toggle
+  closed a four-backtick fence on the three-backtick sample inside it. Coverage went from 1,430
+  paragraphs to 2,380. Each fix is pinned by a test that fails when the fix is reverted, and the
+  fence test asserts on what the scanner extracts, not on whether a duplicate is reported — the
+  "no duplicate found" phrasing passes against a scanner that sees nothing at all. Docs and tests
+  only — no agent-visible surface change, no `FINGERPRINT` bump.
+
 ## [0.18.0] - 2026-08-18
 
 ### Added

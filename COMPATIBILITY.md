@@ -211,11 +211,6 @@ reasoning as above — adjacency in the feature table is not evidence that it by
 `remote_plugin` guarantee. [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md) owns the
 obligation to re-check both flags on each upgrade.
 
-`recommended_plugins` is `stable`/default-**off** at `0.148.0` and is left unreserved on the same
-reasoning as above — adjacency in the feature table is not evidence that it bypasses the
-`remote_plugin` guarantee. [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md) owns the
-obligation to re-check both flags on each upgrade.
-
 ## Implicit Codex context (`AGENTS.md`, both skills roots, #300, #358)
 
 `codex exec` **automatically loads** guidance from three `AGENTS.md` sources into model context and
