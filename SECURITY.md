@@ -31,7 +31,7 @@ This is **defense-in-depth, not a guarantee**:
   A skill contributes only its **name and description** up front — but that is enough for the model
   to select it, and selecting it makes the model read the **body**, which then reaches OpenAI too.
   A global skill's body has come back from a prompt that named neither the skill nor the file
-  (observed on codex-cli 0.147.0; the probe, its date, and the verified negatives live in
+  (observed on codex-cli 0.147.0 and again on 0.148.0; the probe, its dates, and the verified negatives live in
   [`COMPATIBILITY.md`](COMPATIBILITY.md) § "Implicit Codex context", the single home for all of it).
   Redaction covers none of it.
 - For workspaces that may contain live credentials, keep secrets out of the tree and review what

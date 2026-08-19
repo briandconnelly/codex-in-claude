@@ -7,6 +7,41 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Tracked Codex version is now `0.148`.** `SUPPORTED_VERSIONS` tracks `(0, 148)`; a `0.147` CLI
+  now warns as untracked (advisory only — it never blocks). `docs/UPGRADING-CODEX.md` was run end to
+  end against `codex-cli 0.148.0`, A/B'd against a side-by-side npm install of `0.147.0`, and the
+  npm/Homebrew channel check for `0.148.0` was clean. **No contract drift:** all 11
+  `ALWAYS_SEND_FLAGS`, the `--model` help-gated flag, and the three `--sandbox` values are present,
+  and the guarantee semantics were re-probed live — `read-only` blocked a write, `workspace-write`
+  allowed a workspace write while blocking network egress, `--output-last-message` received the
+  final message, and `--output-schema` output conformed to the strict-mode schema. The three
+  `CONTRACT_DRIFT_STDERR_PATTERNS` probes (`unexpected argument`, `invalid value`, `unknown feature
+  flag`) still match verbatim. `docs/codex-help/0.148.0/` carries fresh snapshots and the live
+  `integration` suite (10 tests, including the app-server transfer and rate-limit roundtrips) passes
+  against the new CLI.
+- **`KNOWN_MODEL_SLUGS` drops `gpt-5.6-sol-wm`**, refreshed from the `0.148.0`-written
+  `models_cache.json`. As with the slug that was *added* at `0.147`, this is a backend-served
+  catalog move rather than a CLI change — the upgrade's slug diff is what caught it. The
+  reasoning-effort discovery fields still hold their pinned shape (`default_reasoning_level` a
+  string, `supported_reasoning_levels` a list of `{effort, …}` objects), and the `-c
+  model_reasoning_effort` route was re-probed: it still parses, and a bogus effort on a valid model
+  still fails with both bracketed `REASONING_EFFORT_REJECTION_MARKERS`.
+- **New `0.148.0` surface is deliberately not adopted**: the top-level `migrate-rollouts` subcommand,
+  the `codex exec fork` subcommand, and nine new feature flags — none of which this plugin sends or
+  reads. `codex exec` gained **no** new flag. `remote_plugin` is still `stable`/default-on, so the
+  unconditional `--disable remote_plugin` isolation stays load-bearing.
+- App-server: the `0.147.0` → `0.148.0` generated-schema diff leaves every consumed schema
+  byte-identical after canonicalization; the inventory pass added three unconsumed v2 messages
+  (`NullableGetAccountTokenUsageParams`, `ThreadQueueChangedNotification`,
+  `ThreadRevertedNotification`) and removed none.
+- **Implicit-context probe re-run against both binaries** (`COMPATIBILITY.md` → "Implicit Codex
+  context"). Under the read-forbidding probe, both discovery captures passed the no-tool-item
+  assertion and the two presence matrices were **identical** to each other and to the `0.147` record:
+  a `$CODEX_HOME/skills/` skill is discovered despite `--ignore-user-config`, `.claude/skills/` is
+  not, and a parent `AGENTS.md` above the git root is not loaded. The unprompted-selection consult
+  returned the user-global skill's codeword on **both** binaries from a prompt naming neither the
+  skill nor the file, so the egress claim holds unchanged at `0.148.0`.
+
 - **Every prose egress-warning site now states how a skill's body actually arrives** (#498). #480 established
   the mechanism — `AGENTS.md` content is auto-**loaded**, while a skill is auto-**discovered** by
   name and description, and its **body** follows only through a read the model itself issues once it
