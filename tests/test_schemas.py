@@ -831,9 +831,14 @@ def _wire_catalog_bytes() -> int:
 # applies identically here: `RedactionSummary.inline_masks` gained `Field(ge=0)`, a
 # validated `"minimum":0` property, not description prose): 87,274 -> 87,298 bytes
 # (+24 B) — still within cap, no further change.
+# Measured again 2026-08-19 (#501 — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET
+# history for the justification, which applies identically here: every egress tool
+# description now states how a skill's BODY arrives, which four of the six did not
+# disclose before): 87,298 -> 87,811 bytes (+513 B) — over cap; cap raised to the next
+# 500 above the measured value.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 87_500
+CATALOG_BYTE_CAP = 88_000
 
 
 def test_wire_catalog_under_cap():
@@ -992,7 +997,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-75"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-76"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

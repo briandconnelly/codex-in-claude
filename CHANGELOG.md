@@ -7,6 +7,33 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The MCP wire surface now states HOW a skill's body reaches OpenAI, not just that skills are
+  discovered.** #480 established that the two halves of Codex's implicit context arrive
+  differently — `AGENTS.md` content is auto-**loaded**, already in context before the turn, while a
+  skill is auto-**discovered** as name and description only, and its **body** follows a read the
+  model itself issues once it selects that skill. #498 corrected every prose site; the wire kept
+  the older umbrella framing. The server instructions block no longer says "Codex also auto-loads
+  context implicitly"; the `codex_status` caveat, `codex_capabilities`' `negative_scope`, all six
+  active tools' `returns`, and all six egress tool descriptions now carry one canonical sentence
+  (`cli_contract.SKILL_BODY_FACT`). Four of the six gained disclosure rather than wording:
+  `codex_consult_async` and `codex_review_changes_async` named the skills roots with no mechanism
+  at all, and `codex_delegate`/`codex_delegate_async`'s `returns` did the same. **Fingerprint
+  `schema-75` → `schema-76`.** Not breaking — no guarantee weakens, and the disclosure gets
+  strictly more precise. A new `skill_body_read` guarantee matcher holds every carrier site, and
+  the six hand-copied descriptions are pinned against the constant (a paraphrase that satisfies the
+  word-presence matcher still fails the pin). `pontonier`'s declarative
+  `BackendContract.implicit_context_disclosure` — whose own contract is "what the CLI
+  auto-loads that isolation cannot suppress" — carries it too, so a contract consumer cannot
+  re-learn the wrong model. `tools/list` grew 513 bytes to 87,794; the budget and the
+  capability-catalog cap both moved 87,500 → 88,000.
+- **Safety-critical rules in the egress-caveat docs are no longer buried in narration.** No warning
+  weakens and no mechanism claim changes — this is placement only. `README.md`'s ~22-line Safety
+  bullet is split, with "do not target a workspace containing secrets you cannot disclose" promoted
+  from its tail to a bolded lead and the redaction-marker detail moved to its own bullet;
+  `SECURITY.md`'s compound bullet becomes one facts bullet plus a separate imperative for each of
+  its two obligations; and the fallback reference's abort rule joins the rule list it belongs to
+  instead of trailing the exposure prose. Documentation only — no fingerprint effect.
+
 - **Tracked Codex version is now `0.148`.** `SUPPORTED_VERSIONS` tracks `(0, 148)`; a `0.147` CLI
   now warns as untracked (advisory only — it never blocks). `docs/UPGRADING-CODEX.md` was run end to
   end against `codex-cli 0.148.0`, A/B'd against a side-by-side npm install of `0.147.0`, and the

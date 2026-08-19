@@ -252,9 +252,10 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # negative_scope, README.md, COMPATIBILITY.md, SECURITY.md, and the
 # collaborating-with-codex skill — must disclose BOTH skills roots. No feature-detection
 # logic exists here by design. The canonical sentence pair every code-side site imports
-# lives just below (SKILLS_DISCOVERY_FACT / SKILLS_DISCOVERY_FACT_FULL); the doc-side
-# sites restate it in their own prose instead, checked for the same two roots by
-# tests/test_docs_disclosure.py.
+# lives just below (SKILLS_DISCOVERY_FACT / SKILLS_DISCOVERY_FACT_FULL / SKILL_BODY_FACT);
+# the doc-side sites restate it in their own prose instead, checked for the same two roots
+# by tests/test_docs_disclosure.py. Each site must also state HOW a skill's body arrives
+# (SKILL_BODY_FACT) — calling the whole thing "auto-loading" is the #498/#501 defect.
 
 # Canonical wording for the disclosure the RULE above requires (#427). Every code-side site
 # it names imports these rather than hand-copying the fact in its own words, so a Codex
@@ -277,7 +278,26 @@ SKILLS_DISCOVERY_FACT = (
     "reachable from outside the workspace."
 )
 SKILLS_ISOLATION_NOTE = "The plugin's isolation flags don't suppress any of it."
+# The mechanism half of the same disclosure (#480/#501). The two halves of the implicit
+# context arrive DIFFERENTLY, and the difference is security-relevant: `AGENTS.md` content
+# is auto-LOADED (already in context before the turn), while a skill is auto-DISCOVERED as
+# name and description only — its BODY follows a read the MODEL itself issues once it
+# selects the skill. Calling the whole thing "auto-loading" contradicts that, which is the
+# defect #498 corrected in prose and #501 corrects on the wire. Every carrier site states
+# it; the six egress docstrings hand-copy it for the FastMCP reason above, pinned by
+# tests/test_server.py.
+SKILL_BODY_FACT = (
+    "A skill's name and description arrive up front; selecting one makes the model read "
+    "its body, which can reach OpenAI even if your inputs never mention it."
+)
 SKILLS_DISCOVERY_FACT_FULL = f"{SKILLS_DISCOVERY_FACT} {SKILLS_ISOLATION_NOTE}"
+
+# The whole disclosure in one string, for a carrier that has room for exactly one — the
+# declarative `BackendContract.implicit_context_disclosure`, whose own contract is "what
+# the CLI auto-loads that isolation cannot suppress". That framing is precisely what
+# #501 corrects: half of what arrives is not auto-loaded at all, so the mechanism has to
+# travel with the discovery fact or a contract consumer re-learns the wrong model.
+IMPLICIT_CONTEXT_DISCLOSURE = f"{SKILLS_DISCOVERY_FACT_FULL} {SKILL_BODY_FACT}"
 
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
@@ -595,7 +615,7 @@ PONTONIER_CONTRACT = _pontonier_contract.BackendContract(
         "gathered diffs and returned output is best-effort defense-in-depth; it never "
         "covers supplied inputs or files Codex reads itself."
     ),
-    implicit_context_disclosure=SKILLS_DISCOVERY_FACT_FULL,
+    implicit_context_disclosure=IMPLICIT_CONTEXT_DISCLOSURE,
     structured_output="argv_flag",
     model_catalog=_pontonier_contract.ModelCatalog(
         strategy="cache_with_static_fallback",

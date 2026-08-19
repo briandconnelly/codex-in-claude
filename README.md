@@ -195,8 +195,9 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   yourself. Delegate's no-network sandbox (`workspace-write`) blocks egress only for commands Codex
   *runs* in the sandbox — it does not mean nothing leaves the machine: the model call still sends
   your task and repo context to OpenAI.
-- Supplied prompts and context (`question`, `task`, `extra_context`, and similar author input) are
-  sent raw. During every active call — including consult — Codex may read other files in the
+- **Do not target a workspace containing secrets you cannot disclose.** Supplied prompts and
+  context (`question`, `task`, `extra_context`, and similar author input) are sent raw. During
+  every active call — including consult — Codex may read other files in the
   resolved workspace, and it also pulls in context implicitly: the project's `AGENTS.md` is
   auto-loaded, while skills under `.agents/skills/` — **plus your user-global Codex skills under
   `$CODEX_HOME/skills/`** (default `~/.codex/skills/`) — are auto-discovered by name and
@@ -206,7 +207,8 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   workspace, since they are discovered from outside it). The plugin's isolation
   flags do not suppress any of this — including `--ignore-user-config`, which drops
   `$CODEX_HOME/config.toml` but not `$CODEX_HOME/skills/`. Details, the verifying probe, and the
-  remaining unverified edge cases are in [`COMPATIBILITY.md`](COMPATIBILITY.md). Best-effort redaction protects
+  remaining unverified edge cases are in [`COMPATIBILITY.md`](COMPATIBILITY.md).
+- Redaction is output/diff defense-in-depth, not input protection and not a guarantee. It protects
   gathered diffs and returned free text
   (`summary`, `findings`, `raw_response.text`): secret-looking file hunks are dropped, and inline
   matches are replaced with `[redacted: secret value]` — no affirmative sign the match stopped
@@ -215,9 +217,7 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   produced (the value may continue past the marker), or a leading character that could continue
   the same token (the match may have started mid-token). Neither marker is a guarantee either way:
   a free-form secret can contain almost any character, and flagging every unusual neighbor as
-  suspect would fire on nearly every redaction and stop meaning anything. It is output/diff
-  defense-in-depth, not input protection or a guarantee; do not target a workspace containing
-  secrets you cannot disclose.
+  suspect would fire on nearly every redaction and stop meaning anything.
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 

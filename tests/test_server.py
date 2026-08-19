@@ -572,6 +572,20 @@ _NEGATED_SUPPRESS = re.compile(
     r"|\bno\s+\w+(?:\s+\w+){0,3}\s+suppress(?:es)?\b"
 )
 
+_SKILL_SELECTION_RE = re.compile(r"\bselect(s|ed|ing|ion)?\b", re.IGNORECASE)
+_SKILL_METADATA_RE = re.compile(r"\b(descriptions?|metadata)\b", re.IGNORECASE)
+_SKILL_BODY_RE = re.compile(r"\bbod(y|ies)\b", re.IGNORECASE)
+
+
+def _skill_body_disclosed(text: str) -> bool:
+    """Does this carrier say metadata arrives up front and the body follows selection?"""
+    return bool(
+        _SKILL_SELECTION_RE.search(text)
+        and _SKILL_METADATA_RE.search(text)
+        and _SKILL_BODY_RE.search(text)
+    )
+
+
 _GUARANTEE_MATCHERS = {
     # Caller content is sent to OpenAI.
     "openai": lambda d: "openai" in d,
@@ -608,6 +622,14 @@ _GUARANTEE_MATCHERS = {
     "no_network": lambda d: "network" in d and "block" in d and "sandbox" in d,
     # review: the gathered diff is secret-redacted before it is sent.
     "diff_redacted": lambda d: "redact" in d and "diff" in d,
+    # HOW a skill's body arrives (#480/#501): the metadata comes up front, the body only
+    # after the model selects the skill and issues its own read. `autoload_skills` above
+    # checks only that a skills root is NAMED, so a carrier could drop the mechanism —
+    # and the security-load-bearing half is the BODY — while the matrix stayed green.
+    # Same three markers tests/test_docs_disclosure.py uses on the prose sites, and the
+    # same acknowledged limit: word-presence catches omission, not a confident
+    # misstatement. See test_skill_body_matcher_rejects_metadata_only_and_decoupled_prose.
+    "skill_body_read": _skill_body_disclosed,
 }
 _COMMON_EGRESS = {
     "openai",
@@ -616,6 +638,7 @@ _COMMON_EGRESS = {
     "autoload_agents",
     "autoload_skills",
     "autoload_global_skills",
+    "skill_body_read",
 }
 _REQUIRED_GUARANTEES = {
     "codex_consult": _COMMON_EGRESS | {"isolation_suppress", "redaction_best_effort"},
@@ -716,6 +739,95 @@ def test_global_skills_matcher_rejects_project_only_prose():
     )
 
 
+def test_skill_body_matcher_rejects_metadata_only_and_decoupled_prose():
+    """Guard the guard: the matcher must fail on the wording #501 replaces.
+
+    The body is the security-load-bearing half — metadata reaching the model is
+    comparatively harmless, the body is the egress — so prose that stops at discovery
+    must not pass, and neither must the pre-#501 umbrella framing. Without these
+    controls a matcher that accepted everything would hold the matrix green over the
+    exact omission it exists to catch.
+    """
+    assert _GUARANTEE_MATCHERS["skill_body_read"]("") is False
+
+    # The verbatim pre-#501 CAPABILITY_SUMMARY clause: "auto-loads context implicitly"
+    # names no mechanism at all.
+    umbrella = (
+        "every model-bearing call sends your inputs to openai raw, and codex also "
+        "auto-loads context implicitly."
+    )
+    assert _GUARANTEE_MATCHERS["skill_body_read"](umbrella) is False
+
+    # Discovery stated, body dropped — the shape the two async docstrings carried.
+    metadata_only = (
+        "codex discovers skills in .agents/skills/ and $codex_home/skills/ by name and description."
+    )
+    assert _GUARANTEE_MATCHERS["skill_body_read"](metadata_only) is False
+
+    # Body stated, but with no selection step and no metadata half.
+    body_only = "a skill's body can reach the model."
+    assert _GUARANTEE_MATCHERS["skill_body_read"](body_only) is False
+
+    # The canonical sentence every carrier site now states.
+    assert _GUARANTEE_MATCHERS["skill_body_read"](cli_contract.SKILL_BODY_FACT.lower())
+
+    # …and the limit, stated rather than papered over: word-presence catches OMISSION,
+    # not a confident misstatement. This sentence reverses the mechanism — bodies up
+    # front, selection afterwards, no model-issued read — and still carries all three
+    # markers, so it passes. That is why every carrier is ALSO pinned to the exact
+    # constant (the assertions in this module that compare against SKILL_BODY_FACT
+    # itself); the matcher guards the six hand-copied docstrings against dropping the
+    # claim, the exact pin guards all of them against drifting into a false one.
+    inverted = "skill descriptions and bodies arrive up front; the model selects one later."
+    assert _GUARANTEE_MATCHERS["skill_body_read"](inverted) is True
+
+
+def test_capability_summary_states_the_skill_body_mechanism():
+    """The server instructions block — the highest-reach disclosure in the repo."""
+    assert _GUARANTEE_MATCHERS["skill_body_read"](server.CAPABILITY_SUMMARY.lower())
+    assert cli_contract.SKILL_BODY_FACT in server.CAPABILITY_SUMMARY
+
+
+def test_capability_summary_drops_the_umbrella_autoload_framing():
+    """The pre-#501 umbrella clause must not come back (#501).
+
+    "Codex also auto-loads context implicitly" is false of the skills half: a skill is
+    DISCOVERED, and only a selected one's body is read. The mechanism sentence above
+    can be satisfied while this clause still sits in the same text, so pin its absence
+    separately rather than trusting the positive check to cover it.
+    """
+    assert "auto-loads context implicitly" not in server.CAPABILITY_SUMMARY.lower()
+
+
+def test_status_caveat_states_the_skill_body_mechanism(monkeypatch, clean_env):
+    """The codex_status caveat has no manifest-snapshot guard (see #358 above)."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    caveat = server.codex_status()["caveat"]
+    assert _GUARANTEE_MATCHERS["skill_body_read"](caveat.lower())
+    assert cli_contract.SKILL_BODY_FACT in caveat
+
+
+def test_negative_scope_states_the_skill_body_mechanism():
+    """codex_capabilities' negative_scope is an independent safety inventory (#358)."""
+    blob = " ".join(server.codex_capabilities()["negative_scope"])
+    assert _GUARANTEE_MATCHERS["skill_body_read"](blob.lower())
+    assert cli_contract.SKILL_BODY_FACT in blob
+
+
+@pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
+def test_capability_returns_state_the_skill_body_mechanism(name):
+    """Asserted per entry: a joined blob would pass while five of six dropped it.
+
+    `codex_delegate`/`codex_delegate_async` were the two that carried the discovery
+    fact with no mechanism at all (#501).
+    """
+    by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
+    returns = by_name[name]["returns"]
+    assert _GUARANTEE_MATCHERS["skill_body_read"](returns.lower()), name
+    assert cli_contract.SKILL_BODY_FACT in returns, name
+
+
 def test_global_skills_matcher_rejects_negated_prose():
     """Naming the path is not the guarantee — asserting the behavior is.
 
@@ -810,6 +922,21 @@ def test_sync_tool_docstring_matches_full_skills_discovery_constant(name):
     doc = _normalize(getattr(server, name).__doc__ or "")
     assert _normalize(cli_contract.SKILLS_DISCOVERY_FACT_FULL) in doc, (
         f"{name}'s docstring diverged from cli_contract.SKILLS_DISCOVERY_FACT_FULL"
+    )
+
+
+# The mechanism sentence is hand-copied into all six for the same FastMCP reason, and
+# unlike the discovery fact it is carried by the async twins too: `_REQUIRED_GUARANTEES`
+# pins the async subset lighter only in the ISOLATION note, and #501's gap was precisely
+# that two of these six disclosed discovery with no mechanism at all. Pin the copies
+# against the constant — the `skill_body_read` matcher only checks that three marker
+# words are present, so it would stay green on a paraphrase that had drifted from the
+# single source of truth.
+@pytest.mark.parametrize("name", _SYNC_EGRESS_TOOLS + _ASYNC_EGRESS_TOOLS)
+def test_every_egress_docstring_matches_the_skill_body_constant(name):
+    doc = _normalize(getattr(server, name).__doc__ or "")
+    assert _normalize(cli_contract.SKILL_BODY_FACT) in doc, (
+        f"{name}'s docstring diverged from cli_contract.SKILL_BODY_FACT"
     )
 
 
@@ -2418,7 +2545,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-75"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-76"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6346,7 +6473,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-75")
+    assert result["fingerprint"].endswith("schema-76")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

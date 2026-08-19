@@ -28,6 +28,8 @@ Send the prompt on stdin.
   The plugin itself sends the two config-isolation flags only when the operator raises isolation
   above the default `inherit`.)
 - Set `WORKSPACE` to a directory the user approved for disclosure.
+- If nothing beyond the sanitized stdin prompt may be visible to Codex, do not use this fallback
+  at all.
 
 Even with these flags, Codex auto-loads the resolved workspace's `AGENTS.md`, auto-discovers skills
 in `.agents/skills/`, and does the same for your user-global `$CODEX_HOME/skills/` — which
@@ -40,9 +42,6 @@ An empty scratch `WORKSPACE` removes the ambient *repository* context but not th
 skills: they are discovered from outside the workspace, so no `WORKSPACE` choice excludes them.
 An empty scratch `WORKSPACE` is not a read boundary either — the read-only sandbox bounds writes,
 not reads, so Codex can still read files at other absolute paths.
-
-- If nothing beyond the sanitized stdin prompt may be visible to Codex, do not use this fallback
-  at all.
 
 Before sending, gather, bound, and sanitize context yourself. This direct CLI route sends raw input,
 has no plugin result envelope, and does not provide the plugin's diff gathering or redaction

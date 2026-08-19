@@ -34,12 +34,13 @@ This is **defense-in-depth, not a guarantee**:
   (observed on codex-cli 0.147.0 and again on 0.148.0; the probe, its dates, and the verified negatives live in
   [`COMPATIBILITY.md`](COMPATIBILITY.md) § "Implicit Codex context", the single home for all of it).
   Redaction covers none of it.
-- For workspaces that may contain live credentials, keep secrets out of the tree and review what
-  you delegate. `isolation=ignore-config`/`ignore-rules` helps only for the *specific* `$CODEX_HOME`
-  state it names (`config.toml`, execpolicy `.rules`); it does **not** suppress `AGENTS.md`
-  auto-loading or `.agents/skills/` skill discovery, and — despite the flag's name — it does **not** suppress
+  `isolation=ignore-config`/`ignore-rules` helps only for the *specific* `$CODEX_HOME` state it
+  names (`config.toml`, execpolicy `.rules`); it does **not** suppress `AGENTS.md` auto-loading or
+  `.agents/skills/` skill discovery, and — despite the flag's name — it does **not** suppress
   `$CODEX_HOME/skills/` either (see `COMPATIBILITY.md`). Anything private in a user-global Codex
   skill is eligible for egress on any active call, whatever workspace you target.
+- **Keep secrets out of any tree you point Codex at.** Redaction is not a substitute.
+- **Review what you delegate.** Read the task you send and the diff that comes back.
 
 ## Untrusted content
 
