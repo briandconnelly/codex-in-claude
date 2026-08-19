@@ -118,9 +118,9 @@ Facts to weigh before any active call:
   references).
 - **Workspace:** Pass an absolute `workspace_root` for every repo-grounded call, including consult,
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
-- **Privacy — the workspace is not the boundary:** Treat an active call as able to reach, in
-  principle, anything the OS user running codex can read. No choice of `workspace_root` makes a
-  call safe by itself.
+- **Privacy — never justify a call by workspace placement:** Do not treat sensitive material as
+  protected because it sits outside the chosen `workspace_root`. The workspace is not a read
+  boundary (see Data exposure), so "it is not in the workspace" is never a reason a call is safe.
 - **Privacy — do not call:** Do not make an active call when any of these contains something you
   cannot disclose (see Data exposure): the supplied prompt; the supplied context; any file in the
   resolved workspace; an `AGENTS.md` in any ancestor directory up to the repository root; your

@@ -471,10 +471,20 @@ _NOT_A_READ_BOUNDARY_RE = re.compile(
 )
 
 
+def _flat(text: str) -> str:
+    """Collapse whitespace before matching.
+
+    These are wrapped markdown sources, so a phrase the guard looks for is routinely split
+    across a line break ("not a read\n  boundary"). Without this the matchers below pass or
+    fail on where the author happened to wrap, which is not a property worth gating on.
+    """
+    return re.sub(r"\s+", " ", text)
+
+
 @pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
 def test_doc_site_does_not_scope_codex_reads_to_the_workspace(relpath):
     """No prose site may reuse a clause that presents the workspace as a read bound (#509)."""
-    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8").lower()
+    text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8").lower())
     for clause in _LEGACY_SCOPED_READ_PROSE:
         assert clause not in text, (
             f"{relpath} still scopes Codex's reads with {clause!r} — read-only bounds "
@@ -484,7 +494,7 @@ def test_doc_site_does_not_scope_codex_reads_to_the_workspace(relpath):
 
 @pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
 def test_doc_site_states_reads_are_not_bounded_by_the_workspace(relpath):
-    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8")
+    text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8"))
     assert _OUTSIDE_READ_RE.search(text), f"{relpath} never says Codex reads outside the workspace"
     assert _NOT_A_READ_BOUNDARY_RE.search(text), (
         f"{relpath} never says the workspace is not a read boundary"
@@ -520,7 +530,7 @@ def test_skill_privacy_and_independence_rules_carry_the_correction():
     Independence rules keyed their whole argument on the same geometry — so widening the
     Data-exposure bullet while leaving either narrow would reproduce the exact defect.
     """
-    rules = _privacy_rule_text()
+    rules = _flat(_privacy_rule_text())
     assert _NOT_A_READ_BOUNDARY_RE.search(rules) or "not the boundary" in rules.lower(), (
         "the Privacy binding rules still present the workspace as the decision boundary"
     )
@@ -531,7 +541,7 @@ def test_skill_privacy_and_independence_rules_carry_the_correction():
 
     text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
     start = text.index("- **Independence — draft placement:**")
-    independence = text[start : text.index("\n- **Git state", start)]
+    independence = _flat(text[start : text.index("\n- **Git state", start)])
     assert "not a boundary" in independence, (
         "the Independence rules still treat draft placement as a boundary; under the "
         "corrected model Codex's reads are not bounded by the workspace"
