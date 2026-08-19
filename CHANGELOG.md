@@ -7,6 +7,51 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The egress disclosures no longer scope Codex's reads to the workspace or the repo.** Several
+  agent-visible descriptions said Codex reads "files ... from its resolved working dir", "other
+  **repo** files", or "tracked files in the throwaway worktree". A reader takes that as a bound; it
+  is not one, and the understatement ran in the **unsafe direction**. `--sandbox read-only` bounds
+  **writes**: probed on `codex-cli 0.148.0` under this plugin's own `ALWAYS_SEND` flags with the
+  workspace a bare non-repo directory, the model shelled out and read a file in `$HOME` — outside
+  the workspace and outside any repo — on **both** the `read-only` and `workspace-write` tiers,
+  while a write attempt in the same read-only run was refused by the sandbox. That negative control
+  is what makes the read informative: the sandbox was in force, and it simply does not bound reads.
+  Nothing about the plugin's behavior changed — this corrects a **documentation defect**; the
+  described bound never held. A new canonical `cli_contract.READ_SCOPE_FACT` now states the truth at
+  every carrier: the server instructions block, the `codex_status` caveat, `codex_capabilities`'
+  `negative_scope`, all six active tools' `returns` and all six egress docstrings, plus
+  `readonly_honesty_statement`, the `extra_context` parameter contract, and `workspace_root`'s own
+  description (which now says it selects where Codex works, not what it can read). It is stated as a
+  **ceiling, not a warrant** — the probe shows reads far outside the workspace, not that every file
+  the OS user can read is reachable, since a platform sandbox can still deny individual paths.
+  **Fingerprint `schema-77` → `schema-78`.** Not breaking — no carrier ever promised reads were
+  confined (every one said "may read"), so this widens a disclosure rather than weakening a
+  guarantee, the same call as the `AGENTS.md` widening above. The one contrary case, considered and
+  rejected: the bundled skill's binding **Privacy** rule enumerated workspace-scoped locations as a
+  sufficiency checklist, and that checklist is now declared necessary-but-not-sufficient — a
+  client-procedure correction, not a schema incompatibility. The docs move with the wire: `README`,
+  `SECURITY.md`, `docs/REFERENCE.md`, `COMPATIBILITY.md` (which gains the probe table and drops the
+  "tracked separately" note for this half, keeping #510's), and the `collaborating-with-codex`
+  skill — whose **Privacy** and **Independence** binding rules are corrected too, not just its
+  background section, since the Independence rules had keyed their whole argument on a workspace
+  geometry that bounds nothing. Guards: the code side is pinned by exact containment of the constant
+  plus a rejection list of the eleven removed clauses swept over the runtime carrier strings (a
+  word-presence check would pass a confident inversion, and a `read.*workspace` shape regex would
+  reject the corrected sentence, which itself contains "read files outside the workspace"); the
+  prose sides get the same rejection list plus affirmative matchers, each with guard-the-guard
+  cases, and both reject a bound re-asserted *beside* the correct sentence — containment alone
+  stayed green on "…so no choice of workspace is a read boundary. Nevertheless, Codex is confined to
+  files under the workspace." The skill's binding rules are rebuilt on what an agent can actually
+  observe: machine-level read exposure is stated as a fact the operator accepted by installing and
+  authenticating the CLI (an agent cannot enumerate what the OS user can reach, so a rule asking it
+  to would always resolve to "proceed"), while the new per-call rule triggers on the transcript —
+  material *this session* identified as nondisclosable. Independence reclassification likewise drops
+  its unobservable "otherwise reached it" trigger for three checkable ones (supplied or named to
+  Codex; persisted in a path Codex was pointed at; the returned output carrying the draft's
+  content), since the result contract exposes no read audit. `tools/list` grew 2,417 bytes to 91,195 and the catalog to 91,212; both 89,000 gates moved
+  to 92,000 — the sentence was deliberately not compressed to fit, because the only clause short
+  enough to drop is the one that retires the "narrow the workspace to bound egress" mitigation.
+
 - **The egress disclosure now names every `AGENTS.md` Codex auto-loads, not just the workspace's
   own.** The published caveat said Codex auto-loads "the resolved workspace's `AGENTS.md`". Two
   further sources reach the model, both understated in the **unsafe direction**, both probed on

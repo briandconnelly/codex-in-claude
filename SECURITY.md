@@ -24,8 +24,9 @@ The plugin redacts secret-looking files and inline values from diffs it gathers
 This is **defense-in-depth, not a guarantee**:
 
 - It only covers the diff text the server gathers. During any active call — consult, review, or
-  delegate — Codex may read files in the workspace itself, and it pulls in context you never asked
-  for: `AGENTS.md` is auto-loaded from the resolved workspace, from **every ancestor directory up to
+  delegate — Codex may read files **outside** the workspace, up to everything the OS user running
+  codex can read: `--sandbox read-only` bounds writes, not reads, so no choice of workspace is a
+  read boundary. Codex also pulls in context you never asked for: `AGENTS.md` is auto-loaded from the resolved workspace, from **every ancestor directory up to
   the repository root** when the workspace is in a repository, and from a **user-global
   `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`** on every call whatever workspace
   you target; and skills under `.agents/skills/` **plus your
@@ -44,7 +45,9 @@ This is **defense-in-depth, not a guarantee**:
   `COMPATIBILITY.md`). Anything private in a user-global Codex
   skill **or in a user-global `$CODEX_HOME/AGENTS.md`** is eligible for egress on any active call,
   whatever workspace you target.
-- **Keep secrets out of any tree you point Codex at.** Redaction is not a substitute.
+- **Keep secrets out of any tree you point Codex at — and note that is necessary, not
+  sufficient.** Codex's reads are not bounded by that tree, so a prompt-injected repository can
+  direct them at files elsewhere on the machine. Redaction is not a substitute for either.
 - **Review what you delegate.** Read the task you send and the diff that comes back.
 
 ## Untrusted content

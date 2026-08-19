@@ -78,6 +78,9 @@ Assertions:
 - Rejects the claim that consult cannot inspect the unrelated file.
 - States that every active call may read other files in the resolved workspace, including untracked
   files reachable by consult.
+- States that the workspace is not a read boundary: read-only bounds writes, not reads, so Codex can
+  read files outside the workspace too. (An answer that offers "keep it out of the workspace" as
+  sufficient protection FAILS this assertion.)
 - States that supplied prompts/context are sent raw.
 - Limits redaction to best-effort gathered-diff/output protection, not input protection.
 

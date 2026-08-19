@@ -217,7 +217,9 @@ When the state is unreported and the windows are healthy, `note` says so.
 ## Workspace selection
 
 When calling the MCP tools directly, pass `workspace_root` as an absolute path to the repository you
-want Codex to inspect or edit. Claude Code usually supplies the current repo as an MCP root for slash
+want Codex to inspect or edit. It selects where Codex *works*; it is **not** a read boundary — Codex
+can read files outside it, up to everything the OS user running codex can read (see
+[`COMPATIBILITY.md`](../COMPATIBILITY.md) and `SECURITY.md`). Claude Code usually supplies the current repo as an MCP root for slash
 commands; if neither an MCP root nor `workspace_root` is available, the server may fall back to its
 own launch directory and return `meta.workspace_warning`.
 

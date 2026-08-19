@@ -355,11 +355,36 @@ _SKILL_PATH = "skills/collaborating-with-codex/SKILL.md"
 
 
 def _privacy_rule_text() -> str:
-    """The Privacy bullet from the skill's binding-rules list, alone."""
+    """The Privacy binding rules from the skill's rules list, and only those.
+
+    #509 split the single `- **Privacy:**` bullet into atomic ones (`Privacy — ...`), so this
+    returns the whole contiguous Privacy GROUP rather than one bullet. The #472 enumeration it
+    guards still has to appear somewhere in that group, which is the same guarantee — but
+    scoping to the group, rather than searching the file, is what keeps it from being satisfied
+    by prose in some other section (the #512 failure mode).
+
+    Returned as ONE contiguous slice of the source. An earlier version accumulated per-bullet
+    slices that each stopped before their trailing newline and joined them, which fabricated
+    junctions ("...on a call is safe.- **Privacy — do not call:**") appearing nowhere in the
+    file. No assertion depended on that text, but a guard whose corpus is partly invented can
+    match across a seam that does not exist — the defect this whole change is about. Caught by
+    a Copilot review.
+    """
     text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
-    start = text.index("- **Privacy:**")
-    nxt = text.index("\n- **", start + 1)
-    return text[start:nxt]
+    start = text.index("- **Privacy")
+    end = start
+    while True:
+        nxt = text.index("\n- **", end + 1)
+        if not text[nxt + 1 :].startswith("- **Privacy"):
+            end = nxt
+            break
+        end = nxt
+    group = text[start:end]
+    assert group.count("- **Privacy") >= 1
+    assert "\n- **Privacy" in group or group.count("- **Privacy") == 1, (
+        "the group must be contiguous source text, newlines included"
+    )
+    return group
 
 
 # Both filenames, asserted independently. `_GLOBAL_AGENTS_RE` matches either one, so a
@@ -378,6 +403,23 @@ def _names_every_guidance_file(rule: str) -> bool:
     green. A Codex review caught exactly that.
     """
     return all(filename in rule for filename in _GLOBAL_GUIDANCE_FILES)
+
+
+def test_privacy_rule_text_is_verbatim_source():
+    """The helper must return real source text, not a reassembly of it.
+
+    It previously joined per-bullet slices that each stopped short of their trailing
+    newline, producing junctions ("...on a call is safe.- **Privacy — do not call:**") that
+    appear nowhere in the file. Nothing asserted on those seams, so every test stayed green —
+    but a guard matching a corpus it partly invented can fire, or fail to fire, across a seam
+    the source does not contain. This assertion fails against that implementation.
+    """
+    source = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    group = _privacy_rule_text()
+    assert group in source, "the Privacy group is not a contiguous slice of SKILL.md"
+    assert group.count("- **Privacy") > 1, (
+        "precondition: more than one Privacy bullet, or this cannot detect the defect"
+    )
 
 
 def test_privacy_rule_covers_every_agents_md_source():
@@ -428,3 +470,195 @@ def test_privacy_rule_guard_rejects_the_pre_472_rule():
 
     # …and the rule as it actually stands is accepted by that same predicate.
     assert _names_every_guidance_file(_privacy_rule_text()) is True
+
+
+# --- #509: the read-scope correction on the prose sites ----------------------------
+# The prose sites restate the fact in their own words, so exact containment (what
+# tests/test_server.py pins on the code carriers) is the wrong instrument here. What
+# actually catches a regression on this side is the LEGACY-CLAUSE rejection: an inversion
+# would be phrased as the clause that was removed.
+_LEGACY_SCOPED_READ_PROSE = (
+    "may read other files in the resolved workspace.",
+    "may read files in the workspace itself",
+    "read tracked files in the throwaway worktree",
+    "can inspect files anywhere in that resolved workspace,",
+    "any file codex may inspect in the resolved workspace",
+    "a directory you approve for disclosure",
+)
+
+# Affirmative markers, required TOGETHER: a site must say reads reach outside the
+# workspace AND that the sandbox does not bound them. Requiring both is what stops a
+# site from naming the concept while asserting the old model.
+_OUTSIDE_READ_RE = re.compile(r"read[^.]{0,80}\boutside\b|\boutside\b[^.]{0,80}read", re.IGNORECASE)
+_NOT_A_READ_BOUNDARY_RE = re.compile(
+    r"bounds? writes,? not reads|not a read boundary|not confined to it"
+    r"|not what it can read|not bounded by the workspace",
+    re.IGNORECASE,
+)
+
+
+def _flat(text: str) -> str:
+    """Collapse whitespace before matching.
+
+    These are wrapped markdown sources, so a phrase the guard looks for is routinely split
+    across a line break ("not a read\n  boundary") or interrupted by emphasis ("**not** a
+    read boundary"). Without this the matchers below pass or fail on where the author
+    happened to wrap or bold, which is not a property worth gating on — both variants were
+    caught mid-review passing a site that plainly stated the fact.
+    """
+    return re.sub(r"\s+", " ", text.replace("*", "").replace("`", ""))
+
+
+# The read-scope RULE names a DIFFERENT set of prose sites than the skills-roots RULE
+# above: `docs/REFERENCE.md` carries a workspace-selection section and so must state that
+# the workspace is not a read boundary, but it carries no skills-root disclosure. Reusing
+# `_DOC_DISCLOSURE_SITES` would either under-enforce this rule or wrongly demand skills
+# disclosures of REFERENCE.md, so the rule gets its own tuple and its own two-way
+# consistency check below.
+_READ_SCOPE_DOC_SITES = (*_DOC_DISCLOSURE_SITES, "docs/REFERENCE.md")
+
+
+def test_read_scope_site_list_matches_its_own_rule():
+    """The read-scope tuple and the `RULE (read scope):` block must name the same sites.
+
+    Two-way, for the reason the skills-roots equivalent is: a one-way check lets a site be
+    dropped from the tuple and fall out of enforcement while staying green. The header is
+    matched exactly so this parses ITS rule — `cli_contract.py` now carries two RULE
+    blocks, and splitting on the bare `# RULE:` prefix silently reads the other one.
+    """
+    contract = (_REPO_ROOT / "src/codex_in_claude/cli_contract.py").read_text(encoding="utf-8")
+    assert contract.count("# RULE (read scope):") == 1
+    rule = contract.split("# RULE (read scope):", 1)[1].split("\n\n", 1)[0]
+
+    expected = {
+        "README.md": "README.md",
+        "SECURITY.md": "SECURITY.md",
+        "COMPATIBILITY.md": "COMPATIBILITY.md",
+        "docs/REFERENCE.md": "docs/REFERENCE.md",
+        "collaborating-with-codex": "skills/collaborating-with-codex/SKILL.md",
+    }
+    named_in_rule = {token for token in expected if token in rule}
+    assert named_in_rule == set(expected), (
+        f"the read-scope RULE no longer names: {set(expected) - named_in_rule}"
+    )
+    enforced = set(_READ_SCOPE_DOC_SITES) - {
+        "skills/collaborating-with-codex/references/server-down-fallback.md"
+    }
+    assert enforced == set(expected.values()), (
+        "the read-scope RULE and _READ_SCOPE_DOC_SITES have drifted: "
+        f"only in tuple={enforced - set(expected.values())}, "
+        f"only in RULE={set(expected.values()) - enforced}"
+    )
+
+
+# Same shape as tests/test_server.py's runtime contradiction guard, and same reasoning: a
+# prose site can state the fact correctly in one paragraph and re-assert the bound in
+# another, which neither the legacy list nor the affirmative matchers can see. Kept as an
+# independent copy rather than imported because the two guard different corpora (runtime
+# strings vs markdown sources) and should be able to diverge without silently weakening
+# one another.
+_CONTRADICTS_READ_SCOPE_PROSE = re.compile(
+    r"(?:confined|limited|restricted) to\b[^.]{0,40}"
+    r"\b(?:workspace|worktree|repo|repos|repository|working dir)"
+    r"|(?:cannot|can ?not|can't|never|does not|doesn't) read\b[^.]{0,40}\boutside"
+    r"|reads? only\b[^.]{0,40}\b(?:workspace|worktree|repo|repository)",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("relpath", _READ_SCOPE_DOC_SITES)
+def test_doc_site_does_not_scope_codex_reads_to_the_workspace(relpath):
+    """No prose site may reuse a clause that presents the workspace as a read bound (#509)."""
+    text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8").lower())
+    for clause in _LEGACY_SCOPED_READ_PROSE:
+        assert clause not in text, (
+            f"{relpath} still scopes Codex's reads with {clause!r} — read-only bounds "
+            "writes, not reads (#509; COMPATIBILITY.md owns the probe)"
+        )
+    contradiction = _CONTRADICTS_READ_SCOPE_PROSE.search(text)
+    assert contradiction is None, (
+        f"{relpath} asserts a read bound ({contradiction.group(0)!r} ) alongside the "
+        "corrected disclosure (#509)"
+    )
+
+
+def test_prose_contradiction_pattern_is_not_vacuous():
+    """Guard the guard: it must fire on an inverted claim and spare the corrected wording."""
+    assert _CONTRADICTS_READ_SCOPE_PROSE.search(
+        "Nevertheless, Codex is confined to files under the workspace."
+    )
+    assert _CONTRADICTS_READ_SCOPE_PROSE.search("Codex reads only files in the repo.")
+    assert (
+        _CONTRADICTS_READ_SCOPE_PROSE.search(
+            "Neither read-only nor workspace-write confines what Codex may read."
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("relpath", _READ_SCOPE_DOC_SITES)
+def test_doc_site_states_reads_are_not_bounded_by_the_workspace(relpath):
+    text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8"))
+    assert _OUTSIDE_READ_RE.search(text), f"{relpath} never says Codex reads outside the workspace"
+    assert _NOT_A_READ_BOUNDARY_RE.search(text), (
+        f"{relpath} never says the workspace is not a read boundary"
+    )
+
+
+def test_read_scope_prose_guard_rejects_the_pre_509_wording():
+    """Guard the guard: the wording #509 replaced must fail, and the correction must pass.
+
+    Without this a matcher that accepted everything would hold the two tests above green
+    forever — the vacuity this file's other guard-the-guard cases exist to prevent.
+    """
+    pre_509 = (
+        "During every active call — including consult — Codex may read other files in the "
+        "resolved workspace."
+    )
+    assert _NOT_A_READ_BOUNDARY_RE.search(pre_509) is None
+    corrected = (
+        "Codex may read files outside the resolved workspace, up to everything the OS user "
+        "running codex can read: the sandbox bounds writes, not reads."
+    )
+    assert _OUTSIDE_READ_RE.search(corrected) and _NOT_A_READ_BOUNDARY_RE.search(corrected)
+    # The INVERSION must not satisfy the affirmative matcher.
+    inverted = "The sandbox bounds reads, not writes, so the workspace is a read boundary."
+    assert _NOT_A_READ_BOUNDARY_RE.search(inverted) is None
+
+
+def test_skill_privacy_and_independence_rules_carry_the_correction():
+    """The BINDING rules, not just the background section (#512's failure mode, again).
+
+    #509's premise is that readers treat the workspace enumeration as the decision
+    boundary. The Privacy rules are where that decision is actually made, and the
+    Independence rules keyed their whole argument on the same geometry — so widening the
+    Data-exposure bullet while leaving either narrow would reproduce the exact defect.
+    """
+    rules = _flat(_privacy_rule_text())
+    assert _NOT_A_READ_BOUNDARY_RE.search(rules) or "not the boundary" in rules.lower(), (
+        "the Privacy binding rules still present the workspace as the decision boundary"
+    )
+    assert "necessary, not sufficient" in rules, (
+        "the Privacy enumeration must say it is necessary but NOT sufficient — it lists "
+        "what an ordinary call reaches, not the limit of what can be reached"
+    )
+
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    start = text.index("- **Independence — draft placement:**")
+    independence = _flat(text[start : text.index("\n- **Git state", start)])
+    assert "not a read boundary" in independence, (
+        "the Independence rules still treat draft placement as a boundary; under the "
+        "corrected model Codex's reads are not bounded by the workspace"
+    )
+    # The reclassification trigger must be something the agent can actually observe. The
+    # result contract carries no read audit (schemas.py's success envelopes expose final
+    # text, session, and model — nothing per-file), so a trigger keyed on whether Codex
+    # "reached" the draft is unfalsifiable and the independence claim rests on nothing.
+    assert "otherwise reached it" not in independence, (
+        "reclassification is keyed on an unobservable event; key it on the agent's own "
+        "tool calls and the returned output instead"
+    )
+    for observable in ("supplied to Codex or named to it", "returned output contains"):
+        assert observable in independence, (
+            f"the Independence rules dropped the observable trigger {observable!r}"
+        )

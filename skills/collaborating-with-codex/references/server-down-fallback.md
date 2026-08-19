@@ -37,7 +37,8 @@ directory up to the repository root when the workspace is in a repository, and f
 in `.agents/skills/`, and does the same for your user-global `$CODEX_HOME/skills/` — which
 `--ignore-user-config` suppresses no more than it suppresses the user-global guidance file, since
 that flag drops only `$CODEX_HOME/config.toml` —
-and may read other files.
+and may read other files — including files outside `WORKSPACE`, up to everything the OS user
+running codex can read.
 A skill is discovered as a **name and description**. That alone lets the model select it, and
 selecting it makes the model read the **body**, so a skill body reaches OpenAI even when your
 prompt names neither the skill nor the file.

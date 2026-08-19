@@ -15,7 +15,15 @@ from pontonier.core.jobs import DiscardOutcome
 from pontonier.core.runtime import CommandRun
 from pydantic import ValidationError
 
-from codex_in_claude import __version__, cli_contract, codex, delegate, orchestration, server
+from codex_in_claude import (
+    __version__,
+    cli_contract,
+    codex,
+    delegate,
+    orchestration,
+    param_contracts,
+    server,
+)
 from codex_in_claude.schemas import (
     FINGERPRINT,
     JOB_POLL_AFTER_MS,
@@ -586,6 +594,69 @@ def _skill_body_disclosed(text: str) -> bool:
     )
 
 
+# --- #509: the read-scope fact ----------------------------------------------------
+# Every scoped read clause this replaced ("files Codex reads from its resolved working
+# dir", "other repo files", "tracked files in the worktree") read as a BOUND. It is not
+# one: `read-only` bounds writes, and a run under this plugin's own flags read a file in
+# $HOME, outside the workspace and outside any repo (both sandbox tiers; COMPATIBILITY.md
+# owns the probe). Unlike the other matchers here this one is NOT a word-presence
+# grammar — it is normalized containment of the canonical constant.
+#
+# Word-presence is the wrong instrument for this guarantee specifically. Its content is
+# half negative ("bounds writes, not reads", "no choice of workspace is a read
+# boundary"), and a marker-word check over a negative claim passes the confident
+# INVERSION — the #502 failure, and the acknowledged residual limit of `skill_body_read`
+# and the doc-side mechanism matcher. Exact containment cannot be inverted.
+#
+# Carriers hand text in LOWERCASED (see the call sites below), so normalize and lower
+# both sides; the six docstrings additionally arrive line-wrapped and backticked, which
+# is what `_normalize` exists to absorb.
+def _read_scope_disclosed(text: str) -> bool:
+    """Does this carrier state the read-scope fact verbatim (modulo wrap/backticks/case)?"""
+    return _normalize(cli_contract.READ_SCOPE_FACT).lower() in _normalize(text).lower()
+
+
+# The scoped clauses #509 removed, as they appeared in the live carriers. Exact
+# containment above pins what a carrier MUST say; this pins what none may say again,
+# which is what catches a scoped clause re-added ALONGSIDE the correct fact (containment
+# alone would stay green). Kept as literal pre-fix wording rather than a shape regex on
+# purpose: READ_SCOPE_FACT itself contains "read files outside the workspace", so a
+# `read.*workspace` pattern would reject the very sentence it guards (the #502
+# negation-regex-hits-emphasis failure).
+# Exact containment says a carrier states the fact; the legacy list says it does not
+# repeat a clause we already removed. Neither catches a NEW contradiction written beside
+# the correct sentence — a Codex review demonstrated that READ_SCOPE_FACT followed by
+# "Nevertheless, Codex is confined to files under the workspace" satisfied every guard
+# here. These patterns close that: they match the affirmative shapes an inverted claim
+# takes, with a bounded gap so the object of the confinement is actually named.
+#
+# Deliberately NOT a blanket `read.*workspace` pattern. READ_SCOPE_FACT itself contains
+# "read files outside the workspace", and the corrected COMPATIBILITY prose says
+# "confines what Codex may read" as part of a DENIAL, so a loose matcher would reject the
+# very sentences it exists to protect — the failure this repo hit in #502.
+_CONTRADICTS_READ_SCOPE = re.compile(
+    r"(?:confined|limited|restricted) to\b[^.]{0,40}"
+    r"\b(?:workspace|worktree|repo|repos|repository|working dir)"
+    r"|(?:cannot|can ?not|can't|never|does not|doesn't) read\b[^.]{0,40}\boutside"
+    r"|reads? only\b[^.]{0,40}\b(?:workspace|worktree|repo|repository)",
+    re.IGNORECASE,
+)
+
+_LEGACY_SCOPED_READ_CLAUSES = (
+    "files codex reads from the resolved working dir",
+    "files codex reads from its resolved working dir",
+    "files codex reads from its resolved working directory",
+    "codex may read/send other repo files",
+    "codex may also read other repo files",
+    "may read and send other repo files",
+    "may read and send files from it",
+    "the worktree files codex reads",
+    "read tracked files in the throwaway worktree",
+    "read tracked files in the worktree",
+    "so it may read files there",
+)
+
+
 _GUARANTEE_MATCHERS = {
     # Caller content is sent to OpenAI.
     "openai": lambda d: "openai" in d,
@@ -630,6 +701,10 @@ _GUARANTEE_MATCHERS = {
     # same acknowledged limit: word-presence catches omission, not a confident
     # misstatement. See test_skill_body_matcher_rejects_metadata_only_and_decoupled_prose.
     "skill_body_read": _skill_body_disclosed,
+    # Reads are NOT bounded by the workspace or the repo (#509). Exact containment of
+    # cli_contract.READ_SCOPE_FACT — see _read_scope_disclosed for why this one is not a
+    # word-presence check like its neighbours.
+    "read_scope": _read_scope_disclosed,
 }
 _COMMON_EGRESS = {
     "openai",
@@ -639,6 +714,7 @@ _COMMON_EGRESS = {
     "autoload_skills",
     "autoload_global_skills",
     "skill_body_read",
+    "read_scope",
 }
 _REQUIRED_GUARANTEES = {
     "codex_consult": _COMMON_EGRESS | {"isolation_suppress", "redaction_best_effort"},
@@ -2545,7 +2621,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-77"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-78"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6473,7 +6549,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-77")
+    assert result["fingerprint"].endswith("schema-78")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -8936,3 +9012,163 @@ async def test_blank_task_dry_run_matches_paid_delegate(clean_env, tmp_path, mon
     assert paid["error"]["code"] == dry["error"]["code"] == "invalid_arguments"
     assert paid["error"]["details"] == dry["error"]["details"]
     assert paid["error"]["invalid_arguments"] == dry["error"]["invalid_arguments"]
+
+
+# --- #509 read-scope guards -------------------------------------------------------
+# Guard the guard. `read_scope` is exact containment, so the cases that matter are the
+# near-misses a paraphrase would produce — above all the INVERSION, which every
+# word-presence matcher in this file admits it cannot catch.
+def test_read_scope_matcher_positive_and_negative_controls():
+    fact = cli_contract.READ_SCOPE_FACT
+
+    # Positive: canonical text, and the shapes real carriers deliver it in.
+    assert _read_scope_disclosed(fact)
+    assert _read_scope_disclosed(fact.lower())
+    wrapped = "    " + fact.replace(" ", "\n    ", 3) + "\n"
+    assert _read_scope_disclosed(wrapped), "line-wrapped docstring copy must still match"
+    backticked = fact.replace("OpenAI", "`OpenAI`").replace("workspace", "`workspace`")
+    assert _read_scope_disclosed(backticked), "backticked prose copy must still match"
+    assert _read_scope_disclosed(fact + " This does NOT mean nothing leaves the machine."), (
+        "an unrelated later negation must not break the pin"
+    )
+
+    # Negative: the empty carrier, the inversion, and a truncation that drops the
+    # load-bearing half.
+    assert _read_scope_disclosed("") is False
+    inverted = fact.replace("bounds writes, not reads", "bounds reads, not writes")
+    assert _read_scope_disclosed(inverted) is False, (
+        "the inversion must fail — this is the whole reason this matcher is exact "
+        "containment rather than a word-presence check"
+    )
+    truncated = fact.split(" The sandbox bounds")[0]
+    assert _read_scope_disclosed(truncated) is False, (
+        "dropping 'no choice of workspace is a read boundary' drops the actionable half"
+    )
+    # Every marker word present, opposite claim asserted.
+    assert (
+        _read_scope_disclosed(
+            "codex reads only workspace files; the os user running it cannot read "
+            "outside the workspace, and nothing is sent to openai from elsewhere."
+        )
+        is False
+    )
+    for clause in _LEGACY_SCOPED_READ_CLAUSES:
+        assert _read_scope_disclosed(clause) is False, clause
+
+
+def _runtime_read_scope_carriers(caveat: str | None = None) -> dict[str, str]:
+    """Every runtime string that must carry the read-scope fact and none of the old clauses.
+
+    Deliberately the RUNTIME values, not the source files: this module's own
+    guard-the-guard fixtures quote the pre-fix wording verbatim, so a file-level sweep
+    would flag the very tests that prove the guard works.
+    """
+    caps = server.codex_capabilities(detail="full")
+    carriers = {
+        "CAPABILITY_SUMMARY": server.CAPABILITY_SUMMARY,
+        "negative_scope": " ".join(caps["negative_scope"]),
+        "readonly_honesty_statement": (cli_contract.PONTONIER_CONTRACT.readonly_honesty_statement),
+        "extra_context_contract": param_contracts.PARAMETER_CONTRACTS["extra_context"].full,
+    }
+    for tool in caps["tool_details"]:
+        if tool["name"] in _ACTIVE_EGRESS_TOOLS:
+            carriers[f"returns:{tool['name']}"] = tool["returns"]
+    for name in _ACTIVE_EGRESS_TOOLS:
+        carriers[f"docstring:{name}"] = getattr(server, name).__doc__ or ""
+    if caveat is not None:
+        carriers["status_caveat"] = caveat
+    return carriers
+
+
+def test_no_runtime_carrier_reuses_a_scoped_read_clause(monkeypatch, clean_env):
+    """The clauses #509 removed must not come back — beside the fact or instead of it.
+
+    Exact containment says what a carrier must state; it stays green if a scoped clause
+    is re-added next to the correct sentence. This is the half that catches that.
+    """
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    caveat = server.codex_status()["caveat"]
+    offenders = []
+    for label, text in _runtime_read_scope_carriers(caveat).items():
+        low = _normalize(text).lower()
+        for clause in _LEGACY_SCOPED_READ_CLAUSES:
+            if clause in low:
+                offenders.append(f"{label}: {clause!r}")
+        contradiction = _CONTRADICTS_READ_SCOPE.search(low)
+        if contradiction:
+            offenders.append(f"{label}: contradiction {contradiction.group(0)!r}")
+    assert not offenders, (
+        "these carriers still scope Codex's reads to the workspace/repo/worktree (#509): "
+        + "; ".join(offenders)
+    )
+
+
+# The two param-side carriers state the correction in one clause rather than carrying the
+# whole 200-byte fact: repeating it in a parameter description is bloat on every tool that
+# takes the param, and `codex_capabilities` is one hop away. They still need their own pins
+# — the exact-containment matcher above deliberately does not reach them.
+def test_workspace_root_param_says_it_is_not_a_read_boundary():
+    """`workspace_root` is the single most likely thing to be mistaken for a bound (#509)."""
+    desc = _param_description("WorkspaceRootParam")
+    assert "not a read boundary" in desc, desc
+    assert "not what it can read" in desc, desc
+
+
+def test_extra_context_contract_does_not_scope_reads_to_the_target():
+    """The old wording ("files it's pointed at") read as a bound; it is a ceiling-free fact."""
+    full = param_contracts.PARAMETER_CONTRACTS["extra_context"].full.lower()
+    assert "not bounded by the workspace" in full, full
+    assert "read files it's pointed at" not in full, (
+        "the pre-#509 phrasing implies pointing Codex somewhere bounds what it reads"
+    )
+
+
+def test_readonly_honesty_statement_carries_the_read_scope_fact():
+    """The declarative contract's read-only claim must not imply a read bound either.
+
+    `readonly_honesty_statement` is what a pontonier contract consumer reads to learn what
+    read-only does and does not promise, so it is the one place a downstream bridge could
+    re-learn the workspace-bounded model.
+    """
+    assert _GUARANTEE_MATCHERS["read_scope"](
+        cli_contract.PONTONIER_CONTRACT.readonly_honesty_statement.lower()
+    )
+
+
+def test_contradiction_pattern_catches_a_bound_asserted_beside_the_fact():
+    """The gap a Codex review found: correct sentence, contradiction appended.
+
+    Exact containment stays TRUE for this text and no legacy clause appears in it, so
+    without this pattern every read-scope guard passes a carrier that plainly re-asserts
+    the bound.
+    """
+    poisoned = (
+        cli_contract.READ_SCOPE_FACT
+        + " Nevertheless, Codex is confined to files under the workspace."
+    )
+    assert _read_scope_disclosed(poisoned) is True, (
+        "precondition: containment alone cannot see the contradiction"
+    )
+    assert not any(c in _normalize(poisoned).lower() for c in _LEGACY_SCOPED_READ_CLAUSES), (
+        "precondition: the legacy list cannot see it either"
+    )
+    assert _CONTRADICTS_READ_SCOPE.search(_normalize(poisoned).lower())
+
+    for inverted in (
+        "codex reads only files in the workspace.",
+        "reads are limited to the resolved worktree.",
+        "codex cannot read files outside the workspace.",
+        "its reads are restricted to the repo.",
+    ):
+        assert _CONTRADICTS_READ_SCOPE.search(inverted), inverted
+
+    # And it must NOT fire on the corrected wording it guards — including the denial
+    # forms, which contain the same vocabulary as the claims being rejected.
+    for ok in (
+        cli_contract.READ_SCOPE_FACT.lower(),
+        "neither read-only nor workspace-write confines what codex may read.",
+        "the worktree bounds what codex may write, not what it may read.",
+        "codex can read files outside the workspace and send them to openai.",
+    ):
+        assert _CONTRADICTS_READ_SCOPE.search(ok) is None, ok

@@ -252,6 +252,14 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   touch image handling, re-run the no-auto-attachment A/B that section records — `codex debug
   prompt-input` with and without `--disable view_image`, **plus the `-i` positive control** without
   which a zero count proves nothing.
+- **The read boundary.** `cli_contract.READ_SCOPE_FACT` says the sandbox bounds writes, not reads,
+  and every agent-visible carrier states it ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "The read
+  boundary: there isn't one"). It is a *ceiling* claim, so the upgrade risk runs one way: if a
+  release ever DID confine reads, the disclosure would be over-broad rather than unsafe, and the
+  correct response is to re-probe before narrowing anything. Re-run that section's two-tier probe
+  when the release notes touch the sandbox, `--sandbox` values, or filesystem access. Keep the
+  **write negative control** — without it a successful read proves nothing about the sandbox, only
+  that it might not have been applied.
 - **Model catalog fallback.** `cli_contract.py`'s `KNOWN_MODEL_SLUGS` is a bundled fallback copied
   from a specific CLI's `$CODEX_HOME/models_cache.json`, meant to stay in lockstep with
   `SUPPORTED_VERSIONS`. Diff its **slug set** (not the volatile `client_version`/`fetched_at`) against

@@ -140,7 +140,22 @@ from codex_in_claude.server import mcp
 # bare second filename could be read as the workspace/ancestor file in a sentence that names
 # both — it now repeats the path and says `, else`, which also carries the masking precedence
 # `or` did not.
-TOOLS_LIST_BYTE_BUDGET = 89_000
+# Measured again 2026-08-19 (#509 — the read-scope correction. Several descriptions scoped
+# Codex's reads to the "resolved working dir" or "repo files"; a reader takes that as a
+# bound and it is not one. A run under this plugin's own flags read a file in $HOME on both
+# sandbox tiers, while a write in the same read-only run was refused — the sandbox bounds
+# writes, not reads. Every carrier now states `cli_contract.READ_SCOPE_FACT`, which replaces
+# a ~70-byte scoped clause with a 208-byte accurate one across 13 carriers): 88,778 ->
+# 91,195 bytes (+2,417 B) — over budget; budget raised to the next 1,000 above the measured
+# value. Then +252 B on a Codex review point, still inside that raise (91,447, no further
+# change): `WorkspaceRootParam`'s new clause is shared by fourteen tools, six of which never
+# run Codex, so it now says "on an active call it selects where Codex works" rather than
+# implying the free lifecycle and dry-run tools cause reads.
+# The fact was NOT compressed to fit: the only clause short enough to drop is "no
+# choice of workspace is a read boundary", which is precisely the half that retires the
+# "narrow the workspace to bound egress" mitigation. Trimming the plugin's central safety
+# disclosure to hold a byte line is the wrong trade; the raise is the right one.
+TOOLS_LIST_BYTE_BUDGET = 92_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -152,7 +167,7 @@ TOOLS_LIST_BYTE_BUDGET = 89_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 88_778
+TOOLS_LIST_BYTE_TARGET = 91_447
 
 
 def _budget_failure_message(measured: int) -> str:

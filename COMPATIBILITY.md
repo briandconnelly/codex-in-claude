@@ -176,11 +176,35 @@ commands**", which a native handler is not).
 So `view_image` reaches **no file the shell cannot**, and disabling it still buys no containment —
 #479's posture now rests on evidence rather than on the argument it was originally filed with.
 
-Two things that verification exposed, tracked separately because neither is about `view_image`'s
-posture: `read-only` permits reads **anywhere the OS user can read**, while several agent-visible
-descriptions still scope reads to the "resolved working dir" or "repo files" (#509); and a
-successful `view_image` call emits **no item** in the `codex exec --json` stream — failures reach
-only stderr — so image egress is invisible to anything parsing it, this plugin included (#510).
+One thing that verification exposed remains open, and is tracked separately because it is not about
+`view_image`'s posture: a successful `view_image` call emits **no item** in the `codex exec --json`
+stream — failures reach only stderr — so image egress is invisible to anything parsing it, this
+plugin included (#510).
+
+## The read boundary: there isn't one (#509)
+
+The sandbox bounds writes, not reads. Neither `read-only` nor `workspace-write` confines what
+Codex may read: it can read files outside the workspace, up to everything the OS user running it can
+read, and send them to OpenAI. No `--cd` / `workspace_root` you can pass is a read boundary.
+
+Verified on **codex-cli 0.148.0** under this plugin's own `ALWAYS_SEND` flags (`--sandbox <tier>
+--cd <ws> --json --output-last-message --skip-git-repo-check --ephemeral --ignore-user-config
+--ignore-rules --disable remote_plugin`), with the workspace a bare non-repo directory under `/tmp`:
+
+| Tier | Probe | Result |
+|---|---|---|
+| `read-only` | model shelled out: `/bin/zsh -lc 'cat $HOME/<marker>.txt'` | codeword returned |
+| `read-only` | **negative control** — write to `$HOME` | refused: "blocked by read-only sandbox"; no file created |
+| `workspace-write` | same `$HOME` read | codeword returned |
+
+The negative control is what makes the read informative: it shows the sandbox **was** in force, so
+the read is evidence about what the sandbox bounds rather than about a dropped flag. `view_image`
+reaches the same paths as the shell (see above, #507).
+
+Stated as a **ceiling, not a warrant**: the probe establishes reads far outside the workspace, not
+that every file the OS user can read is reachable — a platform sandbox (macOS TCC) can still deny
+individual paths to this process. `cli_contract.READ_SCOPE_FACT` is the canonical wording every
+carrier states; the `RULE` comment beside it lists them.
 
 `recommended_plugins` is `stable`/default-**off** at `0.148.0` and is left unreserved on the same
 reasoning as above — adjacency in the feature table is not evidence that it bypasses the
