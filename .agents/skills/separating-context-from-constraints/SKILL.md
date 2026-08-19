@@ -4,7 +4,7 @@ metadata:
     github-path: separating-context-from-constraints
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: 15c80a7c2240ff02aa52b6a7e470b7e28ad95796
+    github-tree-sha: 870f44fb0062b7695ac85787ac6b05e61bc145da
 name: separating-context-from-constraints
 ---
 # Separating Context from Constraints
@@ -98,6 +98,8 @@ An R5 finding attaches to the conflicting pair of statements, not to either stat
 ## Summary Format
 
 Report counts per rule and per severity, followed by a one-paragraph overall assessment.
+Count a rule id once for every finding that carries it, secondary ids included, so a finding citing a primary and a secondary rule adds one to each.
+Count a finding once by severity, so the severity total is the number of findings and the per-rule total may exceed it.
 Report safety notes separately and exclude them from counts.
 Do not include a numeric score.
 

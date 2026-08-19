@@ -62,11 +62,10 @@ Checkpoint: §3, §4, §5.
 
 For each tool, choose task-completing vs composable primitive, and record the reason.
 
-- Default to task-completing.
-  Hide internal step granularity unless the steps are themselves separately useful tasks.
+- Default to task-completing (`[3.task-completing]`), hiding internal step granularity (`[3.hide-steps]`).
 - Split into composable primitives only when a named exception applies or an eval (Step 8) shows the split helps a code-execution client — not on speculation.
-- Named split exceptions: intermediate state inspection, branching on intermediate results, streaming large results, step reuse across workflows, and human-approval boundaries.
-- Endpoint-shaped tools are an anti-pattern: collapse endpoint chains into the task they serve.
+- Named split exceptions (the list `[3.task-completing]` delegates to this step): intermediate state inspection, branching on intermediate results, streaming large results, step reuse across workflows, and human-approval boundaries.
+- Endpoint-shaped tools are the `[3.ap-endpoint-wrapping]` anti-pattern: collapse endpoint chains into the task they serve.
 - If two tools' descriptions need long prose to disambiguate, the granularity is wrong.
 
 Output: per-tool granularity decision with explicit reasoning (task-completing or composable, and why).

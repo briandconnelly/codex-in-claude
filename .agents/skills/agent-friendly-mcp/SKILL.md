@@ -4,7 +4,7 @@ metadata:
     github-path: agent-friendly-mcp
     github-ref: refs/heads/main
     github-repo: https://github.com/briandconnelly/skills
-    github-tree-sha: a07572d20ad77d5cc674f623638b0fb5ae3acd77
+    github-tree-sha: 78e222248f4796989a8756c166022142b38eff6e
 name: agent-friendly-mcp
 ---
 # Agent-Friendly MCP
@@ -16,18 +16,19 @@ Use this skill to make MCP servers easy for agents to discover, invoke correctly
 This skill is written against the **MCP 2026-07-28** specification (final, released 2026-07-28); the field names, capability paths, method set, and task lifecycle it uses follow that revision, including the `io.modelcontextprotocol/tasks` extension (SEP-2663).
 Status caveat: the 2026-07-28 changelog calls tasks an official extension while the ext-tasks specification repository still labels itself experimental — treat the task contract as extension-versioned and re-verify it against the extension spec when it cuts a release.
 The protocol core is stateless: there is no `initialize` handshake or session id — every request carries `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in `_meta` (both required), and servers advertise their own capabilities via the mandatory `server/discover` method.
-Server-initiated requests are gone: elicitation, sampling, and roots requests ride Multi Round-Trip Requests (`resultType: "input_required"` with `inputRequests`, answered by retrying with `inputResponses`), and push notifications ride an opt-in `subscriptions/listen` stream.
-Every result carries a required `resultType`, and list/read results carry the native cache hints `ttlMs` and `cacheScope`.
+Server-initiated requests are gone: elicitation, sampling, and roots requests ride Multi Round-Trip Requests (`resultType: "input_required"` with `inputRequests`, answered by retrying with `inputResponses`), and subscription notifications — list-changed, resource-updated, and task notifications — ride an opt-in `subscriptions/listen` stream, while request-scoped notifications (`notifications/progress`, `notifications/message`) stay on the originating request's response stream.
+Every result carries a required `resultType`, and `server/discover`, list, and read results carry the native cache hints `ttlMs` and `cacheScope` on their `resultType: "complete"` results — MRTR interim results are never cacheable.
 Roots, sampling, logging, the HTTP+SSE transport, and Dynamic Client Registration are deprecated on a twelve-month minimum window; design new servers without them.
 The extensions framework is formal but demanding: an extension needs a reverse-DNS identifier, its own maintained specification, and negotiation by both peers (declared in `clientCapabilities.extensions` and `server/discover`), so a namespaced `_meta` key remains a private convention until someone does that work.
-This section is the single home for spec-revision facts; other files cite it rather than restating them.
+This section is the single home for revision-level facts: which revision is baseline, its release status, the tasks-extension caveat, and what is deprecated or removed.
+Checklist rules and [native-wire-shapes.md](references/native-wire-shapes.md) necessarily restate the mechanics they govern, including a governed surface's deprecation status; for the revision-level frame they cite this section rather than restating it.
 For clients that still speak **2025-11-25**, the binding rules here still govern what you build; the old revision's wire differences and version-bound failure modes are cataloged in the informative [mcp-2025-11-25-compat.md](references/mcp-2025-11-25-compat.md), and `decisions/001-mcp-2026-07-28-rebase.md` records the rebase decision, verified fact sheet, and impact matrix.
 
 ## Where The Recurring Concerns Live
 
 A routing table, not a summary.
 Each row names a concern this skill keeps returning to and the rules that govern it; the rules themselves are stated only in [contract-checklist.md](references/contract-checklist.md).
-Read the cited ids — nothing here restates them, so a row is never a substitute for the rule.
+Read the cited ids — a row names the concern but does not define the rule, so a row is never a substitute for it.
 
 | Concern | Governing rules |
 | --- | --- |
@@ -44,8 +45,9 @@ Cold-start first-call and first-repair success are the outcome measures this ski
 
 ## Native Fields vs Convention Extensions
 
-This skill is deliberately opinionated: native MCP fields alone are often insufficient for agent-friendliness, so well-designed servers add convention extensions such as structured `errors`, `repair` hints, a capability `fingerprint`, prompt prerequisites, and detail toggles.
-Keep them — but never let them masquerade as protocol.
+This skill is deliberately opinionated: native MCP fields alone are often insufficient for agent-friendliness, so well-designed servers add convention extensions such as structured `errors`, `repair` hints, prompt prerequisites, detail toggles, and — where target clients cache or pin the surface (`[9.fingerprint]`) — a capability `fingerprint`.
+Keep the conventions whose applicability rules hold — but never let them masquerade as protocol.
+The native-vs-convention rule is homed in this section; [contract-checklist.md](references/contract-checklist.md), [native-wire-shapes.md](references/native-wire-shapes.md), and [examples.md](references/examples.md) cite it here rather than restating it.
 
 - **Preserve native MCP field names and casing exactly; prefer `snake_case` for house/domain fields.**
   A field's provenance is determined by the MCP type that contains it, **not** by its casing — native `_meta` carries an underscore, `name`/`code`/`repair` are lowercase on both sides, and a convention object may hold a `mimeType`-style name.
@@ -67,7 +69,7 @@ Keep them — but never let them masquerade as protocol.
 - Defining or hardening tool, resource, or prompt schemas for an existing server.
 - Auditing an existing MCP server for agent-friendliness.
 - Diagnosing concrete agent failures: wrong-tool selection from many candidates, repeated invalid tool calls, token waste from upfront definition loading, endpoint-mirroring tools that force long chains, broken cross-server upgrades.
-- Designing long-running work: progress notifications, cancellation, tasks via the negotiated extension, and long-running operation patterns (see [contract-checklist.md](references/contract-checklist.md) §7 and [examples.md](references/examples.md) §11).
+- Designing long-running work: progress notifications, cancellation, tasks via the negotiated extension, and long-running operation patterns (see [contract-checklist.md](references/contract-checklist.md) §7 and [examples.md](references/examples.md) ex§11).
 
 ## When Not To Use
 
@@ -80,18 +82,19 @@ Keep them — but never let them masquerade as protocol.
 
 ## Vocabulary
 
-Shared terms — discovery surface, repair signal, state handle, capability fingerprint, negotiated capability, task-capable tool, and the rest — are defined in [vocabulary.md](references/vocabulary.md); consult it when a term in the checklist or workflows is unfamiliar.
+Shared terms — discovery surface, repair signal, state handle, capability fingerprint, negotiated capability, task-returning tool, and the rest — are defined in [vocabulary.md](references/vocabulary.md); consult it when a term in the checklist or workflows is unfamiliar.
 
 ## Checklist Map
 
-The normative standard lives in [contract-checklist.md](references/contract-checklist.md); walk it top to bottom for any design or review.
-This index orients and routes — it does not restate the rules.
+The normative standard lives in [contract-checklist.md](references/contract-checklist.md), with two named exceptions homed in this file: the Spec Baseline facts and the native-vs-convention rule.
+Walk the checklist top to bottom for any design or review.
+This index orients and routes — its one-line summaries aid navigation and never define or override a rule.
 State-handle discipline and long-running-operation contracts are normative in §1/§8 and §7 respectively; consult them there rather than a second copy here.
 Notation: bare `§N` always means a contract-checklist section; `ex§N` means section N of [examples.md](references/examples.md).
 A single rule is cited by its stable id, `` `[section.slug]` `` — `[3.naming]`, `[6.repair-object]` — which resolves to exactly one bullet in contract-checklist.md and survives rewording of that bullet.
 Prefer a rule id over a section reference when you mean one specific rule; `tests/check_rule_ids.py` fails the build if a cited id does not resolve.
 
-| § | Section | One-line rule | Worked examples |
+| § | Section | Section gist | Worked examples |
 | --- | --- | --- | --- |
 | §1 | Server-Level | Identity, transport (including required HTTP routing headers), auth modes, agent-actionable prerequisites, per-request capability declaration, and workspace scope — learnable in one read. State handles are declared here: opaque IDs, lifetime, expiry, auth on every use. | ex§7, ex§8a |
 | §2 | Discovery | A capability summary plus compact definitions as the universal baseline; progressive disclosure is a client-dependent optimization — pick a mechanism by cost axis (host-managed context, server-managed catalog, or client-independent surface reduction). | ex§7, ex§8 |
@@ -101,7 +104,7 @@ Prefer a rule id over a section reference when you mean one specific rule; `test
 | §6 | Failure Recovery | Stable symbolic codes, field-level feedback, explicit retryability, repair hints naming real callable surfaces. | ex§6 |
 | §7 | Long-Running Operations | Choose blocking / progress / task-augmented deliberately; declare duration and timeout; recover via the native task lifecycle with a labeled fallback. | ex§11 |
 | §8 | Token Efficiency | Concise default with a `detail` toggle; native list methods paginate with `nextCursor` (omission = done) and carry honest `ttlMs`/`cacheScope`, while a tool's own result payload may use a documented `has_more` convention; explicit truncation with a repair hint; identifiers chosen by role. | ex§2 |
-| §9 | Versioning | Publish a capability fingerprint where target clients cache or pin the surface; deterministic list ordering; native list-changed notifications; discoverable deprecation. | ex§9 |
+| §9 | Versioning | Publish a capability fingerprint where target clients cache or pin the surface; deterministic list ordering; native list-changed notifications; discoverable deprecation. | ex§9, ex§9a |
 
 ## Workflow
 

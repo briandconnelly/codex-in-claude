@@ -325,7 +325,7 @@ A prompt that orchestrates posting a release announcement across multiple channe
 ```
 
 What to notice: `com.slack-mcp/when-to-use` distinguishes this from "draft a message"; `com.slack-mcp/prerequisites` lists the required permissions, tool names, resource URIs, and context assumptions in one place; `com.slack-mcp/expected-followups` names tools by their canonical schema name — the prompt references but does not redefine.
-The block is wire-valid as shown: `when-to-use`, `prerequisites`, and `expected-followups` are convention extensions, not native MCP `Prompt` fields (native is `name`, `title`, `description`, `arguments`, `_meta`), so they ride under namespaced `_meta` keys rather than at the top level (see the native-vs-convention rule in `SKILL.md`).
+The block is wire-valid as shown: `when-to-use`, `prerequisites`, and `expected-followups` are convention extensions, not native MCP `Prompt` fields (native is `name`, `title`, `description`, `icons`, `arguments`, `_meta`), so they ride under namespaced `_meta` keys rather than at the top level (see the native-vs-convention rule in `SKILL.md`).
 Inside `arguments`, only native `PromptArgument` fields appear (`name`, `title`, `description`, `required`); value-shape guidance that would otherwise use `type`, `items`, or `default` is carried in each argument's `description` instead.
 `prompts/get` carries `arguments` as a map of string to string, so there is no array or boolean on the wire — which is why `channels` and `pin` declare their **encoding** ("comma-separated", `"true"`/`"false"`), not just their conceptual type.
 An argument whose description says "array" without saying how to serialize it leaves every client to invent its own convention.
@@ -666,7 +666,7 @@ On a host that preloads the full catalog, they add tools and round trips with no
 }
 ```
 
-What to notice: only summaries come back, not full schemas; the agent calls `describe_tool(name)` — which returns the full native `Tool` record (`name`, `title`, `description`, `inputSchema`, `outputSchema`, `annotations`, `_meta`) plus the server's documented error catalog under `_meta` (`com.slack-mcp/errors`, a convention extension — `errors` is not a native `Tool` field; see `examples.md` §1 and the native-vs-convention rule in `SKILL.md`) — to load the definitions it actually needs. `stability` is included so the agent can filter out preview tools; a capability on its way out is signalled by a `deprecation` marker rather than a `stability` value (`[9.stability-tiers]`), so an adoption decision reads both. `score` is the search-relevance score for the supplied query, ranked descending.
+What to notice: only summaries come back, not full schemas; the agent calls `describe_tool(name)` — which returns the full native `Tool` record (`name`, `title`, `description`, `icons`, `inputSchema`, `outputSchema`, `annotations`, `_meta`) plus the server's documented error catalog under `_meta` (`com.slack-mcp/errors`, a convention extension — `errors` is not a native `Tool` field; see `examples.md` §1 and the native-vs-convention rule in `SKILL.md`) — to load the definitions it actually needs. `stability` is included so the agent can filter out preview tools; a capability on its way out is signalled by a `deprecation` marker rather than a `stability` value (`[9.stability-tiers]`), so an adoption decision reads both. `score` is the search-relevance score for the supplied query, ranked descending.
 The fingerprint travels with the response so a cached client can detect drift.
 Other shapes on this same axis: a tool catalog endpoint, a topic-tagged tool index, a paginated `list_tools` with filtering — all custom surfaces layered over native discovery, and all subject to the same host-integration requirement.
 None of them shrink the native `tools/list` payload a preloading client receives; to lower cost on a client that never lazy-loads, reduce the catalog itself (compact definitions, consolidation, a compact dispatcher, or authorization-scoped catalogs — see §2).
@@ -790,7 +790,7 @@ Every fingerprint string changes when any covered surface changes, including res
 The fingerprint and its `covers`, `deprecation`, and `schema_hash` fields are a convention extension, not a native MCP structure (see the native-vs-convention rule in `SKILL.md`).
 When tool, resource, or prompt lists change, emit the corresponding native `notifications/*/list_changed` message and keep list ordering deterministic; the fingerprint is additive, not a substitute.
 
-### 9a. Lifecycle metadata on the native record
+## 9a. Lifecycle metadata on the native record
 
 The fingerprint above is a house surface.
 A client that reads only native `tools/list` never sees it, so the same two facts ride each capability's own discovery record under one namespaced `_meta` key (`[9.tier-metadata]`).

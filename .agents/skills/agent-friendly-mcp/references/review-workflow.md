@@ -103,7 +103,7 @@ Concrete example:
 
 After the findings list, include a **checklist coverage table**.
 One row per section §1–§9; each row records `finding(s)` (with refs into the findings list), `OK` (with evidence), or `not-checked` (with reason).
-Section names mirror `contract-checklist.md`; if that file changes section count or names, update this template alongside it.
+Section numbering mirrors `contract-checklist.md`, with long section names shortened to fit the table; if that file changes section count or names, update this template alongside it.
 Example shape:
 
 | Section | Status | Notes |
