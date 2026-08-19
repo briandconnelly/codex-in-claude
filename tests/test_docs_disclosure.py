@@ -339,3 +339,53 @@ def test_agents_md_scope_matcher_rejects_the_pre_472_wording():
         "skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
     )
     assert _states_the_agents_md_scope(corrected) is True
+
+
+# --- The skill's BINDING rule, not just its background section (#472) --------------
+#
+# `test_doc_site_states_every_agents_md_source` above is satisfied by ANY one qualifying
+# section, which is right for a file whose disclosure lives in one place — and wrong for
+# the skill, where "Data exposure" is background and "Binding rules" is what an agent
+# actually applies before deciding to spend. A Codex review of this change caught exactly
+# that: the Data-exposure section had been widened while the Privacy rule still named only
+# `$CODEX_HOME/skills/`, so an agent following the binding rules could have approved a call
+# with a secret sitting in one of the two newly disclosed sources. A rule that is narrower
+# than the disclosure it enforces is the defect; this guard is scoped to the rule text.
+_SKILL_PATH = "skills/collaborating-with-codex/SKILL.md"
+
+
+def _privacy_rule_text() -> str:
+    """The Privacy bullet from the skill's binding-rules list, alone."""
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    start = text.index("- **Privacy:**")
+    nxt = text.index("\n- **", start + 1)
+    return text[start:nxt]
+
+
+def test_privacy_rule_covers_every_agents_md_source():
+    rule = _privacy_rule_text()
+    assert _GLOBAL_AGENTS_RE.search(rule), (
+        "the Privacy rule omits the user-global $CODEX_HOME guidance file, which reaches "
+        "OpenAI on every call from any workspace"
+    )
+    assert _ANCESTOR_RE.search(rule) and _REPO_ROOT_RE.search(rule), (
+        "the Privacy rule omits the ancestor AGENTS.md files loaded up to the repository root"
+    )
+    # The rule it already carried must not be dropped while widening it.
+    assert "$CODEX_HOME/skills/" in rule
+
+
+def test_privacy_rule_guard_rejects_the_pre_472_rule():
+    """Guard the guard: the verbatim pre-#472 Privacy rule must fail every assertion above.
+
+    This is the shape that shipped — correct about skills, silent about both guidance
+    sources — so if it passes, the guard is vacuous.
+    """
+    pre_472 = (
+        "- **Privacy:** Do not make an active call when the supplied prompt, the supplied "
+        "context, any file Codex may inspect in the resolved workspace, or your user-global "
+        "skills under `$CODEX_HOME/skills/` contain something you cannot disclose (see Data "
+        "exposure). Changing the workspace does not exclude those skills."
+    )
+    assert _GLOBAL_AGENTS_RE.search(pre_472) is None
+    assert _ANCESTOR_RE.search(pre_472) is None

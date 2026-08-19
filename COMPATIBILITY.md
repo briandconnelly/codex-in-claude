@@ -297,9 +297,26 @@ in each of these seven places:
 
 The workspace is a **subdirectory** of the git root on purpose: with `--cd repo` the ancestor row
 would be indistinguishable from the workspace's own file, and the walk that #472 corrected would be
-invisible. Two of these markers live in the real `$CODEX_HOME` — create them, probe, and **delete
-them in the same run**; a forgotten `$CODEX_HOME/AGENTS.md` silently joins every later Codex call.
-`AGENTS.override.md` masks `AGENTS.md` in that directory, so probe one at a time.
+invisible.
+
+**The two `$CODEX_HOME` markers are the destructive part of this fixture; treat them accordingly.**
+They must live in the **real** `$CODEX_HOME`, because that is the path under test — a scratch
+`CODEX_HOME` would also have to carry a copy of `auth.json`, which is a credential and should not be
+copied around. So the guidance marker is created in a directory that may already hold the
+maintainer's own guidance file, and a careless run can overwrite or delete it:
+
+```sh
+# ABORT rather than overwrite: never clobber a real guidance file to run a probe.
+for f in "${CODEX_HOME:-$HOME/.codex}"/AGENTS.md "${CODEX_HOME:-$HOME/.codex}"/AGENTS.override.md; do
+  [ -e "$f" ] && { echo "REFUSING: $f already exists — probe it by hand or move it aside"; exit 1; }
+done
+trap 'rm -f "${CODEX_HOME:-$HOME/.codex}"/AGENTS.md "${CODEX_HOME:-$HOME/.codex}"/AGENTS.override.md' EXIT
+```
+
+The `trap` matters more than it looks: a forgotten `$CODEX_HOME/AGENTS.md` silently joins **every**
+later Codex call on that machine, this plugin's included. `AGENTS.override.md` masks `AGENTS.md` in
+that directory, so probe one at a time — the override run establishes the precedence, the plain run
+establishes that the un-overridden file loads at all.
 
 **The "present" column is not uniform, and that is the point.** An `AGENTS.md` auto-loads as
 *content*, so its codeword is the evidence; a skill auto-discovers as *name and description only*,
@@ -341,7 +358,7 @@ are requests to a model, the third is evidence about what it did:
    OUT="$TAG-$VER"                       # TAG *and* VER: two binaries can report one version
 
    "$BIN" exec --json --sandbox read-only --ignore-user-config --ignore-rules --ephemeral \
-     --skip-git-repo-check --cd <parent>/repo - < discovery-prompt.txt \
+     --skip-git-repo-check --cd <parent>/repo/sub - < discovery-prompt.txt \
      > "$OUT-discovery.jsonl" 2> "$OUT-discovery.err"
    rc=$?   # capture it here: the jq below would otherwise overwrite it
    [ "$rc" -eq 0 ] || echo "INCONCLUSIVE: $BIN exited $rc — see $OUT-discovery.err"
@@ -383,17 +400,18 @@ This is not hypothetical: the 2026-08-02 run's transcript shows the parent codew
 tool output after the model ran `sed` on `../AGENTS.md`, and the resulting "parent `AGENTS.md`
 loaded? **Yes**" row stood as published fact until it was retracted.
 
-Then run **three** consults with `--cd <parent>/repo` — a consult is single-turn, so this cannot be
+Then run **three** consults with `--cd <parent>/repo/sub` — a consult is single-turn, so this cannot be
 one call. Only the first is read-forbidden; the other two are tool-using by design, and each is
 worded so that what comes back is still evidence:
 
 - **Discovery** — under the three requirements above, ask it to list every skill available to it and
-  every codeword already in its context, then to answer SEEN/NOT-SEEN for each of the five markers
+  every codeword already in its context, then to answer SEEN/NOT-SEEN for each of the seven markers
   **described by its role** — "the user-global skill's codeword", "the `AGENTS.md` above the git
-  root" — never by the generated name or codeword itself. Asking role by role is what separates
+  root", "the `AGENTS.md` one directory above the one you were pointed at", "the `AGENTS.md` in your
+  Codex home" — never by the generated name or codeword itself. Asking role by role is what separates
   "not discovered" from "the model did not bother to mention it"; keeping the generated values out
-  of the prompt is what keeps the answer evidence rather than an echo. **Rows 1-3 come from this
-  run**, except row 1's egress half (below); row 4 is not testable by this probe at all. A run that
+  of the prompt is what keeps the answer evidence rather than an echo. **Rows 1-5 come from this
+  run**, except row 1's egress half (below). A run that
   fails the assertion is discarded, not interpreted.
 - **Body egress** — ask it to use the global marker skill by name and report the codeword in its
   body. This run is **deliberately tool-using, so the assertion above does not apply to it**: on
@@ -461,14 +479,16 @@ neither the skill nor the file. (The 0.148.0 body-egress run located and read th
 `SKILL.md`; the paired 0.147.0 run gave up searching for it and returned no codeword. Read that as
 model search behavior on a tool-using run — the uncontrolled variable this section warns about —
 not as a boundary: 0.147.0's reachability is the 2026-08-18 observation, and its unprompted-selection
-run returned the codeword here.) Row 4 is not testable by this probe and stayed unverified:
+run returned the codeword here.)
 
 | Question | Observed |
 |---|---|
 | `$CODEX_HOME/skills/` discovered despite `--ignore-user-config`? | **Yes** — its name was auto-discovered unprompted; after selection, its body reached the model through a model-issued read |
 | Project `.claude/skills/` discovered? | **No** |
 | Parent-directory `AGENTS.md` above the git root loaded? | **No** — the upward walk is git-root-bounded (see the correction below) |
-| `project_doc_max_bytes=0` fully disables loading? | **Not verified — do not assume** |
+| Ancestor `AGENTS.md` inside the repo, above the resolved workspace, loaded? | **Yes** (#472) |
+| `$CODEX_HOME` guidance `AGENTS.md` loaded, despite `--ignore-user-config`? | **Yes** (#472); `AGENTS.override.md` loads in its place when present |
+| `project_doc_max_bytes=0` disables loading? | **Partly** — it suppresses the workspace and ancestor files, **not** the `$CODEX_HOME` guidance file (#472). Not a containment mechanism, and the plugin does not expose it |
 
 Row 1 is the compound one: read it as *discovered, then reachable*, per the two observations above.
 The egress conclusion is unchanged — content from outside the workspace reaches OpenAI on a call

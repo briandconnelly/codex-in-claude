@@ -116,10 +116,13 @@ Facts to weigh before any active call:
   references).
 - **Workspace:** Pass an absolute `workspace_root` for every repo-grounded call, including consult,
   dry-run, and job-lifecycle calls. Omit it only for a pure question that needs no workspace.
-- **Privacy:** Do not make an active call when the supplied prompt, the supplied context, any file
-  Codex may inspect in the resolved workspace, or your user-global skills under
-  `$CODEX_HOME/skills/` contain something you cannot disclose (see Data exposure). Changing the
-  workspace does not exclude those skills.
+- **Privacy:** Do not make an active call when any of these contains something you cannot disclose
+  (see Data exposure): the supplied prompt; the supplied context; any file Codex may inspect in the
+  resolved workspace; an `AGENTS.md` in any ancestor directory up to the repository root; your
+  user-global skills under `$CODEX_HOME/skills/`; or your user-global `$CODEX_HOME/AGENTS.override.md`
+  or `$CODEX_HOME/AGENTS.md`. Changing the workspace excludes neither the user-global skills nor the
+  user-global guidance file, and narrowing `workspace_root` to a subdirectory does not exclude the
+  ancestor `AGENTS.md` files above it.
 - **Verification:** Treat findings, summaries, verdicts, and proposed changes as unverified claims.
   Run the applicable project checks yourself; read-only consult/review is not proof tests ran.
 - **Delegation:** Never apply a delegated diff before reviewing it. The plugin does not apply it to
