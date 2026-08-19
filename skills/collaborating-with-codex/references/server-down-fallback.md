@@ -31,9 +31,12 @@ Send the prompt on stdin.
 - If nothing beyond the sanitized stdin prompt may be visible to Codex, do not use this fallback
   at all.
 
-Even with these flags, Codex auto-loads the resolved workspace's `AGENTS.md`, auto-discovers skills
+Even with these flags, Codex auto-loads `AGENTS.md` from the resolved workspace, from every ancestor
+directory up to the repository root when the workspace is in a repository, and from a user-global
+`$CODEX_HOME/AGENTS.override.md` (else `$CODEX_HOME/AGENTS.md`); it auto-discovers skills
 in `.agents/skills/`, and does the same for your user-global `$CODEX_HOME/skills/` — which
-`--ignore-user-config` does not suppress, since that flag drops only `$CODEX_HOME/config.toml` —
+`--ignore-user-config` suppresses no more than it suppresses the user-global guidance file, since
+that flag drops only `$CODEX_HOME/config.toml` —
 and may read other files.
 A skill is discovered as a **name and description**. That alone lets the model select it, and
 selecting it makes the model read the **body**, so a skill body reaches OpenAI even when your

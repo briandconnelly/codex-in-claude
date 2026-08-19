@@ -2864,9 +2864,11 @@ async def codex_consult(
     Data egress: this sends your `question` and `extra_context` to OpenAI via the
     codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
     your MCP roots, or the server's cwd as a fallback), so it may read files there and
-    send their content too. Codex auto-loads the resolved workspace's `AGENTS.md` and
-    discovers skills in its `.agents/skills/` and user-global `$CODEX_HOME/skills/`
-    (default `~/.codex/skills/`), reachable from outside the workspace. The plugin's
+    send their content too. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
+    repository, ancestor `AGENTS.md` files through its root, plus a user-global
+    `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the workspace's
+    `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
+    reachable from outside the workspace. The plugin's
     isolation flags don't suppress any of it. A skill's name and description arrive up
     front; selecting one makes the model read its body, which can reach OpenAI even if
     your inputs never mention it. Your inputs are sent raw — secret
@@ -2965,10 +2967,12 @@ async def codex_review_changes(
 
     Data egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is
     secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted),
-    and Codex may read and send other repo files. Codex auto-loads the resolved
-    workspace's `AGENTS.md` and discovers skills in its `.agents/skills/` and
-    user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from
-    outside the workspace. The plugin's isolation flags don't suppress any of it.
+    and Codex may read and send other repo files. Codex auto-loads the resolved workspace's
+    `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root, plus a
+    user-global `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the
+    workspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default
+    `~/.codex/skills/`), reachable from outside the workspace. The plugin's isolation flags
+    don't suppress any of it.
     A skill's name and description arrive up front; selecting one makes the model read
     its body, which can reach OpenAI even if your inputs never mention it.
     Redaction is not a guarantee. Do not rely on it to protect live credentials; keep
@@ -3057,10 +3061,12 @@ async def codex_delegate(
     with a DNS/host-resolution error). Ask only for local code changes; do any network
     step yourself afterward. This does NOT mean nothing leaves the machine: the Codex
     model call still sends your `task` to OpenAI and lets Codex read tracked files in
-    the worktree and send their content. Codex auto-loads the resolved workspace's
-    `AGENTS.md` and discovers skills in its `.agents/skills/` and user-global
-    `$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from outside the
-    workspace. The plugin's isolation flags don't suppress any of it. For delegate,
+    the worktree and send their content. Codex auto-loads the resolved workspace's `AGENTS.md`
+    and, in a repository, ancestor `AGENTS.md` files through its root, plus a user-global
+    `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the workspace's
+    `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
+    reachable from outside the workspace. The plugin's isolation flags don't suppress any of it.
+    For delegate,
     that workspace is the worktree; scrubbing it doesn't exclude `$CODEX_HOME/skills/`.
     A skill's name and description arrive up front; selecting one makes the model read
     its body, which can reach OpenAI even if your inputs never mention it.
@@ -3147,10 +3153,12 @@ async def codex_delegate_async(
     self-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with
     a DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the
     machine: the Codex model call still sends your `task` (raw) to OpenAI and lets Codex
-    read tracked files in the worktree and send their content. Codex auto-loads the
-    resolved workspace's `AGENTS.md` and discovers skills in its `.agents/skills/` and
-    user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from
-    outside the workspace. For delegate, that workspace is the worktree; scrubbing it
+    read tracked files in the worktree and send their content. Codex auto-loads the resolved
+    workspace's `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root,
+    plus a user-global `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in
+    the workspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default
+    `~/.codex/skills/`), reachable from outside the workspace. For delegate, that workspace is
+    the worktree; scrubbing it
     doesn't exclude `$CODEX_HOME/skills/`. A skill's name and description arrive up
     front; selecting one makes the model read its body, which can reach OpenAI even if
     your inputs never mention it. Secret redaction is best-effort and
@@ -3737,9 +3745,11 @@ async def codex_consult_async(
     Data egress: same as `codex_consult` — sends your `question` and `extra_context`
     (raw, unredacted) to OpenAI via the codex CLI, plus files Codex reads from its
     resolved working directory (`workspace_root`, your MCP roots, or the server cwd).
-    Codex auto-loads the resolved workspace's `AGENTS.md` and discovers skills in its
-    `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default
-    `~/.codex/skills/`), reachable from outside the workspace. A skill's name and
+    Codex auto-loads the resolved workspace's `AGENTS.md` and, in a repository, ancestor
+    `AGENTS.md` files through its root, plus a user-global `$CODEX_HOME/AGENTS.override.md` or
+    `AGENTS.md`; it discovers skills in the workspace's `.agents/skills/` and user-global
+    `$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from outside the workspace. A
+    skill's name and
     description arrive up front; selecting one makes the model read its body, which can
     reach OpenAI even if your inputs never mention it."""
     deadline = config.job_max_seconds()
@@ -3809,9 +3819,11 @@ async def codex_review_changes_async(
 
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
     your raw (unredacted) `extra_context` to OpenAI via the codex CLI; Codex may also
-    read other repo files. Codex auto-loads the resolved workspace's `AGENTS.md` and
-    discovers skills in its `.agents/skills/` and user-global `$CODEX_HOME/skills/`
-    (default `~/.codex/skills/`), reachable from outside the workspace. A skill's name
+    read other repo files. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
+    repository, ancestor `AGENTS.md` files through its root, plus a user-global
+    `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`; it discovers skills in the workspace's
+    `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
+    reachable from outside the workspace. A skill's name
     and description arrive up front; selecting one makes the model read its body, which
     can reach OpenAI even if your inputs never mention it. Redaction is best-effort, not
     a guarantee."""

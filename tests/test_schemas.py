@@ -836,9 +836,14 @@ def _wire_catalog_bytes() -> int:
 # description now states how a skill's BODY arrives, which four of the six did not
 # disclose before): 87,298 -> 87,811 bytes (+513 B) — over cap; cap raised to the next
 # 500 above the measured value.
+# Measured again 2026-08-19 (#472 — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET
+# history for the justification, which applies identically here: the canonical egress
+# sentence now names all THREE AGENTS.md sources, two of which the previous wording
+# omitted in the unsafe direction): 87,811 -> 88,699 bytes (+888 B) — over cap; cap
+# raised to the next 500 above the measured value.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.
-CATALOG_BYTE_CAP = 88_000
+CATALOG_BYTE_CAP = 89_000
 
 
 def test_wire_catalog_under_cap():
@@ -997,7 +1002,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-76"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-77"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

@@ -198,8 +198,12 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
 - **Do not target a workspace containing secrets you cannot disclose.** Supplied prompts and
   context (`question`, `task`, `extra_context`, and similar author input) are sent raw. During
   every active call — including consult — Codex may read other files in the
-  resolved workspace, and it also pulls in context implicitly: the project's `AGENTS.md` is
-  auto-loaded, while skills under `.agents/skills/` — **plus your user-global Codex skills under
+  resolved workspace, and it also pulls in context implicitly: `AGENTS.md` is auto-loaded from the
+  resolved workspace and — inside a repository — from **every ancestor directory up to the
+  repository root**, so narrowing the workspace to a subdirectory does not exclude the repo-root
+  file; **plus a user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`**,
+  which loads on every call from any workspace. Skills under `.agents/skills/` — **plus your
+  user-global Codex skills under
   `$CODEX_HOME/skills/`** (default `~/.codex/skills/`) — are auto-discovered by name and
   description, and a skill the model then selects has its body read in as well. Either way the
   content can be sent to OpenAI even if your prompt never mentions it (for delegate, the versions

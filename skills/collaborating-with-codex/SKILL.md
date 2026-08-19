@@ -90,9 +90,12 @@ Facts to weigh before any active call:
 - Every supplied prompt and context field is sent to OpenAI raw.
 - During every active call — including consult — Codex may read other files in the resolved
   workspace.
-- Codex auto-loads the workspace's `AGENTS.md` and auto-discovers skills in `.agents/skills/`; it
+- Codex auto-loads `AGENTS.md` from the resolved workspace, from every ancestor directory up to the
+  repository root when the workspace is in a repository, and from a user-global
+  `$CODEX_HOME/AGENTS.override.md` (else `$CODEX_HOME/AGENTS.md`). It auto-discovers skills in
+  `.agents/skills/`; it
   also auto-discovers your user-global `$CODEX_HOME/skills/` **from outside the workspace**, so no
-  choice of workspace excludes those. All of it applies even if the prompt never mentions them, and
+  choice of workspace excludes those or the user-global guidance file. All of it applies even if the prompt never mentions them, and
   the isolation flags do not suppress any of it.
 - A skill's **name and description** reach the model up front; its **body** follows through a read
   the model itself issues once it selects the skill. Both are egress you did not ask for — a global

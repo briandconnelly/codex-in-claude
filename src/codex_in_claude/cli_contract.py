@@ -217,10 +217,20 @@ VALID_SANDBOXES = (SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, SANDBOX_DANGER_FU
 DISABLE_FEATURE_FLAG = "--disable"  # `--disable <FEATURE>`; == `-c features.<FEATURE>=false`
 REMOTE_PLUGIN_FEATURE = "remote_plugin"
 
-# --- Implicit Codex context (issues #300, #358) ----------------------------------
-# `codex exec` automatically loads the resolved workspace's `AGENTS.md` into model
+# --- Implicit Codex context (issues #300, #358, #472) ----------------------------
+# `codex exec` automatically loads guidance from THREE `AGENTS.md` sources into model
 # context and auto-discovers skills from TWO roots (per upstream docs: name/description
 # metadata up front, a skill's body when it is selected):
+#   - the resolved workspace's own `AGENTS.md`, and
+#   - INSIDE a repository, every ancestor `AGENTS.md` from the workspace up to the
+#     repository root — the walk crosses ABOVE the directory the caller selected and
+#     stops AT the repository root without crossing it, so narrowing `workspace_root` to
+#     a subdirectory to bound egress still ships the repo-root file. Outside a
+#     repository there is no walk: only the workspace's own file loads (#472), and
+#   - `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md` — user-global, on
+#     EVERY call from ANY workspace, the `AGENTS.md` twin of the global skills root
+#     below. `-c project_doc_max_bytes=0` suppresses the first two and NOT this one
+#     (#472); `--ignore-user-config` suppresses none of the three.
 #   - the workspace's `.agents/skills/` (project-level), and
 #   - `$CODEX_HOME/skills/` (default `~/.codex/skills/`) — user-global, discovered from
 #     OUTSIDE the workspace, so no workspace choice excludes it (#358).
@@ -273,9 +283,10 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # `test_sync_tool_docstring_matches_full_skills_discovery_constant` /
 # `test_async_tool_docstring_matches_fact_only_not_full`.
 SKILLS_DISCOVERY_FACT = (
-    "Codex auto-loads the resolved workspace's AGENTS.md and discovers skills in its "
-    ".agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), "
-    "reachable from outside the workspace."
+    "Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor "
+    "AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md "
+    "or AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global "
+    "$CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace."
 )
 SKILLS_ISOLATION_NOTE = "The plugin's isolation flags don't suppress any of it."
 # The mechanism half of the same disclosure (#480/#501). The two halves of the implicit

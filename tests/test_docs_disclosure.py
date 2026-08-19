@@ -260,3 +260,82 @@ def test_mechanism_matcher_requires_the_body_claim():
 
     with_body = metadata_only + "\nSelecting one makes the model read its body."
     assert _states_the_mechanism(with_body) is True
+
+
+# --- The AGENTS.md scope on the doc sites (#472) ----------------------------------
+#
+# The code-side constant is guarded in tests/test_cli_contract.py; these files restate
+# the fact in their own prose, so they need their own guard or the published docs can
+# drift back to the pre-#472 workspace-only claim while the wire stays correct.
+# Two sources are checked because each was separately understated:
+#   - the ancestor walk inside the repository (a workspace narrowed to a subdirectory
+#     still ships every ancestor `AGENTS.md` up to the repository root), and
+#   - the user-global `$CODEX_HOME` guidance file, which loads on every call from any
+#     workspace and which neither isolation flag nor `project_doc_max_bytes=0` suppresses.
+_ANCESTOR_RE = re.compile(r"\bancestor\b", re.IGNORECASE)
+_REPO_ROOT_RE = re.compile(r"\brepositor(y|ies)\b", re.IGNORECASE)
+_GLOBAL_AGENTS_RE = re.compile(r"\$CODEX_HOME/AGENTS")
+
+
+def _states_the_agents_md_scope(section: str) -> bool:
+    return bool(
+        _ANCESTOR_RE.search(section)
+        and _REPO_ROOT_RE.search(section)
+        and _GLOBAL_AGENTS_RE.search(section)
+    )
+
+
+@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+def test_doc_site_states_every_agents_md_source(relpath):
+    text = (_REPO_ROOT / relpath).read_text(encoding="utf-8")
+    disclosing = _sections_disclosing_a_skills_root(text)
+    assert disclosing, f"{relpath} names no skills root at all"
+    assert any(_states_the_agents_md_scope(section) for section in disclosing), (
+        f"{relpath} understates which AGENTS.md files reach OpenAI: the load covers the "
+        "resolved workspace, every ancestor up to the repository root when the workspace "
+        "is in a repository, and a user-global $CODEX_HOME/AGENTS.override.md or "
+        "AGENTS.md (see COMPATIBILITY.md § 'Implicit Codex context')."
+    )
+
+
+def test_agents_md_scope_matcher_rejects_the_pre_472_wording():
+    """Guard the guard: the wording #472 replaces must FAIL this matcher.
+
+    The same acknowledged limit as every other word-presence guard in this module — it
+    catches OMISSION, not a confident misstatement. The exact-constant pins in
+    tests/test_cli_contract.py and tests/test_server.py cover the code carriers against a
+    false claim; on the prose sites COMPATIBILITY.md's probe table remains the authority.
+    """
+    pre_472 = (
+        "## Data exposure\n"
+        "Codex auto-loads the resolved workspace's `AGENTS.md` and discovers skills in\n"
+        "`.agents/skills/` and `$CODEX_HOME/skills/`, whose bodies the model reads once\n"
+        "it selects one by description."
+    )
+    assert _states_the_agents_md_scope(pre_472) is False
+
+    # Half-corrections fail too: the ancestor walk without the global guidance file…
+    ancestors_only = (
+        "## Data exposure\n"
+        "Codex auto-loads `AGENTS.md` from the workspace and every ancestor up to the\n"
+        "repository root, and discovers skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
+    )
+    assert _states_the_agents_md_scope(ancestors_only) is False
+
+    # …and the global file without the ancestor walk.
+    global_only = (
+        "## Data exposure\n"
+        "Codex auto-loads the workspace's `AGENTS.md` plus `$CODEX_HOME/AGENTS.md`, and\n"
+        "discovers skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
+    )
+    assert _states_the_agents_md_scope(global_only) is False
+
+    # The corrected shape passes.
+    corrected = (
+        "## Data exposure\n"
+        "Codex auto-loads `AGENTS.md` from the resolved workspace, from every ancestor\n"
+        "directory up to the repository root, and from a user-global\n"
+        "`$CODEX_HOME/AGENTS.override.md` (else `$CODEX_HOME/AGENTS.md`); it discovers\n"
+        "skills in `.agents/skills/` and `$CODEX_HOME/skills/`."
+    )
+    assert _states_the_agents_md_scope(corrected) is True

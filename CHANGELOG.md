@@ -7,6 +7,27 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The egress disclosure now names every `AGENTS.md` Codex auto-loads, not just the workspace's
+  own.** The published caveat said Codex auto-loads "the resolved workspace's `AGENTS.md`". Two
+  further sources reach the model, both understated in the **unsafe direction**, both probed on
+  `codex-cli 0.148.0` under the read-forbidding probe (`--json` stream asserted free of tool items,
+  so a codeword can only have arrived as auto-loaded context): **(1)** inside a repository the load
+  walks up from the resolved workspace to the repository root, so a caller who narrows
+  `workspace_root` to a subdirectory precisely in order to bound egress still ships the repo-root
+  `AGENTS.md` — a file it never named (#472); outside a repository there is no walk at all.
+  **(2)** A **user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`** loads on
+  every call from any workspace — the `AGENTS.md` twin of the `$CODEX_HOME/skills/` hole (#358) —
+  and neither `--ignore-user-config` nor `-c project_doc_max_bytes=0` suppresses it, though the
+  latter does suppress the workspace and ancestor files. `cli_contract.SKILLS_DISCOVERY_FACT` and
+  every carrier now state all three sources. **Fingerprint `schema-76` → `schema-77`.** Not
+  breaking — it widens a disclosure rather than weakening a guarantee. Two drift guards land with
+  it: the constant is pinned against both omission and the specific over-claims the earlier
+  retracted evidence produced, and each doc site must state the ancestor and user-global sources in
+  the section that carries its skills-root disclosure. `COMPATIBILITY.md` gains the probe matrix and
+  two extra fixture markers for the upgrade procedure; it also records `--cd` versus process cwd as
+  making no difference, resolving one of that section's open unverified questions. `tools/list` grew
+  888 bytes to 88,682 and the catalog to 88,699; both 88,000 gates moved to 89,000.
+
 - **The MCP wire surface now states HOW a skill's body reaches OpenAI, not just that skills are
   discovered.** #480 established that the two halves of Codex's implicit context arrive
   differently — `AGENTS.md` content is auto-**loaded**, already in context before the turn, while a

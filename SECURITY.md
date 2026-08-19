@@ -25,7 +25,10 @@ This is **defense-in-depth, not a guarantee**:
 
 - It only covers the diff text the server gathers. During any active call — consult, review, or
   delegate — Codex may read files in the workspace itself, and it pulls in context you never asked
-  for: the workspace's `AGENTS.md` is auto-loaded, and skills under `.agents/skills/` **plus your
+  for: `AGENTS.md` is auto-loaded from the resolved workspace, from **every ancestor directory up to
+  the repository root** when the workspace is in a repository, and from a **user-global
+  `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`** on every call whatever workspace
+  you target; and skills under `.agents/skills/` **plus your
   user-global skills under `$CODEX_HOME/skills/`** (default `~/.codex/skills/`) are auto-discovered.
   The two arrive differently. `AGENTS.md` content is in the model's context before the turn starts.
   A skill contributes only its **name and description** up front — but that is enough for the model
@@ -37,8 +40,10 @@ This is **defense-in-depth, not a guarantee**:
   `isolation=ignore-config`/`ignore-rules` helps only for the *specific* `$CODEX_HOME` state it
   names (`config.toml`, execpolicy `.rules`); it does **not** suppress `AGENTS.md` auto-loading or
   `.agents/skills/` skill discovery, and — despite the flag's name — it does **not** suppress
-  `$CODEX_HOME/skills/` either (see `COMPATIBILITY.md`). Anything private in a user-global Codex
-  skill is eligible for egress on any active call, whatever workspace you target.
+  `$CODEX_HOME/skills/` or the user-global `$CODEX_HOME` guidance file either (see
+  `COMPATIBILITY.md`). Anything private in a user-global Codex
+  skill **or in a user-global `$CODEX_HOME/AGENTS.md`** is eligible for egress on any active call,
+  whatever workspace you target.
 - **Keep secrets out of any tree you point Codex at.** Redaction is not a substitute.
 - **Review what you delegate.** Read the task you send and the diff that comes back.
 
