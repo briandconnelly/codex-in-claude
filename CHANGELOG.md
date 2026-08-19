@@ -7,7 +7,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
-- **Every egress warning now states how a skill's body actually arrives** (#498). #480 established
+- **Every prose egress-warning site now states how a skill's body actually arrives** (#498). #480 established
   the mechanism — `AGENTS.md` content is auto-**loaded**, while a skill is auto-**discovered** by
   name and description, and its **body** follows only through a read the model itself issues once it
   selects the skill — and corrected `COMPATIBILITY.md` and the `cli_contract.py` comment. The
@@ -24,7 +24,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   scoped to the section that carries the disclosure, because every one of these files uses "select"
   elsewhere for unrelated reasons and a file-wide check would have passed vacuously. No
   agent-visible surface change — the built manifest is byte-identical to the committed snapshot,
-  verified against a mutation probe confirming the comparison can detect one.
+  verified against a mutation probe confirming the comparison can detect one. The **wire** surface
+  is deliberately untouched and is not fully swept: `CAPABILITY_SUMMARY` already states the
+  metadata/body split, but its umbrella phrase "Codex also auto-loads context implicitly" keeps the
+  loose framing, and the `_async` docstrings and delegate `returns` carry the discovery fact without
+  the mechanism. Correcting those would move the fingerprint, so they are tracked separately.
 - The implicit-context marker probe in `COMPATIBILITY.md` now **proves** the model did not read the
   markers itself, instead of asking it to say so. The discovery consult forbids shell commands and
   file reads, keeps every codeword and synthetic skill name *out* of the prompt (asking for an

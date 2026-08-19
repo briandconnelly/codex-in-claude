@@ -30,8 +30,9 @@ Send the prompt on stdin.
 - Set `WORKSPACE` to a directory the user approved for disclosure.
 
 Even with these flags, Codex auto-loads the resolved workspace's `AGENTS.md`, auto-discovers skills
-in `.agents/skills/` and your user-global `$CODEX_HOME/skills/` — which `--ignore-user-config` does
-not suppress, since that flag drops only `$CODEX_HOME/config.toml` — and may read other files.
+in `.agents/skills/`, and does the same for your user-global `$CODEX_HOME/skills/` — which
+`--ignore-user-config` does not suppress, since that flag drops only `$CODEX_HOME/config.toml` —
+and may read other files.
 A skill is discovered as a **name and description**. That alone lets the model select it, and
 selecting it makes the model read the **body**, so a skill body reaches OpenAI even when your
 prompt names neither the skill nor the file.

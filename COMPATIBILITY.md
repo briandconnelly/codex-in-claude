@@ -111,7 +111,7 @@ that knob with profiles you control.
 
 `codex exec` **automatically loads** the resolved workspace's `AGENTS.md` into model context and
 **auto-discovers** skills from two roots (per upstream docs: name/description metadata up front; a
-skill's body loads when the skill is selected):
+skill's body is read in when the skill is selected):
 
 - the workspace's **`.agents/skills/`** — project-level, and
 - **`$CODEX_HOME/skills/`** (default `~/.codex/skills/`) — **user-global, discovered from outside

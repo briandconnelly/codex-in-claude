@@ -584,7 +584,7 @@ _GUARANTEE_MATCHERS = {
     # it, so prose that merely NAMES the path while denying the behavior does not pass.
     # See test_global_skills_matcher_rejects_project_only_prose.
     "autoload_global_skills": _global_skills_disclosed,
-    # The isolation flags do NOT suppress that auto-loaded context.
+    # The isolation flags suppress neither the auto-loaded AGENTS.md nor the discovered skills.
     "isolation_suppress": lambda d: "isolation" in d and "suppress" in d,
     # Secret redaction is best-effort, not a guarantee.
     "redaction_best_effort": lambda d: "redact" in d and "best-effort" in d,

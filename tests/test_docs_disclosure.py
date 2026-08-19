@@ -97,13 +97,24 @@ def test_site_list_matches_the_authoritative_rule():
 # test_mechanism_matcher_rejects_the_pre_498_wording for the red-green proof.
 _SELECTION_RE = re.compile(r"\bselect(s|ed|ion|ing)?\b", re.IGNORECASE)
 _METADATA_RE = re.compile(r"\b(descriptions?|metadata)\b", re.IGNORECASE)
+# The body is the security-load-bearing half of the mechanism: metadata alone is
+# harmless, the body is the egress. Requiring it means a rewrite cannot drop the
+# body claim and keep the guard green.
+_BODY_RE = re.compile(r"\bbod(y|ies)\b", re.IGNORECASE)
 
 
 def _sections_disclosing_a_skills_root(text: str) -> list[str]:
-    """The markdown sections that name either skills root."""
-    sections, current = [], []
+    """The markdown sections that name either skills root.
+
+    Fence-aware: these files embed probe scripts whose `# comment` lines would
+    otherwise read as headings and split a section in the middle, which could
+    strand a disclosure from the sentence that explains it.
+    """
+    sections, current, in_fence = [], [], False
     for line in text.splitlines():
-        if line.startswith("#"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        elif line.startswith("#") and not in_fence:
             sections.append("\n".join(current))
             current = []
         current.append(line)
@@ -116,8 +127,24 @@ def _sections_disclosing_a_skills_root(text: str) -> list[str]:
 
 
 def _states_the_mechanism(section: str) -> bool:
-    """Does this section say metadata arrives up front and the body on selection?"""
-    return bool(_SELECTION_RE.search(section) and _METADATA_RE.search(section))
+    """Does this section say metadata arrives up front and the body on selection?
+
+    Word-presence, deliberately, and its limits are worth stating.
+
+    It CATCHES omission — the pre-#498 wording, and any rewrite that drops the
+    body claim — plus prose that denies the discovery outright.
+
+    It does NOT catch a confident misstatement. A section claiming "descriptions
+    and bodies both auto-load; the model then selects one", or one asserting the
+    body is never read, satisfies every marker. Detecting that needs a reader:
+    an attempt to reject negation lexically fired instead on the *strengthening*
+    phrases these very docs use ("egress the caller never asked for", "a prompt
+    that never referred to it"), so it was removed rather than tuned.
+    `COMPATIBILITY.md` remains the authority on the mechanism itself.
+    """
+    return bool(
+        _SELECTION_RE.search(section) and _METADATA_RE.search(section) and _BODY_RE.search(section)
+    )
 
 
 @pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
@@ -191,3 +218,45 @@ def test_mechanism_matcher_ignores_unrelated_skill_discovery_prose():
         "so no skill name or description is exposed."
     )
     assert _states_the_mechanism(negated) is False
+
+
+def test_section_split_ignores_headings_inside_code_fences():
+    """A `#` comment in an embedded probe script must not split a section.
+
+    `COMPATIBILITY.md` carries shell probes whose comment lines begin with `#`.
+    Splitting on them would separate a disclosure from the sentence explaining
+    the mechanism, failing a site that is in fact correct.
+    """
+    text = (
+        "## Data exposure\n"
+        "Codex auto-discovers skills in `.agents/skills/`.\n"
+        "\n"
+        "```sh\n"
+        "# generate a marker skill\n"
+        'mkdir -p "$CODEX_HOME/skills/marker"\n'
+        "```\n"
+        "\n"
+        "Its name and description arrive up front; the body follows once the\n"
+        "model selects it.\n"
+    )
+    sections = _sections_disclosing_a_skills_root(text)
+    assert len(sections) == 1, "the fenced comment split the section"
+    assert _states_the_mechanism(sections[0]) is True
+
+
+def test_mechanism_matcher_requires_the_body_claim():
+    """Guard the guard: the body is the egress, so dropping it must fail.
+
+    Metadata reaching the model is comparatively harmless; the body is what
+    carries private content to OpenAI. A rewrite that keeps the discovery
+    sentence but drops the body must not stay green.
+    """
+    metadata_only = (
+        "## Data exposure\n"
+        "Codex auto-discovers skills in `.agents/skills/` and `$CODEX_HOME/skills/`.\n"
+        "Their names and descriptions reach the model, which may then select one."
+    )
+    assert _states_the_mechanism(metadata_only) is False
+
+    with_body = metadata_only + "\nSelecting one makes the model read its body."
+    assert _states_the_mechanism(with_body) is True
