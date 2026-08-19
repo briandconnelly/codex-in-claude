@@ -26,6 +26,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   auto-loads that isolation cannot suppress" — carries it too, so a contract consumer cannot
   re-learn the wrong model. `tools/list` grew 513 bytes to 87,794; the budget and the
   capability-catalog cap both moved 87,500 → 88,000.
+- **The posture on Codex's default-on `view_image` feature is now recorded: left enabled,
+  deliberately** (#479). `COMPATIBILITY.md` gains a section explaining that `view_image` is a
+  **model-invoked tool** taking a filesystem path — its JSON schema is in the `0.148.0` binary — and
+  so is not implicit context. A zero-spend `codex debug prompt-input` A/B (with an `-i` positive
+  control) found no image auto-attached to the prompt and no difference under `--disable
+  view_image`. Disabling it would buy no containment, since the read-only tiers already give the
+  model a shell over the same filesystem; it would only stop the model interpreting pixels. Unlike
+  `remote_plugin`, it opens no channel outside the sandbox. The published egress disclosures stay
+  modality-neutral ("files", "their content"), so nothing agent-visible changes. Documentation only
+  — no fingerprint effect.
+
 - **Safety-critical rules in the egress-caveat docs are no longer buried in narration.** No warning
   weakens and no mechanism claim changes — this is placement only. `README.md`'s ~22-line Safety
   bullet is split, with "do not target a workspace containing secrets you cannot disclose" promoted

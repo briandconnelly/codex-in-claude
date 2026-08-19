@@ -107,6 +107,60 @@ like the sandbox/approval `-c` denials below, it is bounded by the **`--profile`
 boundary** — an opaque profile this server cannot inspect could re-enable the feature, so only enable
 that knob with profiles you control.
 
+## Image reading (`view_image`, #479) — deliberately left enabled
+
+Codex **0.147+** ships a `view_image` feature, stage `stable`, default **on** (unchanged at
+`0.148.0`). This plugin neither sends nor refuses it, and that is a decision, not an oversight.
+The question #479 raised was whether it widens egress the way `remote_plugin` did, since a
+`read-only` sandbox bounds *writes*, not what gets read and sent.
+
+**It is a model-invoked tool, not implicit context.** The tool's own JSON schema is in the 0.148.0
+binary: `view_image` — "View a local image file from the filesystem when visual inspection is
+needed" — takes `path` ("Local filesystem path to an image file.") and an optional `detail`
+(`high` | `original`). The binary also carries `core/src/tools/handlers/view_image.rs` and
+`ViewImageToolCall*` events. So an image reaches the model only when the **model issues a call
+naming a file** — categorically unlike `AGENTS.md`, whose content is in context before the turn
+begins (see "Implicit Codex context" below).
+
+**Probe: no auto-attachment** (zero spend, `codex-cli 0.148.0`). In a scratch git repo containing
+`secret_marker.png`, `codex debug prompt-input` — which renders the model-visible prompt input list
+as JSON — produced **zero** `"type": "input_image"` items, and its output was byte-identical with
+and without `--disable view_image` apart from message UUIDs and timestamps. **Positive control:**
+the same command with `-i secret_marker.png` produced exactly one `input_image` item, so the
+negative is a real observation and not a broken instrument. Note the probe's bound: it renders
+*input items*, **not** the tool list, so it says nothing about whether the tool is offered — that
+comes from the schema above.
+
+**Why this is not the `remote_plugin` case.** `remote_plugin` was disabled (above) because
+connectors are a network data and side-effect channel **outside** the sandbox entirely.
+`view_image` reads a local file into the OpenAI model call this plugin already discloses. The
+data-flow category is unchanged: local readable file → model-directed read → the same model call.
+Decisively, **disabling it would buy no containment.** The read-only tiers already give the model a
+shell over the same filesystem, so `--disable view_image` would remove no file from reach — it
+would only remove the model's ability to interpret pixels, while breaking legitimate requests
+("look at this screenshot") and adding a permanent fail-loud feature-name obligation.
+
+**No disclosure change, so no fingerprint effect.** The published egress disclosures are
+deliberately **modality-neutral** — `README.md`, the tool descriptions, and the
+`readonly_honesty_statement` say "files" and "their content", never "text files". Amending them to
+name images would imply that other modalities had been excluded, and would churn the agent-visible
+surface without changing the promise. `SKILLS_DISCOVERY_FACT` is a narrow disclosure about
+*implicit* context, which `view_image` is not, so it does not belong there either.
+
+**What would reopen this.** Any one of: a default `prompt-input` run containing an `input_image`
+before any model tool call; evidence of directory scanning with automatic image attachment; the
+handler reading a path the shell/filesystem policy cannot; or image data leaving through a
+non-OpenAI channel. A merely *unprompted* model call does **not** reopen it — an unprompted shell
+read is already possible and already disclosed.
+
+**Residual, unverified.** Whether the native handler applies exactly the same read boundary as
+shell execution was not probed. The reasoning that `--sandbox` is an OS-level boundary governing
+the whole process (so a native read passes the same gate as a shell read) is an argument, not an
+observation. Re-check `view_image`'s stage and default alongside `remote_plugin` on each upgrade;
+`recommended_plugins` is `stable`/default-**off** at `0.148.0` and is left unreserved on the same
+reasoning — adjacency in the feature table is not evidence that it bypasses the `remote_plugin`
+guarantee.
+
 ## Implicit Codex context (`AGENTS.md`, both skills roots, #300, #358)
 
 `codex exec` **automatically loads** the resolved workspace's `AGENTS.md` into model context and
