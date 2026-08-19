@@ -7,6 +7,34 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The dry-run previews no longer imply they bound what a paid call can send.** `codex_dry_run`
+  led with "Preview what a `codex_review_changes` call would send" and `codex_delegate_dry_run`
+  told callers to confirm scope; a clean preview therefore read as "nothing sensitive will be
+  sent". It cannot establish that. A dry run never invokes Codex, so the model's own reads have
+  not happened yet and none can be listed, and those reads are not bounded by the workspace (see
+  the read-scope entry below). A new canonical `cli_contract.PREVIEW_SCOPE_FACT` states the limit
+  at every carrier: both dry-run descriptions, their two `codex_capabilities` entries, a new
+  `negative_scope` item, and the server instructions block. The sentence is deliberately **scoped
+  to the model-initiated channel** — a preview genuinely does bound the half this plugin assembles,
+  enforcing the same `max_input_bytes` and reporting truncation, so an unscoped "does not bound
+  what the paid call sends" would have retracted a true, documented guarantee. Both dry-run
+  descriptions also now carry `READ_SCOPE_FACT`, which they never had: they are not egress tools,
+  and the preview fact is three negatives that leave a reader knowing the preview is not a bound
+  but not what the unbounded channel reaches. **Fingerprint `schema-78` → `schema-79`.** Not
+  breaking — no carrier promised a preview was exhaustive, and the sibling redaction clause
+  ("a check on scope, not confirmation that no secret remains") already disclaimed exactly this
+  reading, so this extends an existing disclaimer rather than retracting a promise. Docs move with
+  the wire: `README.md`, `docs/REFERENCE.md`, the `collaborating-with-codex` skill (a new **binding**
+  Privacy rule, not only background prose — a binding rule left narrower than the disclosure is the
+  #512 defect), and both `commands/codex/dry-run.md` and `commands/codex/review.md`, which steer to
+  a preview at the same decision point. `SECURITY.md` and `COMPATIBILITY.md` are deliberately not
+  carriers: neither mentions a preview, so neither makes the claim. Guards: exact containment of the
+  constant over the live `tools/list` and `codex_capabilities` payloads in every detail mode (a
+  default `detail="summary"` reader never sees `use_when`, which is why `negative_scope` carries it
+  too), plus a contradiction sweep for completeness claims — the bypass shape here is not the
+  read-scope one, since a text can assert "everything the paid call transmits has been previewed
+  here" without ever claiming a read bound. Both byte gates were re-measured and raised
+  (`tools/list` 91,447 → 92,289; catalog 91,464 → 92,306).
 - **The egress disclosures no longer scope Codex's reads to the workspace or the repo.** Several
   agent-visible descriptions said Codex reads "files ... from its resolved working dir", "other
   **repo** files", or "tracked files in the throwaway worktree". A reader takes that as a bound; it

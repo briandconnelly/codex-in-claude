@@ -2621,7 +2621,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-78"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-79"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6549,7 +6549,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-78")
+    assert result["fingerprint"].endswith("schema-79")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -9172,3 +9172,286 @@ def test_contradiction_pattern_catches_a_bound_asserted_beside_the_fact():
         "codex can read files outside the workspace and send them to openai.",
     ):
         assert _CONTRADICTS_READ_SCOPE.search(ok) is None, ok
+
+
+# --- #513 preview-scope guards ----------------------------------------------------
+# `codex_dry_run` led with "Preview what a codex_review_changes call would send" and
+# `codex_delegate_dry_run` told callers to confirm scope. Both read as a bound on the paid
+# call's egress; a dry run never invokes Codex, so it cannot be one. Same instrument choice
+# as the read-scope guards directly above — exact containment, not a word-presence grammar —
+# and for the same reason: this fact's content is mostly negative, and a marker-word check
+# over a negative claim passes the confident INVERSION.
+_PREVIEW_SCOPE_TOOLS = ("codex_dry_run", "codex_delegate_dry_run")
+
+
+def _preview_scope_disclosed(text: str) -> bool:
+    """Does this carrier state the preview-scope fact verbatim (modulo wrap/backticks/case)?"""
+    return _normalize(cli_contract.PREVIEW_SCOPE_FACT).lower() in _normalize(text).lower()
+
+
+# Containment says the carrier states the fact; this says it does not then take the claim
+# back. The bypass shape here is NOT the read-scope one: a text can leave "confined to the
+# workspace" entirely alone and still mislead by asserting COMPLETENESS over an egress verb
+# — "everything the model receives has been previewed here". That passes exact containment
+# (true), the read-scope contradiction pattern (no bound asserted), and any fixture list
+# keyed on "preflight"/"safe to proceed". A fable review constructed both survivors below.
+#
+# Scoped to a completeness quantifier ADJACENT to an egress verb, not to the quantifier
+# alone: the repo legitimately says "full UTF-8 size of the prompt that would be sent"
+# (schemas.py) and "sends the secret-redacted diff", and a looser pattern would reject the
+# very carriers it guards — the #502 negation-regex-hits-emphasis failure.
+_CONTRADICTS_PREVIEW_SCOPE = re.compile(
+    # A completeness quantifier whose SUBJECT is the paid run, next to an egress verb.
+    # The subject is load-bearing: READ_SCOPE_FACT says "everything the OS user running it
+    # can read — and send them to OpenAI", which a quantifier-plus-egress-verb pattern
+    # matches on sight. That fact is hand-copied into both dry-run docstrings, so the loose
+    # form fired on the very carriers this guards — the #502 failure, rediscovered by this
+    # module's own guard-the-guard case.
+    r"\b(?:everything|all)\b[^.]{0,30}\b(?:paid call|model|codex run)\b"
+    r"[^.]{0,40}\b(?:sen[dt]s?|transmit(?:s|ted)?|receiv(?:e|es|ed)|leaves?)\b"
+    # …or a claim that the preview already showed it all.
+    r"|\b(?:everything|nothing (?:else|more))\b[^.]{0,60}"
+    r"\b(?:previewed|shown here|listed here|reported here)\b"
+    # …or the procedural inversions: the preview as an approval to spend.
+    # "inventory" is NOT in this alternative: CAPABILITY_SUMMARY legitimately says "use
+    # codex_capabilities for the full inventory", which the looser form flagged.
+    r"|\b(?:complete|full|exhaustive)\s+(?:security\s+)?(?:preflight|audit)\b"
+    r"|\b(?:complete|full|exhaustive)\s+inventory\s+of\b[^.]{0,40}"
+    r"\b(?:read|reads|files|egress|sent)\b"
+    r"|\bsafe to (?:proceed|spend)\b"
+    r"|\bno (?:further|additional) disclosure review\b"
+    # …or a certification that the preview clears the run. The completeness alternatives
+    # above are keyed on a quantifier ("everything…transmits"); a Codex review showed this
+    # shape needs none — "A clean preview certifies that no sensitive content will reach
+    # OpenAI" passed every guard. It is the operative claim #513 exists to stop.
+    r"|\b(?:certif(?:y|ies|ied)|confirms?|confirmed|assures?|proves?|guarantees?|"
+    r"establishes?|verifies|verified)\b[^.]{0,60}"
+    r"\bno\b[^.]{0,30}\b(?:sensitive|secrets?|confidential|disclosure|egress|"
+    r"private data)\b"
+    r"|\b(?:nothing sensitive|no sensitive \w+|no secrets?)\b[^.]{0,40}"
+    r"\b(?:will be sent|is sent|reaches?|reach|leaves?|will leave)\b",
+    re.IGNORECASE,
+)
+
+
+# A denial of the claim is not the claim. "…not evidence that nothing sensitive will be
+# sent" contains the poison phrase verbatim, and the corrected carriers are FULL of such
+# denials — this repo has now been bitten three times by a matcher that reads a
+# strengthening sentence as the weakness it forbids (#502, the read-scope emphasis case,
+# and this one). So the regex finds candidate claims and this wrapper drops the ones a
+# negation governs, rather than the regex being weakened until it stops catching the
+# affirmative form.
+_DENIAL_PREFIX = re.compile(
+    r"\b(?:not|never|n't|no|rather than|instead of|neither|nor)\b(?:\s+\S+){0,12}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _preview_egress_bound_claim(text: str) -> str | None:
+    """The first affirmative claim that a preview bounds or clears the paid call's egress."""
+    for m in _CONTRADICTS_PREVIEW_SCOPE.finditer(text):
+        # Sentence-scoped: a negation in a PREVIOUS sentence does not govern this claim,
+        # and "Do not present a clean preview as evidence that nothing sensitive will be
+        # sent" puts its negation seven words back — a fixed word window is the wrong
+        # instrument, the sentence is.
+        sentence_prefix = re.split(r"(?<=[.;:])\s+", text[: m.start()])[-1]
+        if not _DENIAL_PREFIX.search(sentence_prefix):
+            return m.group(0)
+    return None
+
+
+def test_preview_scope_matcher_positive_and_negative_controls():
+    """Guard the guard: the near-misses a paraphrase would produce, above all the inversion."""
+    fact = cli_contract.PREVIEW_SCOPE_FACT
+
+    assert _preview_scope_disclosed(fact)
+    assert _preview_scope_disclosed(fact.lower())
+    wrapped = "    " + fact.replace(" ", "\n    ", 3) + "\n"
+    assert _preview_scope_disclosed(wrapped), "line-wrapped docstring copy must still match"
+    backticked = fact.replace("Codex", "`Codex`").replace("dry run", "`dry run`")
+    assert _preview_scope_disclosed(backticked), "backticked prose copy must still match"
+
+    assert _preview_scope_disclosed("") is False
+    inverted = fact.replace("neither enumerates nor bounds", "enumerates and bounds")
+    assert _preview_scope_disclosed(inverted) is False, (
+        "the inversion must fail — the whole reason this is exact containment"
+    )
+    truncated = fact.split("; it does not")[0]
+    assert _preview_scope_disclosed(truncated) is False, (
+        "dropping the non-invocation/non-enumeration half drops the actionable content"
+    )
+    # Every marker word present, opposite claim asserted.
+    assert (
+        _preview_scope_disclosed(
+            "a dry run reports metadata about the input this plugin would assemble and "
+            "bounds the files the model itself reads and sends during the paid call."
+        )
+        is False
+    )
+
+
+def test_preview_scope_fact_does_not_retract_the_assembled_bound():
+    """The fact must stay scoped to the MODEL-initiated channel.
+
+    A dry run genuinely DOES bound the half this plugin assembles: it enforces the same
+    `max_input_bytes` and reports `truncated`, and an oversize input fails the preview
+    exactly where the paid call fails (server.py's dry-run body, issue #6). An earlier
+    draft said a preview does not "bound what the paid call sends" full stop — false for
+    that half, and it would have retracted a documented guarantee. This pins the scope so
+    a future reword cannot quietly widen it back.
+    """
+    fact = cli_contract.PREVIEW_SCOPE_FACT
+    assert "the files the model itself reads" in fact, (
+        "the non-bound claim must name the model-initiated channel it applies to"
+    )
+    assert "bound what the paid call sends" not in fact, (
+        "unscoped: this retracts the true max_input_bytes/truncation guarantee"
+    )
+    # And the guarantee it must not retract is still real: both previews publish the byte
+    # cap and the review preview publishes the truncation flag, on their success branch.
+    for schema in (server.DRY_RUN_SCHEMA, server.DELEGATE_DRY_RUN_SCHEMA):
+        success = next(b for b in schema["anyOf"] if b["properties"]["ok"].get("const") is True)
+        assert "max_input_bytes" in success["properties"], schema["anyOf"][0]["properties"]["tool"]
+    review_success = next(
+        b for b in server.DRY_RUN_SCHEMA["anyOf"] if b["properties"]["ok"].get("const") is True
+    )
+    assert "truncated" in review_success["properties"]
+
+
+def test_preview_contradiction_pattern_catches_a_completeness_claim():
+    """The bypass a fable review constructed: correct sentence, completeness appended."""
+    for tail in (
+        " In practice, `prompt_bytes` is the full size of everything the paid call "
+        "transmits to OpenAI.",
+        " So after a clean dry run, everything the model receives has been previewed here.",
+        " This report is a complete security preflight.",
+        " A clean preview means it is safe to proceed.",
+        " No further disclosure review is needed before spending.",
+        # Reported by a Codex review of this very change: it passed BOTH contradiction
+        # patterns and every containment guard. No quantifier, no read bound, no
+        # "preflight" — just the operative claim #513 exists to stop.
+        " A clean preview certifies that no sensitive content will reach OpenAI.",
+        " This confirms no secrets are sent.",
+        " After a clean run, nothing sensitive will be sent.",
+    ):
+        poisoned = cli_contract.PREVIEW_SCOPE_FACT + tail
+        assert _preview_scope_disclosed(poisoned) is True, (
+            f"precondition: containment alone cannot see {tail!r}"
+        )
+        assert _CONTRADICTS_READ_SCOPE.search(_normalize(poisoned).lower()) is None, (
+            f"precondition: the read-scope pattern cannot see {tail!r} either"
+        )
+        assert _preview_egress_bound_claim(_normalize(poisoned)), tail
+
+    # It must NOT fire on the corrected wording, nor on the repo's legitimate uses of the
+    # same vocabulary — the byte-size fields and the egress disclosures both say "sent".
+    for ok in (
+        cli_contract.PREVIEW_SCOPE_FACT,
+        cli_contract.READ_SCOPE_FACT,
+        "full UTF-8 size of the prompt that would be sent (0 if no call)",
+        "sends the secret-redacted diff plus your raw extra_context",
+        "the task byte limit the real run enforces",
+        # A real false positive this pattern produced: an unrelated legitimate phrase.
+        "Use codex_capabilities for the full inventory.",
+        "Codex can read files outside the workspace and send them to OpenAI.",
+    ):
+        assert _preview_egress_bound_claim(ok) is None, ok
+
+    # The wrapper must not become an escape hatch. A denial in a PREVIOUS sentence must not
+    # excuse an affirmative claim in this one — otherwise any carrier could earn immunity by
+    # stating the correct fact (which is full of negations) first, which is exactly what
+    # every real carrier does.
+    governed = "Do not present a clean preview as evidence that nothing sensitive will be sent."
+    assert _preview_egress_bound_claim(governed) is None, "a governed denial must be spared"
+    escaped = governed + " A clean preview certifies that no sensitive content reaches OpenAI."
+    assert _preview_egress_bound_claim(escaped), (
+        "a denial in an earlier sentence must not excuse the affirmative claim after it"
+    )
+
+
+def _runtime_preview_scope_carriers() -> dict[str, str]:
+    """Every runtime string that must carry the preview-scope fact.
+
+    Read from the LIVE payloads rather than source literals: `detail="summary"` projects
+    `tool_details` down to `_CAPABILITY_SUMMARY_FIELDS`, so a fact placed only in a
+    `ToolCapability` entry never reaches a default capabilities reader. `negative_scope`
+    is top-level and survives every detail mode, which is why it carries this too.
+    """
+    caps = server.codex_capabilities(detail="full")
+    carriers = {
+        "CAPABILITY_SUMMARY": server.CAPABILITY_SUMMARY,
+        "negative_scope": " ".join(caps["negative_scope"]),
+    }
+    for tool in caps["tool_details"]:
+        if tool["name"] in _PREVIEW_SCOPE_TOOLS:
+            carriers[f"use_when:{tool['name']}"] = tool["use_when"]
+    for name in _PREVIEW_SCOPE_TOOLS:
+        carriers[f"docstring:{name}"] = getattr(server, name).__doc__ or ""
+    return carriers
+
+
+def test_every_runtime_preview_carrier_states_the_preview_scope_fact():
+    """The freeze: each runtime carrier states the fact verbatim (#513)."""
+    missing = [
+        label
+        for label, text in _runtime_preview_scope_carriers().items()
+        if not _preview_scope_disclosed(text)
+    ]
+    assert not missing, (
+        "these carriers do not state cli_contract.PREVIEW_SCOPE_FACT (#513): " + ", ".join(missing)
+    )
+
+
+def test_no_runtime_preview_carrier_claims_the_preview_bounds_egress():
+    """None may take the claim back — beside the fact or instead of it."""
+    offenders = []
+    for label, text in _runtime_preview_scope_carriers().items():
+        hit = _preview_egress_bound_claim(_normalize(text))
+        if hit:
+            offenders.append(f"{label}: {hit!r}")
+    assert not offenders, (
+        "these carriers present a preview as evidence about total egress (#513): "
+        + "; ".join(offenders)
+    )
+
+
+def test_dry_run_docstrings_also_carry_the_read_scope_fact():
+    """The dry-run tools are not egress tools, so nothing else gives them the read fact.
+
+    PREVIEW_SCOPE_FACT is three negatives: on its own a docstring reader learns the preview
+    is not a bound but never what the unbounded channel actually reaches. The affirmative
+    half has to travel with it in the one surface read before deciding to spend.
+    """
+    for name in _PREVIEW_SCOPE_TOOLS:
+        assert name not in _ACTIVE_EGRESS_TOOLS, (
+            f"{name} became an egress tool — give it the full guarantee matrix instead"
+        )
+        assert _read_scope_disclosed(getattr(server, name).__doc__ or ""), name
+
+
+@pytest.mark.anyio
+async def test_preview_scope_fact_reaches_the_tools_list_wire():
+    """Pin the CLIENT-visible description, not just `__doc__`.
+
+    A decorator, a title, or a description override could serve text that differs from the
+    function's docstring; what a client reads before it spends is this payload.
+    """
+    async with Client(server.mcp) as c:
+        tools = await c.list_tools()
+    served = {t.name: t.description or "" for t in tools}
+    for name in _PREVIEW_SCOPE_TOOLS:
+        assert _preview_scope_disclosed(served[name]), name
+        assert _read_scope_disclosed(served[name]), name
+
+
+def test_preview_scope_fact_survives_every_capabilities_detail_mode():
+    """`negative_scope` is the carrier that reaches a default reader; prove it in each mode.
+
+    `detail="summary"` strips `use_when`/`returns` and `detail="contracts"` drops
+    `tool_details` entirely, so a fact carried only by the ToolCapability entries would be
+    invisible to both.
+    """
+    for detail in ("summary", "full", "contracts"):
+        payload = server.codex_capabilities(detail=detail)
+        joined = " ".join(payload["negative_scope"])
+        assert _preview_scope_disclosed(joined), detail

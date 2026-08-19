@@ -157,6 +157,11 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
   eviction, and result retention are covered in
   [`docs/REFERENCE.md`](docs/REFERENCE.md#background-jobs).
 
+Both dry runs report metadata about the input this plugin would assemble. Neither invokes Codex, so
+neither enumerates nor bounds the files the model itself reads and sends during the paid run — a
+clean preview is a check on scope, not evidence that nothing sensitive will be sent (see
+[Safety](#safety)).
+
 Slash commands wrap these: `/codex:status`, `/codex:transfer`, `/codex:consult`, `/codex:review`,
 `/codex:delegate`, `/codex:delegate-async`, `/codex:dry-run`.
 

@@ -853,7 +853,12 @@ def _wire_catalog_bytes() -> int:
 # 1,000 above the measured value. See tests/test_wire_size.py for why the sentence was not
 # compressed to fit instead. Then 91,212 -> 91,464 (+252 B) scoping the shared
 # `WorkspaceRootParam` clause to active calls (Codex review) — still within cap.
-CATALOG_BYTE_CAP = 92_000
+# Measured again 2026-08-19 (#513, the dry-run preview-scope correction — both dry-run
+# descriptions now state that a preview neither enumerates nor bounds the files the model
+# itself reads during the paid run, plus the read-scope fact those two tools never carried;
+# see tests/test_wire_size.py for why the sentence was not compressed to fit): 91,464 ->
+# 92,306 bytes (+842 B) — over cap; cap raised to the next 1,000 above the measured value.
+CATALOG_BYTE_CAP = 93_000
 
 
 def test_wire_catalog_under_cap():
@@ -1012,7 +1017,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-78"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-79"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

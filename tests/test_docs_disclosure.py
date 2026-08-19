@@ -662,3 +662,297 @@ def test_skill_privacy_and_independence_rules_carry_the_correction():
         assert observable in independence, (
             f"the Independence rules dropped the observable trigger {observable!r}"
         )
+
+
+# --- #513 preview-scope prose guards ----------------------------------------------
+# The doc half of `cli_contract.py`'s `RULE (preview scope):`. A dry run cannot establish
+# what a paid call will send, and every prose site that steers a reader toward a preview
+# before spending has to say so.
+#
+# SECTION-scoped, not file-wide, and for a sharper reason than the skills-root guards
+# above: README states the read-scope fact ~50 lines BELOW its dry-run bullets, and
+# `active-workflows.md` states it in the Consult section before its dry-run prose. A
+# file-wide positive check is therefore green today, on files whose dry-run passages still
+# make the uncorrected claim — a guard that cannot fail.
+#
+# SECURITY.md and COMPATIBILITY.md are deliberately absent, unlike _READ_SCOPE_DOC_SITES:
+# neither file contains "dry" or "preview" at all, so neither makes the claim being
+# corrected, and a section-scoped guard would have no section to anchor to.
+_PREVIEW_SCOPE_DOC_SITES = (
+    "README.md",
+    "docs/REFERENCE.md",
+    "skills/collaborating-with-codex/SKILL.md",
+    "skills/collaborating-with-codex/references/active-workflows.md",
+    "commands/codex/dry-run.md",
+    "commands/codex/review.md",
+)
+
+# The anchor is derived from the claim being guarded — a passage that steers the reader to
+# run a dry run — rather than from every mention of the tools. `docs/REFERENCE.md` names
+# them in four unrelated sections (the free-tool list, `coverage.redaction`, `roots_source`,
+# `deadline_advisory`); demanding the disclosure in all four over-demands, and "any section"
+# reintroduces the vacuity this scoping exists to avoid.
+_DRY_RUN_STEER_RE = re.compile(
+    r"\b(?:codex_dry_run|codex_delegate_dry_run|dry[- ]run|dry run)\b", re.IGNORECASE
+)
+_SPEND_STEER_RE = re.compile(
+    r"\b(?:before|first|preview|previews|previewing)\b[^.]{0,80}"
+    r"\b(?:spend|spending|paid|cost|free)\b"
+    r"|\bpreview\b[^.]{0,40}\b(?:a |the )?(?:review|delegate)\b",
+    re.IGNORECASE,
+)
+
+
+def _preview_steer_sections(text: str) -> list[str]:
+    """Markdown sections that steer a reader to run a dry run before spending.
+
+    Fence-aware for the same reason as `_sections_disclosing_a_skills_root`: a `#` inside a
+    fenced block is not a heading, and splitting there could strand a disclosure from the
+    passage it qualifies. Frontmatter counts as the first section, which is what lets the
+    slash-command files be guarded on their standalone `description:` line.
+    """
+    sections, current, in_fence = [], [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        elif line.startswith("#") and not in_fence:
+            sections.append("\n".join(current))
+            current = []
+        current.append(line)
+    sections.append("\n".join(current))
+    return [s for s in sections if _DRY_RUN_STEER_RE.search(s) and _SPEND_STEER_RE.search(s)]
+
+
+# The prose sites paraphrase rather than carrying the 198-byte constant verbatim — a
+# slash-command `description:` line is a one-line label, and demanding the whole constant
+# there is wrong-sized. So this is a word-presence check, with the acknowledged limit every
+# such matcher in this repo carries: it catches omission, not a confident misstatement. The
+# contradiction sweep below is the half that covers the misstatement.
+# The negation must PRECEDE the limit verb, and the verb list must not reach "boundary".
+# Both constraints were found by a false pass, not written defensively: `bound\w*` matched
+# "read boundary" and the loose ordering matched "The sandbox bounds writes, not reads" —
+# so `docs/REFERENCE.md` satisfied this guard using the READ-scope sentence, while its
+# dry-run passage still made the uncorrected claim. A guard that green-lights a site via a
+# different guarantee is the #512 shape at matcher level.
+_PREVIEW_LIMIT_RE = re.compile(
+    r"\b(?:does not|doesn't|do not|don't|cannot|can ?not|never|neither|not)\b[^.]{0,90}"
+    r"\b(?:enumerates?|bounds?|proves?|establishe?s?|guarantees?|inventor(?:y|ies))\b",
+    re.IGNORECASE,
+)
+_MODEL_READS_RE = re.compile(
+    r"\b(?:codex|the model)\b[^.]{0,60}\breads?\b|\bfiles\b[^.]{0,40}\breads?\b",
+    re.IGNORECASE,
+)
+
+
+def _flat_text(relpath: str) -> str:
+    return (_REPO_ROOT / relpath).read_text(encoding="utf-8")
+
+
+def test_preview_scope_doc_sites_exist():
+    """Guard the guard: a renamed or moved file must fail loudly, not silently pass."""
+    for relpath in _PREVIEW_SCOPE_DOC_SITES:
+        assert (_REPO_ROOT / relpath).is_file(), relpath
+
+
+def test_preview_site_list_matches_its_own_rule():
+    """The tuple above and the `RULE (preview scope):` block must name the same sites.
+
+    Two-way, like its read-scope sibling: a one-way check lets a site drop out of the tuple
+    and out of enforcement while staying green. The header is matched exactly because
+    `cli_contract.py` now carries THREE RULE blocks and a bare `# RULE:` split reads the
+    first one.
+    """
+    contract = (_REPO_ROOT / "src/codex_in_claude/cli_contract.py").read_text(encoding="utf-8")
+    assert contract.count("# RULE (preview scope):") == 1
+    rule = contract.split("# RULE (preview scope):", 1)[1].split("\n\n", 1)[0]
+
+    expected = {
+        "README.md": "README.md",
+        "docs/REFERENCE.md": "docs/REFERENCE.md",
+        "collaborating-with-codex": "skills/collaborating-with-codex/SKILL.md",
+        "references/active-workflows.md": (
+            "skills/collaborating-with-codex/references/active-workflows.md"
+        ),
+        "commands/codex/dry-run.md": "commands/codex/dry-run.md",
+        "commands/codex/review.md": "commands/codex/review.md",
+    }
+    named_in_rule = {token for token in expected if token in rule}
+    assert named_in_rule == set(expected), (
+        f"the preview-scope RULE no longer names: {set(expected) - named_in_rule}"
+    )
+    assert set(_PREVIEW_SCOPE_DOC_SITES) == set(expected.values()), (
+        "the preview-scope RULE and _PREVIEW_SCOPE_DOC_SITES have drifted: "
+        f"only in tuple={set(_PREVIEW_SCOPE_DOC_SITES) - set(expected.values())}, "
+        f"only in RULE={set(expected.values()) - set(_PREVIEW_SCOPE_DOC_SITES)}"
+    )
+
+
+@pytest.mark.parametrize("relpath", _PREVIEW_SCOPE_DOC_SITES)
+def test_every_dry_run_steer_states_the_preview_limit(relpath):
+    """A site that steers a reader to a dry run must say somewhere what it cannot establish.
+
+    At least one steer section, not every one. `SKILL.md`'s numbered Shared-workflow step is a
+    RULE, and a `separating-context-from-constraints` audit of this very change flagged the
+    load-bearing fact an every-section version had pushed into it — that skill requires rule
+    sections to stay free of facts, so the stricter guard mandated the defect. The gap this
+    leaves (one section states it, another still misleads) is covered by the file-wide
+    contradiction sweep below and, for the skill, by the binding-rule pin at the end of this
+    module.
+    """
+    sections = _preview_steer_sections(_flat_text(relpath))
+    assert sections, (
+        f"{relpath} no longer contains a dry-run steer — if the steer moved, move this "
+        "site out of _PREVIEW_SCOPE_DOC_SITES and out of the RULE (#513)"
+    )
+    stating = [
+        sec
+        for sec in (_flat(section) for section in sections)
+        if _PREVIEW_LIMIT_RE.search(sec) and _MODEL_READS_RE.search(sec)
+    ]
+    assert stating, (
+        f"{relpath}: no dry-run steer states the preview-scope limit (#513); steers found "
+        f"in {len(sections)} section(s), e.g. {_flat(sections[0])[:160]!r}"
+    )
+
+
+def test_preview_steer_matcher_rejects_the_pre_513_wording():
+    """Guard the guard, red-green: the wording this issue corrects must FAIL.
+
+    Without this, the matcher could be satisfied by any nearby hedge and the whole
+    parametrized sweep above would be a check that cannot fail.
+    """
+    pre_513 = _flat(
+        "- `codex_dry_run(scope, …)` — preview a review's scope/diff size/redactions "
+        "before spending."
+    )
+    assert _DRY_RUN_STEER_RE.search(pre_513) and _SPEND_STEER_RE.search(pre_513), (
+        "precondition: the pre-fix bullet must still register as a steer"
+    )
+    assert not (_PREVIEW_LIMIT_RE.search(pre_513) and _MODEL_READS_RE.search(pre_513)), (
+        "the pre-#513 wording must fail the limit check"
+    )
+    # A redaction-only qualifier is not the read-side one: this is the exact text
+    # active-workflows.md carried, and it must not satisfy the guard on its own.
+    redaction_only = _flat(
+        "Run codex_dry_run first when scope or redaction is uncertain before spending. "
+        "A dry-run previews input; it does not prove that redaction catches every secret."
+    )
+    assert not (
+        _PREVIEW_LIMIT_RE.search(redaction_only) and _MODEL_READS_RE.search(redaction_only)
+    ), "a redaction-only caveat must not satisfy the read-side guard"
+    # …while a corrected passage passes.
+    fixed = _flat(
+        "Run codex_dry_run first to preview scope before spending. It does not enumerate "
+        "the files Codex itself reads during the paid run."
+    )
+    assert _PREVIEW_LIMIT_RE.search(fixed) and _MODEL_READS_RE.search(fixed)
+
+
+@pytest.mark.parametrize("relpath", _PREVIEW_SCOPE_DOC_SITES)
+def test_no_doc_site_presents_a_preview_as_an_egress_bound(relpath):
+    """File-wide contradiction sweep — the misstatement half the word check cannot see."""
+    hit = _preview_egress_bound_claim(_flat(_flat_text(relpath)))
+    assert hit is None, (
+        f"{relpath} presents a preview as evidence about total egress (#513): {hit!r}"
+    )
+
+
+# Same shape and same reasoning as `_CONTRADICTS_READ_SCOPE_PROSE` above, and kept as an
+# independent copy of test_server.py's runtime pattern for the reason stated there: the two
+# guard different corpora and should be able to diverge without weakening one another.
+_CONTRADICTS_PREVIEW_SCOPE_PROSE = re.compile(
+    r"\b(?:everything|all)\b[^.]{0,30}\b(?:paid call|model|codex run)\b"
+    r"[^.]{0,40}\b(?:sen[dt]s?|transmit(?:s|ted)?|receiv(?:e|es|ed)|leaves?)\b"
+    r"|\b(?:everything|nothing (?:else|more))\b[^.]{0,60}"
+    r"\b(?:previewed|shown here|listed here|reported here)\b"
+    # "inventory" is NOT in this alternative: CAPABILITY_SUMMARY legitimately says "use
+    # codex_capabilities for the full inventory", which the looser form flagged.
+    r"|\b(?:complete|full|exhaustive)\s+(?:security\s+)?(?:preflight|audit)\b"
+    r"|\b(?:complete|full|exhaustive)\s+inventory\s+of\b[^.]{0,40}"
+    r"\b(?:read|reads|files|egress|sent)\b"
+    r"|\bsafe to (?:proceed|spend)\b"
+    r"|\bno (?:further|additional) disclosure review\b"
+    # …or a certification that the preview clears the run. The completeness alternatives
+    # above are keyed on a quantifier ("everything…transmits"); a Codex review showed this
+    # shape needs none — "A clean preview certifies that no sensitive content will reach
+    # OpenAI" passed every guard. It is the operative claim #513 exists to stop.
+    r"|\b(?:certif(?:y|ies|ied)|confirms?|confirmed|assures?|proves?|guarantees?|"
+    r"establishes?|verifies|verified)\b[^.]{0,60}"
+    r"\bno\b[^.]{0,30}\b(?:sensitive|secrets?|confidential|disclosure|egress|"
+    r"private data)\b"
+    r"|\b(?:nothing sensitive|no sensitive \w+|no secrets?)\b[^.]{0,40}"
+    r"\b(?:will be sent|is sent|reaches?|reach|leaves?|will leave)\b",
+    re.IGNORECASE,
+)
+
+
+# A denial of the claim is not the claim. "…not evidence that nothing sensitive will be
+# sent" contains the poison phrase verbatim, and the corrected carriers are FULL of such
+# denials — this repo has now been bitten three times by a matcher that reads a
+# strengthening sentence as the weakness it forbids (#502, the read-scope emphasis case,
+# and this one). So the regex finds candidate claims and this wrapper drops the ones a
+# negation governs, rather than the regex being weakened until it stops catching the
+# affirmative form.
+_DENIAL_PREFIX = re.compile(
+    r"\b(?:not|never|n't|no|rather than|instead of|neither|nor)\b(?:\s+\S+){0,12}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _preview_egress_bound_claim(text: str) -> str | None:
+    """The first affirmative claim that a preview bounds or clears the paid call's egress."""
+    for m in _CONTRADICTS_PREVIEW_SCOPE_PROSE.finditer(text):
+        # Sentence-scoped: a negation in a PREVIOUS sentence does not govern this claim,
+        # and "Do not present a clean preview as evidence that nothing sensitive will be
+        # sent" puts its negation seven words back — a fixed word window is the wrong
+        # instrument, the sentence is.
+        sentence_prefix = re.split(r"(?<=[.;:])\s+", text[: m.start()])[-1]
+        if not _DENIAL_PREFIX.search(sentence_prefix):
+            return m.group(0)
+    return None
+
+
+def test_preview_prose_contradiction_pattern_is_not_vacuous():
+    """Guard the guard: it must fire on the constructed bypasses and spare the fix."""
+    for poison in (
+        "After a clean dry run, everything the model receives has been previewed here.",
+        "prompt_bytes is the full size of everything the paid call transmits to OpenAI.",
+        "The preview is a complete security preflight.",
+        "A clean preview means it is safe to proceed.",
+        "A clean preview certifies that no sensitive content will reach OpenAI.",
+        "The preview confirms no secrets are sent.",
+    ):
+        assert _preview_egress_bound_claim(_flat(poison)), poison
+    for ok in (
+        "Codex can read files outside the workspace — up to everything the OS user "
+        "running it can read — and send them to OpenAI.",
+        "preview a review's scope/diff size/redactions before spending",
+        "the full UTF-8 size of the prompt that would be sent",
+        "Use codex_capabilities for the full inventory.",
+    ):
+        assert _preview_egress_bound_claim(_flat(ok)) is None, ok
+
+
+def test_skill_carries_a_binding_rule_not_only_background():
+    """The skill must gate the DECISION on this, not merely describe it (#512, #513).
+
+    A prose site can state the fact in its background section while its binding rules stay
+    narrow — the agent then follows every rule it is given and still treats a clean preview as
+    clearance. That is the #512 defect, and it is why this pins the rule text itself rather
+    than trusting the section sweep above.
+    """
+    text = _flat_text("skills/collaborating-with-codex/SKILL.md")
+    parts = text.split("## Binding rules", 1)
+    assert len(parts) == 2, "the Binding rules section is gone or renamed"
+    flat_rules = _flat(parts[1])
+    assert "dry run is not a disclosure check" in flat_rules, (
+        "the preview-scope binding rule is missing from the Binding rules section"
+    )
+    assert _PREVIEW_LIMIT_RE.search(flat_rules), (
+        "the binding rule states no limit — background disclosure is not a decision rule"
+    )
+    exposure = _flat(text.split("## Data exposure", 1)[1].split("## Binding rules", 1)[0])
+    assert _PREVIEW_LIMIT_RE.search(exposure) and _MODEL_READS_RE.search(exposure), (
+        "Data exposure lost the preview-scope fact the binding rule cross-references"
+    )

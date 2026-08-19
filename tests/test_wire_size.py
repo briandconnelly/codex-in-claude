@@ -155,7 +155,20 @@ from codex_in_claude.server import mcp
 # choice of workspace is a read boundary", which is precisely the half that retires the
 # "narrow the workspace to bound egress" mitigation. Trimming the plugin's central safety
 # disclosure to hold a byte line is the wrong trade; the raise is the right one.
-TOOLS_LIST_BYTE_BUDGET = 92_000
+# Measured again 2026-08-19 (#513 — the dry-run previews. Both descriptions framed the
+# preview as "what a call would send", which reads as a bound on the paid call's egress. It
+# is not one: a dry run never invokes Codex, so the model's own reads have not happened yet
+# and cannot be listed. Both docstrings now carry `cli_contract.PREVIEW_SCOPE_FACT` AND
+# `READ_SCOPE_FACT`. The read fact is carried here, unlike the six egress tools, because
+# these two are NOT egress tools and had no read-scope disclosure of their own: the preview
+# fact is three negatives, and without the affirmative half a reader learns the preview is
+# not a bound but never what the unbounded channel reaches. This is the FREE tool a client
+# reads precisely to decide whether to spend, so the bytes buy the disclosure at the moment
+# the decision is made): 91,447 -> 92,289 bytes (+842 B) — over budget; budget raised to the
+# next 1,000 above the measured value. Compressing was rejected for the same reason as #509:
+# the only clause short enough to drop is the affirmative read half, which is the half that
+# tells the reader what a clean preview failed to cover.
+TOOLS_LIST_BYTE_BUDGET = 93_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -167,7 +180,7 @@ TOOLS_LIST_BYTE_BUDGET = 92_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 91_447
+TOOLS_LIST_BYTE_TARGET = 92_289
 
 
 def _budget_failure_message(measured: int) -> str:

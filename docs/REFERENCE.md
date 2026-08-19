@@ -246,6 +246,14 @@ differ. A missing key means only that the value was not reported (see
 identity from its absence. The exhaustive per-envelope matrix ships with the field itself at
 `codex://result-meta`.
 
+Both dry runs report metadata about the input the plugin would assemble — the gathered scope and
+prompt size for `codex_dry_run`, the planned worktree baseline for `codex_delegate_dry_run` — and
+both enforce the same `max_input_bytes` the paid call enforces, so an oversize input fails the
+preview exactly where the paid call would. What a preview cannot do is bound the other channel:
+it never invokes Codex, so it neither enumerates nor bounds the files the model itself reads and
+sends during the paid run. Treat a clean preview as a check on scope, not as evidence about total
+egress.
+
 Both dry runs also carry `deadline_advisory`: non-null when the previewed paid call's prompt size or
 reasoning effort risks the synchronous deadline, naming — verbatim, so it is directly callable — the
 **previewed paid tool's own** `_async` counterpart: `codex_review_changes_async` from `codex_dry_run`,
