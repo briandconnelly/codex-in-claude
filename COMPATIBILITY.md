@@ -303,20 +303,46 @@ invisible.
 They must live in the **real** `$CODEX_HOME`, because that is the path under test — a scratch
 `CODEX_HOME` would also have to carry a copy of `auth.json`, which is a credential and should not be
 copied around. So the guidance marker is created in a directory that may already hold the
-maintainer's own guidance file, and a careless run can overwrite or delete it:
+maintainer's own guidance file. Put the whole probe in a **script or an explicit subshell** — never
+paste this into an interactive shell, where the `EXIT` trap outlives the probe and can delete a
+guidance file you legitimately create later in the same session:
 
 ```sh
-# ABORT rather than overwrite: never clobber a real guidance file to run a probe.
-for f in "${CODEX_HOME:-$HOME/.codex}"/AGENTS.md "${CODEX_HOME:-$HOME/.codex}"/AGENTS.override.md; do
-  [ -e "$f" ] && { echo "REFUSING: $f already exists — probe it by hand or move it aside"; exit 1; }
-done
-trap 'rm -f "${CODEX_HOME:-$HOME/.codex}"/AGENTS.md "${CODEX_HOME:-$HOME/.codex}"/AGENTS.override.md' EXIT
+(                                      # bounded: the trap dies with this subshell
+  set -u
+  home=${CODEX_HOME:-$HOME/.codex}     # resolve ONCE; every later step reuses $home
+  created=()
+  # -e misses a DANGLING symlink, which the cleanup would then delete: test -L as well.
+  for f in "$home/AGENTS.md" "$home/AGENTS.override.md"; do
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      echo "REFUSING: $f already exists — move it aside and re-run"; exit 1
+    fi
+  done
+  trap 'rm -f "${created[@]}"' EXIT    # fallback only; remove what THIS probe created
+  printf 'Global guidance. Codeword: <codeword>\n' > "$home/AGENTS.md"; created+=("$home/AGENTS.md")
+  ...                                  # run the discovery consults below
+  rm -f "${created[@]}"; created=()    # explicit cleanup on the success path
+)
 ```
 
-The `trap` matters more than it looks: a forgotten `$CODEX_HOME/AGENTS.md` silently joins **every**
-later Codex call on that machine, this plugin's included. `AGENTS.override.md` masks `AGENTS.md` in
-that directory, so probe one at a time — the override run establishes the precedence, the plain run
-establishes that the un-overridden file loads at all.
+Clean up explicitly on success and keep the trap as the fallback for the failure path — a trap that
+is the *only* cleanup silently becomes a no-op the day someone runs the steps by hand. A forgotten
+`$CODEX_HOME/AGENTS.md` joins **every** later Codex call on that machine, this plugin's included.
+
+**Two variants are needed beyond the ordinary discovery run, because the results table records
+behavior the ordinary run cannot reproduce.** A recorded observation whose procedure cannot
+re-derive it is exactly the stale-record failure this section exists to prevent:
+
+- **Override precedence.** Create **both** guidance files at once, with **distinct** codewords, and
+  assert that only the `AGENTS.override.md` codeword arrives. Probing them one at a time shows each
+  loads on its own and says nothing about which one wins.
+- **`project_doc_max_bytes=0`.** Repeat the discovery run with `-c project_doc_max_bytes=0` added,
+  against the same fixture, and record the workspace/ancestor markers and the `$CODEX_HOME` guidance
+  marker separately — the knob suppresses the first two and not the third, so one undifferentiated
+  boolean would hide a change to either half.
+
+Capture each variant under its own `$OUT` name and run the same clean-stream assertion over it; a
+variant that fails the assertion is discarded like any other run.
 
 **The "present" column is not uniform, and that is the point.** An `AGENTS.md` auto-loads as
 *content*, so its codeword is the evidence; a skill auto-discovers as *name and description only*,

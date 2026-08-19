@@ -362,12 +362,20 @@ def _privacy_rule_text() -> str:
     return text[start:nxt]
 
 
+# Both filenames, asserted independently. `_GLOBAL_AGENTS_RE` matches either one, so a
+# single search would accept a rule naming only `AGENTS.md` — and `AGENTS.override.md`
+# is the file that actually wins when both exist, so dropping it drops the one an agent
+# most needs to check. A Codex review caught this exact vacuity.
+_GLOBAL_GUIDANCE_FILES = ("$CODEX_HOME/AGENTS.override.md", "$CODEX_HOME/AGENTS.md")
+
+
 def test_privacy_rule_covers_every_agents_md_source():
     rule = _privacy_rule_text()
-    assert _GLOBAL_AGENTS_RE.search(rule), (
-        "the Privacy rule omits the user-global $CODEX_HOME guidance file, which reaches "
-        "OpenAI on every call from any workspace"
-    )
+    for filename in _GLOBAL_GUIDANCE_FILES:
+        assert filename in rule, (
+            f"the Privacy rule omits {filename}, a user-global guidance file that reaches "
+            "OpenAI on every call from any workspace"
+        )
     assert _ANCESTOR_RE.search(rule) and _REPO_ROOT_RE.search(rule), (
         "the Privacy rule omits the ancestor AGENTS.md files loaded up to the repository root"
     )
@@ -389,3 +397,17 @@ def test_privacy_rule_guard_rejects_the_pre_472_rule():
     )
     assert _GLOBAL_AGENTS_RE.search(pre_472) is None
     assert _ANCESTOR_RE.search(pre_472) is None
+
+    # Half-corrections must fail too, or the guard would accept a rule that names one
+    # guidance file and silently drops the other.
+    plain_only = (
+        "- **Privacy:** Do not make an active call when your user-global "
+        "`$CODEX_HOME/AGENTS.md` contains something you cannot disclose."
+    )
+    assert "$CODEX_HOME/AGENTS.override.md" not in plain_only
+
+    override_only = (
+        "- **Privacy:** Do not make an active call when your user-global "
+        "`$CODEX_HOME/AGENTS.override.md` contains something you cannot disclose."
+    )
+    assert "$CODEX_HOME/AGENTS.md" not in override_only
