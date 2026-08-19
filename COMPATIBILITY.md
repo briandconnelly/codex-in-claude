@@ -118,9 +118,11 @@ The question #479 raised was whether it widens egress the way `remote_plugin` di
 binary: `view_image` — "View a local image file from the filesystem when visual inspection is
 needed" — takes `path` ("Local filesystem path to an image file.") and an optional `detail`
 (`high` | `original`). The binary also carries `core/src/tools/handlers/view_image.rs` and
-`ViewImageToolCall*` events. So an image reaches the model only when the **model issues a call
-naming a file** — categorically unlike `AGENTS.md`, whose content is in context before the turn
-begins (see "Implicit Codex context" below).
+`ViewImageToolCall*` events. So `view_image` puts an image in context only after the **model
+issues a call naming a file** — categorically unlike `AGENTS.md`, whose content is in context
+before the turn begins (see "Implicit Codex context" below). (That is a statement about this
+feature, not about every image path: `codex exec -i <file>` attaches one with no model call at
+all. This plugin never passes `-i`.)
 
 **Probe: no auto-attachment** (zero spend, `codex-cli 0.148.0`). In a scratch git repo containing
 `secret_marker.png`, `codex debug prompt-input` — which renders the model-visible prompt input list
@@ -153,13 +155,19 @@ handler reading a path the shell/filesystem policy cannot; or image data leaving
 non-OpenAI channel. A merely *unprompted* model call does **not** reopen it — an unprompted shell
 read is already possible and already disclosed.
 
-**Residual, unverified.** Whether the native handler applies exactly the same read boundary as
-shell execution was not probed. The reasoning that `--sandbox` is an OS-level boundary governing
-the whole process (so a native read passes the same gate as a shell read) is an argument, not an
-observation. Re-check `view_image`'s stage and default alongside `remote_plugin` on each upgrade;
+**Residual, unverified — and do not close it by assuming the sandbox covers it.** Whether the
+native handler enforces the same read boundary as shell execution was **not** probed, and
+`--sandbox` does not settle it: `codex exec --help` scopes that flag to "the sandbox policy to use
+when executing model-generated **shell commands**", so it does not follow that a native tool
+handler shares the shell's containment. The handler may well take its own sandbox context — the
+point is that this was not verified here, by source inspection or by an exercised boundary test.
+This is the one open question that could flip the decision, so it is tracked as #507 rather than
+left as a paragraph.
+
 `recommended_plugins` is `stable`/default-**off** at `0.148.0` and is left unreserved on the same
-reasoning — adjacency in the feature table is not evidence that it bypasses the `remote_plugin`
-guarantee.
+reasoning as above — adjacency in the feature table is not evidence that it bypasses the
+`remote_plugin` guarantee. [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md) owns the
+obligation to re-check both flags on each upgrade.
 
 ## Implicit Codex context (`AGENTS.md`, both skills roots, #300, #358)
 

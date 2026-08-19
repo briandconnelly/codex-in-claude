@@ -34,7 +34,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   view_image`. Disabling it would buy no containment, since the read-only tiers already give the
   model a shell over the same filesystem; it would only stop the model interpreting pixels. Unlike
   `remote_plugin`, it opens no channel outside the sandbox. The published egress disclosures stay
-  modality-neutral ("files", "their content"), so nothing agent-visible changes. Documentation only
+  modality-neutral ("files", "their content"), so nothing agent-visible changes. One assumption the
+  decision rests on — that the native handler enforces the same read boundary as shell execution —
+  is explicitly **not** verified and is tracked as #507; `docs/UPGRADING-CODEX.md` now carries a
+  step to re-check already-decided feature flags, not just scan for new ones. Documentation only
   — no fingerprint effect.
 
 - **Safety-critical rules in the egress-caveat docs are no longer buried in narration.** No warning
