@@ -28,7 +28,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   is deliberately untouched and is not fully swept: `CAPABILITY_SUMMARY` already states the
   metadata/body split, but its umbrella phrase "Codex also auto-loads context implicitly" keeps the
   loose framing, and the `_async` docstrings and delegate `returns` carry the discovery fact without
-  the mechanism. Correcting those would move the fingerprint, so they are tracked separately.
+  the mechanism. Correcting those would move the fingerprint, so they are tracked in #501.
 - The implicit-context marker probe in `COMPATIBILITY.md` now **proves** the model did not read the
   markers itself, instead of asking it to say so. The discovery consult forbids shell commands and
   file reads, keeps every codeword and synthetic skill name *out* of the prompt (asking for an
