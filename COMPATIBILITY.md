@@ -155,14 +155,37 @@ handler reading a path the shell/filesystem policy cannot; or image data leaving
 non-OpenAI channel. A merely *unprompted* model call does **not** reopen it — an unprompted shell
 read is already possible and already disclosed.
 
-**Residual, unverified — and do not close it by assuming the sandbox covers it.** Whether the
-native handler enforces the same read boundary as shell execution was **not** probed, and
-`--sandbox` does not settle it: `codex exec --help` scopes that flag to "the sandbox policy to use
-when executing model-generated **shell commands**", so it does not follow that a native tool
-handler shares the shell's containment. The handler may well take its own sandbox context — the
-point is that this was not verified here, by source inspection or by an exercised boundary test.
-This is the one open question that could flip the decision, so it is tracked as #507 rather than
-left as a paragraph.
+**The read boundary is verified equal to the shell's (#507).** This was the one open question that
+could have flipped the decision, and it was closed two ways rather than by assuming `--sandbox`
+covers it (it does not: `codex exec --help` scopes that flag to "model-generated **shell
+commands**", which a native handler is not).
+
+- **Source**, at the `rust-v0.148.0` tag: the handler routes **both** `get_metadata` and
+  `read_file` through `turn.file_system_sandbox_context(...)`, so its reads are sandbox-mediated
+  rather than raw filesystem access. Upstream carries a test named
+  `handle_passes_sandbox_context_for_local_filesystem_reads` asserting exactly that.
+- **Exercised**, at `0.148.0` under this plugin's own flags (`--sandbox read-only --cd <ws>
+  --ephemeral --skip-git-repo-check --disable remote_plugin`): `view_image` read and transmitted a
+  PNG in `$HOME` — outside the workspace and outside any repo — and the model reported its colour
+  correctly across **three** distinct pairs (blue/red, then green/yellow, then magenta). The
+  filenames were colour-neutral (`a.png`, `b.png`) and the only shell command available in those
+  runs revealed no colour (an 8-byte header dump; a `cat` of an unrelated text file), so the
+  answers can only have come from the pixels. The same runs' shell reads of the same outside paths
+  also succeeded.
+
+So `view_image` reaches **no file the shell cannot**, and disabling it still buys no containment —
+#479's posture now rests on evidence rather than on the argument it was originally filed with.
+
+Two things that verification exposed, tracked separately because neither is about `view_image`'s
+posture: `read-only` permits reads **anywhere the OS user can read**, while several agent-visible
+descriptions still scope reads to the "resolved working dir" or "repo files" (#509); and a
+successful `view_image` call emits **no item** in the `codex exec --json` stream — failures reach
+only stderr — so image egress is invisible to anything parsing it, this plugin included (#510).
+
+`recommended_plugins` is `stable`/default-**off** at `0.148.0` and is left unreserved on the same
+reasoning as above — adjacency in the feature table is not evidence that it bypasses the
+`remote_plugin` guarantee. [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md) owns the
+obligation to re-check both flags on each upgrade.
 
 `recommended_plugins` is `stable`/default-**off** at `0.148.0` and is left unreserved on the same
 reasoning as above — adjacency in the feature table is not evidence that it bypasses the

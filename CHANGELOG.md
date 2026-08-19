@@ -36,9 +36,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `remote_plugin`, it opens no channel outside the sandbox. The published egress disclosures stay
   modality-neutral ("files", "their content"), so nothing agent-visible changes. One assumption the
   decision rests on — that the native handler enforces the same read boundary as shell execution —
-  is explicitly **not** verified and is tracked as #507; `docs/UPGRADING-CODEX.md` now carries a
-  step to re-check already-decided feature flags, not just scan for new ones. Documentation only
-  — no fingerprint effect.
+  is now **verified** (#507): the `rust-v0.148.0` handler routes both its metadata and read calls
+  through `turn.file_system_sandbox_context(...)`, and an exercised probe showed `view_image`
+  reading a PNG in `$HOME` that the shell could read in the same run — so it reaches no file the
+  shell cannot, and the posture rests on evidence. `docs/UPGRADING-CODEX.md` now carries a step to
+  re-check already-decided feature flags, not just scan for new ones. Verifying it surfaced two
+  unrelated gaps, filed as #509 (agent-visible descriptions scope Codex's reads to the working
+  directory, but a `read-only` run reads anywhere the OS user can) and #510 (`view_image` egress is
+  invisible in the `codex exec --json` stream). Documentation only — no fingerprint effect.
 
 - **Safety-critical rules in the egress-caveat docs are no longer buried in narration.** No warning
   weakens and no mechanism claim changes — this is placement only. `README.md`'s ~22-line Safety
