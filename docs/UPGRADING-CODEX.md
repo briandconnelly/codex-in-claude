@@ -242,6 +242,16 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   surface). A release's most relevant new surface often lives there rather than in `codex exec`'s
   flags — e.g. 0.142 added the `features` subcommand and a native `codex exec review --output-schema`.
   Adopting any of these is a separate, deliberate change — not part of a version bump.
+- **Feature flags this repo has already ruled on.** Scanning for *new* flags is not enough — a flag
+  whose posture was decided can have its stage or default moved under you. Re-check each of these
+  in `codex features list` and confirm the recorded posture still holds:
+  `remote_plugin` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Remote-plugin isolation"; the
+  plugin forces it off, and an upstream rename fails loud at arg-parse) and `view_image` /
+  `recommended_plugins` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Image reading"; both left
+  enabled/unreserved deliberately). If `view_image`'s stage or default moves, or the release notes
+  touch image handling, re-run the no-auto-attachment A/B that section records — `codex debug
+  prompt-input` with and without `--disable view_image`, **plus the `-i` positive control** without
+  which a zero count proves nothing.
 - **Model catalog fallback.** `cli_contract.py`'s `KNOWN_MODEL_SLUGS` is a bundled fallback copied
   from a specific CLI's `$CODEX_HOME/models_cache.json`, meant to stay in lockstep with
   `SUPPORTED_VERSIONS`. Diff its **slug set** (not the volatile `client_version`/`fetched_at`) against
