@@ -20,14 +20,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `integration` suite (10 tests, including the app-server transfer and rate-limit roundtrips) passes
   against the new CLI.
 - **`KNOWN_MODEL_SLUGS` drops `gpt-5.6-sol-wm`**, refreshed from the `0.148.0`-written
-  `models_cache.json`. As with the slug that was *added* at `0.147`, this is a backend-served
-  catalog move rather than a CLI change — the upgrade's slug diff is what caught it. The
+  `models_cache.json`. What was observed is only that the slug is absent from the backend-served
+  catalog cached by `0.148.0`; unlike the `0.147` *addition* — where a `0.146`-written cache already
+  carried the slug, so the move was demonstrably independent of the client — no contemporaneous
+  `0.147` observation was taken here, so this record does **not** establish that the removal is
+  independent of the new client. The upgrade's slug diff is what caught it either way. The
   reasoning-effort discovery fields still hold their pinned shape (`default_reasoning_level` a
   string, `supported_reasoning_levels` a list of `{effort, …}` objects), and the `-c
   model_reasoning_effort` route was re-probed: it still parses, and a bogus effort on a valid model
   still fails with both bracketed `REASONING_EFFORT_REJECTION_MARKERS`.
 - **New `0.148.0` surface is deliberately not adopted**: the top-level `migrate-rollouts` subcommand,
-  the `codex exec fork` subcommand, and nine new feature flags — none of which this plugin sends or
+  the `codex exec fork` subcommand, and ten new feature flags — none of which this plugin sends or
   reads. `codex exec` gained **no** new flag. `remote_plugin` is still `stable`/default-on, so the
   unconditional `--disable remote_plugin` isolation stays load-bearing.
 - App-server: the `0.147.0` → `0.148.0` generated-schema diff leaves every consumed schema

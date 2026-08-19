@@ -381,8 +381,10 @@ MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Bundled advisory fallback used ONLY when the on-disk cache is absent/unreadable.
 # Copied from codex-cli 0.148.0's models_cache.json on 2026-08-19 (cache order preserved);
 # `gpt-5.6-sol-wm` was DROPPED in that refresh (it had been added in the 0.147.0-era refresh).
-# The catalog is served by the backend, not shipped in the binary, so a slug can appear or vanish
-# without a CLI release — this drop is exactly that, not a 0.148.0 change. Re-diff the slug set on
+# The catalog is served by the backend, not shipped in the binary, so a slug CAN appear or vanish
+# without a CLI release. Whether THIS drop was such a move is not established: the only observation
+# is the 0.148.0-written cache, with no contemporaneous 0.147.0 read to compare (contrast the
+# 0.147 addition, where a 0.146.0-written cache already carried the slug). Re-diff the slug set on
 # every upgrade anyway — this is the pass that catches it.
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
 # live account's available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping
