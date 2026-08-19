@@ -115,7 +115,16 @@ from codex_in_claude.server import mcp
 # reach the wire as a `"minimum":0` property, duplicated across the same two tools'
 # outputSchema as the row above): 87,281 bytes (+24 B) — still within budget, no
 # further change.
-TOOLS_LIST_BYTE_BUDGET = 87_500
+# Measured again 2026-08-19 (#501: every egress tool description now states HOW a skill's
+# body arrives — `cli_contract.SKILL_BODY_FACT` — not just that skills are discovered.
+# Genuinely new disclosure on four of the six, not a reword: `codex_consult_async` and
+# `codex_review_changes_async` previously named the skills roots with no mechanism at all,
+# and the sync review/delegate descriptions stated the body without the metadata half that
+# makes it legible. This is the security-load-bearing half of the caveat — metadata reaching
+# the model is comparatively harmless, the body is the egress — so it is disclosure the
+# client cannot get anywhere else before it spends): 87,796 bytes (+515 B) — over budget;
+# budget raised to the next 500 above the measured value.
+TOOLS_LIST_BYTE_BUDGET = 88_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -127,7 +136,7 @@ TOOLS_LIST_BYTE_BUDGET = 87_500
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 87_281
+TOOLS_LIST_BYTE_TARGET = 87_796
 
 
 def _budget_failure_message(measured: int) -> str:
