@@ -31,7 +31,11 @@ _MIN_LINES = 2
 _MIN_CHARS = 120
 
 # Leaders that mark a block as structural rather than prose. These recur by design.
-_STRUCTURAL_LEADERS = ("-", "*", "|", "#", ">", "1.")
+# Ordered lists are matched by pattern, not by a literal "1.": a numbered block can open
+# at any digit — 35 blocks in this repo's docs open at 2. or higher — and a leader tuple
+# holding only "1." would scan those as prose.
+_STRUCTURAL_LEADERS = ("-", "*", "|", "#", ">")
+_ORDERED_LIST_LEADER = re.compile(r"^\d+[.)]\s")
 
 
 def _prose_paragraphs(text: str) -> list[str]:
@@ -57,7 +61,7 @@ def _prose_paragraphs(text: str) -> list[str]:
     for block in blocks:
         if len(block) < _MIN_LINES:
             continue
-        if block[0].startswith(_STRUCTURAL_LEADERS):
+        if block[0].startswith(_STRUCTURAL_LEADERS) or _ORDERED_LIST_LEADER.match(block[0]):
             continue
         joined = " ".join(block)
         if len(joined) < _MIN_CHARS:
@@ -137,3 +141,12 @@ def test_scan_ignores_structure_that_recurs_by_design():
         "- the project skills root, whose names and descriptions reach the model up front\n"
     )
     assert not _duplicate_paragraphs(f"{bullets}\n{bullets}")
+
+    # An ordered list may open at any digit, not only 1. — this repo's docs hold blocks
+    # that start at 2., 3., and 0., and a literal "1." skip would scan them as prose.
+    for marker in ("1.", "2.", "9)", "0."):
+        numbered = (
+            f"{marker} Check whether the repo already carries a config, and keep it if so\n"
+            f"{marker} Reinstall the Git shims so every hook runs from the new toolchain\n"
+        )
+        assert not _duplicate_paragraphs(f"{numbered}\n{numbered}"), marker

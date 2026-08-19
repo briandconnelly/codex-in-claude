@@ -256,9 +256,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   paragraph the #508 change had already placed in the "Image reading (`view_image`, #479)" section,
   leaving two verbatim consecutive copies; the second is removed. Nothing else was lost in that
   operation — the only other deletion there was the "Residual, unverified" paragraph, removed on
-  purpose when #507 closed. A regression guard lands with it: every tracked Markdown file is
-  scanned for a verbatim-repeated multi-line prose paragraph, since every existing doc guard is
-  presence-based (`"..." in text`) and a presence check passes at one occurrence and at ten. The
+  purpose when #507 closed. A regression guard lands with it: every Markdown file in the
+  repository tree (build and dependency directories aside) is scanned for a verbatim-repeated
+  multi-line prose paragraph, since every existing doc guard is presence-based (`"..." in text`)
+  and a presence check passes at one occurrence and at ten. The
   scan skips fenced code, tables, lists, and headings, which recur by design, and carries its own
   positive control so a clean corpus is evidence rather than a silent no-op. Docs and tests only —
   no agent-visible surface change, no `FINGERPRINT` bump.
