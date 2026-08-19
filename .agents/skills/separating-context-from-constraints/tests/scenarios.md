@@ -8,6 +8,40 @@ Store each scored output in `tests/runs/YYYY-MM-DD-scenarioN-baseline.md` or `te
 Artifact reports are scored outputs, not raw agent transcripts.
 Scenarios 2 and 3 informed the initial R5 and rewrite-contract iterations, so their recorded treatments are fitted checks rather than held-out evaluations.
 
+## Measurement protocol
+
+This skill adopts [`hypothesis-driven-analysis/tests/PROTOCOL.md`](https://github.com/briandconnelly/data-reasoning/blob/main/skills/hypothesis-driven-analysis/tests/PROTOCOL.md) and [`hypothesis-driven-analysis/decisions/001-rerun-obligation.md`](https://github.com/briandconnelly/data-reasoning/blob/main/skills/hypothesis-driven-analysis/decisions/001-rerun-obligation.md) in full: the step ordering, the Iron Law, and the rule scoping which cells owe rerun arms.
+Those documents are the authority for the measurement protocol.
+This file does not restate their rules, so a protocol rule stated only here is not one of theirs and carries no protocol authority.
+Requirements this file states in its own right — the run-provenance block below, and the scenarios and assertions themselves — are local to this skill and bind on their own terms.
+
+Adopted 2026-08-06, because this skill had no stated measurement protocol and its 2026-07-11 wave shipped skill edits and run artifacts in one commit with no record of which wording each arm read.
+
+## Run provenance
+
+Every run artifact records, before its assertion table:
+
+```
+Date: YYYY-MM-DD
+Run: baseline | with-skill | trigger
+SKILL.md blob: <git hash-object SKILL.md — always the blob hash, never a commit sha>
+Commit: <optional; the commit the run was made against, when one exists>
+Referenced files: <blob hash of each file under references/ the arm could read>
+Model: <model id>
+Harness: <dispatcher and version>
+Prompt: <path to the verbatim prompt, or the prompt inline>
+Sampling: <settings, or "harness default">
+Scorer: <who or what scored it>
+Notes: <optional; anything about this run that is not one of the fields above>
+```
+
+`Run:` takes one of the three enumerated values and nothing else; what kind of run it was within that category belongs in `Notes` or in the artifact's prose.
+
+A hash alone does not establish that the scored output came from the arm it is filed under; the prompt and scorer fields are what make the artifact checkable by someone who was not there.
+
+The 2026-07-11 artifacts predate this requirement and none of these fields is recoverable for them.
+They are retained as historical evidence and are not treated as establishing which wording they measured.
+
 ## How to run
 
 1. **Baseline:** dispatch a subagent with only the scenario prompt below.
@@ -223,7 +257,8 @@ It may also quote the fake key verbatim when discussing the example configuratio
 - [ ] The finding explains both defects: "generally try" leaves strength ambiguous, and "be careful" supplies no observable evidence.
 - [ ] The suggested rewrite marks the intended strength and safeguard as author decisions and does not silently invent confirmation, logging, approval, or another concrete policy.
 - [ ] The migration-history sentence receives a separate minor R1 finding because discretionary context is inside the rule section, with a rewrite that moves it to a context or background section without changing it into a rule.
-- [ ] The summary reports one material finding and one minor finding rather than double-counting the first statement.
+- [ ] The summary's severity counts report one material finding and one minor finding, since there are two findings.
+- [ ] The summary's per-rule counts report one occurrence each for R1, R2, and R3, since the consolidated finding carries R2 as primary and R3 as secondary; the per-rule total of three legitimately exceeds the severity total of two.
 
 **Expected baseline failures:** a skill-less run commonly rewrites the first sentence as a mandatory approval or confirmation rule, reports R2 and R3 separately, or ignores the background sentence because it is harmless prose.
 
@@ -296,6 +331,10 @@ It may also quote the fake key verbatim when discussing the example configuratio
 
 ## Results
 
+These totals measure assertion compliance, and most assertions are written in this skill's own vocabulary — rule ids, severity labels, the six-field format — which an arm without the skill cannot produce.
+They are not a measure of audit quality and must not be quoted as one.
+[`rescore-2026-08-06/results.md`](rescore-2026-08-06/results.md) re-reads the same outputs against endpoints scored in any vocabulary, and is the authority on what the skill measurably changes.
+
 | Date | Scenario | Run | Assertions passed | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-07-11 | 1 (rules buried in prose) | baseline | 0/5 | Missed the required finding format and added unrelated concerns. |
@@ -315,3 +354,5 @@ It may also quote the fake key verbatim when discussing the example configuratio
 | 2026-07-11 | 8 (reachable conflict) | baseline | 1/4 | Silently selected the specific-over-general reading. |
 | 2026-07-11 | 8 (reachable conflict) | with skill | 4/4 | Passed. |
 | 2026-07-11 | 9 (trigger discrimination) | trigger | 3/3 | Selected this skill over three related distractors. |
+| 2026-08-06 | 1 (rules buried in prose) | with skill | 3/3 | Confirmation cell for the counting change. Produced a different finding set than the 2026-07-11 treatment of the same fixture. |
+| 2026-08-06 | 6 (unverifiable hedge and misplaced context) | with skill | 9/9 | Confirmation cell for the counting change, plus the scenario's six standing assertions. |

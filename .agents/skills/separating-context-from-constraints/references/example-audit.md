@@ -93,8 +93,9 @@ An audit should treat unrelated fields as prohibited only when the document expl
 
 ## Summary
 
-Counts per rule: R1 1, R2 1, R3 1, R4 1, R5 1.
+Counts per rule: R1 2, R2 1, R3 1, R4 1, R5 1.
 Counts per severity: material 5 (R1, R2, R3, R4, R5), minor 1 (R1).
+No finding here carries a secondary rule id, so the per-rule total of six equals the six findings counted by severity.
 
 This document buries one rule in narrative prose, keeps one historical statement in the rules section, states one rule with ambiguous strength, states one untestable rule, bundles three obligations into one compound rule, and leaves a realistic branch-selection conflict without stated precedence.
 The earlier migration-history background and the `DEPLOY_ENV` tool-semantics note are both correctly placed outside `## Rules` and require no changes.
