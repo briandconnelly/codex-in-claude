@@ -321,7 +321,14 @@ guidance file you legitimately create later in the same session:
   trap 'rm -f "${created[@]}"' EXIT    # fallback only; remove what THIS probe created
   printf 'Global guidance. Codeword: <codeword>\n' > "$home/AGENTS.md"; created+=("$home/AGENTS.md")
   ...                                  # run the discovery consults below
-  rm -f "${created[@]}"; created=()    # explicit cleanup on the success path
+  # Explicit cleanup on the success path. Clear the tracking array ONLY once removal
+  # succeeded and the paths are gone — clearing unconditionally leaves the EXIT fallback
+  # with nothing to retry, so a failed rm would strand a marker in the real $CODEX_HOME.
+  if rm -f "${created[@]}" && ! ls -d "${created[@]}" >/dev/null 2>&1; then
+    created=()
+  else
+    echo "CLEANUP FAILED — remove these by hand: ${created[*]}" >&2; exit 1
+  fi
 )
 ```
 
@@ -340,6 +347,13 @@ re-derive it is exactly the stale-record failure this section exists to prevent:
   against the same fixture, and record the workspace/ancestor markers and the `$CODEX_HOME` guidance
   marker separately — the knob suppresses the first two and not the third, so one undifferentiated
   boolean would hide a change to either half.
+- **No enclosing repository.** Build a second fixture — `top/mid/leaf`, **no `.git` anywhere** — with
+  a codeword at each level, run with `--cd .../leaf`, and record all three markers. Only the leaf's
+  own file loads; without this variant the "no walk outside a repository" claim rests on nothing the
+  procedure runs, since the main fixture is always a repository.
+- **Process cwd instead of `--cd`.** Repeat the ordinary discovery run with the process cwd set to
+  `<parent>/repo/sub` and **`--cd` omitted**. The markers must match the `--cd` run exactly; that
+  equality is the recorded claim, so a divergence is the signal.
 
 Capture each variant under its own `$OUT` name and run the same clean-stream assertion over it; a
 variant that fails the assertion is discarded like any other run.

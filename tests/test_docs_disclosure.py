@@ -369,6 +369,17 @@ def _privacy_rule_text() -> str:
 _GLOBAL_GUIDANCE_FILES = ("$CODEX_HOME/AGENTS.override.md", "$CODEX_HOME/AGENTS.md")
 
 
+def _names_every_guidance_file(rule: str) -> bool:
+    """The production check, as a predicate the guard-the-guard cases can run.
+
+    Extracted so the half-correction fixtures below go through the SAME logic the real
+    assertion uses. Fixtures that only assert things about their own hard-coded strings
+    prove nothing about the guard — weakening `_GLOBAL_GUIDANCE_FILES` would leave them
+    green. A Codex review caught exactly that.
+    """
+    return all(filename in rule for filename in _GLOBAL_GUIDANCE_FILES)
+
+
 def test_privacy_rule_covers_every_agents_md_source():
     rule = _privacy_rule_text()
     for filename in _GLOBAL_GUIDANCE_FILES:
@@ -376,6 +387,7 @@ def test_privacy_rule_covers_every_agents_md_source():
             f"the Privacy rule omits {filename}, a user-global guidance file that reaches "
             "OpenAI on every call from any workspace"
         )
+    assert _names_every_guidance_file(rule)
     assert _ANCESTOR_RE.search(rule) and _REPO_ROOT_RE.search(rule), (
         "the Privacy rule omits the ancestor AGENTS.md files loaded up to the repository root"
     )
@@ -400,14 +412,19 @@ def test_privacy_rule_guard_rejects_the_pre_472_rule():
 
     # Half-corrections must fail too, or the guard would accept a rule that names one
     # guidance file and silently drops the other.
+    # Each half-correction is run through the SAME predicate the production assertion
+    # uses, so weakening `_GLOBAL_GUIDANCE_FILES` fails here too.
     plain_only = (
         "- **Privacy:** Do not make an active call when your user-global "
         "`$CODEX_HOME/AGENTS.md` contains something you cannot disclose."
     )
-    assert "$CODEX_HOME/AGENTS.override.md" not in plain_only
+    assert _names_every_guidance_file(plain_only) is False
 
     override_only = (
         "- **Privacy:** Do not make an active call when your user-global "
         "`$CODEX_HOME/AGENTS.override.md` contains something you cannot disclose."
     )
-    assert "$CODEX_HOME/AGENTS.md" not in override_only
+    assert _names_every_guidance_file(override_only) is False
+
+    # …and the rule as it actually stands is accepted by that same predicate.
+    assert _names_every_guidance_file(_privacy_rule_text()) is True
