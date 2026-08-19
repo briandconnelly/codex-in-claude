@@ -122,7 +122,7 @@ from codex_in_claude.server import mcp
 # and the sync review/delegate descriptions stated the body without the metadata half that
 # makes it legible. This is the security-load-bearing half of the caveat — metadata reaching
 # the model is comparatively harmless, the body is the egress — so it is disclosure the
-# client cannot get anywhere else before it spends): 87,796 bytes (+515 B) — over budget;
+# client cannot get anywhere else before it spends): 87,794 bytes (+513 B) — over budget;
 # budget raised to the next 500 above the measured value.
 TOOLS_LIST_BYTE_BUDGET = 88_000
 
@@ -136,7 +136,7 @@ TOOLS_LIST_BYTE_BUDGET = 88_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 87_796
+TOOLS_LIST_BYTE_TARGET = 87_794
 
 
 def _budget_failure_message(measured: int) -> str:

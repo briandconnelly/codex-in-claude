@@ -48,7 +48,12 @@ def test_contract_instance_derives_from_legacy_constants():
     assert c.exec_argv_prefix == cli_contract.EXEC_SUBCOMMAND
     assert set(c.always_send_flags) == set(cli_contract.ALWAYS_SEND_FLAGS)
     assert set(c.help_gated_flags) == set(cli_contract.HELP_GATED_FLAGS)
-    assert c.implicit_context_disclosure == cli_contract.SKILLS_DISCOVERY_FACT_FULL
+    # The declarative carrier states the discovery fact AND how a skill's body arrives
+    # (#501) — a consumer that learns only the first keeps the "auto-loads" model the
+    # field's own description carries, which is the misconception being corrected.
+    assert c.implicit_context_disclosure == cli_contract.IMPLICIT_CONTEXT_DISCLOSURE
+    assert cli_contract.SKILLS_DISCOVERY_FACT_FULL in c.implicit_context_disclosure
+    assert cli_contract.SKILL_BODY_FACT in c.implicit_context_disclosure
     assert c.usage_event_markers == cli_contract.USAGE_EVENT_MARKERS
     assert len(c.failure_signatures.auth) == len(cli_contract.AUTH_FAILURE_PATTERNS)
     assert len(c.failure_signatures.contract_drift) == len(

@@ -2968,7 +2968,7 @@ async def codex_review_changes(
     and Codex may read and send other repo files. Codex auto-loads the resolved
     workspace's `AGENTS.md` and discovers skills in its `.agents/skills/` and
     user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from
-    outside the workspace. The plugin's isolation flags don't suppress any of it. A
+    outside the workspace. The plugin's isolation flags don't suppress any of it.
     A skill's name and description arrive up front; selecting one makes the model read
     its body, which can reach OpenAI even if your inputs never mention it.
     Redaction is not a guarantee. Do not rely on it to protect live credentials; keep

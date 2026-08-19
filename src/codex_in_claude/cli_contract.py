@@ -292,6 +292,13 @@ SKILL_BODY_FACT = (
 )
 SKILLS_DISCOVERY_FACT_FULL = f"{SKILLS_DISCOVERY_FACT} {SKILLS_ISOLATION_NOTE}"
 
+# The whole disclosure in one string, for a carrier that has room for exactly one — the
+# declarative `BackendContract.implicit_context_disclosure`, whose own contract is "what
+# the CLI auto-loads that isolation cannot suppress". That framing is precisely what
+# #501 corrects: half of what arrives is not auto-loaded at all, so the mechanism has to
+# travel with the discovery fact or a contract consumer re-learns the wrong model.
+IMPLICIT_CONTEXT_DISCLOSURE = f"{SKILLS_DISCOVERY_FACT_FULL} {SKILL_BODY_FACT}"
+
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
 # that use them and NEVER gated on `--help` parsing. If upstream removes/renames
@@ -608,7 +615,7 @@ PONTONIER_CONTRACT = _pontonier_contract.BackendContract(
         "gathered diffs and returned output is best-effort defense-in-depth; it never "
         "covers supplied inputs or files Codex reads itself."
     ),
-    implicit_context_disclosure=SKILLS_DISCOVERY_FACT_FULL,
+    implicit_context_disclosure=IMPLICIT_CONTEXT_DISCLOSURE,
     structured_output="argv_flag",
     model_catalog=_pontonier_contract.ModelCatalog(
         strategy="cache_with_static_fallback",

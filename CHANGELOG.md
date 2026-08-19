@@ -21,8 +21,11 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `schema-75` → `schema-76`.** Not breaking — no guarantee weakens, and the disclosure gets
   strictly more precise. A new `skill_body_read` guarantee matcher holds every carrier site, and
   the six hand-copied descriptions are pinned against the constant (a paraphrase that satisfies the
-  word-presence matcher still fails the pin). `tools/list` grew 515 bytes to 87,796; the budget
-  moved 87,500 → 88,000.
+  word-presence matcher still fails the pin). `pontonier`'s declarative
+  `BackendContract.implicit_context_disclosure` — whose own contract is "what the CLI
+  auto-loads that isolation cannot suppress" — carries it too, so a contract consumer cannot
+  re-learn the wrong model. `tools/list` grew 513 bytes to 87,794; the budget and the
+  capability-catalog cap both moved 87,500 → 88,000.
 - **Safety-critical rules in the egress-caveat docs are no longer buried in narration.** No warning
   weakens and no mechanism claim changes — this is placement only. `README.md`'s ~22-line Safety
   bullet is split, with "do not target a workspace containing secrets you cannot disclose" promoted

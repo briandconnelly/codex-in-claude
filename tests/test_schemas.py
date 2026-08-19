@@ -834,7 +834,7 @@ def _wire_catalog_bytes() -> int:
 # Measured again 2026-08-19 (#501 — see tests/test_wire_size.py's TOOLS_LIST_BYTE_BUDGET
 # history for the justification, which applies identically here: every egress tool
 # description now states how a skill's BODY arrives, which four of the six did not
-# disclose before): 87,298 -> 87,813 bytes (+515 B) — over cap; cap raised to the next
+# disclose before): 87,298 -> 87,811 bytes (+513 B) — over cap; cap raised to the next
 # 500 above the measured value.
 # Tighten deliberately when the surface legitimately shrinks; a bump means the wire
 # response grew — justify it.

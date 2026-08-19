@@ -771,10 +771,21 @@ def test_skill_body_matcher_rejects_metadata_only_and_decoupled_prose():
     # The canonical sentence every carrier site now states.
     assert _GUARANTEE_MATCHERS["skill_body_read"](cli_contract.SKILL_BODY_FACT.lower())
 
+    # …and the limit, stated rather than papered over: word-presence catches OMISSION,
+    # not a confident misstatement. This sentence reverses the mechanism — bodies up
+    # front, selection afterwards, no model-issued read — and still carries all three
+    # markers, so it passes. That is why every carrier is ALSO pinned to the exact
+    # constant (the assertions in this module that compare against SKILL_BODY_FACT
+    # itself); the matcher guards the six hand-copied docstrings against dropping the
+    # claim, the exact pin guards all of them against drifting into a false one.
+    inverted = "skill descriptions and bodies arrive up front; the model selects one later."
+    assert _GUARANTEE_MATCHERS["skill_body_read"](inverted) is True
+
 
 def test_capability_summary_states_the_skill_body_mechanism():
     """The server instructions block — the highest-reach disclosure in the repo."""
     assert _GUARANTEE_MATCHERS["skill_body_read"](server.CAPABILITY_SUMMARY.lower())
+    assert cli_contract.SKILL_BODY_FACT in server.CAPABILITY_SUMMARY
 
 
 def test_capability_summary_drops_the_umbrella_autoload_framing():
@@ -792,13 +803,16 @@ def test_status_caveat_states_the_skill_body_mechanism(monkeypatch, clean_env):
     """The codex_status caveat has no manifest-snapshot guard (see #358 above)."""
     monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
-    assert _GUARANTEE_MATCHERS["skill_body_read"](server.codex_status()["caveat"].lower())
+    caveat = server.codex_status()["caveat"]
+    assert _GUARANTEE_MATCHERS["skill_body_read"](caveat.lower())
+    assert cli_contract.SKILL_BODY_FACT in caveat
 
 
 def test_negative_scope_states_the_skill_body_mechanism():
     """codex_capabilities' negative_scope is an independent safety inventory (#358)."""
-    blob = " ".join(server.codex_capabilities()["negative_scope"]).lower()
-    assert _GUARANTEE_MATCHERS["skill_body_read"](blob)
+    blob = " ".join(server.codex_capabilities()["negative_scope"])
+    assert _GUARANTEE_MATCHERS["skill_body_read"](blob.lower())
+    assert cli_contract.SKILL_BODY_FACT in blob
 
 
 @pytest.mark.parametrize("name", _ACTIVE_EGRESS_TOOLS)
@@ -809,7 +823,9 @@ def test_capability_returns_state_the_skill_body_mechanism(name):
     fact with no mechanism at all (#501).
     """
     by_name = {t["name"]: t for t in server.codex_capabilities(detail="full")["tool_details"]}
-    assert _GUARANTEE_MATCHERS["skill_body_read"](by_name[name]["returns"].lower()), name
+    returns = by_name[name]["returns"]
+    assert _GUARANTEE_MATCHERS["skill_body_read"](returns.lower()), name
+    assert cli_contract.SKILL_BODY_FACT in returns, name
 
 
 def test_global_skills_matcher_rejects_negated_prose():
