@@ -562,6 +562,16 @@ def _global_skills_disclosed(text):
     return False
 
 
+# Ways the non-suppression guarantee is stated. Kept deliberately generous about
+# phrasing while insisting the claim is negated somewhere in the text.
+_NEGATED_SUPPRESS = re.compile(
+    r"\b(?:do|does|did)(?:\s*n[\u2019']t|\s+not)\s+suppress(?:es)?\b"
+    r"|\bcan(?:not|\s*n[\u2019']t|\s+not)\s+suppress(?:es)?\b"
+    r"|\bnever\s+suppress(?:es)?\b"
+    r"|\bsuppress(?:es)?\s+neither\b"
+    r"|\bno\s+\w+(?:\s+\w+){0,3}\s+suppress(?:es)?\b"
+)
+
 _GUARANTEE_MATCHERS = {
     # Caller content is sent to OpenAI.
     "openai": lambda d: "openai" in d,
@@ -573,7 +583,9 @@ _GUARANTEE_MATCHERS = {
     "files_read": lambda d: bool(_FILES_READ_DISCLOSED.search(d)),
     # The workspace AGENTS.md auto-loads (its content can be sent).
     "autoload_agents": lambda d: "agents.md" in d,
-    # The workspace .agents/skills/ skills auto-load.
+    # The workspace .agents/skills/ skills are auto-discovered (name/description up
+    # front; a selected skill's body follows via a model-issued read — see #498). The
+    # key name predates that distinction and is kept to bound the churn.
     "autoload_skills": lambda d: ".agents/skills" in d,
     # User-global skills under $CODEX_HOME/skills/ are discovered too — outside the
     # workspace, and not suppressed by the config-isolation flags (#358). Keyed on the
@@ -582,8 +594,12 @@ _GUARANTEE_MATCHERS = {
     # it, so prose that merely NAMES the path while denying the behavior does not pass.
     # See test_global_skills_matcher_rejects_project_only_prose.
     "autoload_global_skills": _global_skills_disclosed,
-    # The isolation flags do NOT suppress that auto-loaded context.
-    "isolation_suppress": lambda d: "isolation" in d and "suppress" in d,
+    # The isolation flags suppress neither the auto-loaded AGENTS.md nor the discovered
+    # skills. This guarantee IS a negation, so the negation carries its content and is
+    # required: "isolation" + "suppress" alone was satisfied by prose asserting the
+    # OPPOSITE, leaving the freeze green through a reversal (#502 review).
+    # See test_isolation_suppress_matcher_requires_an_explicit_negation.
+    "isolation_suppress": lambda d: "isolation" in d and bool(_NEGATED_SUPPRESS.search(d)),
     # Secret redaction is best-effort, not a guarantee.
     "redaction_best_effort": lambda d: "redact" in d and "best-effort" in d,
     # delegate: workspace-write blocks network egress for commands Codex RUNS *in the
@@ -628,6 +644,38 @@ def test_guarantee_matchers_are_discriminating():
     the guarantee was deleted (a broken instrument and a clean result look alike)."""
     for key, matcher in _GUARANTEE_MATCHERS.items():
         assert matcher("") is False, key
+
+
+def test_isolation_suppress_matcher_requires_an_explicit_negation():
+    """The guarantee IS a negation, so prose asserting the OPPOSITE must not pass.
+
+    `"isolation" in d and "suppress" in d` was satisfied by an inverted claim, so
+    the freeze would have stayed green through a reversal of the very guarantee it
+    holds. Mirrors the affirmative-verb requirement on `autoload_global_skills`.
+
+    Note the polarity: unlike the prose guard in tests/test_docs_disclosure.py —
+    where requiring a negation token backfired, matching the docs' own emphatic
+    phrasing — here the negation IS the guarantee's content, so requiring it is
+    requiring the claim itself.
+    """
+    inverted = "the plugin's isolation flags suppress all of this implicit context."
+    assert _GUARANTEE_MATCHERS["isolation_suppress"](inverted) is False
+    assert (
+        _GUARANTEE_MATCHERS["isolation_suppress"]("isolation flags, suppression, whatever") is False
+    )
+
+    # The canonical sentence every egress docstring carries today.
+    assert _GUARANTEE_MATCHERS["isolation_suppress"](cli_contract.SKILLS_ISOLATION_NOTE.lower())
+
+    for phrasing in (
+        "the plugin's isolation flags do not suppress any of it",
+        "the plugin's isolation flags don't suppress any of it",
+        "isolation: the flags never suppress agents.md",
+        "the isolation flags suppress neither agents.md nor the discovered skills",
+        "no isolation value suppresses either skills root",
+        "the isolation flags cannot suppress agents.md",
+    ):
+        assert _GUARANTEE_MATCHERS["isolation_suppress"](phrasing), phrasing
 
 
 def test_files_read_matcher_rejects_decoupled_tokens():

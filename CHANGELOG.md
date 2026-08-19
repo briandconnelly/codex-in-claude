@@ -7,6 +7,28 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **Every prose egress-warning site now states how a skill's body actually arrives** (#498). #480 established
+  the mechanism — `AGENTS.md` content is auto-**loaded**, while a skill is auto-**discovered** by
+  name and description, and its **body** follows only through a read the model itself issues once it
+  selects the skill — and corrected `COMPATIBILITY.md` and the `cli_contract.py` comment. The
+  remaining prose still called the whole thing "auto-loading", so the repo contradicted itself about
+  a security-relevant mechanism. Corrected in `SECURITY.md` (both spots), `README.md`,
+  the `collaborating-with-codex` skill and its `server-down-fallback.md` reference, two remaining
+  loose statements in `COMPATIBILITY.md` itself, the "what auto-loads into context" phrasing in
+  `docs/UPGRADING-CODEX.md` and `docs/codex-help/README.md`, and a stale comment in
+  `tests/test_server.py`. The warnings are **stronger**, not weaker: each site now says the metadata
+  alone is enough for the model to select a skill, and that selecting it pulls the body to OpenAI
+  even when the prompt names neither the skill nor the file. Dated `CHANGELOG` entries and scenario
+  run-record rows were left untouched as historical records. A new `tests/test_docs_disclosure.py`
+  guard fails if a bound disclosure site names a skills root without stating that mechanism; it is
+  scoped to the section that carries the disclosure, because every one of these files uses "select"
+  elsewhere for unrelated reasons and a file-wide check would have passed vacuously. No
+  agent-visible surface change — the built manifest is byte-identical to the committed snapshot,
+  verified against a mutation probe confirming the comparison can detect one. The **wire** surface
+  is deliberately untouched and is not fully swept: `CAPABILITY_SUMMARY` already states the
+  metadata/body split, but its umbrella phrase "Codex also auto-loads context implicitly" keeps the
+  loose framing, and the `_async` docstrings and delegate `returns` carry the discovery fact without
+  the mechanism. Correcting those would move the fingerprint, so they are tracked in #501. Separately, the `isolation_suppress` guarantee matcher in `tests/test_server.py` now requires an explicit negation: that guarantee *is* a negation ("the isolation flags don't suppress any of it"), and the old token check was satisfied by prose asserting the opposite, so the freeze would have stayed green through a reversal.
 - The implicit-context marker probe in `COMPATIBILITY.md` now **proves** the model did not read the
   markers itself, instead of asking it to say so. The discovery consult forbids shell commands and
   file reads, keeps every codeword and synthetic skill name *out* of the prompt (asking for an

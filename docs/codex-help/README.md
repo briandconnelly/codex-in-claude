@@ -20,7 +20,7 @@ the fallback diff source when npm is unreachable.
 
 **What they do not cover:** only the five commands listed above, only as help text. They are not a
 record of the whole CLI surface — `codex app-server --help`, the generated app-server JSON schemas,
-and every behavior with no CLI surface at all (what auto-loads into context) are diffed live against
+and every behavior with no CLI surface at all (what reaches context implicitly) are diffed live against
 a retrieved binary instead. A surface absent here is undiffable from this directory alone, which is
 why step 2A leads with the A/B rather than with these files.
 

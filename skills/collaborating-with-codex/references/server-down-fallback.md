@@ -29,9 +29,13 @@ Send the prompt on stdin.
   above the default `inherit`.)
 - Set `WORKSPACE` to a directory the user approved for disclosure.
 
-Even with these flags, Codex auto-loads the resolved workspace's `AGENTS.md` and `.agents/skills/`
-skills, discovers your user-global skills under `$CODEX_HOME/skills/` — which `--ignore-user-config`
-does not suppress, since that flag drops only `$CODEX_HOME/config.toml` — and may read other files.
+Even with these flags, Codex auto-loads the resolved workspace's `AGENTS.md`, auto-discovers skills
+in `.agents/skills/`, and does the same for your user-global `$CODEX_HOME/skills/` — which
+`--ignore-user-config` does not suppress, since that flag drops only `$CODEX_HOME/config.toml` —
+and may read other files.
+A skill is discovered as a **name and description**. That alone lets the model select it, and
+selecting it makes the model read the **body**, so a skill body reaches OpenAI even when your
+prompt names neither the skill nor the file.
 An empty scratch `WORKSPACE` removes the ambient *repository* context but not those user-global
 skills: they are discovered from outside the workspace, so no `WORKSPACE` choice excludes them.
 An empty scratch `WORKSPACE` is not a read boundary either — the read-only sandbox bounds writes,
