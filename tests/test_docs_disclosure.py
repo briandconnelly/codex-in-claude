@@ -475,13 +475,72 @@ def _flat(text: str) -> str:
     """Collapse whitespace before matching.
 
     These are wrapped markdown sources, so a phrase the guard looks for is routinely split
-    across a line break ("not a read\n  boundary"). Without this the matchers below pass or
-    fail on where the author happened to wrap, which is not a property worth gating on.
+    across a line break ("not a read\n  boundary") or interrupted by emphasis ("**not** a
+    read boundary"). Without this the matchers below pass or fail on where the author
+    happened to wrap or bold, which is not a property worth gating on — both variants were
+    caught mid-review passing a site that plainly stated the fact.
     """
-    return re.sub(r"\s+", " ", text)
+    return re.sub(r"\s+", " ", text.replace("*", "").replace("`", ""))
 
 
-@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+# The read-scope RULE names a DIFFERENT set of prose sites than the skills-roots RULE
+# above: `docs/REFERENCE.md` carries a workspace-selection section and so must state that
+# the workspace is not a read boundary, but it carries no skills-root disclosure. Reusing
+# `_DOC_DISCLOSURE_SITES` would either under-enforce this rule or wrongly demand skills
+# disclosures of REFERENCE.md, so the rule gets its own tuple and its own two-way
+# consistency check below.
+_READ_SCOPE_DOC_SITES = (*_DOC_DISCLOSURE_SITES, "docs/REFERENCE.md")
+
+
+def test_read_scope_site_list_matches_its_own_rule():
+    """The read-scope tuple and the `RULE (read scope):` block must name the same sites.
+
+    Two-way, for the reason the skills-roots equivalent is: a one-way check lets a site be
+    dropped from the tuple and fall out of enforcement while staying green. The header is
+    matched exactly so this parses ITS rule — `cli_contract.py` now carries two RULE
+    blocks, and splitting on the bare `# RULE:` prefix silently reads the other one.
+    """
+    contract = (_REPO_ROOT / "src/codex_in_claude/cli_contract.py").read_text(encoding="utf-8")
+    assert contract.count("# RULE (read scope):") == 1
+    rule = contract.split("# RULE (read scope):", 1)[1].split("\n\n", 1)[0]
+
+    expected = {
+        "README.md": "README.md",
+        "SECURITY.md": "SECURITY.md",
+        "COMPATIBILITY.md": "COMPATIBILITY.md",
+        "docs/REFERENCE.md": "docs/REFERENCE.md",
+        "collaborating-with-codex": "skills/collaborating-with-codex/SKILL.md",
+    }
+    named_in_rule = {token for token in expected if token in rule}
+    assert named_in_rule == set(expected), (
+        f"the read-scope RULE no longer names: {set(expected) - named_in_rule}"
+    )
+    enforced = set(_READ_SCOPE_DOC_SITES) - {
+        "skills/collaborating-with-codex/references/server-down-fallback.md"
+    }
+    assert enforced == set(expected.values()), (
+        "the read-scope RULE and _READ_SCOPE_DOC_SITES have drifted: "
+        f"only in tuple={enforced - set(expected.values())}, "
+        f"only in RULE={set(expected.values()) - enforced}"
+    )
+
+
+# Same shape as tests/test_server.py's runtime contradiction guard, and same reasoning: a
+# prose site can state the fact correctly in one paragraph and re-assert the bound in
+# another, which neither the legacy list nor the affirmative matchers can see. Kept as an
+# independent copy rather than imported because the two guard different corpora (runtime
+# strings vs markdown sources) and should be able to diverge without silently weakening
+# one another.
+_CONTRADICTS_READ_SCOPE_PROSE = re.compile(
+    r"(?:confined|limited|restricted) to\b[^.]{0,40}"
+    r"\b(?:workspace|worktree|repo|repos|repository|working dir)"
+    r"|(?:cannot|can ?not|can't|never|does not|doesn't) read\b[^.]{0,40}\boutside"
+    r"|reads? only\b[^.]{0,40}\b(?:workspace|worktree|repo|repository)",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("relpath", _READ_SCOPE_DOC_SITES)
 def test_doc_site_does_not_scope_codex_reads_to_the_workspace(relpath):
     """No prose site may reuse a clause that presents the workspace as a read bound (#509)."""
     text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8").lower())
@@ -490,9 +549,28 @@ def test_doc_site_does_not_scope_codex_reads_to_the_workspace(relpath):
             f"{relpath} still scopes Codex's reads with {clause!r} — read-only bounds "
             "writes, not reads (#509; COMPATIBILITY.md owns the probe)"
         )
+    contradiction = _CONTRADICTS_READ_SCOPE_PROSE.search(text)
+    assert contradiction is None, (
+        f"{relpath} asserts a read bound ({contradiction.group(0)!r} ) alongside the "
+        "corrected disclosure (#509)"
+    )
 
 
-@pytest.mark.parametrize("relpath", _DOC_DISCLOSURE_SITES)
+def test_prose_contradiction_pattern_is_not_vacuous():
+    """Guard the guard: it must fire on an inverted claim and spare the corrected wording."""
+    assert _CONTRADICTS_READ_SCOPE_PROSE.search(
+        "Nevertheless, Codex is confined to files under the workspace."
+    )
+    assert _CONTRADICTS_READ_SCOPE_PROSE.search("Codex reads only files in the repo.")
+    assert (
+        _CONTRADICTS_READ_SCOPE_PROSE.search(
+            "Neither read-only nor workspace-write confines what Codex may read."
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("relpath", _READ_SCOPE_DOC_SITES)
 def test_doc_site_states_reads_are_not_bounded_by_the_workspace(relpath):
     text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8"))
     assert _OUTSIDE_READ_RE.search(text), f"{relpath} never says Codex reads outside the workspace"

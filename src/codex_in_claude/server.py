@@ -710,8 +710,8 @@ WorkspaceRootParam = Annotated[
     Field(
         description="Absolute path to the target repo root — pass it (or an MCP root) to "
         "target the intended repo; otherwise the call falls back to the server's own cwd "
-        "and sets meta.workspace_warning. It selects where Codex works, not what it can "
-        "read — it is not a read boundary."
+        "and sets meta.workspace_warning. On an active call it selects where Codex works, "
+        "not what it can read — it is not a read boundary."
     ),
 ]
 TranscriptPathParam = Annotated[

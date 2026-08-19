@@ -851,7 +851,8 @@ def _wire_catalog_bytes() -> int:
 # that Codex's reads are not bounded by the workspace, replacing the scoped clauses that
 # read as a bound): 88,795 -> 91,212 bytes (+2,417 B) — over cap; cap raised to the next
 # 1,000 above the measured value. See tests/test_wire_size.py for why the sentence was not
-# compressed to fit instead.
+# compressed to fit instead. Then 91,212 -> 91,464 (+252 B) scoping the shared
+# `WorkspaceRootParam` clause to active calls (Codex review) — still within cap.
 CATALOG_BYTE_CAP = 92_000
 
 

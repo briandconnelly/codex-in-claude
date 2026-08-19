@@ -623,6 +623,25 @@ def _read_scope_disclosed(text: str) -> bool:
 # purpose: READ_SCOPE_FACT itself contains "read files outside the workspace", so a
 # `read.*workspace` pattern would reject the very sentence it guards (the #502
 # negation-regex-hits-emphasis failure).
+# Exact containment says a carrier states the fact; the legacy list says it does not
+# repeat a clause we already removed. Neither catches a NEW contradiction written beside
+# the correct sentence — a Codex review demonstrated that READ_SCOPE_FACT followed by
+# "Nevertheless, Codex is confined to files under the workspace" satisfied every guard
+# here. These patterns close that: they match the affirmative shapes an inverted claim
+# takes, with a bounded gap so the object of the confinement is actually named.
+#
+# Deliberately NOT a blanket `read.*workspace` pattern. READ_SCOPE_FACT itself contains
+# "read files outside the workspace", and the corrected COMPATIBILITY prose says
+# "confines what Codex may read" as part of a DENIAL, so a loose matcher would reject the
+# very sentences it exists to protect — the failure this repo hit in #502.
+_CONTRADICTS_READ_SCOPE = re.compile(
+    r"(?:confined|limited|restricted) to\b[^.]{0,40}"
+    r"\b(?:workspace|worktree|repo|repos|repository|working dir)"
+    r"|(?:cannot|can ?not|can't|never|does not|doesn't) read\b[^.]{0,40}\boutside"
+    r"|reads? only\b[^.]{0,40}\b(?:workspace|worktree|repo|repository)",
+    re.IGNORECASE,
+)
+
 _LEGACY_SCOPED_READ_CLAUSES = (
     "files codex reads from the resolved working dir",
     "files codex reads from its resolved working dir",
@@ -9076,6 +9095,9 @@ def test_no_runtime_carrier_reuses_a_scoped_read_clause(monkeypatch, clean_env):
         for clause in _LEGACY_SCOPED_READ_CLAUSES:
             if clause in low:
                 offenders.append(f"{label}: {clause!r}")
+        contradiction = _CONTRADICTS_READ_SCOPE.search(low)
+        if contradiction:
+            offenders.append(f"{label}: contradiction {contradiction.group(0)!r}")
     assert not offenders, (
         "these carriers still scope Codex's reads to the workspace/repo/worktree (#509): "
         + "; ".join(offenders)
@@ -9112,3 +9134,41 @@ def test_readonly_honesty_statement_carries_the_read_scope_fact():
     assert _GUARANTEE_MATCHERS["read_scope"](
         cli_contract.PONTONIER_CONTRACT.readonly_honesty_statement.lower()
     )
+
+
+def test_contradiction_pattern_catches_a_bound_asserted_beside_the_fact():
+    """The gap a Codex review found: correct sentence, contradiction appended.
+
+    Exact containment stays TRUE for this text and no legacy clause appears in it, so
+    without this pattern every read-scope guard passes a carrier that plainly re-asserts
+    the bound.
+    """
+    poisoned = (
+        cli_contract.READ_SCOPE_FACT
+        + " Nevertheless, Codex is confined to files under the workspace."
+    )
+    assert _read_scope_disclosed(poisoned) is True, (
+        "precondition: containment alone cannot see the contradiction"
+    )
+    assert not any(c in _normalize(poisoned).lower() for c in _LEGACY_SCOPED_READ_CLAUSES), (
+        "precondition: the legacy list cannot see it either"
+    )
+    assert _CONTRADICTS_READ_SCOPE.search(_normalize(poisoned).lower())
+
+    for inverted in (
+        "codex reads only files in the workspace.",
+        "reads are limited to the resolved worktree.",
+        "codex cannot read files outside the workspace.",
+        "its reads are restricted to the repo.",
+    ):
+        assert _CONTRADICTS_READ_SCOPE.search(inverted), inverted
+
+    # And it must NOT fire on the corrected wording it guards — including the denial
+    # forms, which contain the same vocabulary as the claims being rejected.
+    for ok in (
+        cli_contract.READ_SCOPE_FACT.lower(),
+        "neither read-only nor workspace-write confines what codex may read.",
+        "the worktree bounds what codex may write, not what it may read.",
+        "codex can read files outside the workspace and send them to openai.",
+    ):
+        assert _CONTRADICTS_READ_SCOPE.search(ok) is None, ok

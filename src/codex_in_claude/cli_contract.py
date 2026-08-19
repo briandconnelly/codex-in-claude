@@ -327,8 +327,9 @@ IMPLICIT_CONTEXT_DISCLOSURE = f"{SKILLS_DISCOVERY_FACT_FULL} {SKILL_BODY_FACT}"
 # `view_image` reaches the same paths as the shell (#507). COMPATIBILITY.md owns the probe
 # detail and is the single home for it; do not restate probe results here.
 #
-# RULE: every read-scope carrier must state this fact, and none may re-scope reads to the
-# workspace, repo, or worktree. The carriers are the server instructions block, the
+# RULE (read scope): every read-scope carrier must state this fact, and none may
+# re-scope reads to the workspace, repo, or worktree. The carriers are the server
+# instructions block, the
 # codex_status caveat, codex_capabilities' negative_scope, the six active tools' `returns`
 # and their six docstrings, `readonly_honesty_statement` below, the `extra_context`
 # parameter contract, and — doc-side, in their own prose — README.md, SECURITY.md,
