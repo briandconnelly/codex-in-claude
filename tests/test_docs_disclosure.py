@@ -357,24 +357,33 @@ _SKILL_PATH = "skills/collaborating-with-codex/SKILL.md"
 def _privacy_rule_text() -> str:
     """The Privacy binding rules from the skill's rules list, and only those.
 
-    #509 split the single `- **Privacy:**` bullet into atomic ones (`Privacy — …`), so
-    this collects the whole contiguous Privacy GROUP rather than one bullet. The #472
-    enumeration it guards still has to appear somewhere in that group, which is the same
-    guarantee — but scoping to the group, rather than searching the file, is what keeps it
-    from being satisfied by prose in some other section (the #512 failure mode).
+    #509 split the single `- **Privacy:**` bullet into atomic ones (`Privacy — ...`), so this
+    returns the whole contiguous Privacy GROUP rather than one bullet. The #472 enumeration it
+    guards still has to appear somewhere in that group, which is the same guarantee — but
+    scoping to the group, rather than searching the file, is what keeps it from being satisfied
+    by prose in some other section (the #512 failure mode).
+
+    Returned as ONE contiguous slice of the source. An earlier version accumulated per-bullet
+    slices that each stopped before their trailing newline and joined them, which fabricated
+    junctions ("...on a call is safe.- **Privacy — do not call:**") appearing nowhere in the
+    file. No assertion depended on that text, but a guard whose corpus is partly invented can
+    match across a seam that does not exist — the defect this whole change is about. Caught by
+    a Copilot review.
     """
     text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
-    bullets = []
     start = text.index("- **Privacy")
-    cursor = start
+    end = start
     while True:
-        nxt = text.index("\n- **", cursor + 1)
-        bullets.append(text[cursor:nxt])
+        nxt = text.index("\n- **", end + 1)
         if not text[nxt + 1 :].startswith("- **Privacy"):
+            end = nxt
             break
-        cursor = nxt + 1
-    group = "".join(bullets)
-    assert "**Privacy" in group
+        end = nxt
+    group = text[start:end]
+    assert group.count("- **Privacy") >= 1
+    assert "\n- **Privacy" in group or group.count("- **Privacy") == 1, (
+        "the group must be contiguous source text, newlines included"
+    )
     return group
 
 
@@ -394,6 +403,23 @@ def _names_every_guidance_file(rule: str) -> bool:
     green. A Codex review caught exactly that.
     """
     return all(filename in rule for filename in _GLOBAL_GUIDANCE_FILES)
+
+
+def test_privacy_rule_text_is_verbatim_source():
+    """The helper must return real source text, not a reassembly of it.
+
+    It previously joined per-bullet slices that each stopped short of their trailing
+    newline, producing junctions ("...on a call is safe.- **Privacy — do not call:**") that
+    appear nowhere in the file. Nothing asserted on those seams, so every test stayed green —
+    but a guard matching a corpus it partly invented can fire, or fail to fire, across a seam
+    the source does not contain. This assertion fails against that implementation.
+    """
+    source = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    group = _privacy_rule_text()
+    assert group in source, "the Privacy group is not a contiguous slice of SKILL.md"
+    assert group.count("- **Privacy") > 1, (
+        "precondition: more than one Privacy bullet, or this cannot detect the defect"
+    )
 
 
 def test_privacy_rule_covers_every_agents_md_source():
