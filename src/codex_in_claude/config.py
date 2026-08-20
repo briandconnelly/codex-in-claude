@@ -311,8 +311,12 @@ def _extra_args_flag_kind(flag: str) -> str | None:
 
 
 def _safe_token(token: str) -> str:
-    """A bounded, secret-redacted echo of an offending token for an error message."""
-    return (redaction.redact_text(token) or "")[:60]
+    """A bounded, sanitized echo of an offending token for an error message.
+
+    `sanitize_echo` strips control characters before redacting; the ordering and the reason
+    for it live there (#528). The 60-character bound is this bridge's, and it comes LAST so
+    a secret straddling the cut still had its tail when the redactor saw it."""
+    return redaction.sanitize_echo(token)[:60]
 
 
 def _normalize_config_key(key: str) -> str:
@@ -379,15 +383,16 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is refused: it could weaken the sandbox / "
-                        "network / approval / host-env-isolation guarantees this server advertises"
+                        f"config key '{_safe_token(key)}' is refused: it could weaken the "
+                        "sandbox / network / approval / host-env-isolation guarantees this "
+                        "server advertises"
                     ),
                 )
             if normalized in _DENIED_CONFIG_KEYS:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is refused: the plugin disables the "
+                        f"config key '{_safe_token(key)}' is refused: the plugin disables the "
                         "remote_plugin connectors as a security guarantee (#287); an operator "
                         "override cannot re-enable them"
                     ),
@@ -398,7 +403,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is reserved — it would contradict the "
+                        f"config key '{_safe_token(key)}' is reserved — it would contradict the "
                         f"provenance reported in result envelopes ({meta_field}); set "
                         f"{env_var} or the per-call {param} parameter instead ({issue})"
                     ),
@@ -407,7 +412,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
             # Record the flag too (not just the key), so a drift where codex rejects the
             # `-c`/`--config` flag token itself is still attributed to the passthrough.
             # The key is a config-path name (not a secret); the `-c` VALUE is never added.
-            descriptors += [flag, key]
+            descriptors += [flag, _safe_token(key)]
             config_keys.append(key)
         else:  # profile / feature — the value is a non-secret NAME
             if not value:
@@ -416,13 +421,14 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"feature '{value.strip()}' is managed by the plugin and cannot be set "
-                        f"via {EXTRA_ARGS_ENV} (enable or disable): it disables the remote_plugin "
+                        f"feature '{_safe_token(value)}' is managed by the plugin and cannot "
+                        f"be set via {EXTRA_ARGS_ENV} (enable or disable): it disables the "
+                        "remote_plugin "
                         "connectors as a security guarantee (#287)"
                     ),
                 )
             tokens += [flag, value]
-            descriptors += [flag, value]
+            descriptors += [flag, _safe_token(value)]
             if kind == "profile":
                 profile_names.append(value)
         count += 1

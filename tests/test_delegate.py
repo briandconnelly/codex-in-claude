@@ -462,3 +462,31 @@ def test_run_delegate_classify_failure_sanitizes_sentence_final_root(monkeypatch
     result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
     assert wt not in result["error"]["message"]
     assert "cic-worktree-" not in result["error"]["message"]
+
+
+def test_run_delegate_classify_failure_strips_control_characters(monkeypatch, tmp_path):
+    """#528 end to end through the delegate error path: codex runs in the worktree and its
+    stderr is attacker-influenceable (a repository under review can make it print chosen
+    text), so an escape sequence must not reach the envelope."""
+    wt = str(tmp_path / "cic-worktree-g" / "tree")
+    stderr = f"error \x1b[31mRED\x1b[0m writing {wt}/out.txt\x07"
+    result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
+    message = result["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    assert wt not in message
+
+
+def test_run_delegate_classify_failure_relativizes_a_control_split_worktree_path(
+    monkeypatch, tmp_path
+):
+    """The second, independent leak #528 turned up: a control character inside the printed
+    path defeats alias matching, so `sanitize_prose` alone surfaces the dead absolute path
+    even though the worktree is gone — the #420 guarantee, reopened by one byte. The strip
+    has to run inside the alias-staging composition, which is what
+    `worktree.sanitize_echo_prose` does."""
+    wt = str(tmp_path / "cic-worktree-h" / "tree")
+    damaged = wt[:8] + "\x1b" + wt[8:]
+    result = _run_delegate_with_failure(monkeypatch, f"error writing {damaged}/out.txt", wt_path=wt)
+    message = result["error"]["message"]
+    assert wt not in message, repr(message)
+    assert "./out.txt" in message

@@ -160,7 +160,11 @@ def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | N
 
     Inline secret-looking values are redacted from every free-text surface before it
     leaves this process (#58): the parsed structured payload (summary/findings/etc.)
-    via redact_tree, and raw_response.text via redact_text. Best-effort defense-in-
+    via redact_tree, and raw_response.text via redact_text. Deliberately redact_text and
+    NOT the echo sanitizer: raw_response.text is the SUCCESS channel — the answer the
+    caller asked for — and deleting control characters from it would mutate requested
+    content. The echo sanitizer is for text this server quotes back into a diagnostic, not
+    for text it was asked to return (#528). Best-effort defense-in-
     depth, consistent with the diff redaction the review path already applies."""
     structured = normalize.parse_structured(result.last_message)
     if structured is not None:
@@ -223,9 +227,11 @@ def _review_invalid_response_error(code: str, last_message: str | None, meta: Me
     """Build the explicit error for an exit-0 review whose output ignored the schema
     (#159). Unlike consult's prose-passthrough, review's value is the structured
     verdict/findings, so a missing/non-object payload is surfaced rather than silently
-    downgraded to verdict="unknown". The raw text is preserved as a bounded, secret-
-    redacted preview for debugging (ErrorResult carries no raw_response field)."""
-    preview = (redaction.redact_text(last_message) or "").strip()[:300]
+    downgraded to verdict="unknown". The raw text is preserved as a bounded, sanitized
+    preview for debugging (ErrorResult carries no raw_response field). It is MODEL text
+    quoted back into an error, so it goes through the echo sanitizer — control characters
+    deleted ahead of redaction (#528) — not through bare redaction."""
+    preview = redaction.sanitize_echo_prose(last_message).strip()[:300]
     tail = f" Raw output preview: {preview}" if preview else ""
     message = (
         "codex exited 0 but did not return a schema-valid JSON object for the review "
@@ -363,7 +369,7 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
         details = None  # derived from the entry by make_error, so the two cannot drift
         message = reason[:300]
     else:
-        message = (redaction.redact_text(str(exc)) or "")[:300]
+        message = redaction.sanitize_echo_prose(str(exc))[:300]
     return serialize_error(
         ErrorResult(
             error=make_error(

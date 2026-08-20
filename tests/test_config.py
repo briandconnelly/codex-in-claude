@@ -675,3 +675,54 @@ def test_extra_args_owns_profile_file_by_codex_naming_convention(monkeypatch):
     assert ea.owns_profile_file("/home/u/.codex/config.toml") is False
     assert ea.owns_profile_file("/home/u/.codex/otherprof.config.toml") is False
     assert ea.owns_profile_file(None) is False
+
+
+# --- #528: operator-supplied text is echoed through the shared echo sanitizer ---------
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_fragment"),
+    [
+        # The denied-ROOT branch matches on a PREFIX, so the rest of the key is arbitrary
+        # and is echoed — one case per denied root.
+        ("-c sandbox_\x07mode=x", "refused"),
+        ("-c shell_environment_policy_\x1b[31mx=1", "refused"),
+        ("-c approval_policy_\x07x=1", "refused"),
+        # The unsupported-argument branch echoes an arbitrary token. It was the ONE path
+        # `_safe_token` already covered — and `_safe_token` redacted and bounded without
+        # stripping, so it leaked too (#528).
+        ("--bogus\x07flag v", "unsupported argument"),
+    ],
+)
+def test_extra_args_refusals_never_echo_a_control_character(raw, expected_fragment, monkeypatch):
+    """Refusal messages interpolate the operator's own key or token, and reached the
+    envelope raw.
+
+    Only these branches can carry a control character at all: every other refusal either
+    interpolates an allowlisted flag name, or fires on an EXACT match (`features`,
+    `model_reasoning_effort`, `remote_plugin`) that a control character would break — such
+    a key is junk codex's own config never reads, not an alias, so it is accepted as an
+    ordinary passthrough key and echoed only as a descriptor (covered in test_codex.py).
+    """
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, raw)
+    ea = config.extra_args()
+    # Non-vacuity: this input must actually take the refusal branch under test, or the
+    # assertion below would hold for an input that never built a message at all.
+    assert ea.error is not None, raw
+    assert expected_fragment in ea.error
+    assert not _has_control(ea.error), repr(ea.error)
+
+
+@pytest.mark.parametrize("attack", ["\x1b[31m", "\x07", "\x7f", "\x85"])
+def test_descriptors_never_carry_a_control_character(attack, monkeypatch):
+    """Descriptors are matched against codex's rejection text AND echoed into the error.
+    A valid config key or profile name was recorded verbatim."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile ev{attack}il -c some.key{attack}=v")
+    ea = config.extra_args()
+    assert ea.valid, ea.error
+    for descriptor in ea.descriptors:
+        assert not _has_control(descriptor), repr(descriptor)

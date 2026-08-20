@@ -90,8 +90,13 @@ def _display_text(text: object) -> str:
     bounds one JSONL *line* at 8 MiB; without this there is no cap between that line and
     the agent's context window, and no redaction between it and an MCP error envelope.
 
-    Redaction runs BEFORE truncation: cutting first can split a secret so no pattern
-    matches, publishing its prefix. The result never exceeds ``_MAX_DISPLAY_CHARS`` — an
+    Sanitation runs BEFORE truncation: cutting first can split a secret so no pattern
+    matches, publishing its prefix. `sanitize_echo_prose` also deletes control characters
+    ahead of the redaction (#528) — this is untrusted child-process text, and an escape
+    sequence in it can corrupt or spoof how the message renders in a terminal. Its prose
+    variant keeps line breaks wherever that is provably as safe as removing them.
+
+    The result never exceeds ``_MAX_DISPLAY_CHARS`` — an
     over-cap value ends in ``_DISPLAY_TRUNC_MARKER`` so a reader can tell a clipped
     diagnostic from a complete one. Non-strings are coerced (``None`` -> ``""``), since
     every field here is ``.get()``-ed off untrusted JSON and may be any type.
@@ -105,12 +110,12 @@ def _display_text(text: object) -> str:
     ``{}``) carries no diagnostic text, but coercing one here yields a truthy string, so
     branching on the sanitized result would emit noise like ``rejected the import: {}``
     instead of a clean generic sentence. The converse cannot happen: a truthy ``detail``
-    never sanitizes to ``""`` (``redact_text`` substitutes a non-empty placeholder), so no
+    never sanitizes to ``""`` (the redactor substitutes a non-empty placeholder), so no
     caller can strand a prefix with an empty fragment after it.
     """
     if text is None:
         return ""
-    out = redaction.redact_text(str(text)) or ""
+    out = redaction.sanitize_echo_prose(str(text))
     if len(out) <= _MAX_DISPLAY_CHARS:
         return out
     return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
@@ -119,12 +124,15 @@ def _display_text(text: object) -> str:
 def _display_stderr_tail(raw: str | None) -> str | None:
     """Project a raw ``codex app-server`` stderr tail for an error envelope.
 
-    Redact the FULL capture, then keep the LAST ``_MAX_DISPLAY_CHARS`` characters with the
-    truncation marker at the START. This is the mirror image of :func:`_display_text`, which
+    Sanitize the FULL capture, then keep the LAST ``_MAX_DISPLAY_CHARS`` characters with
+    the truncation marker at the START. This is the mirror image of :func:`_display_text`, which
     keeps the *head*: ``stderr_tail`` is a rolling tail whose signal — the terminal
     exception / panic line — is last, so head-truncation would spend the whole budget on the
-    oldest, least useful output (the #275 hazard). Redaction runs before the cut so a secret
-    straddling the boundary can't survive as an unredacted suffix.
+    oldest, least useful output (the #275 hazard). Sanitation runs before the cut so a secret
+    straddling the boundary can't survive as an unredacted suffix — and so a control
+    character cannot ride out in the one field most likely to be read in a terminal (#528).
+    The PROSE variant is deliberate: a rolling tail is multi-line, and collapsing it into a
+    single glued line would destroy what it exists for.
 
     Returns ``None`` for empty / ``None`` input so a caller can branch on *whether a
     diagnostic exists* — the same falsey-collapse the ``drain.snapshot() or None`` idiom
@@ -133,7 +141,7 @@ def _display_stderr_tail(raw: str | None) -> str | None:
     outcome for a later path to surface unredacted."""
     if not raw:
         return None
-    out = redaction.redact_text(raw) or ""
+    out = redaction.sanitize_echo_prose(raw)
     if not out:
         return None
     if len(out) <= _MAX_DISPLAY_CHARS:

@@ -1401,3 +1401,60 @@ def test_user_config_rejection_does_not_leak_a_control_split_secret(monkeypatch)
     err = codex.classify_failure(_run(stderr=stderr))
     assert err.code == "user_config_rejected"
     assert secret not in (err.message or "")
+
+
+# --- #528: every echoed span goes through the shared echo sanitizer ------------------
+#
+# #524/#527 applied strip-then-redact to the two spans a --strict-config rejection
+# carries. Every OTHER path that echoes foreign text into an envelope had the same gap:
+# escape sequences reached the agent (and often a terminal, where they can recolor,
+# reposition, or erase), and a control character wedged into a secret defeated redaction
+# so the value rode out as plaintext. The ordering now lives upstream in
+# pontonier.core.redaction, so no call site re-derives it.
+
+_ECHO_ATTACKS = ["\x1b[31mRED\x1b[0m", "bell\x07", "wipe\x1b[2K", "del\x7f", "c1\x85"]
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize("attack", _ECHO_ATTACKS)
+def test_nonzero_exit_strips_control_characters_from_echoed_stderr(attack, monkeypatch):
+    """The generic branch echoed codex's stderr with no control-character stripping."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    # Embedded mid-string, not trailing: `str.strip()` already eats a TRAILING NEL, so a
+    # trailing attack would pass without any of this code running.
+    err = codex.classify_failure(_run(stderr=f"boom {attack} and more"))
+    assert err.code == "nonzero_exit"
+    assert not _has_control(err.message or ""), repr(err.message)
+
+
+def test_nonzero_exit_redacts_a_control_split_secret(monkeypatch):
+    """The interaction half: a secret split by a control character matches no pattern, so
+    it survived redaction as plaintext. Stripping first rejoins it where the matcher can
+    still see it."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    secret = "sk-ant-api03-" + "A" * 40
+    err = codex.classify_failure(_run(stderr="sk-\x01ant-api03-" + "A" * 40))
+    message = err.message or ""
+    # Assert the VALUE is gone, not that the contiguous spelling is absent — the attacked
+    # text never contains that spelling, so `secret not in message` passes vacuously.
+    assert "A" * 40 not in message, repr(message)
+    assert secret not in message
+    # Positive control: the redactor really does catch this once contiguous.
+    assert secret not in (redaction.redact_text(secret) or "")
+
+
+@pytest.mark.parametrize("attack", _ECHO_ATTACKS)
+def test_extra_args_rejected_strips_control_characters_from_descriptors(attack, monkeypatch):
+    """Descriptors reach BOTH error.message and repair.alternative, and neither was
+    sanitized: `_safe_token` covers only the unsupported-argument path, while a VALID
+    config key or profile name is recorded raw (#528)."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile ev{attack}il")
+    err = codex.classify_failure(
+        _run(stderr=f"error: unexpected argument '--profile ev{attack}il' found")
+    )
+    assert err.code == "extra_args_rejected"
+    assert not _has_control(err.message or ""), repr(err.message)
+    assert not _has_control((err.repair.alternative if err.repair else "") or "")

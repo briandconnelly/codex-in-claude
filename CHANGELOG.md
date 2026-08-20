@@ -5,6 +5,49 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Control characters are stripped from every echoed diagnostic, not just the two spans a
+  `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
+  key and file path; every other path that quotes foreign text into an envelope still had the gap
+  — the generic `nonzero_exit` branch echoing codex's stderr, the `codex_transfer` diagnostics
+  including `app_server_stderr_tail`, the review path's raw-output preview, stored job-result
+  fragments, exception text, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and refusal
+  messages. Two consequences: an escape sequence reaching a terminal can recolor, reposition, or
+  erase — enough to spoof or hide surrounding output, and the text is attacker-influenceable,
+  since a repository under review can make codex print chosen text — and a control character
+  wedged into a secret defeats the redactor's patterns outright, so the value rides out as
+  plaintext.
+
+  Three findings corrected the issue's own scope while verifying it. `config._safe_token` covered
+  only the unsupported-argument path, so a valid config key or profile name reached both
+  `error.message` and `repair.alternative` raw. `redaction.exc_summary` fed three more sinks that
+  were not in the inventory. And a control character in a printed worktree path defeats
+  `sanitize_prose`'s alias matching, so the dead absolute path survives — a second, independent
+  leak of the #420 guarantee, which no amount of stripping the OUTPUT can fix.
+
+  The mechanism is upstream (`pontonier` 0.6.0: `redaction.sanitize_echo`,
+  `redaction.sanitize_echo_prose`, `worktree.sanitize_echo_prose`), because it is CLI-agnostic and
+  a sibling bridge has byte-identical call sites — see AGENTS.md, Package boundary. What stays
+  here is bridge policy: which spans are echoed, each one's length bound and truncation direction,
+  and which variant a span gets. Single-token spans (a config key, a path, a rejected flag name)
+  use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
+  wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
+
+  Deliberately unchanged: `raw_response.text` and the delegate summary. Those are the SUCCESS
+  channel — the answer the caller asked for — and deleting control characters from returned
+  content is a different act from cleaning a diagnostic this server chose to quote. Machine
+  identifier fields (`details.field`, job ids, resource URIs) are also unchanged: deleting
+  characters from an identifier corrupts it, so those want validation instead, tracked as #529.
+
+  **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
+  own sanitation policy, and that policy changed. It now states the guarantee precisely — every
+  Unicode `Cc` code point (C0, DEL, C1) removed, so no terminal escape sequence survives — and
+  states its limit, that category `Cf` bidi/format controls are not covered. Not breaking: a
+  strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since the serialized
+  shape and accepted types are untouched. Error-message prose changes carry no fingerprint of
+  their own (see AGENTS.md, Versioning).
+
 ### Changed
 
 - **BREAKING: `codex exec --strict-config` now guards the guarantee-bearing `-c` key pins, and a

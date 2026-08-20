@@ -156,12 +156,12 @@ async def run_delegate(
                 reasoning_effort=meta.reasoning_effort,
                 # Codex runs with cwd=wt.path, so its raw stderr/event text can name the
                 # worktree, which is dead by the time this envelope reaches the caller
-                # (#420, the #412 remainder). sanitize_prose is the one approved
-                # relativize+redact composition (see the comment on the last_message
-                # rewrite below, which explains why the two passes can't be called
-                # separately); it REPLACES classify_failure's own redact_text call rather
-                # than adding a second pass.
-                sanitize=lambda t: worktree.sanitize_prose(t, wt_aliases) or "",
+                # (#420, the #412 remainder). sanitize_echo_prose is the one approved
+                # composition of the THREE passes this text needs — control-character
+                # stripping, relativization, and redaction — in the one order safe for all
+                # of them (see the comment on the last_message rewrite below, and #528). It
+                # REPLACES classify_failure's own sanitizer rather than adding a pass.
+                sanitize=lambda t: worktree.sanitize_echo_prose(t, wt_aliases) or "",
             )
             return serialize_error(ErrorResult(error=err, meta=meta))
         diff = worktree.capture_diff(wt.path, timeout=git_timeout, config=config.WORKTREE_CONFIG)
@@ -184,6 +184,12 @@ async def run_delegate(
     # because they interact: neither plain order is safe, and the safe combination is not
     # something a call site should have to remember. See that function for the two attacks.
     # One call covers both fields built from this text (summary and raw_response.text).
+    # Deliberately `sanitize_prose`, NOT the `sanitize_echo_prose` the failure path above
+    # uses: this is the SUCCESS channel — the answer the caller asked for. Deleting control
+    # characters from it would mutate requested content (a diff, a code sample, deliberate
+    # formatting), which is a different thing from cleaning a diagnostic we chose to echo.
+    # The echo sanitizer is for text we quote back, not for text we were asked to return
+    # (#528; the machine-identifier half is #529).
     last_message = worktree.sanitize_prose(result.last_message, wt_aliases)
     summary = (last_message or "").strip() or "(codex returned no summary)"
     if not diff.strip():

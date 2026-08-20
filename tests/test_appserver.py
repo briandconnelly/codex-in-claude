@@ -2009,3 +2009,38 @@ def test_live_rate_limits_read_roundtrip():
     if outcome.status is RateLimitReadStatus.OK:
         assert outcome.snapshot is not None
         assert outcome.snapshot.primary is not None or outcome.snapshot.secondary is not None
+
+
+# --- #528: the two display helpers strip control characters before redacting ----------
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize("attack", ["\x1b[31mRED\x1b[0m", "bell\x07", "wipe\x1b[2K", "del\x7f"])
+def test_display_text_strips_control_characters(attack):
+    """Every app-server string reaching an envelope routes through here, so this is the
+    one place the transfer paths need the echo sanitizer."""
+    assert not _has_cc(appserver._display_text(f"import failed: {attack} at step 2"))
+
+
+@pytest.mark.parametrize("attack", ["\x1b[31mRED\x1b[0m", "bell\x07", "wipe\x1b[2K", "del\x7f"])
+def test_display_stderr_tail_strips_control_characters(attack):
+    """`app_server_stderr_tail` is child-process stderr — the most attacker-shaped text
+    this server echoes, and the one most likely to be read in a terminal."""
+    out = appserver._display_stderr_tail(f"panic: {attack} at line 9") or ""
+    assert not _has_cc(out), repr(out)
+
+
+def test_display_stderr_tail_redacts_a_control_split_secret():
+    out = appserver._display_stderr_tail("token sk-\x01ant-api03-" + "A" * 40) or ""
+    assert "A" * 40 not in out, repr(out)
+
+
+def test_display_stderr_tail_keeps_its_line_structure_when_nothing_is_redacted():
+    """The tail's value is that it is a multi-line diagnostic, so the PROSE variant is the
+    right one: line breaks survive wherever keeping them is provably as safe as removing
+    them (which is every tail the redactor did not touch across a boundary)."""
+    out = appserver._display_stderr_tail("first line\nsecond line\nthird line")
+    assert out == "first line\nsecond line\nthird line"

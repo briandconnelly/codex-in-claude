@@ -4528,9 +4528,10 @@ def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) ->
         provenance += f", producer server_version {version}"
     if isinstance(fingerprint, str) and fingerprint:
         provenance += f", producer fingerprint {fingerprint}"
-    # The provenance strings and `detail` echo stored payload fragments, so redact the
+    # The provenance strings and `detail` echo stored payload fragments, so sanitize the
     # whole composed message at this single sink and bound its size, mirroring
-    # _job_result_corrupt.
+    # _job_result_corrupt. The echo sanitizer, not bare redaction: a stored payload is
+    # foreign text being quoted back, and can carry control characters (#528).
     message = (
         f"stored job result was written under a different result format ({provenance}): {detail}"
     )
@@ -4538,7 +4539,7 @@ def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) ->
         ErrorResult(
             error=make_error(
                 "job_result_incompatible",
-                (redaction.redact_text(message) or "")[:500],
+                redaction.sanitize_echo_prose(message)[:500],
             ),
             meta=meta,
         )
@@ -4547,12 +4548,13 @@ def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) ->
 
 def _job_result_corrupt(detail: str, meta: Meta) -> dict:
     # `detail` interpolates ValidationError text that can echo stored payload fragments
-    # (Pydantic's input_value), so redact at this single sink for both corrupt-result paths.
+    # (Pydantic's input_value), so sanitize at this single sink for both corrupt-result
+    # paths — echoed foreign text, so control characters go too (#528).
     return serialize_error(
         ErrorResult(
             error=make_error(
                 "internal_error",
-                f"job result could not be returned: {redaction.redact_text(detail) or ''}"[:300],
+                f"job result could not be returned: {redaction.sanitize_echo_prose(detail)}"[:300],
                 repair_alternative=(
                     "Start a new job; if this persists, run codex_status and check the server logs."
                 ),
@@ -4688,7 +4690,7 @@ def _finished_job_envelope(
         # emits — so domain errors (already redacted at write time) aren't re-run through the
         # heuristic redactor and can't be over-redacted.
         if validated.error.code == "internal_error":
-            validated.error.message = redaction.redact_text(validated.error.message) or ""
+            validated.error.message = redaction.sanitize_echo_prose(validated.error.message)
         return serialize_error(validated), True
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))
     # A still-running job is the one recoverable case: point at the poll tool with

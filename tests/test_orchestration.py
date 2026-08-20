@@ -637,3 +637,27 @@ def test_stamp_meta_effort_rejection_without_sent_effort_is_drift(monkeypatch):
     out = orchestration._stamp_meta(result, meta)
     assert out is not None
     assert out["error"]["code"] == "cli_contract_changed"
+
+
+# --- #528: echoed previews and exception text go through the echo sanitizer -----------
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+def test_review_invalid_response_preview_strips_control_characters():
+    """The preview quotes the model's raw output back into an error message — model text
+    is the most directly attacker-shaped input this server echoes."""
+    out = orchestration._review_invalid_response_error(
+        "invalid_json", "not json \x1b[31mRED\x1b[0m \x07here", _make_meta()
+    )
+    message = out["error"]["message"]
+    assert not _has_cc(message), repr(message)
+
+
+def test_review_invalid_response_preview_redacts_a_control_split_secret():
+    out = orchestration._review_invalid_response_error(
+        "invalid_json", "leak sk-\x01ant-api03-" + "A" * 40, _make_meta()
+    )
+    assert "A" * 40 not in out["error"]["message"]
