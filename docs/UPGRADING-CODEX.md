@@ -283,6 +283,41 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   `[ReasoningEffortParam]` (`REASONING_EFFORT_REJECTION_MARKERS` — the classifier requires all of
   them in `[…]` form); note it spends a trivial request. Also check
   `codex exec --help` for a new dedicated effort flag worth adopting.
+- **Workspace-write network pin.** The propose tiers pin the no-network-egress guarantee with
+  `-c sandbox_workspace_write.network_access=false` (`WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`,
+  #518). Like the reasoning-effort key above, a rename/removal of the KEY drifts **silently** —
+  codex would ignore the pin as junk and the user's `$CODEX_HOME/config.toml` (or a profile) could
+  silently re-grant egress — so this semantic probe is the only guard, and it protects a security
+  guarantee. The probe needs a **scratch** `$CODEX_HOME` (the config file is the thing under
+  test), which must carry an `auth.json` copy — a credential — so run the whole block in the
+  explicit subshell below, whose `EXIT` trap removes the copy even when a probe is interrupted
+  (never paste the steps individually into an interactive shell). It assumes file-backed auth
+  (`codex login`); each of the three runs spends a trivial request:
+
+  ```bash
+  (                                     # bounded: the trap dies with this subshell
+    set -eu                             # fail fast: a failed cp/mktemp must not run the probes
+    home=${CODEX_HOME:-$HOME/.codex}    # the active home, not a hard-coded path
+    scratch=$(mktemp -d)
+    trap 'rm -rf "$scratch"' EXIT       # the credential copy never outlives the probe
+    cp "$home/auth.json" "$scratch/"
+    printf '[sandbox_workspace_write]\nnetwork_access = true\n' \
+      | tee "$scratch/config.toml" > "$scratch/net.config.toml"
+    P="Run exactly this shell command and report its exact stdout and exit status verbatim: curl -sS -o /dev/null -w '%{http_code}' https://example.com"
+    run() { CODEX_HOME="$scratch" codex exec --json --sandbox workspace-write \
+            --ephemeral --skip-git-repo-check "$@" - <<< "$P"; }
+    run                                                        # 1: positive control
+    run -c sandbox_workspace_write.network_access=false        # 2: the pin
+    run -c sandbox_workspace_write.network_access=false --profile net   # 3: pin vs profile
+  )
+  ```
+
+  Judge each run by the `command_execution` item's `exit_code` in the `--json` stream, not the
+  model's prose. Run 1 must report egress (curl exit `0`, HTTP `200`) — the positive control
+  proving the probe can see the open state; without it a broken probe and a held guarantee look
+  identical. Runs 2 and 3 must be blocked (curl exit `6`, could-not-resolve-host); run 3 shows
+  the `-c` override still outranks profiles (verified 0.148.0). If run 2 or 3 reports egress,
+  the key drifted: update the constant and re-verify before shipping the version bump.
 - **Structured output.** Run a small live `codex exec --output-schema <file>` and confirm the final
   message still conforms to the strict-mode schema in `schemas.py`. (Reminder, already in
   `COMPATIBILITY.md`: native `codex review --output-schema` is **not** honored for the final message

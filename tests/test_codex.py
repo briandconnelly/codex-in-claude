@@ -10,7 +10,7 @@ import pytest
 from pontonier.core import worktree
 from pontonier.core.runtime import CommandRun
 
-from codex_in_claude import cli_contract, codex
+from codex_in_claude import cli_contract, codex, config
 from codex_in_claude.preflight import FlagSupport
 
 _ALL_FLAGS = FlagSupport(
@@ -74,6 +74,64 @@ def test_build_exec_command_disables_remote_plugin_every_tier(tmp_path, sandbox,
     assert cmd[cmd.index("--disable") + 1] == cli_contract.REMOTE_PLUGIN_FEATURE
     # It is a plugin-owned flag (before operator extra_args), never gated away.
     assert cli_contract.DISABLE_FEATURE_FLAG in cli_contract.ALWAYS_SEND_FLAGS
+
+
+@pytest.mark.parametrize("isolation", config.VALID_ISOLATIONS)
+@pytest.mark.parametrize("sandbox", cli_contract.VALID_SANDBOXES)
+def test_build_exec_command_pins_network_access_exactly_on_workspace_write(
+    tmp_path, sandbox, isolation
+):
+    # #518: at the default isolation (inherit) codex reads $CODEX_HOME/config.toml, where
+    # `[sandbox_workspace_write] network_access = true` would silently void the advertised
+    # no-network-egress guarantee. The pin closes that channel (and --profile — the `-c`
+    # override outranks both, verified live on 0.148.0) for every workspace-write run.
+    # The expected token is a LITERAL here on purpose: deriving it from the constant the
+    # code reads would make this test unable to catch a wrong constant.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox=sandbox,
+        isolation=isolation,
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.network_access=false"
+    pairs = [i for i in range(len(cmd) - 1) if cmd[i] == "-c" and cmd[i + 1] == pin]
+    if sandbox == "workspace-write":
+        # Exactly one adjacent `-c <pin>` pair: absent breaks the guarantee, duplicated or
+        # mis-paired tokens would corrupt the argv.
+        assert len(pairs) == 1
+    else:
+        assert pin not in cmd
+
+
+def test_build_exec_command_network_pin_ordering_with_other_config_tokens(tmp_path):
+    # #518: the pin is plugin-owned — emitted before operator extra_args — and must not
+    # displace or mis-pair the reasoning-effort `-c` token that shares the same flag.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="high",
+        extra_args=("-c", "model_provider=x"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.network_access=false"
+    assert cmd[cmd.index(pin) - 1] == "-c"
+    effort = 'model_reasoning_effort="high"'
+    assert cmd[cmd.index(effort) - 1] == "-c"
+    assert cmd.index(pin) < cmd.index("model_provider=x")
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+
+
+def test_network_pin_key_constant_matches_codex_config_key():
+    # The cli_contract constant is the single source the builder reads; pin its VALUE
+    # here so a typo'd constant fails loudly instead of drifting into a silent no-op
+    # (codex ignores unknown -c keys).
+    assert (
+        cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY
+        == "sandbox_workspace_write.network_access"
+    )
 
 
 def test_build_exec_command_disable_precedes_extra_args(tmp_path):

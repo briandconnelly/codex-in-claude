@@ -252,6 +252,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **The `workspace-write` no-network-egress guarantee now holds at the default isolation level**
+  (#518). At `inherit` isolation the plugin sends no `--ignore-user-config`, so codex reads the
+  user's `$CODEX_HOME/config.toml` — where `[sandbox_workspace_write] network_access = true`, a
+  reasonable setting for the user's own interactive codex use, silently re-granted the delegate
+  tiers full network egress (verified live on codex-cli 0.148.0 with a positive control: `curl`
+  reached example.com under the plugin's exact default flag set). The `-c` denylist refuses
+  `sandbox_*` keys on the argv passthrough channel, but nothing inspected the config-file channel.
+  Every `workspace-write` run now pins `-c sandbox_workspace_write.network_access=false`
+  (`cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`), which was verified to outrank both
+  the config file and an operator `--profile`, so the advertised promise holds at every isolation
+  level and the `--profile` operator-trust carve-out is closed for this one key.
+  `docs/UPGRADING-CODEX.md` gains the semantic probe (with its positive control) that guards the
+  pin against silent upstream key drift, since codex ignores unknown `-c` keys rather than
+  rejecting them. **No fingerprint change** — the pin alters only the built argv, which no
+  discovered surface exposes, and the agent-visible text already asserted the guarantee this
+  change makes true. Not breaking. The sibling filesystem-scope keys (`writable_roots`,
+  `exclude_*`) remain overridable through the same channel and are tracked as #520;
+  `COMPATIBILITY.md` now discloses both the pin and that open remainder.
 - `COMPATIBILITY.md` no longer repeats the `recommended_plugins` paragraph. PR #511 re-added the
   paragraph the #508 change had already placed in the "Image reading (`view_image`, #479)" section,
   leaving two verbatim consecutive copies; the second is removed. Nothing else was lost in that
