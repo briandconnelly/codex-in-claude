@@ -82,6 +82,27 @@ network step yourself after reviewing and applying the returned diff. The tool d
 `codex_capabilities` `negative_scope` state this so a calling agent doesn't assume write access
 implies internet access.
 
+Codex itself makes that boundary configurable — `[sandbox_workspace_write] network_access = true`
+in `$CODEX_HOME/config.toml` (or a profile) re-grants egress inside `workspace-write` — and at the
+default `inherit` isolation the user's config file is read, so a user who enabled that key for
+their own interactive codex use would silently void the promise above (#518). The server therefore
+**pins the guarantee**: every `workspace-write` run sends
+`-c sandbox_workspace_write.network_access=false`
+(`cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`). The `-c` override outranks both the
+config file and an operator `--profile` (codex resolves by config layer, not argv order; verified
+live on 0.148.0 with positive controls), so the promise holds at every isolation level, and for
+this one key the `--profile` operator-trust carve-out is closed. This deliberately overrides the
+user's own setting for plugin-launched runs only; their interactive codex sessions are untouched.
+One drift caveat: a `-c` KEY cannot fail loudly the way a flag does (codex ignores unknown keys),
+so an upstream rename would reopen the channel silently — `docs/UPGRADING-CODEX.md` carries the
+semantic probe that guards this on every version change.
+
+The pin covers **network egress only**. The filesystem half of the sentence above — writes stay
+inside the workspace — rests on other `sandbox_workspace_write` keys (`writable_roots`,
+`exclude_tmpdir_env_var`, `exclude_slash_tmp`) that the same config-file channel can still widen
+at `inherit` isolation; those carry usability tradeoffs the network key does not, and are tracked
+separately (#520 — not pinned today, an open exposure at the default isolation, not a closed one).
+
 ## Remote-plugin isolation (`remote_plugin`, #287)
 
 Codex **0.143+** flipped the `remote_plugin` feature to **default-on**, which makes named
@@ -691,7 +712,10 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   `--disable some_other`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
-  **operator-trust boundary** — only enable this knob with profiles you control.
+  **operator-trust boundary** — only enable this knob with profiles you control. One key is
+  excepted: `sandbox_workspace_write.network_access` is pinned by a plugin-owned `-c` override
+  that outranks profiles (verified 0.148.0; see Sandbox modes above), so a profile cannot
+  re-grant network egress to a `workspace-write` run.
 
 ## Version policy
 

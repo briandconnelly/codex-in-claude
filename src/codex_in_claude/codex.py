@@ -108,6 +108,14 @@ def build_exec_command(
     # isolation (codex 0.143+ defaults `remote_plugin` on; #287). Guarantee-bearing and
     # order-independent — `--disable` wins over any operator `--enable`/`-c ...=true`.
     tokens += [cli_contract.DISABLE_FEATURE_FLAG, cli_contract.REMOTE_PLUGIN_FEATURE]
+    # Pin the no-network-egress guarantee for workspace-write runs (#518): at `inherit`
+    # isolation codex reads $CODEX_HOME/config.toml, where the user's own
+    # `network_access = true` would silently grant the delegate egress. The `-c`
+    # override outranks the config file AND --profile (verified 0.148.0), so this holds
+    # at every isolation level. A config key cannot be help-gated; upstream renaming the
+    # key drifts silently — see the constant's note in cli_contract.
+    if sandbox == cli_contract.SANDBOX_WORKSPACE_WRITE:
+        tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY}=false"]
     tokens += isolation_flags(isolation)
     if skip_git_repo_check:
         tokens += ["--skip-git-repo-check"]

@@ -453,6 +453,24 @@ HELP_GATED_FLAGS = {
 # max/ultra for other slugs). Discovery is advisory only (codex_models).
 MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
 
+# --- workspace-write network pin (issue #518) --------------------------------------
+# The codex config key that grants network egress inside the workspace-write sandbox.
+# At the default isolation (`inherit`) no --ignore-user-config is sent, so a user's
+# `$CODEX_HOME/config.toml` with `[sandbox_workspace_write] network_access = true`
+# would silently void the no-network-egress guarantee this server advertises for the
+# propose tiers. The builder therefore pins `-c <this key>=false` on every
+# workspace-write run. Precedence verified live on codex-cli 0.148.0 (2026-08-19,
+# probes with positive controls, #518): the `-c` override outranks BOTH the config
+# file and an operator `--profile` (codex resolves by config layer, not argv order),
+# so the pin holds at every isolation level and closes the --profile carve-out for
+# this one key.
+# Drift coverage is the same NARROW case as MODEL_REASONING_EFFORT_CONFIG_KEY above:
+# only removal of `-c` itself fails loudly. A rename/removal of the KEY drifts
+# SILENTLY — codex tolerates unknown `-c` keys as junk it never reads — and would
+# quietly reopen the egress channel; the semantic probe in docs/UPGRADING-CODEX.md is
+# the only guard for that case, so it must run on every supported-version change.
+WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY = "sandbox_workspace_write.network_access"
+
 # Markers identifying the BACKEND's rejection of a bad reasoning-effort VALUE (a
 # caller error), as distinct from a CLI rejection of the config key itself (contract
 # drift). The backend 400 reads "[ReasoningEffortParam] [reasoning.effort]
