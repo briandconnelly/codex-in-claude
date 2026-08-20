@@ -4629,7 +4629,7 @@ async def _job_result_impl(
 # deliberately absent: it is the exact-content carrier, and `diff` is content too (already
 # redacted at write time). Keys, not a blind tree walk, so replay cannot mutate a machine
 # identifier or `meta` (#528, #529).
-_STORED_PRESENTATION_KEYS = ("summary", "findings", "questions", "next_steps")
+_STORED_PRESENTATION_KEYS = ("summary", "findings", "questions", "next_steps", "assumptions")
 
 
 def _sanitize_stored_presentation(payload: dict) -> dict:

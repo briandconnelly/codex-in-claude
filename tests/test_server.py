@@ -9821,3 +9821,34 @@ def test_stored_success_replay_leaves_a_clean_payload_byte_identical():
     re-run through the heuristic redactor and cannot be over-redacted."""
     payload = {"ok": True, "summary": "git failed near ref AKIAIOSFODNN7EXAMPLE"}
     assert server._sanitize_stored_presentation(dict(payload)) == payload
+
+
+def test_stored_presentation_keys_cover_every_model_supplied_prose_field():
+    """Completeness guard for `_STORED_PRESENTATION_KEYS`, derived from the RESULT MODELS
+    rather than from the tuple it checks.
+
+    The tuple is a literal on purpose — a test that read its expected value from the same
+    tuple could not fail — so this asserts the other direction: every field on every result
+    type is either a rendered prose field the replay pass covers, or named here as a
+    deliberate exclusion. Adding a new prose field to a result model fails this until the
+    replay pass is taught about it. (`assumptions` was missing from the first version.)
+    """
+    from codex_in_claude.schemas import ConsultResult, DelegateResult, ReviewResult
+
+    excluded = {
+        "ok",
+        "tool",
+        "meta",  # envelope/machine metadata, never model prose
+        "raw_response",  # the exact-content carrier, deliberately untouched
+        "diff",  # content, redacted at write time
+        "verdict",
+        "confidence",
+        "review_status",  # closed enums
+        "coverage",  # server-computed status, not model text
+    }
+    for model in (ConsultResult, ReviewResult, DelegateResult):
+        for name in model.model_fields:
+            assert name in server._STORED_PRESENTATION_KEYS or name in excluded, (
+                f"{model.__name__}.{name} is neither covered by the replay presentation "
+                f"pass nor listed as a deliberate exclusion"
+            )
