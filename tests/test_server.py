@@ -2621,7 +2621,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-79"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-80"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3754,13 +3754,16 @@ async def test_job_cancel_is_idempotent_but_not_read_only():
 async def test_async_launchers_are_not_read_only(tool_name):
     """Every *_async launcher creates an observable, mutable, spend-committing job
     record that outlives the response, so none may advertise readOnlyHint — even
-    consult/review whose underlying run is read-only (issue #138)."""
+    consult/review whose underlying run is read-only (issue #138). destructiveHint
+    diverges by tier: delegate_async is destructive (temp-root grant, #523 — see
+    test_delegate_tools_declare_destructive_writes); consult/review job records are
+    additive."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
     assert ann.readOnlyHint is False
     assert ann.idempotentHint is False
     assert ann.openWorldHint is True
-    assert ann.destructiveHint is False
+    assert ann.destructiveHint is (tool_name == "codex_delegate_async")
 
 
 @pytest.mark.parametrize(
@@ -6549,7 +6552,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-79")
+    assert result["fingerprint"].endswith("schema-80")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -9455,3 +9458,194 @@ def test_preview_scope_fact_survives_every_capabilities_detail_mode():
         payload = server.codex_capabilities(detail=detail)
         joined = " ".join(payload["negative_scope"])
         assert _preview_scope_disclosed(joined), detail
+
+
+# --- #523 write-scope guards -------------------------------------------------------
+# The propose tier's surface promised "writes only inside a throwaway worktree", but
+# codex's workspace-write sandbox grants the OS temp roots (/tmp and $TMPDIR) by
+# default (verified live, on-disk state judged, positive and negative controls; #523).
+# Same architecture as the #509 read-scope guards above: exact containment of the
+# canonical constant on every carrier, a legacy-clause sweep, a contradiction matcher
+# for paraphrased re-inversions, and guard-the-guard controls proving each matcher can
+# fail.
+
+_WRITE_SCOPE_TOOLS = ("codex_delegate", "codex_delegate_async")
+
+# The bridge-owned persistence half (the CLI-owned grant lives in
+# cli_contract.WORKSPACE_WRITE_SCOPE_FACT): temp-root writes outlive the run and never
+# reach the reviewable diff. Pinned as exact containment on the delegate carriers.
+_TEMP_PERSISTENCE_CLAUSE = "neither captured in the returned diff nor cleaned up"
+
+
+def _write_scope_disclosed(text: str) -> bool:
+    return _normalize(cli_contract.WORKSPACE_WRITE_SCOPE_FACT).lower() in _normalize(text).lower()
+
+
+# Matches the affirmative shapes an exclusivity claim takes, with a bounded gap so the
+# worktree is actually named as the bound. Deliberately NOT a blanket `write.*worktree`
+# pattern: WORKSPACE_WRITE_SCOPE_FACT itself says "the worktree does not bound Codex's
+# writes", and true sentences ("never edits your working tree", "not applied to your
+# working tree") name writes near a tree without asserting containment.
+_CONTRADICTS_WRITE_SCOPE = re.compile(
+    r"writes?\s+only\s+inside|only\s+inside\s+a\s+throwaway"
+    r"|worktree,?\s+which\s+bounds|worktree\s+bounds\s+what\b[^.]{0,40}\bwrite"
+    r"|writes?\s+(?:stay|stays|are\s+isolated)\b[^.]{0,50}\bworktree"
+    r"|writes?\b[^.]{0,30}\b(?:confined|limited|restricted)\s+to\b[^.]{0,40}\bworktree",
+    re.IGNORECASE,
+)
+
+_LEGACY_EXCLUSIVE_WRITE_CLAUSES = (
+    "writes only inside a throwaway worktree",
+    "but only inside a throwaway worktree",
+    "the worktree bounds what codex may write",
+    "worktree, which bounds what it may write",
+    "the throwaway worktree bounds what codex may write",
+    "any file writes stay inside a throwaway worktree",
+)
+
+
+def _runtime_write_scope_carriers() -> dict[str, str]:
+    """Every runtime string that must carry the write-scope fact.
+
+    Runtime values, not source files, for the same reason as the read-scope helper:
+    this module's own guard-the-guard fixtures quote the pre-fix wording verbatim.
+    """
+    caps = server.codex_capabilities(detail="full")
+    carriers: dict[str, str] = {"negative_scope": " ".join(caps["negative_scope"])}
+    for tool in caps["tool_details"]:
+        if tool["name"] in _WRITE_SCOPE_TOOLS:
+            carriers[f"returns:{tool['name']}"] = tool["returns"]
+    for name in _WRITE_SCOPE_TOOLS:
+        carriers[f"docstring:{name}"] = getattr(server, name).__doc__ or ""
+    return carriers
+
+
+def test_write_scope_fact_reaches_every_delegate_carrier():
+    """Both delegate descriptions, their capabilities `returns`, and negative_scope
+    must carry cli_contract.WORKSPACE_WRITE_SCOPE_FACT verbatim (#523)."""
+    for label, text in _runtime_write_scope_carriers().items():
+        assert _write_scope_disclosed(text), f"{label} does not carry the write-scope fact"
+
+
+def test_delegate_carriers_state_temp_root_persistence():
+    """Temp-root writes outlive the run and never reach the diff — EVERY write-scope
+    carrier must say so, or "reviewable diff" reads as a full account of the run's
+    side effects (#523). The capabilities `returns` entries are included because a
+    caller reading only the capabilities inventory would otherwise get the grant
+    without its key implication (Copilot review on #526)."""
+    for label, text in _runtime_write_scope_carriers().items():
+        assert _TEMP_PERSISTENCE_CLAUSE in _normalize(text).lower(), label
+
+
+def test_no_runtime_carrier_claims_worktree_bounds_writes(monkeypatch, clean_env):
+    """The exclusivity claims #523 removed must not come back — beside the fact or
+    instead of it. Sweeps every read-scope carrier too: those strings all describe the
+    same runs, and one of them re-asserting the bound would undo the correction."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    caveat = server.codex_status()["caveat"]
+    swept = {**_runtime_read_scope_carriers(caveat), **_runtime_write_scope_carriers()}
+    offenders = []
+    for label, text in swept.items():
+        low = _normalize(text).lower()
+        for clause in _LEGACY_EXCLUSIVE_WRITE_CLAUSES:
+            if clause in low:
+                offenders.append(f"{label}: {clause!r}")
+        contradiction = _CONTRADICTS_WRITE_SCOPE.search(low)
+        if contradiction:
+            offenders.append(f"{label}: contradiction {contradiction.group(0)!r}")
+    assert not offenders, (
+        "these carriers still present the worktree as bounding Codex's writes (#523): "
+        + "; ".join(offenders)
+    )
+
+
+def test_meta_tier_and_sandbox_descriptions_state_temp_root_grant():
+    """The two schema fields that name the propose tier's write scope carry a
+    short-form disclosure rather than the whole fact (the param-side pattern from
+    #509): each must name the OS temp roots and neither may assert the old bound."""
+    from codex_in_claude.schemas import Meta
+
+    for field in ("tier", "sandbox"):
+        desc = Meta.model_fields[field].description or ""
+        low = _normalize(desc).lower()
+        assert "os temp roots" in low, f"Meta.{field} never names the temp-root grant"
+        assert _CONTRADICTS_WRITE_SCOPE.search(low) is None, f"Meta.{field}: {desc!r}"
+        for clause in _LEGACY_EXCLUSIVE_WRITE_CLAUSES:
+            assert clause not in low, f"Meta.{field}: {clause!r}"
+
+
+def test_annotations_reading_states_the_destructive_hint_split():
+    """The agent-visible annotations_reading judgment must cover destructiveHint too:
+    delegate is destructive because of the temp-root grant, consult/review are not
+    (#523)."""
+    from codex_in_claude.schemas import CapabilitiesResult
+
+    text = _normalize(CapabilitiesResult.model_fields["annotations_reading"].default).lower()
+    assert "destructivehint" in text
+    assert "temp root" in text or "os temp roots" in text
+    # The field's schema `description` must name both hints too, or the schema docs
+    # contradict the default they describe (Copilot round 2 on #526).
+    desc = _normalize(CapabilitiesResult.model_fields["annotations_reading"].description).lower()
+    assert "destructivehint" in desc and "readonlyhint" in desc
+
+
+def test_write_scope_matcher_positive_and_negative_controls():
+    """Guard the guard: containment, contradiction, and legacy matchers must each be
+    able to fail — on the pre-#523 wording above all."""
+    fact = cli_contract.WORKSPACE_WRITE_SCOPE_FACT
+
+    # Positive: canonical text, and the shapes real carriers deliver it in.
+    assert _write_scope_disclosed(fact)
+    assert _write_scope_disclosed(fact.lower())
+    wrapped = "    " + fact.replace(" ", "\n    ", 3) + "\n"
+    assert _write_scope_disclosed(wrapped), "line-wrapped docstring copy must still match"
+    backticked = fact.replace("/tmp", "`/tmp`").replace("$TMPDIR", "`$TMPDIR`")
+    assert _write_scope_disclosed(backticked), "backticked prose copy must still match"
+
+    # Negative: the empty carrier and the inversion.
+    assert _write_scope_disclosed("") is False
+    inverted = fact.replace("does not bound", "bounds")
+    assert _write_scope_disclosed(inverted) is False, (
+        "the inversion must fail — exact containment, not word presence"
+    )
+
+    # The corrected fact must not trip the contradiction matcher protecting it...
+    assert _CONTRADICTS_WRITE_SCOPE.search(fact.lower()) is None
+    # ...and every pre-fix carrier sentence must trip a matcher.
+    for pre_fix in (
+        "propose (writes only inside a throwaway worktree)",
+        "Codex edits files with workspace-write, but only inside a throwaway worktree",
+        "the worktree, which bounds what it may WRITE, not what it may read",
+        "The throwaway worktree bounds what Codex may WRITE, not what it may read",
+        "any file writes stay inside a throwaway worktree",
+        "Writes are isolated. codex_delegate runs Codex with workspace-write but only "
+        "inside a throwaway git worktree",
+    ):
+        low = _normalize(pre_fix).lower()
+        assert _CONTRADICTS_WRITE_SCOPE.search(low) or any(
+            clause in low for clause in _LEGACY_EXCLUSIVE_WRITE_CLAUSES
+        ), pre_fix
+    # True sentences that name writes near a tree must NOT trip it.
+    for ok in (
+        "codex_delegate never edits your working tree — it returns a reviewable diff",
+        "a reviewable diff that is NOT applied to your tree",
+        "The worktree does not bound Codex's writes.",
+        "The sandbox bounds writes, not reads, so no choice of workspace is a read boundary.",
+    ):
+        assert _CONTRADICTS_WRITE_SCOPE.search(_normalize(ok).lower()) is None, ok
+
+
+@pytest.mark.parametrize("tool_name", ["codex_delegate", "codex_delegate_async"])
+async def test_delegate_tools_declare_destructive_writes(tool_name):
+    """MCP defines destructiveHint:false as "performs only additive updates". A
+    delegated task can overwrite or delete pre-existing files under /tmp and $TMPDIR
+    (the sandbox's default temp-root grant, #523), so the delegate tools must declare
+    destructiveHint:true. Consult/review keep false below: their Codex run is
+    read-only and the job record they create is additive."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is False
+    assert ann.destructiveHint is True
+    assert ann.idempotentHint is False
+    assert ann.openWorldHint is True

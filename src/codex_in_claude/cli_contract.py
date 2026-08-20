@@ -487,13 +487,37 @@ WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY = "sandbox_workspace_write.network_acc
 # `exclude_slash_tmp`) are deliberately NOT pinned: their default (false) is already
 # the widest state, so the config file can only narrow them — an operator's own choice,
 # not a guarantee leak (COMPATIBILITY.md documents this; the default temp-dir grant
-# itself is tracked as #523).
+# itself is disclosed as WORKSPACE_WRITE_SCOPE_FACT below, #523).
 # Drift coverage is the same NARROW case as the network key: only removal of `-c`
 # itself fails loudly. A rename/removal of the KEY drifts SILENTLY — codex tolerates
 # unknown `-c` keys as junk it never reads — and would quietly reopen the filesystem
 # channel; the semantic probe in docs/UPGRADING-CODEX.md is the only guard for that
 # case, so it must run on every supported-version change.
 WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY = "sandbox_workspace_write.writable_roots"
+
+# --- workspace-write write scope (issue #523) ---------------------------------------
+# RULE (write scope): every prose site that describes the propose tier's write
+# boundary — README.md, SECURITY.md, COMPATIBILITY.md, and
+# skills/collaborating-with-codex/references/independent-attempt.md — must state the
+# temp-root grant below and must not present the worktree as bounding Codex's writes.
+# The runtime carriers (both delegate tool descriptions, their codex_capabilities
+# `returns` entries, and negative_scope) carry the constant verbatim;
+# tests/test_server.py and tests/test_docs_disclosure.py enforce both halves.
+#
+# Verified live on codex-cli 0.148.0 (2026-08-19, #523, on-disk state judged, with
+# positive and negative controls): at this plugin's exact workspace-write argv,
+# `touch /tmp/...` and a $TMPDIR write both succeed while a $HOME write in the same
+# run is denied. The grant is upstream's out-of-the-box state
+# (`exclude_slash_tmp`/`exclude_tmpdir_env_var` default false) and is deliberately NOT
+# pinned closed — build tools, uv, git, and test runners routinely need $TMPDIR — so
+# the surface discloses it instead (see the writable-roots note above and
+# COMPATIBILITY.md). Because of this grant, a delegated task can overwrite or delete
+# pre-existing files under the temp roots, which is why the delegate tools advertise
+# destructiveHint: true (server.py's annotation presets).
+WORKSPACE_WRITE_SCOPE_FACT = (
+    "The worktree does not bound Codex's writes: codex's workspace-write sandbox also "
+    "lets commands write the OS temp roots (/tmp and $TMPDIR) by default."
+)
 
 # Markers identifying the BACKEND's rejection of a bad reasoning-effort VALUE (a
 # caller error), as distinct from a CLI rejection of the config key itself (contract

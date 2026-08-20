@@ -30,9 +30,10 @@ order cannot be repaired by intent: once Codex's answer is in context, everythin
 is conditioned on it, and "I did not condition on it" is neither enforceable nor observable.
 
 Consult can read tracked and untracked files in its resolved workspace, and is not confined to it —
-read-only bounds writes, not reads. Delegate works from the seeded worktree baseline, which likewise
-bounds what it may write rather than what it may read. So placing the draft elsewhere on disk
-removes Codex's pointer to it but does not put it out of reach.
+read-only bounds writes, not reads. Delegate works from the seeded worktree baseline; the sandbox
+bounds its writes (the worktree plus the OS temp roots `/tmp` and `$TMPDIR`, per codex's
+workspace-write default), never its reads. So placing the draft elsewhere on disk removes Codex's
+pointer to it but does not put it out of reach.
 
 That distinction sets what you may claim. "Codex did not see the draft" is not available: the result
 contract carries no read audit, and the framing you wrote into the shared task reaches both members

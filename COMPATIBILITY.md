@@ -73,7 +73,8 @@ test does this live). See "Session transfer" below for the import flow.
 consult/review tiers, `workspace-write` for the propose tiers (`codex_delegate`,
 `codex_delegate_async`); we never pass `danger-full-access` or `--dangerously-bypass-*` by default.
 
-**`workspace-write` permits filesystem writes inside the workspace but blocks network egress.** This
+**`workspace-write` permits filesystem writes inside the workspace (plus the OS temp roots — see
+the temp-root note below) but blocks network egress.** This
 is codex's own sandbox boundary and we pass it through deliberately. The practical consequence: a
 propose/apply task **cannot perform network operations** — `git push`/`fetch`, `gh ...`, `curl`,
 `npm publish`, dependency installs, etc. all fail inside the sandbox (typically with a
@@ -97,7 +98,7 @@ One drift caveat: a `-c` KEY cannot fail loudly the way a flag does (codex ignor
 so an upstream rename would reopen the channel silently — `docs/UPGRADING-CODEX.md` carries the
 semantic probe that guards this on every version change.
 
-The filesystem half of the sentence above — writes stay inside the workspace — gets the same
+The filesystem half of the sentence above — the sandbox's write boundary — gets the same
 treatment (#520): every `workspace-write` run also sends
 `-c sandbox_workspace_write.writable_roots=[]`
 (`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`), so a user's own
@@ -114,8 +115,10 @@ rather than tightening it: the default already grants writes to the OS temp root
 (`exclude_tmpdir_env_var`, `exclude_slash_tmp`) are deliberately **not** pinned — their default
 (`false`) is the widest state, so the config file can only *narrow* them, which is the operator's
 own prerogative (an operator who sets one merely denies plugin-launched shell commands the
-matching temp root). The default temp-root grant itself — and the surface text it contradicts —
-is tracked as #523. Second, the pin binds the *config* layer only: the `--add-dir` **flag** layer
+matching temp root). The default temp-root grant is disclosed across the propose-tier surface
+itself (#523): the worktree does not bound Codex's writes, the tool descriptions and docs say
+so, and the delegate tools advertise `destructiveHint: true` because a task can overwrite
+pre-existing files under those roots. Second, the pin binds the *config* layer only: the `--add-dir` **flag** layer
 outranks it (verified in the same probes), which is why `--add-dir` stays reserved for
 plugin-owned use and no model-bearing call sends it today (see the builder's note in
 `codex.py`). Upstream completeness — that no *new* `sandbox_workspace_write` key has appeared
