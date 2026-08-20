@@ -1,5 +1,5 @@
 {
-  "result_format": 9,
+  "result_format": 10,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -1655,6 +1655,11 @@
               "default": null,
               "title": "Field"
             },
+            "field_withheld": {
+              "default": false,
+              "title": "Field Withheld",
+              "type": "boolean"
+            },
             "fields": {
               "anyOf": [
                 {
@@ -1903,6 +1908,11 @@
             "field": {
               "title": "Field",
               "type": "string"
+            },
+            "field_withheld": {
+              "default": false,
+              "title": "Field Withheld",
+              "type": "boolean"
             },
             "reason": {
               "title": "Reason",

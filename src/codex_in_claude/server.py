@@ -371,11 +371,41 @@ _MAX_ARG_FIELD_LEN = 128
 _TOOL_POSTURE: dict[str, tuple[str, str]] = {}
 
 
+# The stand-in emitted instead of a caller-supplied argument NAME that carries a control
+# character (#529). An unknown key is rejected *because* it is unknown, so there is no parameter
+# to hang a `pattern` on the way `field_policy.REJECT_PARAMS` does; and the name can be neither
+# echoed (caller-controlled) nor stripped (stripping an identifier corrupts it into a different
+# one). It is therefore withheld. The marker is not reserved — a caller may legitimately send an
+# argument named `<withheld>` — so it is meaningful only together with `field_withheld: true`,
+# which is the machine discriminator a client branches on.
+_WITHHELD_FIELD = "<withheld>"
+
+
+def _loc_is_withheld(loc: tuple[object, ...]) -> bool:
+    """True when this location must not be echoed back to the caller.
+
+    Checked on the RAW components, before `_format_loc` joins and truncates them: a control
+    character past the length bound would otherwise be cut away by the truncation and the
+    remaining prefix reported as if it were clean.
+
+    A location that is exactly the marker is also withheld, so a caller cannot forge an
+    indistinguishable `field_withheld: false` report by naming an argument `<withheld>`.
+    """
+    for component in loc:
+        if isinstance(component, str) and (
+            appserver._has_control_char(component) or component == _WITHHELD_FIELD
+        ):
+            return True
+    return False
+
+
 def _format_loc(loc: tuple[object, ...]) -> str:
     """Render a Pydantic error location as a stable field path. An integer index is
     appended as ``[i]`` directly onto the preceding component (``paths[0]``, not
     ``paths.[0]``) so the path is a valid accessor and never breaks on a non-string
     location component (#136)."""
+    if _loc_is_withheld(loc):
+        return _WITHHELD_FIELD
     out = ""
     for component in loc:
         if isinstance(component, int):
@@ -514,16 +544,19 @@ def _invalid_arguments_envelope(
                 field=field,
                 reason=str(err.get("msg", ""))[:_MAX_ARG_REASON_LEN],
                 allowed_values=allowed,
+                field_withheld=_loc_is_withheld(loc),
             )
         )
 
     first = items[0]
     shown = f" (showing {len(items)} of {total})" if total > len(items) else ""
     # `first.field` is the CALLER's own argument name. This copy is prose, so it is
-    # sanitized like any other echoed text (#528); the machine copies below
-    # (`details.field`, `invalid_arguments[].field`) keep the exact name, because deleting
-    # characters from an identifier corrupts the value a client uses to correct its call.
-    # Validating or rejecting those is #529.
+    # sanitized like any other echoed text (#528); the machine copies (`details.field`,
+    # `invalid_arguments[].field`) keep the exact name, because deleting characters from an
+    # identifier corrupts the value a client uses to correct its call. A name carrying a
+    # control character never reaches either copy — `_format_loc` has already replaced it with
+    # `_WITHHELD_FIELD` and `field_withheld` records that it did (#529) — so this sanitizer now
+    # only ever sees an already-clean name, and is kept as defence in depth.
     safe_field = redaction.sanitize_echo(first.field)
     message = f"{tool_name}: {total} invalid argument(s){shown}: {safe_field} — {first.reason}"
     # Type-aware repair: name the dominant fix, then point at the authoritative schema.
@@ -698,6 +731,11 @@ _diffstat = delegate._diffstat
 # --------------------------------------------------------------------------- #
 # Described param annotations (#93)
 # --------------------------------------------------------------------------- #
+
+# The #529 machine-identifier bound. Same literal as the reasoning-effort pattern below (both
+# come from config, which owns the fact); `field_policy` documents which parameters carry it
+# and why the other family is preserved byte-exact instead.
+_CONTROL_CHAR_FREE_PATTERN = config.CONTROL_CHAR_FREE_PATTERN
 # Each ambiguous param's `description` is defined once here and reused across every tool
 # signature, so the advertised input schema carries the constraint/semantics that
 # previously lived only in docstring prose — and the wording can never drift between
@@ -733,12 +771,13 @@ WorkspaceRootParam = Annotated[
 TranscriptPathParam = Annotated[
     str,
     Field(
+        pattern=_CONTROL_CHAR_FREE_PATTERN,
         description="Absolute path to the Claude Code session transcript (.jsonl) to hand "
         "off to Codex. Must be an existing, non-empty .jsonl file under "
         "~/.claude/projects. Find the current session's transcript as the newest *.jsonl "
         "under ~/.claude/projects/<cwd-slug>/. If that is ambiguous — for example, more than "
         "one recent transcript could be the current session — ask the user which one "
-        "to transfer."
+        "to transfer.",
     ),
 ]
 ExtraContextParam = Annotated[
@@ -749,8 +788,9 @@ ExtraContextParam = Annotated[
 ModelParam = Annotated[
     str | None,
     Field(
+        pattern=_CONTROL_CHAR_FREE_PATTERN,
         description="Override the Codex model slug for this call; defaults to the "
-        "server/Codex default when unset."
+        "server/Codex default when unset. Control characters are rejected, not stripped.",
     ),
 ]
 # Bounds on the reasoning-effort VALUE, enforced at the MCP boundary (like
@@ -779,11 +819,19 @@ TimeoutSecondsParam = Annotated[
 ]
 BaseParam = Annotated[
     str | None,
-    Field(description="Base git ref for scope='branch'; the review covers base...HEAD."),
+    Field(
+        pattern=_CONTROL_CHAR_FREE_PATTERN,
+        description="Base git ref for scope='branch'; the review covers base...HEAD. "
+        "Control characters are rejected, not stripped.",
+    ),
 ]
 CommitParam = Annotated[
     str | None,
-    Field(description="Commit SHA or ref to review for scope='commit'."),
+    Field(
+        pattern=_CONTROL_CHAR_FREE_PATTERN,
+        description="Commit SHA or ref to review for scope='commit'. Control characters "
+        "are rejected, not stripped.",
+    ),
 ]
 PathsParam = Annotated[
     list[str] | None,
@@ -843,8 +891,9 @@ CapabilitiesDetailParam = Annotated[
 JobIdParam = Annotated[
     str,
     Field(
+        pattern=_CONTROL_CHAR_FREE_PATTERN,
         description="The job_id from an *_async call or a sync call's meta.job_id; recover "
-        "lost ids with codex_job_list."
+        "lost ids with codex_job_list. Control characters are rejected, not stripped.",
     ),
 ]
 JobLimitParam = Annotated[
@@ -909,10 +958,11 @@ TaskDryRunParam = Annotated[
 ModelDryRunParam = Annotated[
     str | None,
     Field(
+        pattern=_CONTROL_CHAR_FREE_PATTERN,
         description="The Codex model slug the previewed paid call would use; defaults "
         "to the server default (CODEX_IN_CLAUDE_MODEL) when unset, so the preview "
         "mirrors the paid call's resolution. This dry run does not call Codex or "
-        "validate the model."
+        "validate the model.",
     ),
 ]
 ReasoningEffortDryRunParam = Annotated[

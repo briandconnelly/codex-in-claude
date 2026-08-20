@@ -562,7 +562,11 @@ def test_worker_conformant_invalid_arguments_envelope_passes_through_unchanged(
     assert out["error"]["invalid_arguments"]
     # The fixture's details is make_error's own auto-derived mirror of entry [0] — the
     # exact shape the guard's conformance check requires alongside the non-empty list.
-    assert out["error"]["details"] == {"field": "scope", "reason": "must be a known enum"}
+    assert out["error"]["details"] == {
+        "field": "scope",
+        "reason": "must be a known enum",
+        "field_withheld": False,
+    }
 
 
 @pytest.mark.parametrize(

@@ -214,7 +214,14 @@ def test_serialize_error_omits_absent_allowed_values_on_an_invalid_argument():
     )
     d = serialize_error(env)
     assert d["error"]["invalid_arguments"] == [
-        {"field": "transcript_path", "reason": "not a .jsonl"}
+        {
+            "field": "transcript_path",
+            "reason": "not a .jsonl",
+            # Always present, never omitted: a client must be able to tell "this is the
+            # caller's argument name" from "the name was withheld" without inferring it
+            # from the field's absence (#529).
+            "field_withheld": False,
+        }
     ]
     assert "allowed_values" not in d["error"]["invalid_arguments"][0]
     assert "allowed_values" not in d["error"]["details"]

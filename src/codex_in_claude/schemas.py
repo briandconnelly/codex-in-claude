@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-82"
+FINGERPRINT = "codex-in-claude/0.1/schema-83"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -127,7 +127,7 @@ FINGERPRINT = "codex-in-claude/0.1/schema-82"
 # SAMPLE and not an enumeration of codes, this change would otherwise have moved only the
 # `schemas` view; result_format_snapshot.py therefore now renders a second error envelope
 # using this code, so the sample reflects the persisted-byte consequence.
-RESULT_FORMAT: int = 9
+RESULT_FORMAT: int = 10
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -1002,6 +1002,11 @@ class InvalidArgument(BaseModel):
     field: str  # the offending argument name (accessor path for nested locations)
     reason: str  # the validator's human-readable message (bounded)
     allowed_values: list[str] | None = None  # enum options when the field is a Literal
+    # True when `field` is the withheld-name marker rather than the caller's actual argument
+    # name, because that name carried a control character (#529). The marker alone cannot carry
+    # this fact: it is not a reserved word, so a caller may send an argument genuinely named
+    # `<withheld>`. Branch on this flag, never on the marker string.
+    field_withheld: bool = False
     # The rejected value is deliberately NOT echoed: a Literal/string param accepts
     # arbitrary input, so a value could be a secret, and best-effort redaction cannot
     # reliably catch a plain one. The caller already holds what it sent; field + reason +
@@ -1062,6 +1067,11 @@ class ErrorDetail(BaseModel):
     ) = None
     reason: str | None = None
     allowed_values: list[str] | None = None
+    # True when `field` is the withheld-name marker rather than the caller's actual argument
+    # name, because that name carried a control character (#529). The marker alone cannot carry
+    # this fact: it is not a reserved word, so a caller may send an argument genuinely named
+    # `<withheld>`. Branch on this flag, never on the marker string.
+    field_withheld: bool = False
 
     @model_validator(mode="after")
     def _one_of_field_or_fields(self) -> ErrorDetail:

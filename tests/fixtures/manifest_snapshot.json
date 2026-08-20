@@ -913,7 +913,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-82",
+            "default": "codex-in-claude/0.1/schema-83",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1067,7 +1067,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 22326
+          "size_bytes": 22494
         }
       },
       "mimeType": "application/schema+json",
@@ -1125,6 +1125,11 @@
                 ],
                 "default": null,
                 "title": "Field"
+              },
+              "field_withheld": {
+                "default": false,
+                "title": "Field Withheld",
+                "type": "boolean"
               },
               "fields": {
                 "anyOf": [
@@ -1394,6 +1399,11 @@
                 "title": "Field",
                 "type": "string"
               },
+              "field_withheld": {
+                "default": false,
+                "title": "Field Withheld",
+                "type": "boolean"
+              },
               "reason": {
                 "title": "Reason",
                 "type": "string"
@@ -1472,7 +1482,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-82",
+                "default": "codex-in-claude/0.1/schema-83",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2168,7 +2178,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 22326
+          "size_bytes": 22494
         }
       },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
@@ -2596,7 +2606,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-82",
+            "default": "codex-in-claude/0.1/schema-83",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3279,7 +3289,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-82",
+            "default": "codex-in-claude/0.1/schema-83",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3659,6 +3669,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -3666,7 +3677,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset."
+            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset. Control characters are rejected, not stripped."
           },
           "question": {
             "description": "The question or prompt to send Codex (a different model) for a read-only answer. Must be non-blank: empty or whitespace-only is rejected before any model call.",
@@ -3961,6 +3972,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -3968,7 +3980,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset."
+            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset. Control characters are rejected, not stripped."
           },
           "question": {
             "description": "The question or prompt to send Codex (a different model) for a read-only answer. Must be non-blank: empty or whitespace-only is rejected before any model call.",
@@ -4238,6 +4250,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -4245,7 +4258,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset."
+            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset. Control characters are rejected, not stripped."
           },
           "reasoning_effort": {
             "anyOf": [
@@ -4538,6 +4551,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -4545,7 +4559,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset."
+            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset. Control characters are rejected, not stripped."
           },
           "reasoning_effort": {
             "anyOf": [
@@ -4790,6 +4804,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -5071,6 +5086,7 @@
           "base": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -5078,11 +5094,12 @@
               }
             ],
             "default": null,
-            "description": "Base git ref for scope='branch'; the review covers base...HEAD."
+            "description": "Base git ref for scope='branch'; the review covers base...HEAD. Control characters are rejected, not stripped."
           },
           "commit": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -5090,7 +5107,7 @@
               }
             ],
             "default": null,
-            "description": "Commit SHA or ref to review for scope='commit'."
+            "description": "Commit SHA or ref to review for scope='commit'. Control characters are rejected, not stripped."
           },
           "extra_context": {
             "anyOf": [
@@ -5124,6 +5141,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -5564,7 +5582,8 @@
         "additionalProperties": false,
         "properties": {
           "job_id": {
-            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list.",
+            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list. Control characters are rejected, not stripped.",
+            "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
             "type": "string"
           },
           "workspace_root": {
@@ -5806,7 +5825,8 @@
             "type": "string"
           },
           "job_id": {
-            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list.",
+            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list. Control characters are rejected, not stripped.",
+            "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
             "type": "string"
           },
           "workspace_root": {
@@ -6139,7 +6159,8 @@
             "type": "string"
           },
           "job_id": {
-            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list.",
+            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list. Control characters are rejected, not stripped.",
+            "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
             "type": "string"
           },
           "workspace_root": {
@@ -6232,7 +6253,8 @@
         "additionalProperties": false,
         "properties": {
           "job_id": {
-            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list.",
+            "description": "The job_id from an *_async call or a sync call's meta.job_id; recover lost ids with codex_job_list. Control characters are rejected, not stripped.",
+            "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
             "type": "string"
           },
           "workspace_root": {
@@ -6637,6 +6659,7 @@
           "base": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -6644,11 +6667,12 @@
               }
             ],
             "default": null,
-            "description": "Base git ref for scope='branch'; the review covers base...HEAD."
+            "description": "Base git ref for scope='branch'; the review covers base...HEAD. Control characters are rejected, not stripped."
           },
           "commit": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -6656,7 +6680,7 @@
               }
             ],
             "default": null,
-            "description": "Commit SHA or ref to review for scope='commit'."
+            "description": "Commit SHA or ref to review for scope='commit'. Control characters are rejected, not stripped."
           },
           "detail": {
             "default": "summary",
@@ -6713,6 +6737,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -6720,7 +6745,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset."
+            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset. Control characters are rejected, not stripped."
           },
           "paths": {
             "anyOf": [
@@ -7113,6 +7138,7 @@
           "base": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -7120,11 +7146,12 @@
               }
             ],
             "default": null,
-            "description": "Base git ref for scope='branch'; the review covers base...HEAD."
+            "description": "Base git ref for scope='branch'; the review covers base...HEAD. Control characters are rejected, not stripped."
           },
           "commit": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -7132,7 +7159,7 @@
               }
             ],
             "default": null,
-            "description": "Commit SHA or ref to review for scope='commit'."
+            "description": "Commit SHA or ref to review for scope='commit'. Control characters are rejected, not stripped."
           },
           "extra_context": {
             "anyOf": [
@@ -7180,6 +7207,7 @@
           "model": {
             "anyOf": [
               {
+                "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
                 "type": "string"
               },
               {
@@ -7187,7 +7215,7 @@
               }
             ],
             "default": null,
-            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset."
+            "description": "Override the Codex model slug for this call; defaults to the server/Codex default when unset. Control characters are rejected, not stripped."
           },
           "paths": {
             "anyOf": [
@@ -7619,6 +7647,7 @@
         "properties": {
           "transcript_path": {
             "description": "Absolute path to the Claude Code session transcript (.jsonl) to hand off to Codex. Must be an existing, non-empty .jsonl file under ~/.claude/projects. Find the current session's transcript as the newest *.jsonl under ~/.claude/projects/<cwd-slug>/. If that is ambiguous — for example, more than one recent transcript could be the current session — ask the user which one to transfer.",
+            "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]*$",
             "type": "string"
           },
           "workspace_root": {

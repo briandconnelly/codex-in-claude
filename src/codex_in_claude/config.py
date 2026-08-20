@@ -100,6 +100,11 @@ def _env_int(name: str, default: int) -> int:
 # C1 block (U+0080-U+009F) alike; "surrogate" is category Cs (U+D800-U+DFFF). Real
 # efforts are ≤ ~7 chars; 128 is generous headroom.
 REASONING_EFFORT_MAX_LENGTH = 128
+# The advertised JSON-Schema `pattern` for a string that must carry no Unicode Cc code point.
+# One home for that fact: the reasoning-effort bound below and the #529 machine-identifier
+# parameters (`field_policy.REJECT_PARAMS`) are the same requirement, so they share the literal
+# rather than each spelling it out.
+#
 # ECMA-safe for the advertised JSON-Schema `pattern` (no \Z, which ECMA lacks).
 # Deliberately does NOT name the surrogate range: under a non-`u`-flag ECMA engine a
 # [\uD800-\uDFFF] class also matches the code UNITS of astral characters — legitimate
@@ -107,7 +112,8 @@ REASONING_EFFORT_MAX_LENGTH = 128
 # A compliant UTF-8 JSON transport cannot deliver an unpaired surrogate anyway; the
 # character-wise check below closes the residual (env defaults, in-process calls,
 # lenient parsers).
-REASONING_EFFORT_VALUE_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
+CONTROL_CHAR_FREE_PATTERN = r"^[^\x00-\x1F\x7F-\x9F]*$"
+REASONING_EFFORT_VALUE_PATTERN = CONTROL_CHAR_FREE_PATTERN
 
 
 def reasoning_effort_shape_error(value: str) -> str | None:

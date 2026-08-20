@@ -7,6 +7,44 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Machine-readable identifier fields validate control characters instead of echoing or
+  stripping them.** #528 deletes every Unicode `Cc` code point from echoed prose. That remedy is
+  wrong for a machine field, and the bug was live: a `job_id` of `abc<BEL><ESC>[31mdef` came back
+  as ``No job 'abc[31mdef'`` — the delete removed `ESC` and left the literal text `[31m`, naming
+  an id the caller never sent. A `repair.arguments` value is fed straight back into a follow-up
+  call, so a corrupted identifier that still looks well-formed is worse than a rejected one.
+
+  Fields now split by **who can fix the value**, not by where it came from. A caller-supplied
+  input the caller can correct is **rejected** at the MCP boundary: `job_id`, `base`, `commit`,
+  `model`, and `transcript_path` advertise `config.CONTROL_CHAR_FREE_PATTERN` in their own
+  inputSchema, so the call is refused before the handler runs, at zero spend, reporting the
+  static parameter NAME and never the value. This follows `reasoning_effort`, which already
+  worked this way. A value that IS or derives from a real filesystem or model identity —
+  `cwd`, `candidate_roots`, `Finding.file`, `session_id`, `source_path` — is **preserved
+  byte-exact**, because POSIX permits a control character in a filename, so such a value may be
+  entirely correct; a `repair.arguments.workspace_root` naming such a repository still round-trips.
+
+  An unknown ARGUMENT NAME is the one site no schema can cover, since it is rejected precisely
+  because it is unknown. Such a name is now **withheld** rather than echoed or stripped:
+  `details.field` and `invalid_arguments[].field` carry a fixed marker plus a new
+  `field_withheld: true`. The flag is the machine discriminator — the marker is not a reserved
+  word, so a caller may genuinely send an argument named `<withheld>`. Detection runs on the raw
+  location components, before the length bound truncates, so a control character past the bound
+  cannot be cut away and the remainder reported as clean.
+
+  Three corrections to the issue's own scope came out of verifying it. `error.resource_uri` was
+  listed as affected but is not: `ReadResourceRequestParams.uri` is a pydantic `AnyUrl`, which
+  percent-encodes any raw `Cc` before the field is populated. `meta.base`, `meta.commit`, and
+  `meta.model` were affected and were NOT listed. And dropping a control-bearing client MCP root —
+  an early candidate remedy — would have been unsafe: `pontonier.core.workspace.resolve` selects
+  `norm_roots[0]`, so discarding one silently promotes the next root or the server cwd and
+  retargets a PAID call at the wrong repository. No root is dropped.
+
+  **Fingerprint `schema-82` → `schema-83`**, and `RESULT_FORMAT` 9 → 10: `InvalidArgument` and
+  `ErrorDetail` are closed schemas (`extra="forbid"`), so an older reader would reject a stored
+  envelope carrying `field_withheld`. Breaking: five parameters narrow their accepted value set.
+  (#529)
+
 - **Control characters are stripped from every echoed diagnostic, not just the two spans a
   `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
   key and file path; every other path that quotes foreign text into an envelope still had the gap

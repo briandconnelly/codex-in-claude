@@ -82,6 +82,7 @@ def test_gitdiff_error_invalid_untracked_carries_the_per_argument_list():
             "field": "untracked",
             "reason": "untracked must be one of 'exclude', 'explicit_only', 'include'.",
             "allowed_values": ["explicit_only", "include", "exclude"],
+            "field_withheld": False,
         }
     ]
     assert err["details"] == err["invalid_arguments"][0]

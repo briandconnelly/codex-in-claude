@@ -2621,7 +2621,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-82"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-83"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6552,7 +6552,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-82")
+    assert result["fingerprint"].endswith("schema-83")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -6603,10 +6603,16 @@ async def test_transfer_invalid_path_carries_the_per_argument_list(monkeypatch):
     _patch_validation(monkeypatch, realpath=None, reason=_TRANSCRIPT_REASON)
     result = await server.codex_transfer(transcript_path="/x.txt")
     err = result["error"]
-    assert err["invalid_arguments"] == [{"field": "transcript_path", "reason": _TRANSCRIPT_REASON}]
+    assert err["invalid_arguments"] == [
+        {"field": "transcript_path", "reason": _TRANSCRIPT_REASON, "field_withheld": False}
+    ]
     # `details` mirrors the first entry, and the message states the same reason, so the
     # three cannot disagree about why the argument was rejected.
-    assert err["details"] == {"field": "transcript_path", "reason": _TRANSCRIPT_REASON}
+    assert err["details"] == {
+        "field": "transcript_path",
+        "reason": _TRANSCRIPT_REASON,
+        "field_withheld": False,
+    }
     assert err["message"] == _TRANSCRIPT_REASON
     # A path is not an enum: absent from the wire dict, not present-and-null (§8).
     assert "allowed_values" not in err["invalid_arguments"][0]
@@ -8939,7 +8945,9 @@ async def test_blank_input_envelope_mirrors_boundary_shape(
     res = await getattr(server, tool)("   ", workspace_root=str(tmp_path))
     err = res["error"]
     assert err["code"] == "invalid_arguments"
-    assert err["invalid_arguments"] == [{"field": field, "reason": err["details"]["reason"]}]
+    assert err["invalid_arguments"] == [
+        {"field": field, "reason": err["details"]["reason"], "field_withheld": False}
+    ]
     assert err["details"]["field"] == field
     assert err["repair"]["tool"] == tool
     assert err["repair"]["next_step"] == "correct_arguments"
@@ -9748,11 +9756,14 @@ def test_stderr_tail_description_matches_what_the_code_actually_does():
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in dirty.replace("\n", ""))
 
 
-def test_invalid_arguments_message_strips_control_characters_but_field_is_exact():
-    """#528: the caller's own argument name is composed into `error.message`, which is
-    prose. The MACHINE copies (`details.field`, `invalid_arguments[].field`) keep the exact
-    name — deleting characters from an identifier corrupts it, and a client uses that value
-    to correct its call. Validating/rejecting those is #529's half, not this one's."""
+def test_invalid_arguments_control_bearing_name_is_withheld_not_stripped():
+    """#528 sanitized the argument name into `error.message` as prose and left the MACHINE
+    copies exact. #529 supersedes the second half: a name carrying a control character is now
+    WITHHELD from all three carriers rather than echoed exact or stripped.
+
+    Stripping was the failure mode. `ev<ESC>[31mil` stripped to `ev[31mil` — a different,
+    still plausible-looking argument name that the caller never sent, which a client would
+    then use to "correct" its call."""
     out = server._invalid_arguments_envelope(
         "codex_consult",
         param_names={"question"},
@@ -9764,11 +9775,13 @@ def test_invalid_arguments_message_strips_control_characters_but_field_is_exact(
     assert out is not None
     message = out["error"]["message"]
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
-    # The printable payload of the escape survives — that is the documented bound (only the
-    # Cc code point goes), and it is why the machine copy below is the authoritative one.
-    assert "ev[31mil" in message
-    assert out["error"]["details"]["field"] == "ev\x1b[31mil"
-    assert out["error"]["invalid_arguments"][0]["field"] == "ev\x1b[31mil"
+    # Neither the raw name nor a stripped rendering of it reaches any carrier.
+    assert "ev[31mil" not in message
+    assert "ev\x1b[31mil" not in message
+    assert message.count(server._WITHHELD_FIELD) == 1
+    for carrier in (out["error"]["details"], out["error"]["invalid_arguments"][0]):
+        assert carrier["field"] == server._WITHHELD_FIELD
+        assert carrier["field_withheld"] is True
 
 
 async def test_stored_error_replay_sanitizes_repair_alternative_too(

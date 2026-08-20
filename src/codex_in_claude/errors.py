@@ -364,7 +364,12 @@ def make_error(
             )
         first = invalid_arguments[0]
         details = ErrorDetail(
-            field=first.field, reason=first.reason, allowed_values=first.allowed_values
+            field=first.field,
+            reason=first.reason,
+            allowed_values=first.allowed_values,
+            # Mirror the withheld flag too: a `details` that dropped it would report the
+            # marker as if it were the caller's real argument name (#529).
+            field_withheld=first.field_withheld,
         )
     next_step, tool, temp_default, alt_default = _REPAIR_BY_CODE[code]
     if repair_next_step is not None:
