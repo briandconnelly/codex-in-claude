@@ -2621,7 +2621,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-79"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-82"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -3754,13 +3754,16 @@ async def test_job_cancel_is_idempotent_but_not_read_only():
 async def test_async_launchers_are_not_read_only(tool_name):
     """Every *_async launcher creates an observable, mutable, spend-committing job
     record that outlives the response, so none may advertise readOnlyHint — even
-    consult/review whose underlying run is read-only (issue #138)."""
+    consult/review whose underlying run is read-only (issue #138). destructiveHint
+    diverges by tier: delegate_async is destructive (temp-root grant, #523 — see
+    test_delegate_tools_declare_destructive_writes); consult/review job records are
+    additive."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
     assert ann.readOnlyHint is False
     assert ann.idempotentHint is False
     assert ann.openWorldHint is True
-    assert ann.destructiveHint is False
+    assert ann.destructiveHint is (tool_name == "codex_delegate_async")
 
 
 @pytest.mark.parametrize(
@@ -6549,7 +6552,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-79")
+    assert result["fingerprint"].endswith("schema-82")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -9455,3 +9458,469 @@ def test_preview_scope_fact_survives_every_capabilities_detail_mode():
         payload = server.codex_capabilities(detail=detail)
         joined = " ".join(payload["negative_scope"])
         assert _preview_scope_disclosed(joined), detail
+
+
+# --- #523 write-scope guards -------------------------------------------------------
+# The propose tier's surface promised "writes only inside a throwaway worktree", but
+# codex's workspace-write sandbox grants the OS temp roots (/tmp and $TMPDIR) by
+# default (verified live, on-disk state judged, positive and negative controls; #523).
+# Same architecture as the #509 read-scope guards above: exact containment of the
+# canonical constant on every carrier, a legacy-clause sweep, a contradiction matcher
+# for paraphrased re-inversions, and guard-the-guard controls proving each matcher can
+# fail.
+
+_WRITE_SCOPE_TOOLS = ("codex_delegate", "codex_delegate_async")
+
+# The bridge-owned persistence half (the CLI-owned grant lives in
+# cli_contract.WORKSPACE_WRITE_SCOPE_FACT): temp-root writes outlive the run and never
+# reach the reviewable diff. Pinned as exact containment on the delegate carriers.
+_TEMP_PERSISTENCE_CLAUSE = "neither captured in the returned diff nor cleaned up"
+
+
+def _write_scope_disclosed(text: str) -> bool:
+    return _normalize(cli_contract.WORKSPACE_WRITE_SCOPE_FACT).lower() in _normalize(text).lower()
+
+
+# Matches the affirmative shapes an exclusivity claim takes, with a bounded gap so the
+# worktree is actually named as the bound. Deliberately NOT a blanket `write.*worktree`
+# pattern: WORKSPACE_WRITE_SCOPE_FACT itself says "the worktree does not bound Codex's
+# writes", and true sentences ("never edits your working tree", "not applied to your
+# working tree") name writes near a tree without asserting containment.
+_CONTRADICTS_WRITE_SCOPE = re.compile(
+    r"writes?\s+only\s+inside|only\s+inside\s+a\s+throwaway"
+    r"|worktree,?\s+which\s+bounds|worktree\s+bounds\s+what\b[^.]{0,40}\bwrite"
+    r"|writes?\s+(?:stay|stays|are\s+isolated)\b[^.]{0,50}\bworktree"
+    r"|writes?\b[^.]{0,30}\b(?:confined|limited|restricted)\s+to\b[^.]{0,40}\bworktree",
+    re.IGNORECASE,
+)
+
+_LEGACY_EXCLUSIVE_WRITE_CLAUSES = (
+    "writes only inside a throwaway worktree",
+    "but only inside a throwaway worktree",
+    "the worktree bounds what codex may write",
+    "worktree, which bounds what it may write",
+    "the throwaway worktree bounds what codex may write",
+    "any file writes stay inside a throwaway worktree",
+)
+
+
+def _runtime_write_scope_carriers() -> dict[str, str]:
+    """Every runtime string that must carry the write-scope fact.
+
+    Runtime values, not source files, for the same reason as the read-scope helper:
+    this module's own guard-the-guard fixtures quote the pre-fix wording verbatim.
+    """
+    caps = server.codex_capabilities(detail="full")
+    carriers: dict[str, str] = {"negative_scope": " ".join(caps["negative_scope"])}
+    for tool in caps["tool_details"]:
+        if tool["name"] in _WRITE_SCOPE_TOOLS:
+            carriers[f"returns:{tool['name']}"] = tool["returns"]
+    for name in _WRITE_SCOPE_TOOLS:
+        carriers[f"docstring:{name}"] = getattr(server, name).__doc__ or ""
+    return carriers
+
+
+def test_write_scope_fact_reaches_every_delegate_carrier():
+    """Both delegate descriptions, their capabilities `returns`, and negative_scope
+    must carry cli_contract.WORKSPACE_WRITE_SCOPE_FACT verbatim (#523)."""
+    for label, text in _runtime_write_scope_carriers().items():
+        assert _write_scope_disclosed(text), f"{label} does not carry the write-scope fact"
+
+
+def test_delegate_carriers_state_temp_root_persistence():
+    """Temp-root writes outlive the run and never reach the diff — EVERY write-scope
+    carrier must say so, or "reviewable diff" reads as a full account of the run's
+    side effects (#523). The capabilities `returns` entries are included because a
+    caller reading only the capabilities inventory would otherwise get the grant
+    without its key implication (Copilot review on #526)."""
+    for label, text in _runtime_write_scope_carriers().items():
+        assert _TEMP_PERSISTENCE_CLAUSE in _normalize(text).lower(), label
+
+
+def test_no_runtime_carrier_claims_worktree_bounds_writes(monkeypatch, clean_env):
+    """The exclusivity claims #523 removed must not come back — beside the fact or
+    instead of it. Sweeps every read-scope carrier too: those strings all describe the
+    same runs, and one of them re-asserting the bound would undo the correction."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (True, "auth (ChatGPT)."))
+    caveat = server.codex_status()["caveat"]
+    swept = {**_runtime_read_scope_carriers(caveat), **_runtime_write_scope_carriers()}
+    offenders = []
+    for label, text in swept.items():
+        low = _normalize(text).lower()
+        for clause in _LEGACY_EXCLUSIVE_WRITE_CLAUSES:
+            if clause in low:
+                offenders.append(f"{label}: {clause!r}")
+        contradiction = _CONTRADICTS_WRITE_SCOPE.search(low)
+        if contradiction:
+            offenders.append(f"{label}: contradiction {contradiction.group(0)!r}")
+    assert not offenders, (
+        "these carriers still present the worktree as bounding Codex's writes (#523): "
+        + "; ".join(offenders)
+    )
+
+
+def test_meta_tier_and_sandbox_descriptions_state_temp_root_grant():
+    """The two schema fields that name the propose tier's write scope carry a
+    short-form disclosure rather than the whole fact (the param-side pattern from
+    #509): each must name the OS temp roots and neither may assert the old bound."""
+    from codex_in_claude.schemas import Meta
+
+    for field in ("tier", "sandbox"):
+        desc = Meta.model_fields[field].description or ""
+        low = _normalize(desc).lower()
+        assert "os temp roots" in low, f"Meta.{field} never names the temp-root grant"
+        assert _CONTRADICTS_WRITE_SCOPE.search(low) is None, f"Meta.{field}: {desc!r}"
+        for clause in _LEGACY_EXCLUSIVE_WRITE_CLAUSES:
+            assert clause not in low, f"Meta.{field}: {clause!r}"
+
+
+def test_annotations_reading_states_the_destructive_hint_split():
+    """The agent-visible annotations_reading judgment must cover destructiveHint too:
+    delegate is destructive because of the temp-root grant, consult/review are not
+    (#523)."""
+    from codex_in_claude.schemas import CapabilitiesResult
+
+    text = _normalize(CapabilitiesResult.model_fields["annotations_reading"].default).lower()
+    assert "destructivehint" in text
+    assert "temp root" in text or "os temp roots" in text
+    # The field's schema `description` must name both hints too, or the schema docs
+    # contradict the default they describe (Copilot round 2 on #526).
+    desc = _normalize(CapabilitiesResult.model_fields["annotations_reading"].description).lower()
+    assert "destructivehint" in desc and "readonlyhint" in desc
+
+
+def test_write_scope_matcher_positive_and_negative_controls():
+    """Guard the guard: containment, contradiction, and legacy matchers must each be
+    able to fail — on the pre-#523 wording above all."""
+    fact = cli_contract.WORKSPACE_WRITE_SCOPE_FACT
+
+    # Positive: canonical text, and the shapes real carriers deliver it in.
+    assert _write_scope_disclosed(fact)
+    assert _write_scope_disclosed(fact.lower())
+    wrapped = "    " + fact.replace(" ", "\n    ", 3) + "\n"
+    assert _write_scope_disclosed(wrapped), "line-wrapped docstring copy must still match"
+    backticked = fact.replace("/tmp", "`/tmp`").replace("$TMPDIR", "`$TMPDIR`")
+    assert _write_scope_disclosed(backticked), "backticked prose copy must still match"
+
+    # Negative: the empty carrier and the inversion.
+    assert _write_scope_disclosed("") is False
+    inverted = fact.replace("does not bound", "bounds")
+    assert _write_scope_disclosed(inverted) is False, (
+        "the inversion must fail — exact containment, not word presence"
+    )
+
+    # The corrected fact must not trip the contradiction matcher protecting it...
+    assert _CONTRADICTS_WRITE_SCOPE.search(fact.lower()) is None
+    # ...and every pre-fix carrier sentence must trip a matcher.
+    for pre_fix in (
+        "propose (writes only inside a throwaway worktree)",
+        "Codex edits files with workspace-write, but only inside a throwaway worktree",
+        "the worktree, which bounds what it may WRITE, not what it may read",
+        "The throwaway worktree bounds what Codex may WRITE, not what it may read",
+        "any file writes stay inside a throwaway worktree",
+        "Writes are isolated. codex_delegate runs Codex with workspace-write but only "
+        "inside a throwaway git worktree",
+    ):
+        low = _normalize(pre_fix).lower()
+        assert _CONTRADICTS_WRITE_SCOPE.search(low) or any(
+            clause in low for clause in _LEGACY_EXCLUSIVE_WRITE_CLAUSES
+        ), pre_fix
+    # True sentences that name writes near a tree must NOT trip it.
+    for ok in (
+        "codex_delegate never edits your working tree — it returns a reviewable diff",
+        "a reviewable diff that is NOT applied to your tree",
+        "The worktree does not bound Codex's writes.",
+        "The sandbox bounds writes, not reads, so no choice of workspace is a read boundary.",
+    ):
+        assert _CONTRADICTS_WRITE_SCOPE.search(_normalize(ok).lower()) is None, ok
+
+
+@pytest.mark.parametrize("tool_name", ["codex_delegate", "codex_delegate_async"])
+async def test_delegate_tools_declare_destructive_writes(tool_name):
+    """MCP defines destructiveHint:false as "performs only additive updates". A
+    delegated task can overwrite or delete pre-existing files under /tmp and $TMPDIR
+    (the sandbox's default temp-root grant, #523), so the delegate tools must declare
+    destructiveHint:true. Consult/review keep false below: their Codex run is
+    read-only and the job record they create is additive."""
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    ann = tools[tool_name].annotations
+    assert ann.readOnlyHint is False
+    assert ann.destructiveHint is True
+    assert ann.idempotentHint is False
+    assert ann.openWorldHint is True
+
+
+async def test_worktree_error_message_strips_control_characters(monkeypatch, clean_env, tmp_path):
+    """#528, the shape a `redact_text` sweep misses: a pontonier `WorktreeError` reaches the
+    envelope as bare `str(exc)[:300]`, with no sanitizing pass at this end at all.
+
+    Upstream builds those messages from git's stderr through `sanitize_prose` — redaction
+    and relativization, but no control-character stripping — so an escape sequence in git's
+    output rides straight through. Whatever upstream does at its own raise sites, text this
+    server puts in an envelope is sanitized by this server.
+    """
+
+    def boom(*a, **k):
+        raise server.worktree.WorktreeError("git failed \x1b[31mRED\x1b[0m at step\x07 2")
+
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+    message = res["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    assert "RED" in message  # the actionable text survives; only the escapes go
+
+
+async def test_workspace_error_message_strips_control_characters(clean_env, tmp_path):
+    """#528: `error_detail` quotes the caller's own workspace_root and filesystem text
+    back into the message. `details.field` stays a machine field and is not mutated (#529)."""
+    res = await server.codex_consult("hi", workspace_root="/definitely-missing/evil\x1b[31m")
+    assert res["ok"] is False
+    message = res["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    assert "evil" in message  # the actionable path text survives
+
+
+async def test_stored_error_replay_sanitizes_every_code_not_just_internal_error(
+    monkeypatch, clean_env, tmp_path
+):
+    """#528 regression: the boundary pass was scoped to `internal_error`, so a record
+    written by a pre-#528 worker replayed a DOMAIN error with its control characters intact
+    for the whole TTL after the upgrade (a day, by default).
+
+    It has to stay the full strip-then-redact pass: the stored text was already redacted at
+    write time, so a strip alone would be the redact-then-strip ordering and could
+    reassemble a control-split secret that write-time redaction missed.
+    """
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    secret = "sk-ant-api03-" + "A" * 40
+    stored = _serialize_error(
+        _ErrorResult(
+            error=_make_error(
+                "nonzero_exit",
+                "codex exited 1: bad \x1b[31mRED\x1b[0m\x07 sk-\x01ant-api03-" + "A" * 40,
+            ),
+            meta=_meta_for(tmp_path),
+        )
+    )
+    stored["meta"] = _meta_for(tmp_path).model_dump(mode="json")
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "nonzero_exit"  # a DOMAIN error, not internal_error
+    message = res["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    # The split secret is rejoined by the strip and then caught by the redactor.
+    assert "A" * 40 not in message, repr(message)
+    assert secret not in message
+
+
+def test_stderr_tail_description_matches_what_the_code_actually_does():
+    """The advertised guarantee is checked against the implementation, not just written.
+
+    The description said "removes every Unicode Cc code point" while the prose sanitizer
+    deliberately KEEPS line feeds — and LF is Cc. A false guarantee in the discovery
+    surface is worse than a weaker true one, because clients cache it by fingerprint.
+    """
+    from codex_in_claude import appserver as _appserver
+    from codex_in_claude.schemas import ErrorInfo as _ErrorInfo
+
+    description = _ErrorInfo.model_fields["app_server_stderr_tail"].description or ""
+    # Case 1: an untouched multi-line tail keeps its line structure.
+    kept = _appserver._display_stderr_tail("first line\nsecond line") or ""
+    assert "\n" in kept
+    # Case 2: a tail whose redaction interacts with a line boundary comes back COLLAPSED.
+    # The description said LF "is kept", full stop, which was false for this input — the
+    # second wrong version of this same guarantee, caught by testing the claim rather than
+    # re-reading it.
+    collapsed = _appserver._display_stderr_tail("api_key=" + "A" * 20 + "\n" + "S" * 20) or ""
+    assert "\n" not in collapsed, repr(collapsed)
+    assert "retained when removing it would not change the sanitized result" in description
+    assert "Do not depend on line structure" in description
+    # Everything the description claims IS removed, is removed.
+    dirty = _appserver._display_stderr_tail("a\x1b[31mb\x00c\x7fd\x85e") or ""
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in dirty.replace("\n", ""))
+
+
+def test_invalid_arguments_message_strips_control_characters_but_field_is_exact():
+    """#528: the caller's own argument name is composed into `error.message`, which is
+    prose. The MACHINE copies (`details.field`, `invalid_arguments[].field`) keep the exact
+    name — deleting characters from an identifier corrupts it, and a client uses that value
+    to correct its call. Validating/rejecting those is #529's half, not this one's."""
+    out = server._invalid_arguments_envelope(
+        "codex_consult",
+        param_names={"question"},
+        property_schemas={},
+        errors=[
+            {"type": "unexpected_keyword_argument", "loc": ("ev\x1b[31mil",), "msg": "unexpected"}
+        ],
+    )
+    assert out is not None
+    message = out["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    # The printable payload of the escape survives — that is the documented bound (only the
+    # Cc code point goes), and it is why the machine copy below is the authoritative one.
+    assert "ev[31mil" in message
+    assert out["error"]["details"]["field"] == "ev\x1b[31mil"
+    assert out["error"]["invalid_arguments"][0]["field"] == "ev\x1b[31mil"
+
+
+async def test_stored_error_replay_sanitizes_repair_alternative_too(
+    monkeypatch, clean_env, tmp_path
+):
+    """`repair.alternative` is the other human-readable carrier on an error envelope, and
+    it quotes the same foreign text the message does. Sanitizing only the message left it."""
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(
+            error=_make_error(
+                "extra_args_rejected",
+                "codex rejected an argument (ev\x1b[31mil)",
+                repair_alternative="Fix or remove the offending entry (ev\x1b[31mil).",
+            ),
+            meta=_meta_for(tmp_path),
+        )
+    )
+    stored["meta"] = _meta_for(tmp_path).model_dump(mode="json")
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    alternative = res["error"]["repair"]["alternative"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in alternative), repr(alternative)
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+async def test_stored_success_replay_sanitizes_presentation_fields(
+    monkeypatch, clean_env, tmp_path
+):
+    """Through `codex_job_result`, the shipping replay path — not the helper.
+
+    A record written before this change replays its control characters into the fields a
+    client renders, for the whole TTL after an upgrade. `raw_response` is left as it was
+    stored (the content carrier) and `meta` is untouched.
+    """
+    stored = {
+        "ok": True,
+        "tool": "codex_delegate",
+        "summary": "bad \x1b[31mRED\x1b[0m",
+        "diff": "--- a\n+++ b\n",
+        "findings": [
+            {
+                "title": "t\x07x",
+                "severity": "low",
+                "evidence": "e",
+                "risk": "r",
+                "recommendation": "rec",
+            }
+        ],
+        "assumptions": ["a\x07"],
+        "questions": [],
+        "next_steps": [],
+        "raw_response": {"text": "exact \x1b[31mRED\x1b[0m"},
+        "meta": _meta_for(tmp_path).model_dump(mode="json"),
+    }
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path), detail="full")
+    assert res["ok"] is True, res
+    assert not _has_control(res["summary"]), repr(res["summary"])
+    assert res["findings"], "the finding must survive, or the assertion below is vacuous"
+    assert not _has_control(res["findings"][0]["title"])
+    assert not _has_control(res["assumptions"][0])
+    # The content carrier is replayed as stored.
+    assert res["raw_response"]["text"] == "exact \x1b[31mRED\x1b[0m"
+
+
+def test_stored_success_replay_leaves_a_clean_payload_byte_identical():
+    """Only taken when a control character is actually present, so a clean record is not
+    re-run through the heuristic redactor and cannot be over-redacted."""
+    payload = {"ok": True, "summary": "git failed near ref AKIAIOSFODNN7EXAMPLE"}
+    assert server._sanitize_stored_presentation(dict(payload)) == payload
+
+
+def test_stored_presentation_keys_cover_every_model_supplied_prose_field():
+    """Completeness guard for `_STORED_PRESENTATION_KEYS`, derived from the RESULT MODELS
+    rather than from the tuple it checks.
+
+    The tuple is a literal on purpose — a test that read its expected value from the same
+    tuple could not fail — so this asserts the other direction: every field on every result
+    type is either a rendered prose field the replay pass covers, or named here as a
+    deliberate exclusion. Adding a new prose field to a result model fails this until the
+    replay pass is taught about it. (`assumptions` was missing from the first version.)
+    """
+    from codex_in_claude.schemas import ConsultResult, DelegateResult, ReviewResult
+
+    excluded = {
+        "ok",
+        "tool",
+        "meta",  # envelope/machine metadata, never model prose
+        "raw_response",  # the closest-to-source carrier, not additionally sanitized
+        "diff",  # content, redacted at write time
+        "verdict",
+        "confidence",
+        "review_status",  # closed enums
+        "coverage",  # server-computed status, not model text
+    }
+    for model in (ConsultResult, ReviewResult, DelegateResult):
+        for name in model.model_fields:
+            assert name in server._STORED_PRESENTATION_KEYS or name in excluded, (
+                f"{model.__name__}.{name} is neither covered by the replay presentation "
+                f"pass nor listed as a deliberate exclusion"
+            )
+
+
+async def test_stored_error_replay_sanitizes_app_server_stderr_tail(
+    monkeypatch, clean_env, tmp_path
+):
+    """The third human-readable carrier on an error envelope, and the one with a PUBLISHED
+    guarantee: `app_server_stderr_tail`'s schema description promises no terminal escape
+    sequence survives. A record stored before this change made that promise false for the
+    whole TTL. The controls live ONLY in the tail here, so a pass that looked at
+    `message`/`repair` alone would not save it."""
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    err = _make_error("cli_contract_changed", "clean message with no controls")
+    err.app_server_stderr_tail = "panic \x1b[31mRED\x1b[0m"
+    stored = _serialize_error(_ErrorResult(error=err, meta=_meta_for(tmp_path)))
+    stored["meta"] = _meta_for(tmp_path).model_dump(mode="json")
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    tail = res["error"]["app_server_stderr_tail"]
+    assert not _has_control(tail), repr(tail)
+    assert "RED" in tail  # the diagnostic text survives; only the escapes go
+
+
+async def test_unexpanded_env_placeholder_message_is_sanitized(monkeypatch, clean_env, tmp_path):
+    """Env var NAMES are operator-controlled text composed into a message."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EVIL\x1b[31m", "${UNEXPANDED}")
+    res = await server.codex_consult("hi", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+    assert not _has_control(res["error"]["message"]), repr(res["error"]["message"])
+
+
+async def test_job_not_found_message_sanitizes_the_echoed_job_id(clean_env, tmp_path):
+    """The caller's job_id is echoed so they can see which id missed; that copy is prose.
+    `details.field` names the PARAMETER, not the value, so it is unaffected."""
+    res = await server.codex_job_status(
+        job_id="job-\x1b[2J\x1b[31mFAKE", workspace_root=str(tmp_path)
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_not_found"
+    assert not _has_control(res["error"]["message"]), repr(res["error"]["message"])
+    assert res["error"]["details"]["field"] == "job_id"

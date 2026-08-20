@@ -25,7 +25,7 @@ Codex a question, a diff to review, or a task to implement — and get back a st
 |------|---------------|----------------|---------|
 | `consult` | `read-only` | nothing — text/findings only | questions, second opinions |
 | `review` | `read-only` | nothing — structured findings | reviewing your git changes |
-| `propose` (the `delegate` tools) | `workspace-write` (temp git **worktree**) | isolated worktree → returns a **reviewable diff, never auto-applied** | delegating a coding task |
+| `propose` (the `delegate` tools) | `workspace-write` (temp git **worktree** + OS temp roots) | worktree diff → returns a **reviewable diff, never auto-applied** | delegating a coding task |
 
 Planned later milestone: an explicit opt-in `apply` tier for live-tree edits. It is not exposed by
 the current tool set.
@@ -194,10 +194,12 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
 ## Safety
 
 - `consult` and `review` are strictly read-only.
-- `propose` (the `delegate` tools) lets Codex write, but only inside a throwaway git worktree
-  seeded from `HEAD` plus replayable uncommitted tracked changes. Untracked files are not copied.
-  Your working tree is never modified by the plugin; you review the returned diff and apply it
-  yourself. Delegate's no-network sandbox (`workspace-write`) blocks egress only for commands Codex
+- `propose` (the `delegate` tools) lets Codex write in a throwaway git worktree seeded from
+  `HEAD` plus replayable uncommitted tracked changes. Untracked files are not copied. The
+  worktree does not bound Codex's writes: codex's workspace-write sandbox also lets commands
+  write the OS temp roots (`/tmp` and `$TMPDIR`) by default, and those writes are neither
+  captured in the returned diff nor cleaned up (see `COMPATIBILITY.md`). Your working tree is
+  never modified by the plugin; you review the returned diff and apply it yourself. Delegate's no-network sandbox (`workspace-write`) blocks egress only for commands Codex
   *runs* in the sandbox — it does not mean nothing leaves the machine: the model call still sends
   your task and repo context to OpenAI.
 - **Do not target a workspace containing secrets you cannot disclose.** Supplied prompts and
@@ -230,6 +232,10 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   the same token (the match may have started mid-token). Neither marker is a guarantee either way:
   a free-form secret can contain almost any character, and flagging every unusual neighbor as
   suspect would fire on nearly every redaction and stop meaning anything.
+- Control characters are deleted from the same returned free text, before redaction runs — an
+  escape sequence in an envelope can corrupt or spoof how it renders, and one wedged into a secret
+  would defeat the redactor. `raw_response.text` and machine fields (a review `verdict`, a finding's
+  `file`, an argument name) are deliberately left alone; see [`docs/REFERENCE.md`](docs/REFERENCE.md).
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 

@@ -7,10 +7,10 @@ import tomllib
 
 import anyio
 import pytest
-from pontonier.core import worktree
+from pontonier.core import redaction, worktree
 from pontonier.core.runtime import CommandRun
 
-from codex_in_claude import cli_contract, codex
+from codex_in_claude import cli_contract, codex, config
 from codex_in_claude.preflight import FlagSupport
 
 _ALL_FLAGS = FlagSupport(
@@ -74,6 +74,146 @@ def test_build_exec_command_disables_remote_plugin_every_tier(tmp_path, sandbox,
     assert cmd[cmd.index("--disable") + 1] == cli_contract.REMOTE_PLUGIN_FEATURE
     # It is a plugin-owned flag (before operator extra_args), never gated away.
     assert cli_contract.DISABLE_FEATURE_FLAG in cli_contract.ALWAYS_SEND_FLAGS
+
+
+@pytest.mark.parametrize("isolation", config.VALID_ISOLATIONS)
+@pytest.mark.parametrize("sandbox", cli_contract.VALID_SANDBOXES)
+def test_build_exec_command_pins_network_access_exactly_on_workspace_write(
+    tmp_path, sandbox, isolation
+):
+    # #518: at the default isolation (inherit) codex reads $CODEX_HOME/config.toml, where
+    # `[sandbox_workspace_write] network_access = true` would silently void the advertised
+    # no-network-egress guarantee. The pin closes that channel (and --profile — the `-c`
+    # override outranks both, verified live on 0.148.0) for every workspace-write run.
+    # The expected token is a LITERAL here on purpose: deriving it from the constant the
+    # code reads would make this test unable to catch a wrong constant.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox=sandbox,
+        isolation=isolation,
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.network_access=false"
+    pairs = [i for i in range(len(cmd) - 1) if cmd[i] == "-c" and cmd[i + 1] == pin]
+    if sandbox == "workspace-write":
+        # Exactly one adjacent `-c <pin>` pair: absent breaks the guarantee, duplicated or
+        # mis-paired tokens would corrupt the argv.
+        assert len(pairs) == 1
+    else:
+        assert pin not in cmd
+
+
+def test_build_exec_command_network_pin_ordering_with_other_config_tokens(tmp_path):
+    # #518: the pin is plugin-owned — emitted before operator extra_args — and must not
+    # displace or mis-pair the reasoning-effort `-c` token that shares the same flag.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="high",
+        extra_args=("-c", "model_provider=x"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.network_access=false"
+    assert cmd[cmd.index(pin) - 1] == "-c"
+    effort = 'model_reasoning_effort="high"'
+    assert cmd[cmd.index(effort) - 1] == "-c"
+    assert cmd.index(pin) < cmd.index("model_provider=x")
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+
+
+def test_network_pin_key_constant_matches_codex_config_key():
+    # The cli_contract constant is the single source the builder reads; pin its VALUE
+    # here so a typo'd constant fails loudly instead of drifting into a silent no-op
+    # (codex ignores unknown -c keys).
+    assert (
+        cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY
+        == "sandbox_workspace_write.network_access"
+    )
+
+
+@pytest.mark.parametrize("isolation", config.VALID_ISOLATIONS)
+@pytest.mark.parametrize("sandbox", cli_contract.VALID_SANDBOXES)
+def test_build_exec_command_pins_writable_roots_exactly_on_workspace_write(
+    tmp_path, sandbox, isolation
+):
+    # #520: the filesystem sibling of the #518 network pin. At the default isolation
+    # (inherit) codex reads $CODEX_HOME/config.toml, where `[sandbox_workspace_write]
+    # writable_roots = [...]` would silently widen the delegate sandbox to write outside
+    # the workspace, voiding the advertised writes-stay-in-the-workspace boundary. The
+    # pin restores codex's own default ([]) and closes the config-file and --profile
+    # channels (the `-c` override outranks both, verified live on 0.148.0) for every
+    # workspace-write run. The expected token is a LITERAL here on purpose: deriving it
+    # from the constant the code reads would make this test unable to catch a wrong
+    # constant.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox=sandbox,
+        isolation=isolation,
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.writable_roots=[]"
+    pairs = [i for i in range(len(cmd) - 1) if cmd[i] == "-c" and cmd[i + 1] == pin]
+    if sandbox == "workspace-write":
+        # Exactly one adjacent `-c <pin>` pair: absent breaks the guarantee, duplicated or
+        # mis-paired tokens would corrupt the argv.
+        assert len(pairs) == 1
+    else:
+        assert pin not in cmd
+
+
+def test_build_exec_command_writable_roots_pin_ordering_with_other_config_tokens(tmp_path):
+    # #520: the pin is plugin-owned — emitted before operator extra_args — and must not
+    # displace or mis-pair the network pin or the reasoning-effort `-c` token that share
+    # the same flag.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="high",
+        extra_args=("-c", "model_provider=x"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.writable_roots=[]"
+    assert cmd[cmd.index(pin) - 1] == "-c"
+    net_pin = "sandbox_workspace_write.network_access=false"
+    assert cmd[cmd.index(net_pin) - 1] == "-c"
+    effort = 'model_reasoning_effort="high"'
+    assert cmd[cmd.index(effort) - 1] == "-c"
+    assert cmd.index(pin) < cmd.index("model_provider=x")
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+
+
+def test_writable_roots_pin_key_constant_matches_codex_config_key():
+    # The cli_contract constant is the single source the builder reads; pin its VALUE
+    # here so a typo'd constant fails loudly instead of drifting into a silent no-op
+    # (codex ignores unknown -c keys).
+    assert (
+        cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY
+        == "sandbox_workspace_write.writable_roots"
+    )
+
+
+def test_build_exec_command_add_dir_composes_with_writable_roots_pin(tmp_path):
+    # #520: --add-dir grants ride the FLAG layer, which outranks the `-c` config-layer
+    # pin (verified live on 0.148.0) — so a future add_dirs caller widens the sandbox
+    # DESPITE the pin. Both tokens coexisting in the argv is the documented behavior;
+    # adopting add_dirs on a model-bearing path is a contract change needing its own
+    # surface review (see the builder's add_dirs note).
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        add_dirs=("/extra",),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd[cmd.index("--add-dir") + 1] == "/extra"
+    assert "sandbox_workspace_write.writable_roots=[]" in cmd
 
 
 def test_build_exec_command_disable_precedes_extra_args(tmp_path):
@@ -912,3 +1052,430 @@ async def test_run_codex_exec_surfaces_help_gate_drops_from_the_adapter(monkeypa
         model="gpt-5.6-sol",
     )
     assert result.dropped_flags == ["--model"]
+
+
+# --- strict-config emission (#524) -------------------------------------------------
+def _strict_count(cmd: list[str]) -> int:
+    return cmd.count(cli_contract.STRICT_CONFIG_FLAG)
+
+
+def _dash_c_keys(cmd: list[str]) -> list[str]:
+    """The KEY half of every `-c KEY=VALUE` pair in a built argv."""
+    return [
+        cmd[i + 1].split("=", 1)[0] for i in range(len(cmd) - 1) if cmd[i] in ("-c", "--config")
+    ]
+
+
+@pytest.mark.parametrize("isolation", config.VALID_ISOLATIONS)
+@pytest.mark.parametrize("sandbox", cli_contract.VALID_SANDBOXES)
+@pytest.mark.parametrize("effort", [None, "high"])
+@pytest.mark.parametrize("extra", [(), ("-c", "model_provider=x"), ("--profile", "p")])
+def test_strict_config_emitted_exactly_when_a_config_override_rides(
+    tmp_path, sandbox, isolation, effort, extra
+):
+    # #524: the flag guards the plugin's guarantee-bearing `-c` KEY pins, so it rides
+    # exactly the runs that CARRY a `-c` override — and never an override-free run, where
+    # it would only expose the user's own config to a hard failure for no guarantee.
+    # The expectation is derived from the BUILT argv (does any `-c` pair exist?), not from
+    # a restatement of the emission condition, so a builder that emits the wrong set fails.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox=sandbox,
+        isolation=isolation,
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort=effort,
+        extra_args=extra,
+        flag_support=_ALL_FLAGS,
+    )
+    assert _strict_count(cmd) == (1 if _dash_c_keys(cmd) else 0)
+
+
+def test_strict_config_rides_the_workspace_write_pins(tmp_path):
+    # The delegate tier always carries the two #518/#520 pins, so it always gets the guard.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert _strict_count(cmd) == 1
+    assert set(_dash_c_keys(cmd)) == {
+        "sandbox_workspace_write.network_access",
+        "sandbox_workspace_write.writable_roots",
+    }
+
+
+def test_strict_config_absent_on_the_default_consult_run(tmp_path):
+    # The common read-only consult carries no `-c` at all: no pin to guard, so no new
+    # failure mode for an unrelated unknown key in the user's config.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert _dash_c_keys(cmd) == []
+    assert cli_contract.STRICT_CONFIG_FLAG not in cmd
+
+
+def test_strict_config_rides_an_operator_only_config_override(tmp_path):
+    # An operator `-c` is the only override on this run; the key is still validated, so a
+    # typo'd operator key fails loudly instead of being silently ignored.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="ignore-config",
+        output_last_message_path=str(tmp_path / "l"),
+        extra_args=("--config", "model_provider=x"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert _strict_count(cmd) == 1
+
+
+def test_strict_config_is_plugin_owned_and_precedes_extra_args(tmp_path):
+    # Plugin-owned tokens come before operator passthrough, and the flag is never gated
+    # away by the --help parse (ALWAYS_SEND).
+    cmd, dropped = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        extra_args=("-c", "model_provider=x"),
+        flag_support=_NO_MODEL,
+    )
+    assert cmd.index(cli_contract.STRICT_CONFIG_FLAG) < cmd.index("model_provider=x")
+    assert cli_contract.STRICT_CONFIG_FLAG not in dropped
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+
+
+# --- strict-config failure classification (#524) -----------------------------------
+def _override_stderr(key: str) -> str:
+    return (
+        f"Error loading config.toml: unknown configuration field `{key}` in -c/--config override\n"
+    )
+
+
+def _file_stderr(key: str, path: str = "/home/u/.codex/config.toml", line: int = 1) -> str:
+    return (
+        "Error loading config.toml:\n"
+        f"{path}:{line}:1: unknown configuration field `{key}`\n"
+        "  |\n"
+        f"{line} | {key} = true\n"
+    )
+
+
+def _run(stderr: str = "", stdout: str = "", exit_code: int = 1) -> CommandRun:
+    return CommandRun(stdout, stderr, exit_code, 1, False)
+
+
+@pytest.mark.parametrize("key", sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS))
+def test_strict_rejection_of_a_plugin_pin_is_contract_drift(key, monkeypatch):
+    # THE point of #524: a silent upstream rename of a guarantee-bearing pin key becomes a
+    # loud, zero-spend cli_contract_changed instead of a quietly reopened guarantee.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_override_stderr(key)))
+    assert err.code == "cli_contract_changed"
+
+
+@pytest.mark.parametrize("key", sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS))
+def test_plugin_pin_drift_is_not_stolen_by_an_operator_config_passthrough(key, monkeypatch):
+    # The misattribution hazard: every operator `-c` entry records the SHARED `-c`
+    # descriptor, which appears in codex's own rejection text ("in -c/--config override").
+    # Attribution keys on the rejected KEY, so an unrelated operator entry cannot claim a
+    # plugin pin's drift and send the user to fix the wrong configuration.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=x")
+    err = codex.classify_failure(_run(stderr=_override_stderr(key)))
+    assert err.code == "cli_contract_changed"
+
+
+def test_strict_rejection_of_an_operator_key_is_attributed_to_the_operator(monkeypatch):
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=x")
+    err = codex.classify_failure(_run(stderr=_override_stderr("model_provider")))
+    assert err.code == "extra_args_rejected"
+    assert "model_provider" in (err.message or "")
+
+
+def test_strict_rejection_of_an_unattributable_override_stays_fail_loud(monkeypatch):
+    # Neither a known plugin pin nor an operator key: report drift rather than guess.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_override_stderr("some.mystery.key")))
+    assert err.code == "cli_contract_changed"
+
+
+def test_strict_rejection_in_the_user_config_file_is_user_config_rejected(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_file_stderr("junk_key", line=7)))
+    assert err.code == "user_config_rejected"
+    assert err.temporary is False
+    assert err.repair is not None
+    assert err.repair.next_step == "correct_config"
+    # The message must locate the offending key — that is the whole actionable content.
+    assert "junk_key" in (err.message or "")
+    assert "/home/u/.codex/config.toml" in (err.message or "")
+    assert ":7" in (err.message or "")
+
+
+def test_user_config_rejection_names_a_profile_table_key(monkeypatch):
+    # Verified live: an unknown key in an UNSELECTED [profiles.X] table fails the run too,
+    # and is reported with its full dotted path.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_file_stderr("profiles.myprof.junk_key", line=2)))
+    assert err.code == "user_config_rejected"
+    assert "profiles.myprof.junk_key" in (err.message or "")
+
+
+def test_strict_rejection_in_a_selected_operator_profile_file_is_the_operators(monkeypatch):
+    # `--profile NAME` (an operator passthrough) makes codex load and validate
+    # $CODEX_HOME/NAME.config.toml, so a rejection there is operator config, not the
+    # user's own file.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    err = codex.classify_failure(
+        _run(stderr=_file_stderr("junk_key", path="/home/u/.codex/myprof.config.toml"))
+    )
+    assert err.code == "extra_args_rejected"
+
+
+def test_strict_rejection_beats_the_auth_check(monkeypatch):
+    # Config parsing precedes auth, so this failure is never an auth problem — but the
+    # echoed key and path can carry AUTH_FAILURE_PATTERNS substrings. Ordering protects it.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = _file_stderr("unauthorized_key", path="/home/401/.codex/config.toml")
+    assert cli_contract.is_auth_failure(stderr) is True  # positive control
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+
+
+def test_strict_rejection_beats_a_drift_phrase_inside_the_rejected_key(monkeypatch):
+    # A TOML quoted key may contain a CONTRACT_DRIFT_STDERR_PATTERNS phrase; the anchored
+    # strict grammar classifies it as the user's config, not as a plugin-flag drift.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = _file_stderr("invalid value")
+    assert cli_contract.is_contract_drift(stderr) is True  # positive control
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+
+
+def test_strict_rejection_is_read_from_stderr_only(monkeypatch):
+    # The failure is stderr-only and pre-model (verified: stdout is empty). Restricting
+    # recognition to stderr keeps model-produced text — a last message or an event blob
+    # quoting this grammar — from manufacturing the classification.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    text = _file_stderr("junk_key")
+    assert codex.classify_failure(_run(stdout=text)).code != "user_config_rejected"
+    assert codex.classify_failure(_run(), last_message=text).code != "user_config_rejected"
+    # Positive control: the identical text on STDERR does classify, so the negatives above
+    # measure the stream restriction rather than a recognizer that matches nothing.
+    assert codex.classify_failure(_run(stderr=text)).code == "user_config_rejected"
+
+
+def test_user_config_rejection_redacts_a_secret_in_the_echoed_path(monkeypatch):
+    # The path is untrusted echoed text that reaches an envelope; it goes through the same
+    # redaction every other surfaced failure text does.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    secret = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    stderr = _file_stderr("junk_key", path=f"/tmp/{secret}/c.toml")
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+    assert secret not in (err.message or "")
+
+
+def test_operator_passthrough_can_never_own_a_plugin_pinned_key(monkeypatch):
+    """The coupling that makes override-form attribution safe (#524).
+
+    `_strict_config_error` checks the rejected key against PLUGIN_OWNED_CONFIG_KEYS
+    before asking whether the operator owns it. That check is currently REDUNDANT — the
+    extra-args parser already refuses all three keys (`sandbox` root denial, reserved
+    meta keys), so `owns_config_key` cannot return True for any of them — and a mutation
+    removing it passes every other test here. The redundancy is the point: this test pins
+    the invariant the redundancy rests on, in the module that depends on it, so narrowing
+    that denylist fails HERE instead of silently misattributing a guarantee-bearing pin's
+    drift to the operator.
+    """
+    for key in sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS):
+        monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"-c {key}=x")
+        ea = config.extra_args()
+        assert ea.valid is False, f"{key} must be refused by the extra-args denylist"
+        assert ea.owns_config_key(key) is False
+    # Positive control: an ordinary key IS accepted and owned, so the assertions above
+    # measure the denial rather than a parser that rejects everything.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=x")
+    control = config.extra_args()
+    assert control.valid is True
+    assert control.owns_config_key("model_provider") is True
+
+
+def test_strict_config_not_emitted_for_a_flag_shaped_option_value(tmp_path):
+    """A VALUE that looks like `-c` must not trigger the guard (#524).
+
+    `model` accepts any string, so `model="-c"` puts that token in the argv as the
+    --model VALUE while no config override rides. A membership test over the token list
+    cannot tell a value from an option, and would arm strict validation — exposing the
+    run to an unrelated user-config rejection the documented scope promises it is free of.
+    """
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="-c",
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd[cmd.index("--model") + 1] == "-c"  # the value really is in the argv
+    # No real override rides: none of the pinned keys was appended. (Deliberately not
+    # `_dash_c_keys`, which is the same naive membership scan this test exists to reject —
+    # it reads the --model VALUE as a flag and reports a phantom key.)
+    assert not [
+        t for t in cmd if any(t.startswith(f"{k}=") for k in cli_contract.PLUGIN_OWNED_CONFIG_KEYS)
+    ]
+    assert cli_contract.STRICT_CONFIG_FLAG not in cmd
+    # The same for --config-shaped and for the extra-args side.
+    cmd2, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="--config",
+        extra_args=("--profile", "myprof"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cli_contract.STRICT_CONFIG_FLAG not in cmd2
+
+
+def test_user_config_rejection_strips_control_characters(monkeypatch):
+    """Echoed key/path text is untrusted and must not carry control sequences (#524).
+
+    codex read both off disk — a TOML quoted key and a `$CODEX_HOME` path can hold
+    arbitrary bytes — and the message travels to an agent and a terminal, where an escape
+    sequence can corrupt or spoof rendering. Secret redaction is best-effort and does not
+    address control characters at all, so they are stripped independently.
+    """
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = (
+        "Error loading config.toml:\n"
+        "/home/u/\x1b[31mBOOM\x1b[0m/config.toml:4:1: unknown configuration field `k\x07ey`\n"
+    )
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+    message = err.message or ""
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    # The actionable content survives the stripping: the line number and the printable
+    # remainder of the key are still there.
+    assert ":4" in message
+    assert "key" in message
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "sk-\x01ant-api03-" + "A" * 40,  # control char breaks the redactor's prefix anchor
+        "s\x01k-ant-api03-" + "A" * 40,
+        "sk-ant\x7f-api03-" + "A" * 40,  # DEL, not just C0
+    ],
+)
+def test_safe_echo_strips_control_characters_before_redacting(attack):
+    """Control-char stripping must run BEFORE redaction, never after (#524).
+
+    A secret with an embedded control character does not match the redactor's pattern,
+    so redacting first leaves it intact — and stripping afterwards then REASSEMBLES the
+    contiguous secret in the outgoing message. Stripping first joins the fragments while
+    the redactor can still see them; it cannot split anything, so this order has no
+    mirror-image failure. Verified against the real redactor, which reconstituted the
+    full key in the old order.
+    """
+    secret = "sk-ant-api03-" + "A" * 40
+    out = codex._safe_echo(attack)
+    assert secret not in out, out
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in out)
+    # Positive control: the redactor really does catch this secret once contiguous, so
+    # the assertion above measures the ordering rather than a matcher that never fires.
+    assert secret not in (redaction.redact_text(secret) or "")
+
+
+def test_user_config_rejection_does_not_leak_a_control_split_secret(monkeypatch):
+    """The same ordering defect, end to end through the classifier."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    secret = "sk-ant-api03-" + "A" * 40
+    stderr = _file_stderr("junk_key", path=f"/tmp/sk-\x01ant-api03-{'A' * 40}/config.toml")
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+    assert secret not in (err.message or "")
+
+
+# --- #528: every echoed span goes through the shared echo sanitizer ------------------
+#
+# #524/#527 applied strip-then-redact to the two spans a --strict-config rejection
+# carries. Every OTHER path that echoes foreign text into an envelope had the same gap:
+# escape sequences reached the agent (and often a terminal, where they can recolor,
+# reposition, or erase), and a control character wedged into a secret defeated redaction
+# so the value rode out as plaintext. The ordering now lives upstream in
+# pontonier.core.redaction, so no call site re-derives it.
+
+_ECHO_ATTACKS = ["\x1b[31mRED\x1b[0m", "bell\x07", "wipe\x1b[2K", "del\x7f", "c1\x85"]
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize("attack", _ECHO_ATTACKS)
+def test_nonzero_exit_strips_control_characters_from_echoed_stderr(attack, monkeypatch):
+    """The generic branch echoed codex's stderr with no control-character stripping."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    # Embedded mid-string, not trailing: `str.strip()` already eats a TRAILING NEL, so a
+    # trailing attack would pass without any of this code running.
+    err = codex.classify_failure(_run(stderr=f"boom {attack} and more"))
+    assert err.code == "nonzero_exit"
+    assert not _has_control(err.message or ""), repr(err.message)
+
+
+def test_nonzero_exit_redacts_a_control_split_secret(monkeypatch):
+    """The interaction half: a secret split by a control character matches no pattern, so
+    it survived redaction as plaintext. Stripping first rejoins it where the matcher can
+    still see it."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    secret = "sk-ant-api03-" + "A" * 40
+    err = codex.classify_failure(_run(stderr="sk-\x01ant-api03-" + "A" * 40))
+    message = err.message or ""
+    # Assert the VALUE is gone, not that the contiguous spelling is absent — the attacked
+    # text never contains that spelling, so `secret not in message` passes vacuously.
+    assert "A" * 40 not in message, repr(message)
+    assert secret not in message
+    # Positive control: the redactor really does catch this once contiguous.
+    assert secret not in (redaction.redact_text(secret) or "")
+
+
+@pytest.mark.parametrize("attack", _ECHO_ATTACKS)
+def test_extra_args_rejected_strips_control_characters_from_descriptors(attack, monkeypatch):
+    """Descriptors reach BOTH error.message and repair.alternative, and neither was
+    sanitized: `_safe_token` covers only the unsupported-argument path, while a VALID
+    config key or profile name is recorded raw (#528)."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile ev{attack}il")
+    err = codex.classify_failure(
+        _run(stderr=f"error: unexpected argument '--profile ev{attack}il' found")
+    )
+    assert err.code == "extra_args_rejected"
+    assert not _has_control(err.message or ""), repr(err.message)
+    assert not _has_control((err.repair.alternative if err.repair else "") or "")
+
+
+@pytest.mark.parametrize("name", ["ev\x07il", "p" * 80])
+def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operator(
+    name, monkeypatch
+):
+    """Regression: sanitizing descriptors at CONSTRUCTION broke attribution.
+
+    A descriptor is matched against codex's rejection text, which quotes the operator's
+    name with its raw spelling. Stripping it (or bounding it to 60 chars) made the match
+    fail, so the operator's own bad passthrough came back as `cli_contract_changed` — the
+    fail-loud plugin-drift path, with repair guidance pointing at the wrong thing.
+
+    The rejection here names ONLY the descriptor, with no `--profile` token, so a match
+    can only come from the name itself; including the static flag would let this pass
+    without proving anything about the controlled name.
+    """
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile {name}")
+    err = codex.classify_failure(_run(stderr=f"error: unexpected argument '{name}' found"))
+    assert err.code == "extra_args_rejected"
+    assert not _has_control(err.message or ""), repr(err.message)

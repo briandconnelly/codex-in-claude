@@ -5,8 +5,151 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Control characters are stripped from every echoed diagnostic, not just the two spans a
+  `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
+  key and file path; every other path that quotes foreign text into an envelope still had the gap
+  — the generic `nonzero_exit` branch echoing codex's stderr, the `codex_transfer` diagnostics
+  including `app_server_stderr_tail`, the review path's raw-output preview, stored job-result
+  fragments, exception text, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and refusal
+  messages. Two consequences: an escape sequence reaching a terminal can recolor, reposition, or
+  erase — enough to spoof or hide surrounding output, and the text is attacker-influenceable,
+  since a repository under review can make codex print chosen text — and a control character
+  wedged into a secret defeats the redactor's patterns outright, so the value rides out as
+  plaintext.
+
+  Three findings corrected the issue's own scope while verifying it. `config._safe_token` covered
+  only the unsupported-argument path, so a valid config key or profile name reached both
+  `error.message` and `repair.alternative` raw. `redaction.exc_summary` fed three more sinks that
+  were not in the inventory. And a control character in a printed worktree path defeats
+  `sanitize_prose`'s alias matching, so the dead absolute path survives — a second, independent
+  leak of the #420 guarantee, which no amount of stripping the OUTPUT can fix.
+
+  The mechanism is upstream (`pontonier` 0.6.0: `redaction.sanitize_echo`,
+  `redaction.sanitize_echo_prose`, `worktree.sanitize_echo_prose`), because it is CLI-agnostic and
+  a sibling bridge has byte-identical call sites — see AGENTS.md, Package boundary. What stays
+  here is bridge policy: which spans are echoed, each one's length bound and truncation direction,
+  and which variant a span gets. Single-token spans (a config key, a path, a rejected flag name)
+  use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
+  wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
+
+  The catalog strings `codex_models` reads from `$CODEX_HOME` (`display_name`, `fetched_at`,
+  `client_version`) are covered too — foreign text on a rendered surface, like a config key a
+  rejection echoes. `slug` is left alone: it is the identifier, and it is pattern-validated.
+
+  Replay covers all three human-readable carriers on a stored error — `error.message`,
+  `repair.alternative`, and `app_server_stderr_tail`, the one with a published guarantee —
+  and a stored success's rendered fields, leaving `raw_response`, `diff`, and `meta` alone.
+
+  The success channel is split rather than exempted, and the split is by FIELD, not by
+  channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
+  and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
+  delegate alike — is sanitized. The machine fields are deliberately left alone, because
+  sanitizing them would *repair* malformed values instead of letting them degrade: a
+  `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
+  control character turns it into an affirmative `pass` at `high` confidence. `severity`
+  inverts the same way, and `file` is an identifier a reader uses to locate code. The same
+  reasoning covers `details.field` and resource URIs, whose validate-don't-mutate half is
+  tracked as #529. Where such a value is ALSO composed into a prose message — the caller's
+  argument name, a missing job id — that copy is sanitized while the machine copy is not.
+
+  `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
+  model's output — `redact_text` still runs, and the delegate path also relativizes worktree
+  paths — but this change does not transform it, so its control characters survive and a
+  caller that needs the output as it stood reads it there.
+
+  Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
+  which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
+  error records written before this change, which replayed their control characters for the whole
+  TTL after an upgrade. The replay pass runs the full strip-then-redact, never a strip alone — the
+  stored text was already redacted at write time, so stripping by itself is the redact-then-strip
+  ordering and would reassemble a control-split secret. It is taken only when a control character
+  is actually present, so a clean domain error still passes through verbatim rather than being
+  re-run through the heuristic redactor.
+
+  **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
+  own sanitation policy, and that policy changed. It now states the guarantee precisely — every
+  Unicode `Cc` code point (C0, DEL, C1) removed **except line feed**, which is kept so a
+  multi-line tail stays readable — and states its limits: the text may still contain LF, a line in
+  it can be one the child process chose, and category `Cf` bidi/format controls are not covered.
+  Not breaking: a strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since
+  the serialized shape and accepted types are untouched. Error-message prose changes carry no
+  fingerprint of their own (see AGENTS.md, Versioning).
+
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors are deliberately **not** sanitized where they are
+  built. A descriptor is an identity matched against codex's own rejection text, which quotes the
+  operator's name with its raw spelling; sanitizing or bounding it at construction changed what it
+  matched, so a control-bearing or over-long name stopped matching and the operator's own bad
+  passthrough was misattributed to plugin contract drift. Sanitation happens at emission instead.
+
 ### Changed
 
+- **BREAKING: `codex exec --strict-config` now guards the guarantee-bearing `-c` key pins, and a
+  new `user_config_rejected` error code reports an unknown key in your own Codex config.** codex
+  silently tolerates an unknown config key, so an upstream rename of
+  `sandbox_workspace_write.network_access` (#518), `sandbox_workspace_write.writable_roots` (#520),
+  or `model_reasoning_effort` (#309) would have left the plugin sending a key codex no longer reads
+  — reopening the guarantee with no signal, guarded only by a manual semantic probe. The flag turns
+  that into a zero-spend startup failure (config parsing precedes auth and any model call, verified
+  live on codex-cli 0.148.0). It is `ALWAYS_SEND`-class but **emitted only on runs that carry a
+  `-c` override** — every `workspace-write` run, every effort-carrying run, and any run with an
+  operator `-c` in `CODEX_IN_CLAUDE_EXTRA_ARGS` — because at the default `inherit` isolation the
+  flag also hard-fails on an unknown key anywhere in the user's own config, including tables for
+  profiles the run never selects; a plain read-only consult carries no pin, so sending it there
+  would risk availability while guarding nothing. Classified **breaking**: a previously accepted
+  operator environment (a junk or version-skewed key in `$CODEX_HOME/config.toml`) now hard-fails
+  pin-carrying runs. Classification reads the anchored stderr grammar on **stderr alone** and runs
+  *before* the auth and drift checks, because codex echoes the offending key and path and either
+  can contain a substring those matchers fire on (`401` in a path, `invalid value` in a quoted TOML
+  key). Ownership keys on the rejected KEY, never on the shared `-c` descriptor that appears in
+  codex's own message: a rejected plugin pin is `cli_contract_changed` (the fail-loud drift signal
+  this exists to produce, and unstealable by an unrelated operator `-c` entry), an operator key or
+  an operator `--profile`-selected file is `extra_args_rejected`, and any other config file is the
+  new `user_config_rejected` — permanent, repairing with `correct_config`, naming the file and line
+  to fix and offering `isolation="ignore-config"` only as an explicitly lossy fallback (it drops
+  the user's entire config). Note neither `codex_status` nor a dry run parses Codex config, so
+  neither can predict this failure. Strict validates key **names** only, so a bad
+  `reasoning_effort` VALUE still takes the backend `invalid_reasoning_effort` path unchanged.
+  **Fingerprint `schema-80` → `schema-81`**, and **`RESULT_FORMAT` 8 → 9**: the new `ErrorCode`
+  literal is persisted in job records (`run_delegate`'s envelope is written to `result.json`
+  verbatim), so an older reader's closed schema would reject those bytes and misreport
+  cross-release incompatibility as corruption. Because the result-format snapshot's `serialized`
+  view is a sample rather than an enumeration of codes, it now renders a second error envelope
+  using the new code, so an `ErrorCode` change is visible there and not only in the `schemas` view.
+  Docs move with the wire: a new COMPATIBILITY.md strict-config section (scope, the validated-source
+  matrix, and the ownership table), its corrected failure-classification order and flag-class
+  wording, and `docs/UPGRADING-CODEX.md` — where the semantic probes stay **mandatory** (strict
+  catches a key RENAME; only the probes catch a key that keeps its name and changes meaning) and a
+  new zero-spend step re-verifies the stderr grammar the classifier depends on.
+- **BREAKING: the propose-tier surface no longer promises "writes only inside a throwaway
+  worktree", and the delegate tools now advertise `destructiveHint: true`.** codex's
+  `workspace-write` sandbox grants the OS temp roots (`/tmp` and `$TMPDIR`) by default
+  (`exclude_slash_tmp`/`exclude_tmpdir_env_var` default false), verified live at this plugin's
+  exact argv with on-disk state judged and positive/negative controls (#523), so the exclusivity
+  claim never held. The `exclude_*` keys are deliberately not pinned closed — build tools, `uv`,
+  `git`, and test runners need `$TMPDIR` — so every carrier now discloses the grant instead: a new
+  canonical `cli_contract.WORKSPACE_WRITE_SCOPE_FACT` ("the worktree does not bound Codex's
+  writes...") is carried verbatim by both delegate descriptions, their `codex_capabilities`
+  `returns` entries, and a new `negative_scope` item, each alongside the persistence clause
+  (temp-root writes are neither captured in the returned diff nor cleaned up); the `Meta.tier` and
+  `Meta.sandbox` field descriptions carry a short form. The annotation preset splits: MCP defines
+  `destructiveHint: false` as "performs only additive updates", and a delegated task can overwrite
+  or delete pre-existing files under the temp roots, so `codex_delegate`/`codex_delegate_async`
+  flip to `destructiveHint: true` while consult/review (whose runs write nothing and whose job
+  records are additive) keep `false` — the split is stated on `annotations_reading`. Classified
+  **breaking** (not the #515/#516 disclosure-widening case): the retired carriers made an
+  exclusive promise ("writes **only** inside", "the worktree **bounds** what Codex may WRITE"),
+  and correcting them weakens a documented guarantee a client could have relied on, even though
+  runtime behavior is unchanged and the guarantee never held. What remains true and promised: the
+  plugin never applies anything to your working tree, and the returned diff is gathered from the
+  worktree only. **Fingerprint `schema-79` → `schema-80`.** Docs move with the wire: `README.md`
+  (Safety bullet and tier table), `SECURITY.md`, `COMPATIBILITY.md` (the #523 pointer resolves),
+  and the `collaborating-with-codex` skill's independent-attempt reference. Guards: exact
+  containment of the constant over the live delegate carriers, a legacy-clause and contradiction
+  sweep across every read- and write-scope runtime carrier and the four prose sites, and
+  guard-the-guard controls proving each matcher fails on the pre-#523 wording. Both byte gates
+  re-measured, within budget (`tools/list` 92,289 → 92,599; catalog 92,306 → 92,616).
 - **The dry-run previews no longer imply they bound what a paid call can send.** `codex_dry_run`
   led with "Preview what a `codex_review_changes` call would send" and `codex_delegate_dry_run`
   told callers to confirm scope; a clean preview therefore read as "nothing sensitive will be
@@ -252,6 +395,45 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **The `workspace-write` writes-stay-in-the-workspace boundary can no longer be widened through
+  the config-file channel** (#520). The filesystem sibling of the #518 fix below: at `inherit`
+  isolation codex reads the user's `$CODEX_HOME/config.toml`, where `[sandbox_workspace_write]
+  writable_roots = ["..."]` — extra writable directories, reasonable for the user's own
+  interactive codex use — silently let a delegate write outside its throwaway worktree (verified
+  live on codex-cli 0.148.0, macOS, under the plugin's exact default flag set, judged by on-disk
+  state with positive controls; the first probe attempt was itself the cautionary tale, using
+  `mktemp -d` targets that sit inside the default-writable `$TMPDIR` and pass vacuously). Every
+  `workspace-write` run now also pins `-c sandbox_workspace_write.writable_roots=[]`
+  (`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`) — codex's own default, so
+  default-config runs are unchanged — verified to outrank both the config file and an operator
+  `--profile`. The remaining `sandbox_workspace_write` keys (`exclude_tmpdir_env_var`,
+  `exclude_slash_tmp`) are deliberately not pinned: their default is already the widest state, so
+  the config file can only narrow them. Two disclosed bounds: the pins restore codex's default
+  boundary, which still grants the OS temp roots (tracked as #523 together with the surface text
+  it contradicts), and the `--add-dir` flag layer outranks the pin (no model-bearing call sends
+  it; the builder now documents that adopting it is a contract change).
+  `docs/UPGRADING-CODEX.md` gains the filesystem semantic probe (unique pre-absent targets,
+  on-disk-state judging, config and profile controls — executed as written before landing) plus
+  an upstream `SandboxWorkspaceWrite` struct completeness check, since a new upstream key would
+  arrive unpinned. **No fingerprint change** — the pin alters only the built argv, which no
+  discovered surface exposes. Not breaking.
+- **The `workspace-write` no-network-egress guarantee now holds at the default isolation level**
+  (#518). At `inherit` isolation the plugin sends no `--ignore-user-config`, so codex reads the
+  user's `$CODEX_HOME/config.toml` — where `[sandbox_workspace_write] network_access = true`, a
+  reasonable setting for the user's own interactive codex use, silently re-granted the delegate
+  tiers full network egress (verified live on codex-cli 0.148.0 with a positive control: `curl`
+  reached example.com under the plugin's exact default flag set). The `-c` denylist refuses
+  `sandbox_*` keys on the argv passthrough channel, but nothing inspected the config-file channel.
+  Every `workspace-write` run now pins `-c sandbox_workspace_write.network_access=false`
+  (`cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`), which was verified to outrank both
+  the config file and an operator `--profile`, so the advertised promise holds at every isolation
+  level and the `--profile` operator-trust carve-out is closed for this one key.
+  `docs/UPGRADING-CODEX.md` gains the semantic probe (with its positive control) that guards the
+  pin against silent upstream key drift, since codex ignores unknown `-c` keys rather than
+  rejecting them. **No fingerprint change** — the pin alters only the built argv, which no
+  discovered surface exposes, and the agent-visible text already asserted the guarantee this
+  change makes true. Not breaking. The sibling filesystem-scope keys were filed as #520 and are
+  closed by the entry above; `COMPATIBILITY.md` discloses both pins.
 - `COMPATIBILITY.md` no longer repeats the `recommended_plugins` paragraph. PR #511 re-added the
   paragraph the #508 change had already placed in the "Image reading (`view_image`, #479)" section,
   leaving two verbatim consecutive copies; the second is removed. Nothing else was lost in that

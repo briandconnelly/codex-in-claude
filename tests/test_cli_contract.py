@@ -295,3 +295,157 @@ def test_agents_md_scope_makes_no_overclaim():
     # reader cannot infer a filesystem-wide walk. Pin the condition, not just the words.
     fact = cli_contract.SKILLS_DISCOVERY_FACT
     assert "in a repository, ancestor" in fact
+
+
+# --- strict-config rejection recognizer (#524) ------------------------------------
+# The two live stderr shapes, captured verbatim from codex-cli 0.148.0 (2026-08-20,
+# scratch $CODEX_HOME, zero spend — config parsing precedes auth). Kept as literals so a
+# recognizer rewritten to match a paraphrase of the grammar fails here.
+_STRICT_OVERRIDE_STDERR = (
+    "Error loading config.toml: unknown configuration field `bogus_key_xyz` "
+    "in -c/--config override\n"
+)
+_STRICT_FILE_STDERR = (
+    "Error loading config.toml:\n"
+    "/home/u/.codex/config.toml:1:1: unknown configuration field `some_unknown_junk_key`\n"
+    "  |\n"
+    "1 | some_unknown_junk_key = true\n"
+    "  | ^^^^^^^^^^^^^^^^^^^^^\n"
+)
+
+
+def test_strict_config_override_form_is_recognized():
+    rej = cli_contract.parse_strict_config_rejection(_STRICT_OVERRIDE_STDERR)
+    assert rej is not None
+    assert rej.origin == "override"
+    assert rej.key == "bogus_key_xyz"
+    assert rej.source_path is None
+    assert rej.line is None
+
+
+def test_strict_config_file_form_is_recognized():
+    rej = cli_contract.parse_strict_config_rejection(_STRICT_FILE_STDERR)
+    assert rej is not None
+    assert rej.origin == "file"
+    assert rej.key == "some_unknown_junk_key"
+    assert rej.source_path == "/home/u/.codex/config.toml"
+    assert rej.line == 1
+
+
+def test_strict_config_file_form_carries_the_dotted_profile_path():
+    # An unknown key inside a [profiles.X] table is reported with its full dotted path
+    # (verified live: an UNSELECTED profile table is validated too).
+    stderr = (
+        "Error loading config.toml:\n"
+        "/home/u/.codex/config.toml:2:1: unknown configuration field "
+        "`profiles.myprof.some_unknown_junk_key`\n"
+    )
+    rej = cli_contract.parse_strict_config_rejection(stderr)
+    assert rej is not None
+    assert rej.key == "profiles.myprof.some_unknown_junk_key"
+
+
+def test_strict_config_recognizer_ignores_unrelated_text():
+    for text in (
+        None,
+        "",
+        "error: unexpected argument '--nope' found",
+        "codex exited 1: something else entirely",
+        # The phrase alone, without the anchored grammar, is not a strict rejection.
+        "unknown configuration field somewhere in prose",
+    ):
+        assert cli_contract.parse_strict_config_rejection(text) is None
+
+
+def test_strict_config_recognizer_requires_the_error_prefix():
+    # A bare file-form line with no `Error loading config.toml` header is not the
+    # strict grammar; requiring the header keeps a quoted echo from matching.
+    orphan = "/home/u/.codex/config.toml:1:1: unknown configuration field `k`\n"
+    assert cli_contract.parse_strict_config_rejection(orphan) is None
+
+
+def test_strict_config_recognizer_survives_auth_markers_in_key_and_path():
+    # The recognizer runs BEFORE the auth check precisely because codex echoes a foreign
+    # key and path here, either of which can contain an AUTH_FAILURE_PATTERNS substring
+    # ("401", "unauthorized"). It must still recognize the rejection, and the classifier
+    # must not read those echoes as an auth failure.
+    stderr = (
+        "Error loading config.toml:\n"
+        "/home/401/.codex/config.toml:3:1: unknown configuration field `unauthorized_key`\n"
+    )
+    rej = cli_contract.parse_strict_config_rejection(stderr)
+    assert rej is not None
+    assert rej.key == "unauthorized_key"
+    assert rej.source_path == "/home/401/.codex/config.toml"
+    # Positive control: those very echoes DO satisfy the auth matcher, so ordering — not
+    # the matcher — is what protects this case.
+    assert cli_contract.is_auth_failure(stderr) is True
+
+
+def test_strict_config_recognizer_bounds_the_key_and_ignores_embedded_newline():
+    # Defensive bounds on untrusted echoed text: an implausibly long key does not match
+    # (drift, not a real key), and a backtick span never spills across lines.
+    huge = (
+        "Error loading config.toml: unknown configuration field "
+        f"`{'k' * 5000}` in -c/--config override\n"
+    )
+    assert cli_contract.parse_strict_config_rejection(huge) is None
+
+
+def test_strict_config_flag_is_guarantee_bearing():
+    # #524: it converts a silent unknown-key drift on the plugin's guarantee-bearing `-c`
+    # pins into a zero-spend startup failure, so it is ALWAYS_SEND (never help-gated).
+    assert cli_contract.STRICT_CONFIG_FLAG == "--strict-config"
+    assert cli_contract.STRICT_CONFIG_FLAG in cli_contract.ALWAYS_SEND_FLAGS
+    assert cli_contract.STRICT_CONFIG_FLAG not in cli_contract.HELP_GATED_FLAGS
+
+
+def test_plugin_owned_config_keys_are_exactly_the_pinned_three():
+    # The set the override-form classifier matches against to prove a rejected key is
+    # OURS. Literal values, so a typo'd constant fails here instead of silently
+    # reclassifying a genuine drift as an operator problem.
+    expected = {
+        "model_reasoning_effort",
+        "sandbox_workspace_write.network_access",
+        "sandbox_workspace_write.writable_roots",
+    }
+    assert set(cli_contract.PLUGIN_OWNED_CONFIG_KEYS) == expected
+    # Every one is a key the builder actually emits.
+    keys = cli_contract.PLUGIN_OWNED_CONFIG_KEYS
+    assert cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY in keys
+    assert cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY in keys
+    assert cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY in keys
+
+
+def test_strict_config_recognizer_tolerates_carriage_returns():
+    """A CRLF-terminated rejection still parses (#524).
+
+    The server is POSIX-first, but `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1`
+    documents a consult-only non-POSIX mode, and a stray `\\r` before the line end would
+    otherwise silently defeat the anchor — degrading a pin drift from
+    `cli_contract_changed` to a generic `nonzero_exit`. Tolerating it in the trailing run
+    costs no anchoring strength: `\\r` is accepted only where a space or tab already is.
+    """
+    override = (
+        "Error loading config.toml: unknown configuration field `k` in -c/--config override\r\n"
+    )
+    parsed = cli_contract.parse_strict_config_rejection(override)
+    assert parsed is not None
+    assert parsed.origin == "override"
+    assert parsed.key == "k"
+    in_file = (
+        "Error loading config.toml:\r\n"
+        "/home/u/.codex/config.toml:2:1: unknown configuration field `j`\r\n"
+    )
+    parsed_file = cli_contract.parse_strict_config_rejection(in_file)
+    assert parsed_file is not None
+    assert parsed_file.key == "j"
+    assert parsed_file.source_path == "/home/u/.codex/config.toml"
+    # Anchoring is unchanged: trailing junk still does not match.
+    assert (
+        cli_contract.parse_strict_config_rejection(
+            "Error loading config.toml: unknown configuration field `k` "
+            "in -c/--config override X\r\n"
+        )
+        is None
+    )

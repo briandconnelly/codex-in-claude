@@ -250,15 +250,30 @@ _RESERVED_META_CONFIG_KEYS: dict[str, tuple[str, str, str, str]] = {
 @dataclass(frozen=True)
 class ExtraArgs:
     """Parsed CODEX_IN_CLAUDE_EXTRA_ARGS. `tokens` is the validated argv to inject
-    (may carry secret `-c` VALUES — never echo it). `descriptors` are sanitized
-    identifiers (allowlisted flag names, config KEYS, profile/feature NAMES — never a
-    `-c` value) safe to surface in codex_status / an error envelope and to match against
-    a codex drift stderr. `error` is a value-free 'why invalid' string set only when the
+    (may carry secret `-c` VALUES — never echo it). `descriptors` are RAW identifiers
+    (allowlisted flag names, config KEYS, profile/feature NAMES — never a `-c` value)
+    used to match against a codex drift stderr.
+
+    Raw is deliberate and load-bearing: a descriptor is an IDENTITY compared with codex's
+    own rejection text, which quotes the operator's name with its exact spelling, so
+    stripping or bounding one here changes what it matches and misattributes the
+    operator's bad passthrough to plugin contract drift (#528). They are therefore NOT
+    safe to surface as-is: every emission site must run them through `_safe_token` (or
+    `codex._safe_echo`), which sanitizes and bounds a single-token echo.
+
+    `error` is a value-free 'why invalid' string set only when the
     knob is present but failed to parse/validate; `configured` is True whenever the env
     var is set to a non-blank value."""
 
     tokens: tuple[str, ...] = ()
     descriptors: tuple[str, ...] = ()
+    # The `-c` KEYS and `--profile` NAMES on their own, split out of the flat
+    # `descriptors` blob (which mixes them with flag names) so an ownership question can
+    # be asked precisely (#524). Matching a strict-config rejection against `descriptors`
+    # would let the SHARED `-c` flag token — recorded for every config entry, and present
+    # in codex's own rejection text — answer "yes" for a key that is really the plugin's.
+    config_keys: tuple[str, ...] = ()
+    profile_names: tuple[str, ...] = ()
     option_count: int = 0
     configured: bool = False
     error: str | None = None
@@ -267,6 +282,30 @@ class ExtraArgs:
     def valid(self) -> bool:
         """True when the knob is unset, or set and parsed/validated cleanly."""
         return self.error is None
+
+    def owns_config_key(self, key: str) -> bool:
+        """Whether `key` — as codex echoed it in a rejection — is one of OUR `-c` KEYS.
+
+        Both sides are canonicalized with the same conservative normalization the
+        denylist uses, so a cased/quoted/spaced echo still matches. False whenever the
+        knob is unset or failed to parse: an unattributable rejection must stay
+        fail-loud rather than be blamed on a passthrough that never reached codex."""
+        if not (self.configured and self.valid):
+            return False
+        target = _normalize_config_key(key)
+        return any(_normalize_config_key(k) == target for k in self.config_keys)
+
+    def owns_profile_file(self, path: str | None) -> bool:
+        """Whether `path` is the config FILE codex loads for a profile WE select.
+
+        `--profile NAME` loads `$CODEX_HOME/NAME.config.toml` and, under
+        `--strict-config`, validates it; an unselected `NAME.config.toml` is never read
+        (both verified live on codex-cli 0.148.0). Matching on the basename keeps this
+        independent of where `$CODEX_HOME` resolves."""
+        if not (self.configured and self.valid) or not path:
+            return False
+        base = Path(path.strip()).name
+        return any(base == f"{name}.config.toml" for name in self.profile_names)
 
 
 def _extra_args_flag_kind(flag: str) -> str | None:
@@ -280,8 +319,12 @@ def _extra_args_flag_kind(flag: str) -> str | None:
 
 
 def _safe_token(token: str) -> str:
-    """A bounded, secret-redacted echo of an offending token for an error message."""
-    return (redaction.redact_text(token) or "")[:60]
+    """A bounded, sanitized echo of an offending token for an error message.
+
+    `sanitize_echo` strips control characters before redacting; the ordering and the reason
+    for it live there (#528). The 60-character bound is this bridge's, and it comes LAST so
+    a secret straddling the cut still had its tail when the redactor saw it."""
+    return redaction.sanitize_echo(token)[:60]
 
 
 def _normalize_config_key(key: str) -> str:
@@ -308,6 +351,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
         return ExtraArgs(configured=True, error="could not tokenize (unbalanced quotes?)")
     tokens: list[str] = []
     descriptors: list[str] = []
+    config_keys: list[str] = []
+    profile_names: list[str] = []
     count = 0
     i = 0
     while i < len(toks):
@@ -346,16 +391,18 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is refused: it could weaken the sandbox / "
-                        "network / approval / host-env-isolation guarantees this server advertises"
+                        f"config key '{_safe_token(key.strip())}' is refused: it could weaken the "
+                        "sandbox / network / approval / host-env-isolation guarantees this "
+                        "server advertises"
                     ),
                 )
             if normalized in _DENIED_CONFIG_KEYS:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is refused: the plugin disables the "
-                        "remote_plugin connectors as a security guarantee (#287); an operator "
+                        f"config key '{_safe_token(key.strip())}' is refused: the plugin "
+                        "disables the remote_plugin connectors as a security guarantee "
+                        "(#287); an operator "
                         "override cannot re-enable them"
                     ),
                 )
@@ -365,8 +412,9 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{key.strip()}' is reserved — it would contradict the "
-                        f"provenance reported in result envelopes ({meta_field}); set "
+                        f"config key '{_safe_token(key.strip())}' is reserved — it would "
+                        f"contradict the provenance reported in result envelopes "
+                        f"({meta_field}); set "
                         f"{env_var} or the per-call {param} parameter instead ({issue})"
                     ),
                 )
@@ -374,7 +422,14 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
             # Record the flag too (not just the key), so a drift where codex rejects the
             # `-c`/`--config` flag token itself is still attributed to the passthrough.
             # The key is a config-path name (not a secret); the `-c` VALUE is never added.
+            # Stored RAW on purpose. A descriptor is an IDENTITY matched against codex's
+            # own rejection text, not display text: sanitizing or bounding it here changes
+            # what it matches, so a control-bearing or >60-char name stops matching codex's
+            # raw spelling and its rejection is misattributed to plugin drift
+            # (`cli_contract_changed`) instead of the operator's passthrough. Sanitation
+            # belongs at EMISSION — see `codex._extra_args_rejected_error` (#528).
             descriptors += [flag, key]
+            config_keys.append(key)
         else:  # profile / feature — the value is a non-secret NAME
             if not value:
                 return ExtraArgs(configured=True, error=f"{flag} requires a non-empty value")
@@ -382,13 +437,16 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"feature '{value.strip()}' is managed by the plugin and cannot be set "
-                        f"via {EXTRA_ARGS_ENV} (enable or disable): it disables the remote_plugin "
+                        f"feature '{_safe_token(value.strip())}' is managed by the plugin "
+                        f"and cannot be set via {EXTRA_ARGS_ENV} (enable or disable): it "
+                        "disables the remote_plugin "
                         "connectors as a security guarantee (#287)"
                     ),
                 )
             tokens += [flag, value]
             descriptors += [flag, value]
+            if kind == "profile":
+                profile_names.append(value)
         count += 1
         i += 1
     # De-dupe descriptors while preserving order (a stable, small match/echo set).
@@ -398,6 +456,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
     return ExtraArgs(
         tokens=tuple(tokens),
         descriptors=tuple(seen),
+        config_keys=tuple(dict.fromkeys(config_keys)),
+        profile_names=tuple(dict.fromkeys(profile_names)),
         option_count=count,
         configured=True,
     )

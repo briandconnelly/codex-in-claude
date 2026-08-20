@@ -108,7 +108,7 @@ async def run_delegate(
             ErrorResult(
                 error=make_error(
                     "not_a_git_repo",
-                    str(exc),
+                    redaction.sanitize_echo_prose(str(exc)),
                     details=ErrorDetail(field="workspace_root"),
                 ),
                 meta=meta,
@@ -119,7 +119,7 @@ async def run_delegate(
             ErrorResult(
                 error=make_error(
                     "worktree_error",
-                    str(exc)[:300],
+                    redaction.sanitize_echo_prose(str(exc))[:300],
                     repair_alternative=(
                         "Ensure the repo has at least one commit and a clean git state."
                     ),
@@ -156,19 +156,19 @@ async def run_delegate(
                 reasoning_effort=meta.reasoning_effort,
                 # Codex runs with cwd=wt.path, so its raw stderr/event text can name the
                 # worktree, which is dead by the time this envelope reaches the caller
-                # (#420, the #412 remainder). sanitize_prose is the one approved
-                # relativize+redact composition (see the comment on the last_message
-                # rewrite below, which explains why the two passes can't be called
-                # separately); it REPLACES classify_failure's own redact_text call rather
-                # than adding a second pass.
-                sanitize=lambda t: worktree.sanitize_prose(t, wt_aliases) or "",
+                # (#420, the #412 remainder). sanitize_echo_prose is the one approved
+                # composition of the THREE passes this text needs — control-character
+                # stripping, relativization, and redaction — in the one order safe for all
+                # of them (see the comment on the last_message rewrite below, and #528). It
+                # REPLACES classify_failure's own sanitizer rather than adding a pass.
+                sanitize=lambda t: worktree.sanitize_echo_prose(t, wt_aliases) or "",
             )
             return serialize_error(ErrorResult(error=err, meta=meta))
         diff = worktree.capture_diff(wt.path, timeout=git_timeout, config=config.WORKTREE_CONFIG)
     except worktree.WorktreeError as exc:
         return serialize_error(
             ErrorResult(
-                error=make_error("worktree_error", str(exc)[:300]),
+                error=make_error("worktree_error", redaction.sanitize_echo_prose(str(exc))[:300]),
                 meta=meta,
             )
         )
@@ -184,8 +184,16 @@ async def run_delegate(
     # because they interact: neither plain order is safe, and the safe combination is not
     # something a call site should have to remember. See that function for the two attacks.
     # One call covers both fields built from this text (summary and raw_response.text).
+    # Two products from one text, treated differently (#528, mirroring
+    # orchestration._success_common). `summary` is a PRESENTATION this function composes —
+    # it prefixes its own sentence below, and it is what a client renders — so it goes
+    # through the echo sanitizer. `last_message` keeps bare `sanitize_prose` and becomes
+    # `raw_response.text`, the closest-to-source carrier: still redacted and relativized,
+    # as it always was, but not additionally stripped — a caller reads it when it needs the
+    # model's output as it stood, so deleting characters from THAT would mutate content.
     last_message = worktree.sanitize_prose(result.last_message, wt_aliases)
-    summary = (last_message or "").strip() or "(codex returned no summary)"
+    summary_text = worktree.sanitize_echo_prose(result.last_message, wt_aliases)
+    summary = (summary_text or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
     else:

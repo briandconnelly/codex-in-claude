@@ -213,6 +213,16 @@ _REPAIR_BY_CODE: dict[str, tuple[RepairStep, str | None, bool, str]] = {
         "codex rejected an entry in CODEX_IN_CLAUDE_EXTRA_ARGS (operator config, not a "
         "plugin drift). Fix or remove the offending option/config key/profile and rerun.",
     ),
+    "user_config_rejected": (
+        "correct_config",
+        None,
+        False,
+        "Your Codex config holds a key this codex version does not recognize. Fix or "
+        "remove the key at the reported file and line, or upgrade/downgrade codex to the "
+        "version that knows it, then rerun. As a last resort, isolation='ignore-config' "
+        "skips your config file for the run — but it drops ALL of it (model provider, "
+        "MCP servers, and every other setting), so prefer fixing the key.",
+    ),
     "codex_rate_limited": (
         "retry_after_delay",
         None,

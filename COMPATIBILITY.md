@@ -73,7 +73,8 @@ test does this live). See "Session transfer" below for the import flow.
 consult/review tiers, `workspace-write` for the propose tiers (`codex_delegate`,
 `codex_delegate_async`); we never pass `danger-full-access` or `--dangerously-bypass-*` by default.
 
-**`workspace-write` permits filesystem writes inside the workspace but blocks network egress.** This
+**`workspace-write` permits filesystem writes inside the workspace (plus the OS temp roots — see
+the temp-root note below) but blocks network egress.** This
 is codex's own sandbox boundary and we pass it through deliberately. The practical consequence: a
 propose/apply task **cannot perform network operations** — `git push`/`fetch`, `gh ...`, `curl`,
 `npm publish`, dependency installs, etc. all fail inside the sandbox (typically with a
@@ -81,6 +82,50 @@ propose/apply task **cannot perform network operations** — `git push`/`fetch`,
 network step yourself after reviewing and applying the returned diff. The tool docstrings and the
 `codex_capabilities` `negative_scope` state this so a calling agent doesn't assume write access
 implies internet access.
+
+Codex itself makes that boundary configurable — `[sandbox_workspace_write] network_access = true`
+in `$CODEX_HOME/config.toml` (or a profile) re-grants egress inside `workspace-write` — and at the
+default `inherit` isolation the user's config file is read, so a user who enabled that key for
+their own interactive codex use would silently void the promise above (#518). The server therefore
+**pins the guarantee**: every `workspace-write` run sends
+`-c sandbox_workspace_write.network_access=false`
+(`cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`). The `-c` override outranks both the
+config file and an operator `--profile` (codex resolves by config layer, not argv order; verified
+live on 0.148.0 with positive controls), so the promise holds at every isolation level, and for
+this one key the `--profile` operator-trust carve-out is closed. This deliberately overrides the
+user's own setting for plugin-launched runs only; their interactive codex sessions are untouched.
+A `-c` KEY cannot fail loudly the way a flag does — codex ignores an unknown key — so an upstream
+rename would once have reopened the channel silently. `--strict-config` now closes that (see
+**Strict config validation** below), leaving only a same-name change of *meaning* to the semantic
+probe in `docs/UPGRADING-CODEX.md`, which still runs on every version change.
+
+The filesystem half of the sentence above — the sandbox's write boundary — gets the same
+treatment (#520): every `workspace-write` run also sends
+`-c sandbox_workspace_write.writable_roots=[]`
+(`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`), so a user's own
+`writable_roots = [...]` — extra writable directories outside the workspace, reasonable for their
+interactive codex use — cannot silently widen a plugin-launched run. `[]` is codex's own default,
+so default-config runs are unchanged. The same precedence facts apply (verified live on 0.148.0,
+macOS, positive controls judged by on-disk state): the `-c` override outranks the config file and
+`--profile`, the same drift coverage holds (`--strict-config` catches a KEY rename; the
+`docs/UPGRADING-CODEX.md` semantic probe covers a same-name change of meaning), and the user's
+interactive sessions are untouched.
+
+Two deliberate bounds on that filesystem pin. First, it restores codex's *default* boundary
+rather than tightening it: the default already grants writes to the OS temp roots (`/tmp` and
+`$TMPDIR`), the pins do not close that grant, and the remaining `sandbox_workspace_write` keys
+(`exclude_tmpdir_env_var`, `exclude_slash_tmp`) are deliberately **not** pinned — their default
+(`false`) is the widest state, so the config file can only *narrow* them, which is the operator's
+own prerogative (an operator who sets one merely denies plugin-launched shell commands the
+matching temp root). The default temp-root grant is disclosed across the propose-tier surface
+itself (#523): the worktree does not bound Codex's writes, the tool descriptions and docs say
+so, and the delegate tools advertise `destructiveHint: true` because a task can overwrite
+pre-existing files under those roots. Second, the pin binds the *config* layer only: the `--add-dir` **flag** layer
+outranks it (verified in the same probes), which is why `--add-dir` stays reserved for
+plugin-owned use and no model-bearing call sends it today (see the builder's note in
+`codex.py`). Upstream completeness — that no *new* `sandbox_workspace_write` key has appeared
+unpinned — is re-checked against the upstream struct on every version change
+(`docs/UPGRADING-CODEX.md`).
 
 ## Remote-plugin isolation (`remote_plugin`, #287)
 
@@ -589,9 +634,12 @@ positive demonstration of exactly the egress path #472 describes.)
 ## Flag classes
 
 - **ALWAYS_SEND_FLAGS** — guarantee-bearing (sandbox, cd, json, output-last-message, isolation,
-  output-schema, …). Sent unconditionally and never gated on `--help`. If `codex` removes or
-  renames one, it rejects the invocation at argument parsing — before any model call, zero spend —
-  and the failure is reported as `cli_contract_changed` with repair guidance.
+  output-schema, …). Never gated on `--help`. If `codex` removes or renames one, it rejects the
+  invocation at argument parsing — before any model call, zero spend — and the failure is reported
+  as `cli_contract_changed` with repair guidance. The class means *never help-gated*, not *present
+  on every argv*: several members ride only the invocations that need them (`--add-dir` and
+  `--output-schema` when a caller supplies one, `--strict-config` when the run carries a `-c`
+  override). What the class guarantees is that when such a flag is sent, its rejection is loud.
 - **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
   `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
 
@@ -608,13 +656,13 @@ when that parse fails, so a raw interpolation would retype boolean/numeric/colle
 (codex 0.144.3 then rejects them locally as an invalid type) and silently unwrap quoted ones;
 encoding makes the advertised open string round-trip exactly. A config key cannot be help-gated —
 `--help` advertises flags,
-not config keys — so a requested effort is sent unconditionally. Drift coverage is **narrower than
-ALWAYS_SEND**: only removal of the `-c` flag itself fails loudly as `cli_contract_changed` with
-zero spend. If a future `codex` renames or removes the **key**, the drift is **silent** — codex
-tolerates unknown `-c` keys as junk it never reads (the same tolerance recorded for lookalike keys
-below) — and the requested effort is quietly ignored; the re-verification probe in
-`docs/UPGRADING-CODEX.md` is the guard for that case. (Verified 2026-07-13: a CLI `-c` override
-survives `--ignore-user-config`, so an explicit effort stays effective under every isolation mode.)
+not config keys — so a requested effort is sent unconditionally. Removal of the `-c` flag itself
+fails loudly as `cli_contract_changed` with zero spend, and a rename or removal of the **key** now
+does too: an effort-carrying run also sends `--strict-config` (see below), which rejects an unknown
+key at startup instead of tolerating it as junk. What remains uncovered is a key that keeps its
+name and changes **meaning** — the re-verification probe in `docs/UPGRADING-CODEX.md` is the guard
+for that case. (Verified 2026-07-13: a CLI `-c` override survives `--ignore-user-config`, so an
+explicit effort stays effective under every isolation mode.)
 
 The **semantic value set** is open and not allowlisted by this plugin. The plugin still enforces
 transport-shape bounds (length and argv/JSON safety); values passing those bounds are sent
@@ -642,6 +690,63 @@ genuinely varies by model and account — the backend advertised
 `ModelInfo.default_reasoning_effort` / `supported_reasoning_efforts`, defensively validated
 (`REASONING_EFFORT_TOKEN_PATTERN`, `SUPPORTED_EFFORTS_MAX_ENTRIES`) and advisory only. The bundled
 static fallback carries no effort data.
+
+## Strict config validation (`--strict-config`, #524)
+
+By default `codex` **tolerates an unknown config key**: it reads it as junk and never applies it.
+For an ordinary key that is harmless, but three of the keys this plugin sends are
+*guarantee-bearing* pins — `sandbox_workspace_write.network_access`,
+`sandbox_workspace_write.writable_roots`, and `model_reasoning_effort` — and for those, tolerance is
+the failure mode. An upstream rename would leave the plugin sending a key codex no longer reads,
+and the guarantee would reopen with no signal at all.
+
+`--strict-config` turns that into a **zero-spend startup failure**: codex parses config before it
+authenticates or calls a model, so an unknown key fails the run at once, for no spend. Verified live
+on codex-cli 0.148.0 (2026-08-20).
+
+**Scope: runs that carry a `-c` override, not every run.** The flag is `ALWAYS_SEND`-class
+(guarantee-bearing, never help-gated), but it is *emitted* only when the built argv actually carries
+a config override — every `workspace-write` run (the two sandbox pins), every effort-carrying run,
+and any run with an operator `-c` in `CODEX_IN_CLAUDE_EXTRA_ARGS`. The reason is blast radius: at
+the default `inherit` isolation the flag also hard-fails on an unknown key **anywhere in the user's
+own config**, including tables for profiles the run never selects. A plain read-only consult sends
+no `-c` at all, so sending the flag there would risk the user's runs while guarding nothing. On a
+codex build lacking the flag, argument parsing rejects it loudly and for zero spend — the safe
+direction.
+
+**Which config sources it validates** (all verified live on 0.148.0):
+
+| Source | Validated under `--strict-config`? |
+| --- | --- |
+| A `-c`/`--config` argv override | Yes |
+| `$CODEX_HOME/config.toml` | Yes — at `inherit` isolation |
+| An **unselected** `[profiles.X]` table in that file | Yes |
+| `$CODEX_HOME/NAME.config.toml`, with `--profile NAME` | Yes |
+| The same file when the profile is **not** selected | No — codex never reads it |
+| Any of the file sources under `--ignore-user-config` | No — `ignore-config`/`ignore-rules` isolation exempts every file, leaving the flag a pure self-check of argv keys |
+
+Only key **names** are checked, not values: `-c model_reasoning_effort="totally_bogus"` still
+parses and is judged by the backend, so the `invalid_reasoning_effort` path above is unaffected.
+
+**Failure classification.** The rejection is recognized from the anchored stderr grammar, on stderr
+alone, and *before* the auth and drift checks — codex echoes the offending key and file path, either
+of which can contain a substring those matchers look for (`401` in a path, `invalid value` in a
+quoted TOML key), and each would otherwise win on ordering. Ownership is then decided by the
+rejected key, never by the shared `-c` descriptor that appears in codex's own message:
+
+| Rejection | Code |
+| --- | --- |
+| An override naming one of the plugin's own pinned keys | `cli_contract_changed` — the drift signal this flag exists to produce |
+| An override naming an operator `-c` key | `extra_args_rejected` |
+| An override naming neither | `cli_contract_changed` — fail loud rather than guess |
+| A file the operator selected with `--profile` | `extra_args_rejected` |
+| Any other config file | `user_config_rejected` — the user's own config, naming the file and line to fix |
+
+`user_config_rejected` is permanent (`temporary: false`) and repairs with `correct_config`. Its
+repair leads with fixing or removing the offending key; `isolation="ignore-config"` is offered only
+as a lossy fallback, since it drops the user's entire config — model provider, MCP servers, and all.
+Note that neither `codex_status` nor a dry run parses the user's Codex config, so neither can
+predict this failure: `ready: true` reports a found, authenticated binary, not a valid config.
 
 ## Operator extra-args passthrough (`CODEX_IN_CLAUDE_EXTRA_ARGS`, #231)
 
@@ -691,7 +796,10 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   `--disable some_other`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
-  **operator-trust boundary** — only enable this knob with profiles you control.
+  **operator-trust boundary** — only enable this knob with profiles you control. One key is
+  excepted: `sandbox_workspace_write.network_access` is pinned by a plugin-owned `-c` override
+  that outranks profiles (verified 0.148.0; see Sandbox modes above), so a profile cannot
+  re-grant network egress to a `workspace-write` run.
 
 ## Version policy
 
@@ -760,21 +868,26 @@ A non-success `codex exec` run is classified from its stderr/stdout and JSONL `e
 the signature sets in `cli_contract.py`, checked in order so a more specific cause is never masked by
 a generic one:
 
-1. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
-2. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`, **unless** the
+1. **strict-config rejection** (`parse_strict_config_rejection`, on **stderr alone**) →
+   `user_config_rejected`, `extra_args_rejected`, or `cli_contract_changed` by the ownership table in
+   the strict-config section above. First because codex parses config before it authenticates or
+   calls a model — so this is never an auth or rate-limit failure — while the key and path it echoes
+   can contain substrings the matchers below would fire on.
+2. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
+3. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`, **unless** the
    rejection names an operator `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptor → `extra_args_rejected` instead
    (user-owned passthrough, not a plugin-contract drift; see the passthrough section above), **or**
    this run sent a first-class reasoning-effort override and the failure carries the backend's
    `REASONING_EFFORT_REJECTION_MARKERS` → `invalid_reasoning_effort` (a caller value to correct; see
    the reasoning-effort section above). Checked
    before rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
-3. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
+4. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
    `retry-after`, plus `429` matched with word boundaries so an incidental digit run can't fire it)
    → `codex_rate_limited`, `temporary=True` with `retry_after_ms` set from a parsed
    `Retry-After`/"retry after Ns" value **when it is seconds-valued** (a non-second unit or HTTP-date
    is ignored), else `RATE_LIMIT_DEFAULT_BACKOFF_MS` (60s). Lets a caller back off deterministically
    instead of retry-storming a transient limit.
-4. everything else → `nonzero_exit`.
+5. everything else → `nonzero_exit`.
 
 Signatures are confirmed against real `codex` output; this file is the source of truth for the
 phrasings, so update `cli_contract.py` (one place) when upstream wording changes.

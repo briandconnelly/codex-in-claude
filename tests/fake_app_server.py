@@ -128,6 +128,9 @@ def _handle_initialize(scenario: str, codex_home: str) -> bool:
     if scenario == "init_error_falsey":
         _emit({"id": 1, "error": {"code": -32000, "message": 0}})
         return True
+    if scenario == "init_error_all_control":
+        _emit({"id": 1, "error": {"code": -32000, "message": "\x07\x1b\x00"}})
+        return True
     if scenario == "long_codex_home":
         # A valid handshake reporting an absurd codexHome. The client keeps the raw value
         # for the ledger lookup but must bound it before it reaches an error message.
@@ -179,6 +182,11 @@ _IMPORT_ERRORS: dict[str, dict] = {
     # rather than coercing them into noise like "rejected the import: {}".
     "import_error_falsey": {"code": 42, "message": 0},
     "invalid_params_falsey": {"code": -32602, "message": {}},
+    # TRUTHY but all-control `message` values: the raw-truthiness gate passes them, and they
+    # sanitize to "" — which stranded a static prefix (or, at the import-rejection site,
+    # produced an empty message) until every site routed through `_display_detail_or`.
+    "import_error_all_control": {"code": 42, "message": "\x07\x1b\x00"},
+    "invalid_params_all_control": {"code": -32602, "message": "\x07\x1b\x00"},
 }
 
 

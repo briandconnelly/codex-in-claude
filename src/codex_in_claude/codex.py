@@ -69,6 +69,11 @@ def reconcile_dropped_model(result: CodexExecResult, meta: Meta) -> None:
         meta.model = None
 
 
+# The two spellings of a config override, in the split form both the builder and
+# config._parse_extra_args emit (`-c KEY=VALUE`, never the attached `-cKEY=VALUE`).
+_CONFIG_OVERRIDE_FLAGS = ("-c", "--config")
+
+
 def build_exec_command(
     *,
     cwd: str,
@@ -98,6 +103,10 @@ def build_exec_command(
     without displacing the envelope-bearing flags."""
     fs = flag_support if flag_support is not None else preflight.flag_support()
     tokens = [cli_contract.CODEX_BIN, *cli_contract.EXEC_SUBCOMMAND]
+    # Set wherever this function appends a real `-c` pair; read by the strict-config
+    # decision below. Tracking the appends is what keeps a flag-shaped VALUE from being
+    # mistaken for an override (see that comment).
+    plugin_config_override = False
     tokens += ["--json"]
     tokens += ["--sandbox", sandbox]
     tokens += ["--cd", cwd]
@@ -108,9 +117,31 @@ def build_exec_command(
     # isolation (codex 0.143+ defaults `remote_plugin` on; #287). Guarantee-bearing and
     # order-independent — `--disable` wins over any operator `--enable`/`-c ...=true`.
     tokens += [cli_contract.DISABLE_FEATURE_FLAG, cli_contract.REMOTE_PLUGIN_FEATURE]
+    # Pin the no-network-egress guarantee for workspace-write runs (#518): at `inherit`
+    # isolation codex reads $CODEX_HOME/config.toml, where the user's own
+    # `network_access = true` would silently grant the delegate egress. The `-c`
+    # override outranks the config file AND --profile (verified 0.148.0), so this holds
+    # at every isolation level. A config key cannot be help-gated, so upstream renaming
+    # the key used to drift silently; the strict-config guard below now catches that
+    # (#524) — see the constant's note in cli_contract.
+    # Pin the writes-stay-in-the-workspace boundary the same way (#520): the user's own
+    # `writable_roots = [...]` in config.toml (or a --profile) would silently widen the
+    # sandbox outside the workspace. `[]` is codex's default, so default-config runs are
+    # unchanged; the `-c` override outranks the config file AND --profile (verified
+    # 0.148.0). Both pins are guarded against a silent KEY rename by the same
+    # strict-config flag — see the constants' notes in cli_contract.
+    if sandbox == cli_contract.SANDBOX_WORKSPACE_WRITE:
+        tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY}=false"]
+        tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY}=[]"]
+        plugin_config_override = True
     tokens += isolation_flags(isolation)
     if skip_git_repo_check:
         tokens += ["--skip-git-repo-check"]
+    # --add-dir rides the FLAG layer, which outranks the writable_roots config pin
+    # above (verified 0.148.0) — so a caller passing add_dirs widens the sandbox
+    # DESPITE the pin. No model-bearing caller does today; adopting add_dirs on one is
+    # a contract change to the writes-stay-in-the-workspace boundary, not just a new
+    # argument (per-tuple review under FINGERPRINT_COVERS applies).
     for d in add_dirs:
         tokens += ["--add-dir", d]
     if output_schema_path:
@@ -121,8 +152,8 @@ def build_exec_command(
     # dedicated flag — `codex exec --help` re-checked 2026-08-19). A config key cannot be
     # help-gated, so it is sent whenever the
     # caller/server requested one — including an explicit "" after shared shape
-    # validation. Loss of the shared `-c` flag fails loudly; a rename/removal of this
-    # key can drift silently (see cli_contract).
+    # validation. Loss of the shared `-c` flag fails loudly, and the strict-config guard
+    # below makes a rename/removal of this key fail loudly too (#524; see cli_contract).
     # The value is TOML-string-encoded (JSON string syntax is valid TOML): codex
     # TOML-parses the `-c` right-hand side and falls back to a string only when that
     # parse fails, so a raw interpolation would retype boolean/numeric/collection-
@@ -136,6 +167,32 @@ def build_exec_command(
             f"{cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY}="
             f"{json.dumps(reasoning_effort, ensure_ascii=False)}",
         ]
+        plugin_config_override = True
+    # Guard every `-c` KEY this argv carries (#524). `--strict-config` turns codex's
+    # silent tolerance of an unknown key into a zero-spend startup failure, which is what
+    # converts a silent upstream rename of a guarantee-bearing pin above
+    # (network_access / writable_roots / model_reasoning_effort) into a loud
+    # cli_contract_changed. It is emitted ONLY when an override actually rides — the
+    # plugin's own pins or an operator `-c` — because at the default `inherit` isolation
+    # the flag ALSO hard-fails on an unknown key anywhere in the user's own config.toml
+    # (unselected [profiles.X] tables included, verified 0.148.0), so sending it on an
+    # override-free run would risk the user's availability while guarding nothing.
+    # Operator `-c` tokens are inspected here, before they are appended below, so the
+    # decision reflects the whole argv.
+    #
+    # The plugin's own half is tracked as this function APPENDS each pin
+    # (`plugin_config_override`), never by searching the built token list: a search cannot
+    # tell an option from a VALUE that merely looks like one, and `model` accepts any
+    # string — `model="-c"` would arm the guard on a run carrying no override at all. The
+    # operator's half reads only the FLAG positions of `extra_args`, which
+    # config._parse_extra_args emits as a flat sequence of `[flag, value]` pairs (its
+    # values can never themselves be flags: a value starting with `-` is refused at parse
+    # time as a smuggled option).
+    operator_config_override = any(
+        extra_args[i] in _CONFIG_OVERRIDE_FLAGS for i in range(0, len(extra_args), 2)
+    )
+    if plugin_config_override or operator_config_override:
+        tokens += [cli_contract.STRICT_CONFIG_FLAG]
     cmd, dropped = _gate_optional(tokens, fs)
     # Operator passthrough goes in AFTER gating (never gated/dropped) and before the
     # stdin sentinel; already allowlist-validated in config.extra_args().
@@ -289,10 +346,16 @@ def _invalid_reasoning_effort_error() -> ErrorInfo:
 def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
     """Error for a drift that codex attributes to an operator-supplied extra arg (#231).
 
-    `matched` are the sanitized descriptors (allowlisted flag names / config keys /
-    profile/feature names — never a secret `-c` VALUE) whose text appeared in codex's
-    rejection, so the repair can name what to fix without echoing input."""
-    named = ", ".join(matched) if matched else config.EXTRA_ARGS_ENV
+    `matched` are the descriptors (allowlisted flag names / config keys / profile/feature
+    names — never a secret `-c` VALUE) whose text appeared in codex's rejection, so the
+    repair can name what to fix without echoing input.
+
+    Each descriptor is echoed through `_safe_echo`. They are operator-supplied rather than
+    codex-supplied, but they are still foreign text reaching an envelope, and they reached
+    it RAW: `config._safe_token` covers only the unsupported-argument path, while a valid
+    config key or profile name is recorded verbatim (#528). Both carriers are sanitized —
+    the message and the repair's alternative, which quotes the same names."""
+    named = ", ".join(_safe_echo(d) for d in matched) if matched else config.EXTRA_ARGS_ENV
     return make_error(
         "extra_args_rejected",
         f"codex rejected an argument from {config.EXTRA_ARGS_ENV} ({named}) — the "
@@ -303,6 +366,75 @@ def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
             "against `codex --help` / `codex exec --help` for your installed version."
         ),
     )
+
+
+# Bound on each echoed span; a real key or path is far shorter (cf. CODEX_HOME_MAX_BYTES).
+_ECHO_MAX_CHARS = 200
+
+
+def _safe_echo(text: str | None) -> str:
+    """Bound an untrusted echoed span, after the shared echo sanitizer has cleaned it.
+
+    Applied to a single-token span whose whole value is its actionable content — the
+    config KEY and file path a strict-config rejection carries, or a rejected flag name.
+    Codex read those off disk, so they are untrusted, but the caller cannot fix a key they
+    are not told about.
+
+    The strip-then-redact ordering is `redaction.sanitize_echo`'s and is documented there;
+    this bridge does not re-derive it (#528). What stays here is bridge policy: the LENGTH
+    bound, and that truncation comes LAST, so a secret straddling the cut still had the
+    tail its pattern needed when the redactor saw it."""
+    return redaction.sanitize_echo(text)[:_ECHO_MAX_CHARS]
+
+
+def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -> ErrorInfo:
+    """Error for a `--strict-config` rejection of a key in the USER's own config (#524).
+
+    The key, file, and line are the entire actionable content, so they are echoed — but
+    they are untrusted text codex read off disk, so they go through the same redaction
+    and length bound as every other surfaced failure detail."""
+    where = _safe_echo(rejection.source_path) or "your Codex config"
+    key = _safe_echo(rejection.key)
+    line = f":{rejection.line}" if rejection.line is not None else ""
+    return make_error(
+        "user_config_rejected",
+        f"codex refused to start: your Codex config sets `{key}`, which this codex "
+        f"version does not recognize ({where}{line}). No model call was made.",
+    )
+
+
+def _strict_config_error(
+    rejection: cli_contract.StrictConfigRejection, extra: config.ExtraArgs | None
+) -> ErrorInfo:
+    """Classify a `--strict-config` unknown-key rejection by WHO owns the key (#524).
+
+    Ownership is decided on the rejected KEY (and, for the file form, the rejected FILE),
+    never on the shared `-c` descriptor: codex's own rejection text names that flag, so a
+    descriptor match would let any operator `-c` entry claim a plugin pin's drift.
+
+    An override-form rejection naming one of PLUGIN_OWNED_CONFIG_KEYS is proof that a
+    guarantee-bearing pin's key drifted upstream — codex is echoing the key WE sent — so
+    it is cli_contract_changed, which is the fail-loud conversion this guard exists for.
+    An unattributable key stays cli_contract_changed too: fail loud rather than guess.
+
+    The PLUGIN_OWNED_CONFIG_KEYS test is deliberately REDUNDANT today: config's
+    extra-args parser already refuses all three of those keys, so `owns_config_key`
+    cannot return True for one, and both branches reach the same error. It is kept so
+    this security-relevant attribution does not silently depend on a denylist in another
+    module; `test_operator_passthrough_can_never_own_a_plugin_pinned_key` pins that
+    coupling, so narrowing the denylist fails a test instead of misattributing a drift."""
+    ea = config.extra_args() if extra is None else extra
+    if rejection.origin == "override":
+        if rejection.key in cli_contract.PLUGIN_OWNED_CONFIG_KEYS:
+            return contract_changed_error()
+        if ea.owns_config_key(rejection.key):
+            return _extra_args_rejected_error([rejection.key])
+        return contract_changed_error()
+    # File form: the user's own config, unless the file is one an operator `--profile`
+    # selected (codex loads and validates $CODEX_HOME/NAME.config.toml only when selected).
+    if ea.owns_profile_file(rejection.source_path):
+        return _extra_args_rejected_error([rejection.key])
+    return _user_config_rejected_error(rejection)
 
 
 def _descriptor_in_blob(descriptor: str, blob: str) -> bool:
@@ -362,20 +494,30 @@ def classify_failure(
     own matched passthrough descriptors account for that signature, in which case
     the rejection is theirs (`extra_args_rejected`, #313).
 
-    `sanitize`, when given, REPLACES the generic `nonzero_exit` branch's `redact_text`
-    call (it already includes redaction — see `worktree.sanitize_prose`, the one
-    approved composition) and runs on the raw `event_error or run.stderr or run.stdout`
-    before the `[:300]` truncation, exactly where `redact_text` ran. `delegate.run_delegate`
-    passes a worktree-aware sanitizer so a delegate error can't quote a dead absolute path
-    into the (already torn-down) throwaway worktree (#420). Every classification decision
+    `sanitize`, when given, REPLACES the generic `nonzero_exit` branch's own sanitizer
+    (`redaction.sanitize_echo_prose`), so it must carry the same guarantees — redaction AND
+    control-character stripping, in that fixed order. `worktree.sanitize_echo_prose` is the
+    one approved composition; `delegate.run_delegate` passes it so a delegate error can't
+    quote a dead absolute path into the (already torn-down) throwaway worktree (#420).
+    It runs on the raw `event_error or run.stderr or run.stdout` before the `[:300]`
+    truncation, exactly where the default sanitizer runs. Every classification decision
     above (drift/auth/rate-limit signature matching) still reads the RAW strings — only the
-    emitted text changes. Omitted (the default), behavior is byte-identical to before this
-    parameter existed."""
+    emitted text changes."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
         return make_error("timeout", "codex exceeded the timeout.")
     event_error = normalize.extract_error_message(events) if events else None
+    # `--strict-config` rejections are classified FIRST, from stderr alone (#524). Codex
+    # parses config before it authenticates or calls a model, so this failure is never an
+    # auth or rate-limit problem — but it ECHOES an untrusted key and file path, either of
+    # which can carry an auth pattern ("401" in a path) or a drift phrase (a TOML quoted
+    # key). Those matchers are substring tests and would win on ordering alone, so the
+    # anchored strict grammar is checked ahead of them. Reading stderr alone also keeps
+    # model-produced text from manufacturing this classification.
+    strict = cli_contract.parse_strict_config_rejection(run.stderr)
+    if strict is not None:
+        return _strict_config_error(strict, extra_args)
     if cli_contract.is_auth_failure(run.stderr, run.stdout, last_message, event_error):
         return _auth_error()
     # Drift before rate-limit so a genuine contract change is never masked as a
@@ -425,9 +567,12 @@ def classify_failure(
         if retry_after is None:
             retry_after = cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
         return _rate_limit_error(retry_after)
-    # Sanitize (or redact, when no `sanitize` was given) the full text *before* truncating:
-    # a secret or worktree path straddling the 300-char cut would otherwise lose the tail
-    # the redaction/relativization patterns need to match, leaking a prefix.
+    # Sanitize the full text *before* truncating: a secret or worktree path straddling the
+    # 300-char cut would otherwise lose the tail the redaction/relativization patterns need
+    # to match, leaking a prefix. The default sanitizer is the shared echo one, which also
+    # strips control characters ahead of redaction (#528) — this is multi-line stderr, so
+    # it is the PROSE variant, which keeps line breaks wherever that is provably as safe
+    # as removing them.
     raw = (event_error or run.stderr or run.stdout).strip()
-    detail = (sanitize(raw) if sanitize is not None else (redaction.redact_text(raw) or ""))[:300]
+    detail = (sanitize(raw) if sanitize is not None else redaction.sanitize_echo_prose(raw))[:300]
     return make_error("nonzero_exit", f"codex exited {run.exit_code}: {detail}")

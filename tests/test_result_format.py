@@ -69,11 +69,15 @@ def test_snapshot_covers_all_four_envelope_types():
         "DelegateResult",
         "ErrorResult",
     }
+    # One entry per envelope type, plus a SECOND error envelope carrying a non-
+    # `internal_error` code (#524) so this view reflects an ErrorCode change in the
+    # persisted bytes rather than only in the `schemas` view.
     assert set(snap["serialized"]) == {
         "consult_success",
         "review_success",
         "delegate_success",
         "error",
+        "error_user_config_rejected",
     }
 
 

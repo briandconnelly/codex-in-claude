@@ -37,6 +37,7 @@ Run Codex non-interactively
   --output-schema <FILE>
   --enable <FEATURE>
   --disable <FEATURE>
+  --strict-config
   -m, --model <MODEL>
 """
 

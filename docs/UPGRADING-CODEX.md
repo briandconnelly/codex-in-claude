@@ -270,8 +270,10 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   on drift — silent for agents, so record a shape change in `CHANGELOG.md`).
 - **Reasoning-effort config key.** The `reasoning_effort` controls ride
   `-c model_reasoning_effort=…` (`MODEL_REASONING_EFFORT_CONFIG_KEY`) — a config key `--help`
-  cannot advertise, so the mechanical drift check can't see it, and a key rename/removal drifts
-  **silently** (codex tolerates unknown `-c` keys as junk): this manual step is the only guard.
+  cannot advertise, so the mechanical drift check can't see it. A key rename/removal is now caught
+  by `--strict-config` (#524), which rides every effort-carrying run; what this manual step still
+  guards — and the only thing strict cannot see — is a key that keeps its NAME and changes its
+  MEANING, default, or accepted values. Run it every time.
   Re-verify per COMPATIBILITY.md's reasoning-effort section, then refresh that section's verified
   dates. Probe 1 —
   `codex exec --json --ignore-user-config --ephemeral --skip-git-repo-check -c 'model_reasoning_effort="bogus"' -c model=bogus-model-xyz - <<< "hi"`
@@ -283,11 +285,128 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   `[ReasoningEffortParam]` (`REASONING_EFFORT_REJECTION_MARKERS` — the classifier requires all of
   them in `[…]` form); note it spends a trivial request. Also check
   `codex exec --help` for a new dedicated effort flag worth adopting.
+- **Workspace-write network pin.** The propose tiers pin the no-network-egress guarantee with
+  `-c sandbox_workspace_write.network_access=false` (`WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`,
+  #518). Like the reasoning-effort key above, a rename/removal of the KEY is caught by
+  `--strict-config` (#524); this semantic probe guards the case strict cannot see — a key that keeps
+  its name while its meaning or default changes, silently re-granting egress from the user's
+  `$CODEX_HOME/config.toml` (or a profile). It protects a security guarantee, so run it every time. The probe needs a **scratch** `$CODEX_HOME` (the config file is the thing under
+  test), which must carry an `auth.json` copy — a credential — so run the whole block in the
+  explicit subshell below, whose `EXIT` trap removes the copy even when a probe is interrupted
+  (never paste the steps individually into an interactive shell). It assumes file-backed auth
+  (`codex login`); each of the three runs spends a trivial request:
+
+  ```bash
+  (                                     # bounded: the trap dies with this subshell
+    set -eu                             # fail fast: a failed cp/mktemp must not run the probes
+    home=${CODEX_HOME:-$HOME/.codex}    # the active home, not a hard-coded path
+    scratch=$(mktemp -d)
+    trap 'rm -rf "$scratch"' EXIT       # the credential copy never outlives the probe
+    cp "$home/auth.json" "$scratch/"
+    printf '[sandbox_workspace_write]\nnetwork_access = true\n' \
+      | tee "$scratch/config.toml" > "$scratch/net.config.toml"
+    P="Run exactly this shell command and report its exact stdout and exit status verbatim: curl -sS -o /dev/null -w '%{http_code}' https://example.com"
+    run() { CODEX_HOME="$scratch" codex exec --json --sandbox workspace-write \
+            --ephemeral --skip-git-repo-check "$@" - <<< "$P"; }
+    run                                                        # 1: positive control
+    run -c sandbox_workspace_write.network_access=false        # 2: the pin
+    run -c sandbox_workspace_write.network_access=false --profile net   # 3: pin vs profile
+  )
+  ```
+
+  Judge each run by the `command_execution` item's `exit_code` in the `--json` stream, not the
+  model's prose. Run 1 must report egress (curl exit `0`, HTTP `200`) — the positive control
+  proving the probe can see the open state; without it a broken probe and a held guarantee look
+  identical. Runs 2 and 3 must be blocked (curl exit `6`, could-not-resolve-host); run 3 shows
+  the `-c` override still outranks profiles (verified 0.148.0). If run 2 or 3 reports egress,
+  the key drifted: update the constant and re-verify before shipping the version bump.
+- **Workspace-write writable-roots pin.** The filesystem sibling
+  (`-c sandbox_workspace_write.writable_roots=[]`, `WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`,
+  #520) has the identical meaning-change hazard (its rename half is covered by `--strict-config`,
+  #524), so it gets the same probe treatment — same
+  scratch-`$CODEX_HOME` discipline, same file-backed-auth assumption, and each of the three runs
+  spends a trivial request. Two things differ from the network probe. Judge by **final on-disk state**, never the model's prose or the
+  command's reported exit status. And the target directory must sit outside **every**
+  default-writable root: `workspace-write` already permits the workspace plus `/tmp` and
+  `$TMPDIR`, so a target under either temp root (e.g. anything `mktemp -d` returns) makes every
+  run pass vacuously — a broken probe that looks exactly like a held guarantee. Use a target
+  under `$HOME`, a **unique pre-absent file per run** (a file left by the positive control must
+  not fake a later run's write), and clean the target directory in the same `EXIT` trap as the
+  credential copy:
+
+  ```bash
+  (                                     # bounded: the trap dies with this subshell
+    set -eu
+    home=${CODEX_HOME:-$HOME/.codex}
+    scratch=$(mktemp -d)
+    # Outside the workspace AND both temp roots. mktemp both creates and names it, so a
+    # collision can never send a pre-existing directory into the trap's rm -rf; the trap
+    # is installed only after both directories exist.
+    outside=$(mktemp -d "$HOME/.codex-fs-probe.XXXXXX")
+    trap 'rm -rf "$scratch" "$outside"' EXIT
+    mkdir "$scratch/work"               # work: the workspace, not the credential-holding scratch
+    cp "$home/auth.json" "$scratch/"
+    printf '[sandbox_workspace_write]\nwritable_roots = ["%s"]\n' "$outside" \
+      | tee "$scratch/config.toml" > "$scratch/fs.config.toml"
+    run() { local f="$outside/$1"; shift
+            P="Run exactly this shell command, even if it fails, then reply DONE: touch $f"
+            CODEX_HOME="$scratch" codex exec --json --sandbox workspace-write --cd "$scratch/work" \
+              --ephemeral --skip-git-repo-check "$@" - <<< "$P" > /dev/null
+            [ -e "$f" ] && echo "$f: WROTE" || echo "$f: denied"; }
+    run 1.txt                                                        # 1: positive control (file)
+    run 2.txt -c 'sandbox_workspace_write.writable_roots=[]'         # 2: the pin vs config file
+    run 3.txt -c 'sandbox_workspace_write.writable_roots=[]' --profile fs   # 3: pin vs profile
+  )
+  ```
+
+  Run 1 must report `WROTE` — the positive control proving the probe can see the open state.
+  Runs 2 and 3 must report `denied`; run 3 shows the `-c` override still outranks profiles
+  (verified 0.148.0). If run 2 or 3 writes, the key drifted: update the constant and re-verify
+  before shipping the version bump. While here, also re-confirm upstream's
+  `SandboxWorkspaceWrite` struct (codex-rs `config/src/types.rs` at the release tag) still has
+  exactly the fields COMPATIBILITY.md's sandbox section accounts for — a NEW widening key would
+  arrive unpinned and reopen the channel the #520 fix closed.
 - **Structured output.** Run a small live `codex exec --output-schema <file>` and confirm the final
   message still conforms to the strict-mode schema in `schemas.py`. (Reminder, already in
   `COMPATIBILITY.md`: native `codex review --output-schema` is **not** honored for the final message
   — `codex_review_changes` must keep using `codex exec` with a diff we gather ourselves. Re-confirm
   this hasn't regressed before considering the native review subcommand.)
+- **Strict-config grammar (zero spend).** The `--strict-config` guard (#524) is only as good as
+  the stderr grammar it is parsed from: if upstream rewords the message,
+  `parse_strict_config_rejection` stops matching and a pin drift degrades from
+  `cli_contract_changed` to a generic `nonzero_exit` — the run still fails loudly, but the
+  diagnosis is lost. Re-verify both shapes against a **scratch** `$CODEX_HOME`. Runs 1 and 2 die
+  at config parsing, which precedes auth. Run 3 is the positive control and does **not** trip the
+  guard, so it would go on to a real turn if it could authenticate — a scratch `$CODEX_HOME` alone
+  does not stop that, because an exported `OPENAI_API_KEY` still authenticates (verified). Unset
+  the key variables for the block and it spends nothing:
+
+  ```bash
+  (
+    set -eu
+    scratch=$(mktemp -d)
+    # codex writes into $CODEX_HOME (a plugins clone) after run 3 returns, so cleanup can race it
+    trap 'rm -rf "$scratch" 2>/dev/null || true' EXIT
+    unset OPENAI_API_KEY CODEX_API_KEY   # load-bearing, not a formality: see above
+    export CODEX_HOME=$scratch           # no auth.json here, so run 3 stops at auth
+    # 1. override form -> unknown configuration field `bogus_key_xyz` in -c/--config override
+    codex exec --strict-config -c bogus_key_xyz=1 \
+      --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+    # 2. file form -> a <path>:<line>:<col>: span for the same phrase
+    printf 'some_unknown_junk_key = true\n' > "$scratch/config.toml"
+    codex exec --strict-config --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+    # 3. positive control: --ignore-user-config must EXEMPT the file (run gets past config)
+    codex exec --strict-config --ignore-user-config \
+      --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+  )
+  ```
+
+  Both rejections must still carry `Error loading config.toml` and ``unknown configuration field``,
+  the override form must still name `in -c/--config override`, and run 3 must get past config
+  parsing (it then fails on auth, which is the expected stopping point). Reconcile any wording
+  change with `STRICT_CONFIG_ERROR_PREFIX` / `STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE` and the two
+  patterns beside them, and refresh COMPATIBILITY.md's strict-config section. **Only encode
+  phrasings from real observed output.**
 - **Failure classification.** Trigger the no-spend parser failures (an unknown flag, an invalid
   `--sandbox` value) and confirm they still match `CONTRACT_DRIFT_STDERR_PATTERNS`. If you can safely
   observe new auth / rate-limit wording, reconcile it against `AUTH_FAILURE_PATTERNS` /

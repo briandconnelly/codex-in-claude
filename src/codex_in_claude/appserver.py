@@ -90,8 +90,13 @@ def _display_text(text: object) -> str:
     bounds one JSONL *line* at 8 MiB; without this there is no cap between that line and
     the agent's context window, and no redaction between it and an MCP error envelope.
 
-    Redaction runs BEFORE truncation: cutting first can split a secret so no pattern
-    matches, publishing its prefix. The result never exceeds ``_MAX_DISPLAY_CHARS`` — an
+    Sanitation runs BEFORE truncation: cutting first can split a secret so no pattern
+    matches, publishing its prefix. `sanitize_echo_prose` also deletes control characters
+    ahead of the redaction (#528) — this is untrusted child-process text, and an escape
+    sequence in it can corrupt or spoof how the message renders in a terminal. Its prose
+    variant keeps line breaks wherever that is provably as safe as removing them.
+
+    The result never exceeds ``_MAX_DISPLAY_CHARS`` — an
     over-cap value ends in ``_DISPLAY_TRUNC_MARKER`` so a reader can tell a clipped
     diagnostic from a complete one. Non-strings are coerced (``None`` -> ``""``), since
     every field here is ``.get()``-ed off untrusted JSON and may be any type.
@@ -101,30 +106,62 @@ def _display_text(text: object) -> str:
     string that reaches an envelope (e.g. ``stderr_tail``, #275) must route through here.
 
     Callers decide *whether a diagnostic exists* by testing the RAW wire value, not this
-    function's output. Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
+    function's output — but that test alone is no longer sufficient. A truthy value could
+    never sanitize to ``""`` while redaction substituted a non-empty marker; a fragment of
+    nothing but control characters now can, stranding a static prefix with no diagnostic
+    after it. :func:`_display_detail_or` does both checks; use it rather than composing a
+    message from this function directly (#528).
+
+    Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
     ``{}``) carries no diagnostic text, but coercing one here yields a truthy string, so
     branching on the sanitized result would emit noise like ``rejected the import: {}``
-    instead of a clean generic sentence. The converse cannot happen: a truthy ``detail``
-    never sanitizes to ``""`` (``redact_text`` substitutes a non-empty placeholder), so no
-    caller can strand a prefix with an empty fragment after it.
+    instead of a clean generic sentence. The converse USED to be impossible — a truthy
+    ``detail`` could not sanitize to ``""``, because the redactor substitutes a non-empty
+    placeholder — which is why testing the raw value alone was once sufficient. Control-
+    character deletion ended that, as the paragraph above says; the two checks are not
+    interchangeable and :func:`_display_detail_or` does both.
     """
     if text is None:
         return ""
-    out = redaction.redact_text(str(text)) or ""
+    out = redaction.sanitize_echo_prose(str(text))
     if len(out) <= _MAX_DISPLAY_CHARS:
         return out
     return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
 
 
+def _display_detail_or(text: object, generic: str, *, prefix: str) -> str:
+    """A sanitized foreign fragment appended to a static prefix, or the generic sentence.
+
+    TWO emptiness checks, and both are load-bearing in opposite directions.
+
+    The RAW value decides whether a diagnostic exists at all. A falsey JSON `message`
+    (`0`, `{}`, `""`, `false`, `[]`) carries none, and `_display_text` would coerce it to a
+    truthy string, publishing noise like "rejected the import: {}" — see
+    `test_falsey_app_server_message_yields_our_generic_sentence`, which locks that.
+
+    The SANITIZED value decides whether anything survived. That check is new: a truthy
+    fragment used to be guaranteed non-empty (the redactor substitutes a marker), but a
+    fragment of nothing but control characters now sanitizes to "", which stranded a static
+    prefix — "codex app-server initialize failed: " with nothing after it (#528).
+    """
+    if not text:
+        return generic
+    fragment = _display_text(text)
+    return f"{prefix}{fragment}" if fragment else generic
+
+
 def _display_stderr_tail(raw: str | None) -> str | None:
     """Project a raw ``codex app-server`` stderr tail for an error envelope.
 
-    Redact the FULL capture, then keep the LAST ``_MAX_DISPLAY_CHARS`` characters with the
-    truncation marker at the START. This is the mirror image of :func:`_display_text`, which
+    Sanitize the FULL capture, then keep the LAST ``_MAX_DISPLAY_CHARS`` characters with
+    the truncation marker at the START. This is the mirror image of :func:`_display_text`, which
     keeps the *head*: ``stderr_tail`` is a rolling tail whose signal — the terminal
     exception / panic line — is last, so head-truncation would spend the whole budget on the
-    oldest, least useful output (the #275 hazard). Redaction runs before the cut so a secret
-    straddling the boundary can't survive as an unredacted suffix.
+    oldest, least useful output (the #275 hazard). Sanitation runs before the cut so a secret
+    straddling the boundary can't survive as an unredacted suffix — and so a control
+    character cannot ride out in the one field most likely to be read in a terminal (#528).
+    The PROSE variant is deliberate: a rolling tail is multi-line, and collapsing it into a
+    single glued line would destroy what it exists for.
 
     Returns ``None`` for empty / ``None`` input so a caller can branch on *whether a
     diagnostic exists* — the same falsey-collapse the ``drain.snapshot() or None`` idiom
@@ -133,7 +170,7 @@ def _display_stderr_tail(raw: str | None) -> str | None:
     outcome for a later path to surface unredacted."""
     if not raw:
         return None
-    out = redaction.redact_text(raw) or ""
+    out = redaction.sanitize_echo_prose(raw)
     if not out:
         return None
     if len(out) <= _MAX_DISPLAY_CHARS:
@@ -860,9 +897,11 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 detail = error.get("message") if isinstance(error, dict) else None
                 return TransferOutcome(
                     status=TransferStatus.PROTOCOL_ERROR,
-                    message=f"codex app-server initialize failed: {_display_text(detail)}"
-                    if detail
-                    else "codex app-server rejected initialize.",
+                    message=_display_detail_or(
+                        detail,
+                        "codex app-server rejected initialize.",
+                        prefix="codex app-server initialize failed: ",
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             # initialize response → capture codexHome, then send initialized + import.
@@ -926,18 +965,19 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
                         codex_home=codex_home,
-                        message=f"codex app-server rejected the import request: "
-                        f"{_display_text(detail)}"
-                        if detail
-                        else "codex app-server rejected the import request.",
+                        message=_display_detail_or(
+                            detail,
+                            "codex app-server rejected the import request.",
+                            prefix="codex app-server rejected the import request: ",
+                        ),
                         stderr_tail=_display_stderr_tail(_settle()),
                     )
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
                     codex_home=codex_home,
-                    message=_display_text(detail)
-                    if detail
-                    else "codex app-server rejected the import.",
+                    message=_display_detail_or(
+                        detail, "codex app-server rejected the import.", prefix=""
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == 2 and "result" in msg:
@@ -1245,9 +1285,11 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 detail = error.get("message") if isinstance(error, dict) else None
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.PROTOCOL_ERROR,
-                    message=f"codex app-server initialize failed: {_display_text(detail)}"
-                    if detail
-                    else "codex app-server rejected initialize.",
+                    message=_display_detail_or(
+                        detail,
+                        "codex app-server rejected initialize.",
+                        prefix="codex app-server initialize failed: ",
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == 1 and "result" in msg and not read_sent:
@@ -1291,10 +1333,11 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
-                    message=f"codex app-server rejected the rate-limit read: "
-                    f"{_display_text(detail)}"
-                    if detail
-                    else "codex app-server rejected the rate-limit read.",
+                    message=_display_detail_or(
+                        detail,
+                        "codex app-server rejected the rate-limit read.",
+                        prefix="codex app-server rejected the rate-limit read: ",
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == read_id and "result" in msg:

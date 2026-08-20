@@ -154,17 +154,99 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     return None
 
 
+# The PROSE members of a parsed structured payload — the text a client renders. Everything
+# not named here is left byte-identical, which is the whole point: see `_sanitize_structured`.
+_PROSE_KEYS = ("summary", "questions", "assumptions", "next_steps")
+# The prose members of one finding. `severity` is a closed enum, and `file`/`line`/`line_end`
+# are identifiers a reader uses to locate the code — machine fields, all of them.
+_FINDING_PROSE_KEYS = ("title", "evidence", "risk", "recommendation")
+
+
+def _sanitize_structured(parsed: dict) -> dict:
+    """Sanitize the PROSE leaves of a parsed structured payload, by key.
+
+    Deliberately not a blind tree walk. A walk that sanitizes every string also REPAIRS the
+    machine fields, and repairing them is worse than leaving them dirty: a `verdict` of
+    "pa\x07ss" is not a valid verdict and must degrade to "unknown", but stripping the
+    control character turns it into an affirmative "pass" — promoting untrusted model output
+    from an invalid judgment to a passing review with "high" confidence. `severity` inverts
+    the same way, and `file` is an identifier a reader uses to locate code, so silently
+    deleting a byte from it points them somewhere else.
+
+    So the machine fields reach `_enum` and `coerce_findings` exactly as the model wrote
+    them, and only text that is rendered as prose is cleaned. This mirrors the split the
+    error envelopes already draw between `error.message` and `details.field` (#528; the
+    validate-don't-mutate half for machine fields is #529).
+
+    Sanitation still REPLACES the `redact_tree` call rather than running after it — it has
+    to be strip-then-redact, and stripping after a redaction pass is the ordering that
+    reassembles a control-split secret. Non-prose leaves keep the plain redaction they
+    always had.
+    """
+    out: dict = dict(parsed)
+    for key in _PROSE_KEYS:
+        if key in out:
+            out[key] = _sanitize_prose_value(out[key])
+    findings = out.get("findings")
+    findings_sanitized = isinstance(findings, list)
+    if findings_sanitized:
+        out["findings"] = [_sanitize_finding(f) for f in findings]
+    # Every remaining leaf keeps the redaction it had before this change — including a
+    # `findings` of some other shape, which the branch above does not touch. Excluding the
+    # key unconditionally would silently DROP the redaction it used to get; `coerce_findings`
+    # discards a non-list today, so that was latent rather than a leak, but the exclusion has
+    # to track what was actually sanitized, not the key name.
+    for key, value in out.items():
+        if key in _PROSE_KEYS or (key == "findings" and findings_sanitized):
+            continue
+        out[key] = redaction.redact_tree(value)
+    return out
+
+
+def _sanitize_finding(finding: object) -> object:
+    if not isinstance(finding, dict):
+        return redaction.redact_tree(finding)
+    out = dict(finding)
+    for key, value in out.items():
+        if key in _FINDING_PROSE_KEYS:
+            out[key] = _sanitize_prose_value(value)
+        else:
+            out[key] = redaction.redact_tree(value)
+    return out
+
+
+def _sanitize_prose_value(value: object) -> object:
+    """Apply the echo sanitizer to a prose leaf, or to each string in a prose list."""
+    if isinstance(value, str):
+        return redaction.sanitize_echo_prose(value)
+    if isinstance(value, list):
+        return [_sanitize_prose_value(v) for v in value]
+    return redaction.redact_tree(value)
+
+
 def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | None, RawResponse]:
     """Parse the structured payload (or None for a plain message) and build the shared
     RawResponse. Returns (structured_or_None, raw).
 
     Inline secret-looking values are redacted from every free-text surface before it
-    leaves this process (#58): the parsed structured payload (summary/findings/etc.)
-    via redact_tree, and raw_response.text via redact_text. Best-effort defense-in-
-    depth, consistent with the diff redaction the review path already applies."""
+    leaves this process (#58). The two surfaces get DIFFERENT treatment, on purpose (#528):
+
+    - The parsed structured payload (summary/findings/questions/next_steps) is a
+      PRESENTATION this server composes, and it is what a client renders. It goes through
+      the echo sanitizer, so a control character in model output cannot reach a terminal
+      through the field most likely to be displayed.
+    - ``raw_response.text`` is the closest-to-source carrier and keeps the bare redaction
+      it always had. Not literally byte-identical to the model's output — ``redact_text``
+      still runs, and the delegate path also relativizes worktree paths — but THIS change
+      does not transform it, so its control characters survive. A caller that needs the
+      model's output as it stood reads it there, which is why deleting characters from it
+      would be wrong.
+
+    Best-effort defense-in-depth, consistent with the diff redaction the review path already
+    applies."""
     structured = normalize.parse_structured(result.last_message)
     if structured is not None:
-        structured = cast("dict[str, Any]", redaction.redact_tree(structured))
+        structured = cast("dict[str, Any]", _sanitize_structured(structured))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,
@@ -174,7 +256,17 @@ def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | N
 
 
 def _summary_of(structured: dict) -> str:
-    return str(structured.get("summary") or "").strip() or "(no summary)"
+    """The rendered summary, sanitized after stringification.
+
+    `_sanitize_structured` already cleans a string- or list-valued `summary`, but the model
+    can return one of any JSON shape, and a dict lands here as `str(dict)`. Python's repr
+    happens to escape control characters inside a nested string, so that shape does not leak
+    today — but relying on an incidental property of repr to hold a security guarantee is
+    not a guarantee. Sanitizing the final string makes it explicit and survives a future
+    change to how this is formatted."""
+    return redaction.sanitize_echo_prose(str(structured.get("summary") or "")).strip() or (
+        "(no summary)"
+    )
 
 
 def _enum(value: object, allowed: tuple[str, ...], default: str) -> Any:
@@ -212,7 +304,12 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
     # invalid_json/schema_violation error the strict review path now raises.
     return dump_success(
         ConsultResult(
-            summary=(raw.text or "").strip() or "(codex returned no message)",
+            # The PRESENTATION copy, sanitized like every other rendered field (#528);
+            # `raw_response` below keeps the exact-content product. Built from
+            # `result.last_message`, not from `raw.text`: sanitizing `raw.text` would be
+            # strip-AFTER-redact, the ordering that reassembles a control-split secret.
+            summary=(redaction.sanitize_echo_prose(result.last_message)).strip()
+            or "(codex returned no message)",
             raw_response=raw,
             meta=meta,
         )
@@ -223,9 +320,11 @@ def _review_invalid_response_error(code: str, last_message: str | None, meta: Me
     """Build the explicit error for an exit-0 review whose output ignored the schema
     (#159). Unlike consult's prose-passthrough, review's value is the structured
     verdict/findings, so a missing/non-object payload is surfaced rather than silently
-    downgraded to verdict="unknown". The raw text is preserved as a bounded, secret-
-    redacted preview for debugging (ErrorResult carries no raw_response field)."""
-    preview = (redaction.redact_text(last_message) or "").strip()[:300]
+    downgraded to verdict="unknown". The raw text is preserved as a bounded, sanitized
+    preview for debugging (ErrorResult carries no raw_response field). It is MODEL text
+    quoted back into an error, so it goes through the echo sanitizer — control characters
+    deleted ahead of redaction (#528) — not through bare redaction."""
+    preview = redaction.sanitize_echo_prose(last_message).strip()[:300]
     tail = f" Raw output preview: {preview}" if preview else ""
     message = (
         "codex exited 0 but did not return a schema-valid JSON object for the review "
@@ -271,7 +370,7 @@ def finalize_review(result: codex.CodexExecResult, *, meta: Meta, coverage: Cove
     status, parsed = normalize.classify_structured(result.last_message)
     if status != "ok":
         return _review_invalid_response_error(status, result.last_message, meta)
-    structured = cast("dict[str, Any]", redaction.redact_tree(cast("dict", parsed)))
+    structured = cast("dict[str, Any]", _sanitize_structured(cast("dict", parsed)))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,
@@ -363,7 +462,7 @@ def gitdiff_error(exc: Exception, meta: Meta) -> dict:
         details = None  # derived from the entry by make_error, so the two cannot drift
         message = reason[:300]
     else:
-        message = (redaction.redact_text(str(exc)) or "")[:300]
+        message = redaction.sanitize_echo_prose(str(exc))[:300]
     return serialize_error(
         ErrorResult(
             error=make_error(

@@ -112,6 +112,16 @@ def build_snapshot() -> dict:
         "error": serialize_error(
             ErrorResult(error=make_error("internal_error", "m"), meta=_representative_meta())
         ),
+        # A SECOND error envelope, carrying a code outside the sample above (#524). The
+        # `serialized` view is a sample, not an enumeration, so a new ErrorCode literal
+        # that no representative envelope uses moves only the `schemas` view — even
+        # though a worker can persist it (run_delegate's classify_failure envelope is
+        # written to result.json verbatim) and an older reader's closed Literal would
+        # reject those bytes. Keeping one non-`internal_error` code here makes the
+        # persisted-byte consequence of an ErrorCode change visible in this view.
+        "error_user_config_rejected": serialize_error(
+            ErrorResult(error=make_error("user_config_rejected", "m"), meta=_representative_meta())
+        ),
     }
     return {
         "result_format": RESULT_FORMAT,
