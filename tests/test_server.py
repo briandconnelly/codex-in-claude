@@ -9649,3 +9649,25 @@ async def test_delegate_tools_declare_destructive_writes(tool_name):
     assert ann.destructiveHint is True
     assert ann.idempotentHint is False
     assert ann.openWorldHint is True
+
+
+async def test_worktree_error_message_strips_control_characters(monkeypatch, clean_env, tmp_path):
+    """#528, the shape a `redact_text` sweep misses: a pontonier `WorktreeError` reaches the
+    envelope as bare `str(exc)[:300]`, with no sanitizing pass at this end at all.
+
+    Upstream builds those messages from git's stderr through `sanitize_prose` — redaction
+    and relativization, but no control-character stripping — so an escape sequence in git's
+    output rides straight through. Whatever upstream does at its own raise sites, text this
+    server puts in an envelope is sanitized by this server.
+    """
+
+    def boom(*a, **k):
+        raise server.worktree.WorktreeError("git failed \x1b[31mRED\x1b[0m at step\x07 2")
+
+    monkeypatch.setattr(server.worktree, "ensure_repo_with_head", boom)
+    res = await server.codex_delegate("x", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "worktree_error"
+    message = res["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    assert "RED" in message  # the actionable text survives; only the escapes go

@@ -108,7 +108,7 @@ async def run_delegate(
             ErrorResult(
                 error=make_error(
                     "not_a_git_repo",
-                    str(exc),
+                    redaction.sanitize_echo_prose(str(exc)),
                     details=ErrorDetail(field="workspace_root"),
                 ),
                 meta=meta,
@@ -119,7 +119,7 @@ async def run_delegate(
             ErrorResult(
                 error=make_error(
                     "worktree_error",
-                    str(exc)[:300],
+                    redaction.sanitize_echo_prose(str(exc))[:300],
                     repair_alternative=(
                         "Ensure the repo has at least one commit and a clean git state."
                     ),
@@ -168,7 +168,7 @@ async def run_delegate(
     except worktree.WorktreeError as exc:
         return serialize_error(
             ErrorResult(
-                error=make_error("worktree_error", str(exc)[:300]),
+                error=make_error("worktree_error", redaction.sanitize_echo_prose(str(exc))[:300]),
                 meta=meta,
             )
         )

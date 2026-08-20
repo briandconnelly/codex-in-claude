@@ -2828,7 +2828,7 @@ async def _prepare_delegate(
             ErrorResult(
                 error=make_error(
                     "not_a_git_repo",
-                    str(exc),
+                    redaction.sanitize_echo_prose(str(exc)),
                     details=ErrorDetail(field="workspace_root"),
                 ),
                 meta=meta,
@@ -2837,7 +2837,7 @@ async def _prepare_delegate(
     except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
         return serialize_error(
             ErrorResult(
-                error=make_error("worktree_error", str(exc)[:300]),
+                error=make_error("worktree_error", redaction.sanitize_echo_prose(str(exc))[:300]),
                 meta=meta,
             )
         )
@@ -4254,7 +4254,7 @@ async def codex_delegate_dry_run(
             ErrorResult(
                 error=make_error(
                     "not_a_git_repo",
-                    str(exc),
+                    redaction.sanitize_echo_prose(str(exc)),
                     details=ErrorDetail(field="workspace_root"),
                 ),
                 meta=meta,
@@ -4265,7 +4265,7 @@ async def codex_delegate_dry_run(
             ErrorResult(
                 error=make_error(
                     "worktree_error",
-                    str(exc)[:300],
+                    redaction.sanitize_echo_prose(str(exc))[:300],
                     # The preview is read-only (no worktree is created), so a dirty tree is
                     # fine; this fires only when the repo has no commit to base on or a git
                     # command failed.
