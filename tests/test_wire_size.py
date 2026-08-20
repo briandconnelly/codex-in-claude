@@ -175,7 +175,17 @@ from codex_in_claude.server import mcp
 # writes are neither in the diff nor cleaned up — replacing the two exclusivity
 # sentences they retire): 92,289 -> 92,599 bytes (+310 B) — still within budget, no
 # further change.
-TOOLS_LIST_BYTE_BUDGET = 93_000
+# Measured again 2026-08-20 (#529 — the machine-identifier control-character boundary. Six
+# parameters (job_id, base, commit, model on two annotations, transcript_path) now advertise
+# `config.CONTROL_CHAR_FREE_PATTERN`, and four carry a one-clause note that the value is
+# REJECTED rather than stripped): 92,599 -> 94,130 bytes (+1,531 B) — over budget; budget
+# raised to the next 1,000 above the measured value. Compacting was considered and rejected:
+# roughly half the growth is the advertised `pattern` itself, which is the machine-readable
+# half a client validates against before spending and so cannot be dropped at all. The prose
+# half was already cut from four sentences to one clause; what remains states the disposition
+# (rejected, not stripped), which is the fact a caller cannot infer from the regex — a regex
+# says which values fail, not that the server refuses rather than silently repairs them.
+TOOLS_LIST_BYTE_BUDGET = 95_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -187,7 +197,7 @@ TOOLS_LIST_BYTE_BUDGET = 93_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 92_599
+TOOLS_LIST_BYTE_TARGET = 94_130
 
 
 def _budget_failure_message(measured: int) -> str:

@@ -862,7 +862,12 @@ def _wire_catalog_bytes() -> int:
 # descriptions now carry `cli_contract.WORKSPACE_WRITE_SCOPE_FACT` plus the temp-root
 # persistence clause, replacing the two "only inside a throwaway worktree" exclusivity
 # sentences): 92,306 -> 92,616 bytes (+310 B) — still within cap, no further change.
-CATALOG_BYTE_CAP = 93_000
+# Measured again 2026-08-20 (#529, the machine-identifier control-character boundary — six
+# parameters advertise `config.CONTROL_CHAR_FREE_PATTERN` and four note that the value is
+# rejected rather than stripped; see tests/test_wire_size.py for why the pattern half cannot
+# be compacted away): 92,616 -> 94,147 bytes (+1,531 B) — over cap; cap raised to the next
+# 1,000 above the measured value.
+CATALOG_BYTE_CAP = 95_000
 
 
 def test_wire_catalog_under_cap():
@@ -1021,7 +1026,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-82"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-83"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
