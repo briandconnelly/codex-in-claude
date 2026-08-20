@@ -9528,12 +9528,13 @@ def test_write_scope_fact_reaches_every_delegate_carrier():
 
 
 def test_delegate_carriers_state_temp_root_persistence():
-    """Temp-root writes outlive the run and never reach the diff — the delegate
-    docstrings and negative_scope must say so, or "reviewable diff" reads as a full
-    account of the run's side effects (#523)."""
-    carriers = _runtime_write_scope_carriers()
-    for label in ("docstring:codex_delegate", "docstring:codex_delegate_async", "negative_scope"):
-        assert _TEMP_PERSISTENCE_CLAUSE in _normalize(carriers[label]).lower(), label
+    """Temp-root writes outlive the run and never reach the diff — EVERY write-scope
+    carrier must say so, or "reviewable diff" reads as a full account of the run's
+    side effects (#523). The capabilities `returns` entries are included because a
+    caller reading only the capabilities inventory would otherwise get the grant
+    without its key implication (Copilot review on #526)."""
+    for label, text in _runtime_write_scope_carriers().items():
+        assert _TEMP_PERSISTENCE_CLAUSE in _normalize(text).lower(), label
 
 
 def test_no_runtime_carrier_claims_worktree_bounds_writes(monkeypatch, clean_env):
