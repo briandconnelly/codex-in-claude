@@ -1479,3 +1479,90 @@ def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operato
     err = codex.classify_failure(_run(stderr=f"error: unexpected argument '{name}' found"))
     assert err.code == "extra_args_rejected"
     assert not _has_control(err.message or ""), repr(err.message)
+
+
+# --- version_display: bounded, sanitized DISPLAY copy of `codex --version` (#531) ------
+# `codex --version` stdout was echoed into StatusResult.codex_version with no bound and no
+# sanitation. The identity/display split is the point: `codex_version()` keeps returning the
+# RAW string (config.parse_version reads it), and only the emitted copy is sanitized.
+
+
+def test_version_display_passes_an_ordinary_version_through():
+    assert codex.version_display("codex-cli 0.148.0") == "codex-cli 0.148.0"
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_version_display_absent_input_stays_none(value):
+    assert codex.version_display(value) is None
+
+
+def test_version_display_deletes_control_characters():
+    """RED before #531: the raw ESC sequences rode into the envelope verbatim."""
+    out = codex.version_display("codex-cli 9.9.9\x1b[2K\x1b[31m rogue")
+    assert out is not None
+    assert not _has_control(out), repr(out)
+    assert "\x1b" not in out
+
+
+def test_version_display_of_nothing_but_control_characters_is_none():
+    """An all-Cc version sanitizes to "", which must read as ABSENT rather than as the
+    empty string — `codex_found` is decided from the raw value, not from this copy."""
+    assert codex.version_display("\x1b\x07\x00") is None
+
+
+def test_version_display_bounds_a_long_version_with_an_explicit_marker():
+    """RED before #531: a 5010-char version came back at full length.
+
+    The marker is reserved INSIDE the cap, so a clipped value can never be mistaken for a
+    complete one ([8.truncation] in the agent-friendly-mcp contract checklist)."""
+    out = codex.version_display("codex-cli " + "A" * 5000)
+    assert out is not None
+    assert len(out) == codex._ECHO_MAX_CHARS
+    assert out.endswith(codex._ECHO_TRUNC_MARKER)
+
+
+@pytest.mark.parametrize(
+    ("length", "clipped"),
+    [
+        (codex._ECHO_MAX_CHARS - 1, False),
+        (codex._ECHO_MAX_CHARS, False),
+        (codex._ECHO_MAX_CHARS + 1, True),
+    ],
+)
+def test_version_display_boundary_is_at_the_cap_not_around_it(length, clipped):
+    """The cap's own boundary: at or below it nothing is touched; one character past it
+    truncates. A silent off-by-one here would clip a complete value or emit an over-cap one."""
+    out = codex.version_display("v" * length)
+    assert out is not None
+    assert (out.endswith(codex._ECHO_TRUNC_MARKER)) is clipped
+    assert len(out) == (codex._ECHO_MAX_CHARS if clipped else length)
+
+
+def test_version_display_redacts_a_secret_straddling_the_truncation_cut():
+    """Sanitation runs BEFORE the bound, so a secret whose pattern needs its tail is
+    redacted while the redactor can still see it — truncating first would publish a prefix."""
+    secret = "sk-ant-api03-" + "x" * 95
+    out = codex.version_display("v0 " + "p" * (codex._ECHO_MAX_CHARS - 10) + secret)
+    assert out is not None
+    assert "sk-ant-api03-" not in out
+
+
+def test_version_display_never_repairs_a_control_split_version_for_the_verdict():
+    """The display copy is LOSSY and is not the identity.
+
+    Deleting the control character out of `0.<BEL>148.0` yields a plausible
+    `codex-cli 0.148.0` — but `version_supported` must keep parsing the RAW probe output,
+    which does not parse at all. Pinning both halves keeps a future refactor from routing
+    the verdict through this copy."""
+    raw = "codex-cli 0.\x07148.0"
+    assert codex.version_display(raw) == "codex-cli 0.148.0"
+    assert config.parse_version(raw) is None
+    assert config.version_supported(raw) is None
+
+
+def test_safe_echo_bounds_an_over_cap_span_with_the_explicit_marker():
+    """#531 applies the same rule to every echoed span: a clipped config key or flag name
+    must not read as a complete one either."""
+    out = codex._safe_echo("k" * 5000)
+    assert len(out) == codex._ECHO_MAX_CHARS
+    assert out.endswith(codex._ECHO_TRUNC_MARKER)

@@ -370,6 +370,20 @@ def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
 
 # Bound on each echoed span; a real key or path is far shorter (cf. CODEX_HOME_MAX_BYTES).
 _ECHO_MAX_CHARS = 200
+# Reserved INSIDE that bound, so a clipped span can never be read as a complete value
+# (#531; `[8.truncation]` in the agent-friendly-mcp contract checklist). appserver's
+# `_DISPLAY_TRUNC_MARKER` makes the same reservation for app-server prose.
+_ECHO_TRUNC_MARKER = "…[truncated]"
+
+
+def _bounded_echo(text: str) -> str:
+    """Cut an already-sanitized span to `_ECHO_MAX_CHARS`, marking the cut when one happens.
+
+    The marker's own length comes out of the budget rather than being added to it, so the
+    result never exceeds the bound the caller was promised."""
+    if len(text) <= _ECHO_MAX_CHARS:
+        return text
+    return text[: _ECHO_MAX_CHARS - len(_ECHO_TRUNC_MARKER)] + _ECHO_TRUNC_MARKER
 
 
 def _safe_echo(text: str | None) -> str:
@@ -383,8 +397,29 @@ def _safe_echo(text: str | None) -> str:
     The strip-then-redact ordering is `redaction.sanitize_echo`'s and is documented there;
     this bridge does not re-derive it (#528). What stays here is bridge policy: the LENGTH
     bound, and that truncation comes LAST, so a secret straddling the cut still had the
-    tail its pattern needed when the redactor saw it."""
-    return redaction.sanitize_echo(text)[:_ECHO_MAX_CHARS]
+    tail its pattern needed when the redactor saw it. The cut is MARKED (#531): a clipped
+    key or flag name that reads as a complete one sends the caller after the wrong thing."""
+    return _bounded_echo(redaction.sanitize_echo(text))
+
+
+def version_display(version: str | None) -> str | None:
+    """The bounded, sanitized DISPLAY copy of a `codex --version` string, or None.
+
+    `codex_version()` above returns the string RAW, and it must keep doing so: it is the
+    IDENTITY `config.parse_version` reads, and sanitizing at capture would let the cleanup
+    decide the support verdict. Deleting the control character out of `0.<BEL>148.0` yields
+    a perfectly plausible `codex-cli 0.148.0` — so a version that does not parse at all
+    would be repaired into one that does. This is the identity-vs-display split #528 drew
+    for extra-args descriptors, applied at the one place the string is emitted (#531).
+
+    So the two disagree by design, and a reader must not treat this copy as the identity:
+    `version_supported` is parsed from the raw probe output, and a truncated display can
+    even omit the token that decided it. `StatusResult` documents that to clients.
+
+    A value that sanitizes away to nothing comes back as None rather than "": the field is
+    optional, and `codex_found` is decided from the RAW value, so a version of nothing but
+    control characters still means codex ran and answered."""
+    return _safe_echo(version) or None
 
 
 def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -> ErrorInfo:

@@ -1350,6 +1350,18 @@ def _tool_meta(name: str) -> dict[str, str]:
     return {_STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY)}
 
 
+# The unsupported-version advisory. STATIC on purpose (#531): the version string is
+# subprocess stdout, and interpolating it here duplicated that untrusted text into a second
+# sink for no machine-readable gain — `codex_version` already carries the (sanitized,
+# bounded) value, and `version_supported` already carries the verdict. Keeping this text
+# free of foreign content also removes any question of what a clipped or sanitized-away
+# version does to the sentence around it.
+VERSION_WARNING = (
+    "The installed codex version is outside the tested set; tools may still work but are "
+    "unverified for this version. The reported version is in `codex_version`."
+)
+
+
 # --------------------------------------------------------------------------- #
 # Free tools
 # --------------------------------------------------------------------------- #
@@ -1387,12 +1399,7 @@ def codex_status() -> dict:
     fs = preflight.flag_support(force=True)
     missing = preflight.missing_expected_flags(fs)
 
-    version_warning = None
-    if version_supported is False:
-        version_warning = (
-            f"codex version {version} is outside the tested set; tools may still "
-            "work but are unverified for this version."
-        )
+    version_warning = VERSION_WARNING if version_supported is False else None
     flags_warning = None
     if missing:
         flags_warning = (
@@ -1414,7 +1421,7 @@ def codex_status() -> dict:
     extra = config.extra_args()
     return StatusResult(
         codex_found=found,
-        codex_version=version,
+        codex_version=codex.version_display(version),
         codex_authenticated=authenticated,
         auth_detail=auth_detail,
         version_supported=version_supported,

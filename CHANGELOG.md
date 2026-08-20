@@ -7,6 +7,32 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **The `codex --version` string is sanitized and bounded before it reaches `codex_status`.**
+  Subprocess stdout was echoed into `codex_version` raw and unbounded, and interpolated into
+  `version_warning`: a `codex` on `PATH` reporting `codex-cli 9.9.9<ESC>[2K<ESC>[31m rogue` put
+  those escape sequences in both fields, and a 5010-character version came back at full length.
+  The bug predates #528 and is the instance of that class the issue left open; the threat
+  model is weaker (it needs a hostile `codex` binary, which already controls every model-bearing
+  run), which is why it was not a blocker there.
+
+  The fix keeps the identity/display split: `codex.codex_version()` still returns the string RAW,
+  because that is what `config.parse_version` reads, and only the emitted copy is cleaned. That
+  ordering is load-bearing rather than stylistic — sanitizing at capture REPAIRS malformed
+  identity text, since deleting the control character out of `0.<BEL>148.0` yields a plausible
+  `codex-cli 0.148.0`, turning a version that does not parse into one that does. So the two
+  fields can legitimately disagree, and `codex_version` now carries a description saying so.
+
+  `version_warning` is now **static**. It never quoted anything the version string did not
+  already put in `codex_version`, so interpolating it only copied untrusted text into a second
+  sink. Truncation is now **marked** (`…[truncated]`, reserved inside the 200-character
+  budget) for every echoed span — the version and, for the same reason, the config keys and
+  rejected flag names `_safe_echo` already bounded silently: a clipped key that reads as a
+  complete one sends the caller after a key they never wrote.
+
+  Agent-visible: `FINGERPRINT` moves to `schema-84` for the new `codex_version` description. Not
+  breaking — no field is removed, renamed, or retyped, no input narrows, and the emitted value is
+  unchanged for every version string a real `codex` prints.
+
 - **Machine-readable identifier fields validate control characters instead of echoing or
   stripping them.** #528 deletes every Unicode `Cc` code point from echoed prose. That remedy is
   wrong for a machine field, and the bug was live: a `job_id` of `abc<BEL><ESC>[31mdef` came back
