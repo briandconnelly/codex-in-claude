@@ -250,10 +250,18 @@ _RESERVED_META_CONFIG_KEYS: dict[str, tuple[str, str, str, str]] = {
 @dataclass(frozen=True)
 class ExtraArgs:
     """Parsed CODEX_IN_CLAUDE_EXTRA_ARGS. `tokens` is the validated argv to inject
-    (may carry secret `-c` VALUES — never echo it). `descriptors` are sanitized
-    identifiers (allowlisted flag names, config KEYS, profile/feature NAMES — never a
-    `-c` value) safe to surface in codex_status / an error envelope and to match against
-    a codex drift stderr. `error` is a value-free 'why invalid' string set only when the
+    (may carry secret `-c` VALUES — never echo it). `descriptors` are RAW identifiers
+    (allowlisted flag names, config KEYS, profile/feature NAMES — never a `-c` value)
+    used to match against a codex drift stderr.
+
+    Raw is deliberate and load-bearing: a descriptor is an IDENTITY compared with codex's
+    own rejection text, which quotes the operator's name with its exact spelling, so
+    stripping or bounding one here changes what it matches and misattributes the
+    operator's bad passthrough to plugin contract drift (#528). They are therefore NOT
+    safe to surface as-is: every emission site must run them through `_safe_token` (or
+    `codex._safe_echo`), which sanitizes and bounds a single-token echo.
+
+    `error` is a value-free 'why invalid' string set only when the
     knob is present but failed to parse/validate; `configured` is True whenever the env
     var is set to a non-blank value."""
 

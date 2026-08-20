@@ -242,7 +242,12 @@ def finalize_consult(result: codex.CodexExecResult, *, meta: Meta) -> dict:
     # invalid_json/schema_violation error the strict review path now raises.
     return dump_success(
         ConsultResult(
-            summary=(raw.text or "").strip() or "(codex returned no message)",
+            # The PRESENTATION copy, sanitized like every other rendered field (#528);
+            # `raw_response` below keeps the exact-content product. Built from
+            # `result.last_message`, not from `raw.text`: sanitizing `raw.text` would be
+            # strip-AFTER-redact, the ordering that reassembles a control-split secret.
+            summary=(redaction.sanitize_echo_prose(result.last_message)).strip()
+            or "(codex returned no message)",
             raw_response=raw,
             meta=meta,
         )
@@ -303,7 +308,7 @@ def finalize_review(result: codex.CodexExecResult, *, meta: Meta, coverage: Cove
     status, parsed = normalize.classify_structured(result.last_message)
     if status != "ok":
         return _review_invalid_response_error(status, result.last_message, meta)
-    structured = cast("dict[str, Any]", redaction.redact_tree(cast("dict", parsed)))
+    structured = cast("dict[str, Any]", _sanitize_tree(cast("dict", parsed)))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,

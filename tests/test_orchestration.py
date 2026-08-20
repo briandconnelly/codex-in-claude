@@ -663,6 +663,42 @@ def test_review_invalid_response_preview_redacts_a_control_split_secret():
     assert "A" * 40 not in out["error"]["message"]
 
 
+def test_review_presentation_fields_are_sanitized_through_finalize_review():
+    """Through the REAL entry point. The first version of this test called
+    `_success_common`, which `finalize_review` never calls — so it passed while the review
+    path still used `redact_tree` and emitted control characters. A test that exercises a
+    different function than the one that ships proves nothing about the one that ships.
+    """
+    payload = (
+        '{"verdict": "pass", "confidence": "high", "summary": "bad \\u001b[31mRED\\u001b[0m",'
+        ' "findings": [{"title": "x\\u0007y", "severity": "low"}]}'
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_review(
+        result, meta=_make_meta(), coverage=Coverage(status="complete")
+    )
+    assert out["ok"] is True, out
+    assert not _has_cc(str(out["summary"]))
+    assert not _has_cc(str(out["findings"]))
+    # The exact-content carrier is untouched.
+    assert out["raw_response"]["text"] == payload
+
+
+def test_plain_consult_summary_is_sanitized_but_raw_response_is_exact():
+    """The non-JSON consult path builds `summary` from the model's prose. It is the
+    rendered field, so it is sanitized; `raw_response.text` stays exact."""
+    prose = "plain \x1b[31mRED\x1b[0m \x07"
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=prose, events=""
+    )
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert out["ok"] is True, out
+    assert not _has_cc(out["summary"]), repr(out["summary"])
+    assert out["raw_response"]["text"] == prose
+
+
 def test_structured_presentation_fields_are_sanitized_but_raw_response_is_exact():
     """#528, the success-channel half: the NORMALIZED fields are a presentation the server
     composes, and they are the ones most likely to be rendered — so control characters go.

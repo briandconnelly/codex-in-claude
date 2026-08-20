@@ -4625,6 +4625,45 @@ async def _job_result_impl(
     return envelope
 
 
+# The presentation carriers a stored SUCCESS payload can hold. `raw_response` is
+# deliberately absent: it is the exact-content carrier, and `diff` is content too (already
+# redacted at write time). Keys, not a blind tree walk, so replay cannot mutate a machine
+# identifier or `meta` (#528, #529).
+_STORED_PRESENTATION_KEYS = ("summary", "findings", "questions", "next_steps")
+
+
+def _sanitize_stored_presentation(payload: dict) -> dict:
+    """Sanitize a pre-#528 stored payload's rendered fields at the replay boundary.
+
+    A record written before the echo sanitizer landed keeps its control characters for the
+    whole TTL after an upgrade — a day by default — and replays them into the same fields a
+    client renders. Only taken when a control character is actually present, so a clean
+    record is returned byte-identical rather than re-run through the heuristic redactor.
+    """
+    for key in _STORED_PRESENTATION_KEYS:
+        value = payload.get(key)
+        if value is not None and _tree_has_control_char(value):
+            payload[key] = orchestration._sanitize_tree(value)
+    return payload
+
+
+def _tree_has_control_char(value: object) -> bool:
+    """Whether any STRING leaf in a nested value carries a Cc code point.
+
+    Deliberately a walk, not a check over `json.dumps(value)`: JSON serialization escapes
+    a control character as a `\\u0007` sequence, so the dumped text contains no Cc at all
+    and the check would report False for every nested value — silently disabling the pass
+    it guards.
+    """
+    if isinstance(value, str):
+        return appserver._has_control_char(value)
+    if isinstance(value, list):
+        return any(_tree_has_control_char(v) for v in value)
+    if isinstance(value, dict):
+        return any(_tree_has_control_char(v) for v in value.values())
+    return False
+
+
 def _finished_job_envelope(
     rec: dict,
     payload: dict | None,
@@ -4667,6 +4706,8 @@ def _finished_job_envelope(
             if delivered and isinstance(validated_payload.get("meta"), dict):
                 validated_payload["meta"]["job_id"] = job_id
                 validated_payload["meta"]["fingerprint"] = FINGERPRINT
+            if delivered:
+                validated_payload = _sanitize_stored_presentation(validated_payload)
             # slim_meta AFTER apply_detail, and after the job_id/fingerprint stamping
             # above — both write non-null values, so neither reintroduces a null key.
             # This is the single delivery chokepoint the sync and replay paths share,
@@ -4719,6 +4760,15 @@ def _finished_job_envelope(
             validated.error.message or ""
         ):
             validated.error.message = redaction.sanitize_echo_prose(validated.error.message)
+        # `repair.alternative` is the OTHER human-readable carrier on an error envelope, and
+        # it quotes the same foreign text the message does (extra-args descriptors, for
+        # one). Sanitizing only the message left it behind.
+        if validated.error.repair is not None and appserver._has_control_char(
+            validated.error.repair.alternative or ""
+        ):
+            validated.error.repair.alternative = redaction.sanitize_echo_prose(
+                validated.error.repair.alternative
+            )
         return serialize_error(validated), True
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))
     # A still-running job is the one recoverable case: point at the poll tool with

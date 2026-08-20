@@ -9732,9 +9732,17 @@ def test_stderr_tail_description_matches_what_the_code_actually_does():
     from codex_in_claude.schemas import ErrorInfo as _ErrorInfo
 
     description = _ErrorInfo.model_fields["app_server_stderr_tail"].description or ""
+    # Case 1: an untouched multi-line tail keeps its line structure.
     kept = _appserver._display_stderr_tail("first line\nsecond line") or ""
-    assert "\n" in kept  # LF really does survive
-    assert "EXCEPT line feed" in description
+    assert "\n" in kept
+    # Case 2: a tail whose redaction interacts with a line boundary comes back COLLAPSED.
+    # The description said LF "is kept", full stop, which was false for this input — the
+    # second wrong version of this same guarantee, caught by testing the claim rather than
+    # re-reading it.
+    collapsed = _appserver._display_stderr_tail("api_key=" + "A" * 20 + "\n" + "S" * 20) or ""
+    assert "\n" not in collapsed, repr(collapsed)
+    assert "retained when removing it would not change the sanitized result" in description
+    assert "Do not depend on line structure" in description
     # Everything the description claims IS removed, is removed.
     dirty = _appserver._display_stderr_tail("a\x1b[31mb\x00c\x7fd\x85e") or ""
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in dirty.replace("\n", ""))
@@ -9761,3 +9769,55 @@ def test_invalid_arguments_message_strips_control_characters_but_field_is_exact(
     assert "ev[31mil" in message
     assert out["error"]["details"]["field"] == "ev\x1b[31mil"
     assert out["error"]["invalid_arguments"][0]["field"] == "ev\x1b[31mil"
+
+
+async def test_stored_error_replay_sanitizes_repair_alternative_too(
+    monkeypatch, clean_env, tmp_path
+):
+    """`repair.alternative` is the other human-readable carrier on an error envelope, and
+    it quotes the same foreign text the message does. Sanitizing only the message left it."""
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    stored = _serialize_error(
+        _ErrorResult(
+            error=_make_error(
+                "extra_args_rejected",
+                "codex rejected an argument (ev\x1b[31mil)",
+                repair_alternative="Fix or remove the offending entry (ev\x1b[31mil).",
+            ),
+            meta=_meta_for(tmp_path),
+        )
+    )
+    stored["meta"] = _meta_for(tmp_path).model_dump(mode="json")
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    alternative = res["error"]["repair"]["alternative"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in alternative), repr(alternative)
+
+
+def test_stored_success_replay_sanitizes_presentation_fields_only():
+    """A record written before this change replays its control characters into the fields a
+    client renders, for the whole TTL after an upgrade. `raw_response` is left exact — it is
+    the content carrier — and `meta` is untouched."""
+    payload = {
+        "ok": True,
+        "summary": "bad \x1b[31mRED\x1b[0m",
+        "findings": [{"title": "x\x07y"}],
+        "raw_response": {"text": "exact \x1b[31mRED\x1b[0m"},
+        "meta": {"cwd": "/x"},
+    }
+    out = server._sanitize_stored_presentation(dict(payload))
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in out["summary"])
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in out["findings"][0]["title"])
+    assert out["raw_response"]["text"] == "exact \x1b[31mRED\x1b[0m"
+    assert out["meta"] == {"cwd": "/x"}
+
+
+def test_stored_success_replay_leaves_a_clean_payload_byte_identical():
+    """Only taken when a control character is actually present, so a clean record is not
+    re-run through the heuristic redactor and cannot be over-redacted."""
+    payload = {"ok": True, "summary": "git failed near ref AKIAIOSFODNN7EXAMPLE"}
+    assert server._sanitize_stored_presentation(dict(payload)) == payload
