@@ -1304,3 +1304,63 @@ def test_operator_passthrough_can_never_own_a_plugin_pinned_key(monkeypatch):
     control = config.extra_args()
     assert control.valid is True
     assert control.owns_config_key("model_provider") is True
+
+
+def test_strict_config_not_emitted_for_a_flag_shaped_option_value(tmp_path):
+    """A VALUE that looks like `-c` must not trigger the guard (#524).
+
+    `model` accepts any string, so `model="-c"` puts that token in the argv as the
+    --model VALUE while no config override rides. A membership test over the token list
+    cannot tell a value from an option, and would arm strict validation — exposing the
+    run to an unrelated user-config rejection the documented scope promises it is free of.
+    """
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="-c",
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd[cmd.index("--model") + 1] == "-c"  # the value really is in the argv
+    # No real override rides: none of the pinned keys was appended. (Deliberately not
+    # `_dash_c_keys`, which is the same naive membership scan this test exists to reject —
+    # it reads the --model VALUE as a flag and reports a phantom key.)
+    assert not [
+        t for t in cmd if any(t.startswith(f"{k}=") for k in cli_contract.PLUGIN_OWNED_CONFIG_KEYS)
+    ]
+    assert cli_contract.STRICT_CONFIG_FLAG not in cmd
+    # The same for --config-shaped and for the extra-args side.
+    cmd2, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        model="--config",
+        extra_args=("--profile", "myprof"),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cli_contract.STRICT_CONFIG_FLAG not in cmd2
+
+
+def test_user_config_rejection_strips_control_characters(monkeypatch):
+    """Echoed key/path text is untrusted and must not carry control sequences (#524).
+
+    codex read both off disk — a TOML quoted key and a `$CODEX_HOME` path can hold
+    arbitrary bytes — and the message travels to an agent and a terminal, where an escape
+    sequence can corrupt or spoof rendering. Secret redaction is best-effort and does not
+    address control characters at all, so they are stripped independently.
+    """
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = (
+        "Error loading config.toml:\n"
+        "/home/u/\x1b[31mBOOM\x1b[0m/config.toml:4:1: unknown configuration field `k\x07ey`\n"
+    )
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+    message = err.message or ""
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    # The actionable content survives the stripping: the line number and the printable
+    # remainder of the key are still there.
+    assert ":4" in message
+    assert "key" in message

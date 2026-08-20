@@ -375,22 +375,28 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   the stderr grammar it is parsed from: if upstream rewords the message,
   `parse_strict_config_rejection` stops matching and a pin drift degrades from
   `cli_contract_changed` to a generic `nonzero_exit` — the run still fails loudly, but the
-  diagnosis is lost. Re-verify both shapes against a **scratch** `$CODEX_HOME` (no credential copy
-  needed: config parsing precedes auth, so these spend nothing and need no login):
+  diagnosis is lost. Re-verify both shapes against a **scratch** `$CODEX_HOME`. Runs 1 and 2 die
+  at config parsing, which precedes auth. Run 3 is the positive control and does **not** trip the
+  guard, so it would go on to a real turn if it could authenticate — a scratch `$CODEX_HOME` alone
+  does not stop that, because an exported `OPENAI_API_KEY` still authenticates (verified). Unset
+  the key variables for the block and it spends nothing:
 
   ```bash
   (
     set -eu
     scratch=$(mktemp -d)
-    trap 'rm -rf "$scratch"' EXIT
-    # 1. override form -> must print: unknown configuration field `bogus_key_xyz` in -c/--config override
-    CODEX_HOME=$scratch codex exec --strict-config -c bogus_key_xyz=1 \
+    # codex writes into $CODEX_HOME (a plugins clone) after run 3 returns, so cleanup can race it
+    trap 'rm -rf "$scratch" 2>/dev/null || true' EXIT
+    unset OPENAI_API_KEY CODEX_API_KEY   # load-bearing, not a formality: see above
+    export CODEX_HOME=$scratch           # no auth.json here, so run 3 stops at auth
+    # 1. override form -> unknown configuration field `bogus_key_xyz` in -c/--config override
+    codex exec --strict-config -c bogus_key_xyz=1 \
       --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
-    # 2. file form -> must print a <path>:<line>:<col>: span for the same phrase
+    # 2. file form -> a <path>:<line>:<col>: span for the same phrase
     printf 'some_unknown_junk_key = true\n' > "$scratch/config.toml"
-    CODEX_HOME=$scratch codex exec --strict-config --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
-    # 3. positive control: --ignore-user-config must EXEMPT the file (run proceeds past config)
-    CODEX_HOME=$scratch codex exec --strict-config --ignore-user-config \
+    codex exec --strict-config --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+    # 3. positive control: --ignore-user-config must EXEMPT the file (run gets past config)
+    codex exec --strict-config --ignore-user-config \
       --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
   )
   ```

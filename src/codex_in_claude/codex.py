@@ -103,6 +103,10 @@ def build_exec_command(
     without displacing the envelope-bearing flags."""
     fs = flag_support if flag_support is not None else preflight.flag_support()
     tokens = [cli_contract.CODEX_BIN, *cli_contract.EXEC_SUBCOMMAND]
+    # Set wherever this function appends a real `-c` pair; read by the strict-config
+    # decision below. Tracking the appends is what keeps a flag-shaped VALUE from being
+    # mistaken for an override (see that comment).
+    plugin_config_override = False
     tokens += ["--json"]
     tokens += ["--sandbox", sandbox]
     tokens += ["--cd", cwd]
@@ -129,6 +133,7 @@ def build_exec_command(
     if sandbox == cli_contract.SANDBOX_WORKSPACE_WRITE:
         tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY}=false"]
         tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY}=[]"]
+        plugin_config_override = True
     tokens += isolation_flags(isolation)
     if skip_git_repo_check:
         tokens += ["--skip-git-repo-check"]
@@ -162,6 +167,7 @@ def build_exec_command(
             f"{cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY}="
             f"{json.dumps(reasoning_effort, ensure_ascii=False)}",
         ]
+        plugin_config_override = True
     # Guard every `-c` KEY this argv carries (#524). `--strict-config` turns codex's
     # silent tolerance of an unknown key into a zero-spend startup failure, which is what
     # converts a silent upstream rename of a guarantee-bearing pin above
@@ -173,7 +179,19 @@ def build_exec_command(
     # override-free run would risk the user's availability while guarding nothing.
     # Operator `-c` tokens are inspected here, before they are appended below, so the
     # decision reflects the whole argv.
-    if any(t in _CONFIG_OVERRIDE_FLAGS for t in (*tokens, *extra_args)):
+    #
+    # The plugin's own half is tracked as this function APPENDS each pin
+    # (`plugin_config_override`), never by searching the built token list: a search cannot
+    # tell an option from a VALUE that merely looks like one, and `model` accepts any
+    # string — `model="-c"` would arm the guard on a run carrying no override at all. The
+    # operator's half reads only the FLAG positions of `extra_args`, which
+    # config._parse_extra_args emits as a flat sequence of `[flag, value]` pairs (its
+    # values can never themselves be flags: a value starting with `-` is refused at parse
+    # time as a smuggled option).
+    operator_config_override = any(
+        extra_args[i] in _CONFIG_OVERRIDE_FLAGS for i in range(0, len(extra_args), 2)
+    )
+    if plugin_config_override or operator_config_override:
         tokens += [cli_contract.STRICT_CONFIG_FLAG]
     cmd, dropped = _gate_optional(tokens, fs)
     # Operator passthrough goes in AFTER gating (never gated/dropped) and before the
@@ -344,14 +362,35 @@ def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
     )
 
 
+# Control characters (Unicode category Cc: C0, DEL, and the C1 block) — stripped from any
+# text codex read off disk before it reaches an envelope. Secret redaction is best-effort
+# and says nothing about control characters, and these two channels are separate risks: an
+# escape sequence in a config KEY or a $CODEX_HOME path can corrupt or spoof how the
+# message renders in a terminal. Same category the reasoning-effort shape bounds reject.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1F\x7F-\x9F]")
+# Bound on each echoed span; a real key or path is far shorter (cf. CODEX_HOME_MAX_BYTES).
+_ECHO_MAX_CHARS = 200
+
+
+def _safe_echo(text: str | None) -> str:
+    """Bound, redact, and strip control characters from untrusted echoed text.
+
+    Applied to the config KEY and file path a strict-config rejection carries: codex read
+    both off disk, so they are untrusted, but they are also the whole actionable content
+    of the error — the caller cannot fix a key they are not told about. Stripping is done
+    AFTER redaction so a control character cannot split a secret past its matcher."""
+    redacted = redaction.redact_text(text or "") or ""
+    return _CONTROL_CHARS.sub("", redacted)[:_ECHO_MAX_CHARS]
+
+
 def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -> ErrorInfo:
     """Error for a `--strict-config` rejection of a key in the USER's own config (#524).
 
     The key, file, and line are the entire actionable content, so they are echoed — but
     they are untrusted text codex read off disk, so they go through the same redaction
     and length bound as every other surfaced failure detail."""
-    where = (redaction.redact_text(rejection.source_path or "") or "")[:200] or "your Codex config"
-    key = (redaction.redact_text(rejection.key) or "")[:200]
+    where = _safe_echo(rejection.source_path) or "your Codex config"
+    key = _safe_echo(rejection.key)
     line = f":{rejection.line}" if rejection.line is not None else ""
     return make_error(
         "user_config_rejected",
