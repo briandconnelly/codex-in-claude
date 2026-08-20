@@ -380,7 +380,12 @@ def _bounded_echo(text: str) -> str:
     """Cut an already-sanitized span to `_ECHO_MAX_CHARS`, marking the cut when one happens.
 
     The marker's own length comes out of the budget rather than being added to it, so the
-    result never exceeds the bound the caller was promised."""
+    result never exceeds the bound the caller was promised.
+
+    The guarantee is ONE-WAY: a cut is always marked, but a marked value is not proof of a
+    cut, because an under-cap span that already ends in the marker passes through untouched.
+    That is why nothing branches on it — it is advisory text for a reader, not a
+    machine-readable `truncated` flag, and a spoofed suffix misleads a reader and no more."""
     if len(text) <= _ECHO_MAX_CHARS:
         return text
     return text[: _ECHO_MAX_CHARS - len(_ECHO_TRUNC_MARKER)] + _ECHO_TRUNC_MARKER

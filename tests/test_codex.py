@@ -1538,13 +1538,43 @@ def test_version_display_boundary_is_at_the_cap_not_around_it(length, clipped):
     assert len(out) == (codex._ECHO_MAX_CHARS if clipped else length)
 
 
+# The retained-text cut, once the marker's own length is reserved out of the budget. The
+# secret below is positioned against THIS number, not against the budget: a fixture that
+# starts the secret past the cut is dropped whole by a truncate-first implementation, so the
+# assertion passes against the very ordering it exists to forbid (caught in review).
+_RETAINED = codex._ECHO_MAX_CHARS - len(codex._ECHO_TRUNC_MARKER)
+# Short enough that the redactor does NOT match it on its own (it needs ~27 characters of
+# this value), so the fragment a truncate-first cut would retain rides out in plaintext.
+_STRADDLE = 20
+
+
 def test_version_display_redacts_a_secret_straddling_the_truncation_cut():
     """Sanitation runs BEFORE the bound, so a secret whose pattern needs its tail is
-    redacted while the redactor can still see it — truncating first would publish a prefix."""
+    redacted while the redactor can still see it.
+
+    The secret STRADDLES the cut: its labelled head sits inside the retained text and its
+    value runs past it. Truncating first keeps that head as an unredactable fragment and
+    publishes `sk-ant-api03-...` verbatim — verified by mutating `_safe_echo` to truncate
+    first and watching this assertion fail."""
     secret = "sk-ant-api03-" + "x" * 95
-    out = codex.version_display("v0 " + "p" * (codex._ECHO_MAX_CHARS - 10) + secret)
+    filler = "p" * (_RETAINED - _STRADDLE)
+    out = codex.version_display(filler + secret)
     assert out is not None
+    assert len(out) == codex._ECHO_MAX_CHARS  # the input is over-cap, so the cut happened
     assert "sk-ant-api03-" not in out
+
+
+def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
+    """The marker's guarantee is ONE-WAY, and this pins that reading (review finding).
+
+    Real truncation is always marked; marked text does not prove truncation, because an
+    under-cap value that literally ends in the marker is passed through untouched. Nothing
+    in this package branches on the marker — it is text for a reader, never a
+    machine-readable `truncated` flag — so a spoofed suffix misleads a reader and nothing
+    more. `StatusResult` describes it as advisory for that reason."""
+    spoofed = "codex-cli 0.148.0" + codex._ECHO_TRUNC_MARKER
+    assert len(spoofed) <= codex._ECHO_MAX_CHARS
+    assert codex.version_display(spoofed) == spoofed
 
 
 def test_version_display_never_repairs_a_control_split_version_for_the_verdict():

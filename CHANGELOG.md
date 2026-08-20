@@ -30,8 +30,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   complete one sends the caller after a key they never wrote.
 
   Agent-visible: `FINGERPRINT` moves to `schema-84` for the new `codex_version` description. Not
-  breaking — no field is removed, renamed, or retyped, no input narrows, and the emitted value is
-  unchanged for every version string a real `codex` prints.
+  breaking — no field is removed, renamed, or retyped, and no input narrows. `codex_version` is
+  byte-identical for every version string a real `codex` prints. `version_warning` DOES change
+  for an unsupported version: it no longer quotes the version. Its advisory meaning is unchanged
+  and it never blocked a call, so the reword weakens no documented guarantee.
 
 - **Machine-readable identifier fields validate control characters instead of echoing or
   stripping them.** #528 deletes every Unicode `Cc` code point from echoed prose. That remedy is

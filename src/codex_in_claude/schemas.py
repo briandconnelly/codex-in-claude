@@ -1169,9 +1169,9 @@ class RawDefaults(BaseModel):
 # the field a reader is holding when it matters.
 _CODEX_VERSION_DESC = (
     "Display copy of `codex --version`: control characters removed, secret-looking values "
-    "redacted, clipped to 200 characters with a truncation marker; null if codex did not "
-    "run or nothing printable remained. Do not parse it — `version_supported` is the "
-    "verdict, and it is parsed from the raw output, which can differ from this."
+    "redacted, clipped to 200 characters with a trailing advisory `…[truncated]`; null if "
+    "codex did not run or nothing printable remained. Do not parse it — `version_supported` "
+    "is the verdict, and it is parsed from the raw output, which can differ from this."
 )
 
 
