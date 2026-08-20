@@ -97,11 +97,30 @@ One drift caveat: a `-c` KEY cannot fail loudly the way a flag does (codex ignor
 so an upstream rename would reopen the channel silently — `docs/UPGRADING-CODEX.md` carries the
 semantic probe that guards this on every version change.
 
-The pin covers **network egress only**. The filesystem half of the sentence above — writes stay
-inside the workspace — rests on other `sandbox_workspace_write` keys (`writable_roots`,
-`exclude_tmpdir_env_var`, `exclude_slash_tmp`) that the same config-file channel can still widen
-at `inherit` isolation; those carry usability tradeoffs the network key does not, and are tracked
-separately (#520 — not pinned today, an open exposure at the default isolation, not a closed one).
+The filesystem half of the sentence above — writes stay inside the workspace — gets the same
+treatment (#520): every `workspace-write` run also sends
+`-c sandbox_workspace_write.writable_roots=[]`
+(`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`), so a user's own
+`writable_roots = [...]` — extra writable directories outside the workspace, reasonable for their
+interactive codex use — cannot silently widen a plugin-launched run. `[]` is codex's own default,
+so default-config runs are unchanged. The same precedence facts apply (verified live on 0.148.0,
+macOS, positive controls judged by on-disk state): the `-c` override outranks the config file and
+`--profile`, the same drift caveat holds (a silent upstream KEY rename is guarded only by the
+`docs/UPGRADING-CODEX.md` semantic probe), and the user's interactive sessions are untouched.
+
+Two deliberate bounds on that filesystem pin. First, it restores codex's *default* boundary
+rather than tightening it: the default already grants writes to the OS temp roots (`/tmp` and
+`$TMPDIR`), the pins do not close that grant, and the remaining `sandbox_workspace_write` keys
+(`exclude_tmpdir_env_var`, `exclude_slash_tmp`) are deliberately **not** pinned — their default
+(`false`) is the widest state, so the config file can only *narrow* them, which is the operator's
+own prerogative (an operator who sets one merely denies plugin-launched shell commands the
+matching temp root). The default temp-root grant itself — and the surface text it contradicts —
+is tracked as #523. Second, the pin binds the *config* layer only: the `--add-dir` **flag** layer
+outranks it (verified in the same probes), which is why `--add-dir` stays reserved for
+plugin-owned use and no model-bearing call sends it today (see the builder's note in
+`codex.py`). Upstream completeness — that no *new* `sandbox_workspace_write` key has appeared
+unpinned — is re-checked against the upstream struct on every version change
+(`docs/UPGRADING-CODEX.md`).
 
 ## Remote-plugin isolation (`remote_plugin`, #287)
 

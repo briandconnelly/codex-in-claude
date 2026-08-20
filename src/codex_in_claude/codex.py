@@ -114,11 +114,23 @@ def build_exec_command(
     # override outranks the config file AND --profile (verified 0.148.0), so this holds
     # at every isolation level. A config key cannot be help-gated; upstream renaming the
     # key drifts silently — see the constant's note in cli_contract.
+    # Pin the writes-stay-in-the-workspace boundary the same way (#520): the user's own
+    # `writable_roots = [...]` in config.toml (or a --profile) would silently widen the
+    # sandbox outside the workspace. `[]` is codex's default, so default-config runs are
+    # unchanged; the `-c` override outranks the config file AND --profile (verified
+    # 0.148.0). Both pins share the network pin's silent-rename drift caveat — see the
+    # constants' notes in cli_contract.
     if sandbox == cli_contract.SANDBOX_WORKSPACE_WRITE:
         tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY}=false"]
+        tokens += ["-c", f"{cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY}=[]"]
     tokens += isolation_flags(isolation)
     if skip_git_repo_check:
         tokens += ["--skip-git-repo-check"]
+    # --add-dir rides the FLAG layer, which outranks the writable_roots config pin
+    # above (verified 0.148.0) — so a caller passing add_dirs widens the sandbox
+    # DESPITE the pin. No model-bearing caller does today; adopting add_dirs on one is
+    # a contract change to the writes-stay-in-the-workspace boundary, not just a new
+    # argument (per-tuple review under FINGERPRINT_COVERS applies).
     for d in add_dirs:
         tokens += ["--add-dir", d]
     if output_schema_path:

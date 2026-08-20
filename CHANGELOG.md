@@ -252,6 +252,28 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **The `workspace-write` writes-stay-in-the-workspace boundary can no longer be widened through
+  the config-file channel** (#520). The filesystem sibling of the #518 fix below: at `inherit`
+  isolation codex reads the user's `$CODEX_HOME/config.toml`, where `[sandbox_workspace_write]
+  writable_roots = ["..."]` — extra writable directories, reasonable for the user's own
+  interactive codex use — silently let a delegate write outside its throwaway worktree (verified
+  live on codex-cli 0.148.0, macOS, under the plugin's exact default flag set, judged by on-disk
+  state with positive controls; the first probe attempt was itself the cautionary tale, using
+  `mktemp -d` targets that sit inside the default-writable `$TMPDIR` and pass vacuously). Every
+  `workspace-write` run now also pins `-c sandbox_workspace_write.writable_roots=[]`
+  (`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`) — codex's own default, so
+  default-config runs are unchanged — verified to outrank both the config file and an operator
+  `--profile`. The remaining `sandbox_workspace_write` keys (`exclude_tmpdir_env_var`,
+  `exclude_slash_tmp`) are deliberately not pinned: their default is already the widest state, so
+  the config file can only narrow them. Two disclosed bounds: the pins restore codex's default
+  boundary, which still grants the OS temp roots (tracked as #523 together with the surface text
+  it contradicts), and the `--add-dir` flag layer outranks the pin (no model-bearing call sends
+  it; the builder now documents that adopting it is a contract change).
+  `docs/UPGRADING-CODEX.md` gains the filesystem semantic probe (unique pre-absent targets,
+  on-disk-state judging, config and profile controls — executed as written before landing) plus
+  an upstream `SandboxWorkspaceWrite` struct completeness check, since a new upstream key would
+  arrive unpinned. **No fingerprint change** — the pin alters only the built argv, which no
+  discovered surface exposes. Not breaking.
 - **The `workspace-write` no-network-egress guarantee now holds at the default isolation level**
   (#518). At `inherit` isolation the plugin sends no `--ignore-user-config`, so codex reads the
   user's `$CODEX_HOME/config.toml` — where `[sandbox_workspace_write] network_access = true`, a
@@ -267,9 +289,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   pin against silent upstream key drift, since codex ignores unknown `-c` keys rather than
   rejecting them. **No fingerprint change** — the pin alters only the built argv, which no
   discovered surface exposes, and the agent-visible text already asserted the guarantee this
-  change makes true. Not breaking. The sibling filesystem-scope keys (`writable_roots`,
-  `exclude_*`) remain overridable through the same channel and are tracked as #520;
-  `COMPATIBILITY.md` now discloses both the pin and that open remainder.
+  change makes true. Not breaking. The sibling filesystem-scope keys were filed as #520 and are
+  closed by the entry above; `COMPATIBILITY.md` discloses both pins.
 - `COMPATIBILITY.md` no longer repeats the `recommended_plugins` paragraph. PR #511 re-added the
   paragraph the #508 change had already placed in the "Image reading (`view_image`, #479)" section,
   leaving two verbatim consecutive copies; the second is removed. Nothing else was lost in that

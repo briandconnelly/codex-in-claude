@@ -134,6 +134,88 @@ def test_network_pin_key_constant_matches_codex_config_key():
     )
 
 
+@pytest.mark.parametrize("isolation", config.VALID_ISOLATIONS)
+@pytest.mark.parametrize("sandbox", cli_contract.VALID_SANDBOXES)
+def test_build_exec_command_pins_writable_roots_exactly_on_workspace_write(
+    tmp_path, sandbox, isolation
+):
+    # #520: the filesystem sibling of the #518 network pin. At the default isolation
+    # (inherit) codex reads $CODEX_HOME/config.toml, where `[sandbox_workspace_write]
+    # writable_roots = [...]` would silently widen the delegate sandbox to write outside
+    # the workspace, voiding the advertised writes-stay-in-the-workspace boundary. The
+    # pin restores codex's own default ([]) and closes the config-file and --profile
+    # channels (the `-c` override outranks both, verified live on 0.148.0) for every
+    # workspace-write run. The expected token is a LITERAL here on purpose: deriving it
+    # from the constant the code reads would make this test unable to catch a wrong
+    # constant.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox=sandbox,
+        isolation=isolation,
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.writable_roots=[]"
+    pairs = [i for i in range(len(cmd) - 1) if cmd[i] == "-c" and cmd[i + 1] == pin]
+    if sandbox == "workspace-write":
+        # Exactly one adjacent `-c <pin>` pair: absent breaks the guarantee, duplicated or
+        # mis-paired tokens would corrupt the argv.
+        assert len(pairs) == 1
+    else:
+        assert pin not in cmd
+
+
+def test_build_exec_command_writable_roots_pin_ordering_with_other_config_tokens(tmp_path):
+    # #520: the pin is plugin-owned — emitted before operator extra_args — and must not
+    # displace or mis-pair the network pin or the reasoning-effort `-c` token that share
+    # the same flag.
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="high",
+        extra_args=("-c", "model_provider=x"),
+        flag_support=_ALL_FLAGS,
+    )
+    pin = "sandbox_workspace_write.writable_roots=[]"
+    assert cmd[cmd.index(pin) - 1] == "-c"
+    net_pin = "sandbox_workspace_write.network_access=false"
+    assert cmd[cmd.index(net_pin) - 1] == "-c"
+    effort = 'model_reasoning_effort="high"'
+    assert cmd[cmd.index(effort) - 1] == "-c"
+    assert cmd.index(pin) < cmd.index("model_provider=x")
+    assert cmd[-1] == cli_contract.STDIN_PROMPT
+
+
+def test_writable_roots_pin_key_constant_matches_codex_config_key():
+    # The cli_contract constant is the single source the builder reads; pin its VALUE
+    # here so a typo'd constant fails loudly instead of drifting into a silent no-op
+    # (codex ignores unknown -c keys).
+    assert (
+        cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY
+        == "sandbox_workspace_write.writable_roots"
+    )
+
+
+def test_build_exec_command_add_dir_composes_with_writable_roots_pin(tmp_path):
+    # #520: --add-dir grants ride the FLAG layer, which outranks the `-c` config-layer
+    # pin (verified live on 0.148.0) — so a future add_dirs caller widens the sandbox
+    # DESPITE the pin. Both tokens coexisting in the argv is the documented behavior;
+    # adopting add_dirs on a model-bearing path is a contract change needing its own
+    # surface review (see the builder's add_dirs note).
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="workspace-write",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        add_dirs=("/extra",),
+        flag_support=_ALL_FLAGS,
+    )
+    assert cmd[cmd.index("--add-dir") + 1] == "/extra"
+    assert "sandbox_workspace_write.writable_roots=[]" in cmd
+
+
 def test_build_exec_command_disable_precedes_extra_args(tmp_path):
     # The plugin-owned --disable is emitted before any operator extra_args, so an operator
     # token can never displace it (and --disable wins over --enable regardless of order).

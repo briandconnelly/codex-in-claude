@@ -471,6 +471,30 @@ MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
 # the only guard for that case, so it must run on every supported-version change.
 WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY = "sandbox_workspace_write.network_access"
 
+# --- workspace-write writable-roots pin (issue #520) --------------------------------
+# The filesystem sibling of the network pin above, in the identical open channel: at
+# `inherit` isolation a user's `[sandbox_workspace_write] writable_roots = [...]` in
+# `$CODEX_HOME/config.toml` (or a `--profile`) would silently widen the workspace-write
+# sandbox to write outside the workspace, voiding the advertised writes-stay-in-the-
+# workspace boundary. The builder therefore pins `-c <this key>=[]` — codex's own
+# default — on every workspace-write run. Precedence verified live on codex-cli 0.148.0
+# (2026-08-19, probes with positive controls judged by on-disk state, #520): the `-c`
+# override outranks BOTH the config file and an operator `--profile`, so the pin holds
+# at every isolation level. `--add-dir` grants ride the FLAG layer, which outranks this
+# config-layer pin (same probes) — acceptable because no model-bearing caller passes
+# add_dirs today, and adopting it is a contract change (see the builder's add_dirs
+# note). The remaining `sandbox_workspace_write` keys (`exclude_tmpdir_env_var`,
+# `exclude_slash_tmp`) are deliberately NOT pinned: their default (false) is already
+# the widest state, so the config file can only narrow them — an operator's own choice,
+# not a guarantee leak (COMPATIBILITY.md documents this; the default temp-dir grant
+# itself is tracked as #523).
+# Drift coverage is the same NARROW case as the network key: only removal of `-c`
+# itself fails loudly. A rename/removal of the KEY drifts SILENTLY — codex tolerates
+# unknown `-c` keys as junk it never reads — and would quietly reopen the filesystem
+# channel; the semantic probe in docs/UPGRADING-CODEX.md is the only guard for that
+# case, so it must run on every supported-version change.
+WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY = "sandbox_workspace_write.writable_roots"
+
 # Markers identifying the BACKEND's rejection of a bad reasoning-effort VALUE (a
 # caller error), as distinct from a CLI rejection of the config key itself (contract
 # drift). The backend 400 reads "[ReasoningEffortParam] [reasoning.effort]
