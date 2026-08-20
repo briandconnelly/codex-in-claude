@@ -4384,7 +4384,11 @@ def _job_not_found(job_id: str, meta: Meta, workspace_root: str | None = None) -
         ErrorResult(
             error=make_error(
                 "job_not_found",
-                f"No job '{job_id}' in this workspace.",
+                # The caller's job_id is echoed so they can see WHICH id missed. This copy
+                # is prose, so it is sanitized like the argument NAME at `_format_loc`
+                # (#528). `details.field` names the parameter, not the value, so it is
+                # unaffected; validating the id itself is #529.
+                f"No job '{redaction.sanitize_echo(job_id)}' in this workspace.",
                 details=ErrorDetail(field="job_id"),
                 repair_arguments=list_params or None,
             ),

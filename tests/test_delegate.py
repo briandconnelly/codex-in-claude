@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import codex
@@ -538,3 +539,48 @@ def test_delegate_summary_is_sanitized_while_raw_response_stays_exact(monkeypatc
     )
     assert "stuff" in result["summary"]
     assert "\x1b" in result["raw_response"]["text"]
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize(
+    ("exc", "code"),
+    [
+        ("NotAGitRepoError", "not_a_git_repo"),
+        ("NoCommitsError", "worktree_error"),
+        ("WorktreeError", "worktree_error"),
+    ],
+)
+def test_delegate_worktree_exception_messages_are_sanitized(monkeypatch, tmp_path, exc, code):
+    """Each `str(exc)` sink in delegate.py, not just the one server.py happens to share.
+
+    An identical handler existing in `server.py` with its own test proves nothing about this
+    file: the two were separate call sites, and only one was covered.
+    """
+    import anyio
+    from pontonier.core import worktree
+
+    from codex_in_claude import delegate
+
+    def boom(*a, **k):
+        raise getattr(worktree, exc)("git failed \x1b[31mRED\x1b[0m at step\x07 2")
+
+    monkeypatch.setattr(worktree, "create", boom)
+    result = anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            str(tmp_path),
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == code
+    assert not _has_cc(result["error"]["message"]), repr(result["error"]["message"])
+    assert "RED" in result["error"]["message"]

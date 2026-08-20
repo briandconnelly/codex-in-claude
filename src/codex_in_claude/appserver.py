@@ -973,9 +973,9 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 return TransferOutcome(
                     status=TransferStatus.ITEM_FAILURE,
                     codex_home=codex_home,
-                    message=_display_text(detail)
-                    if detail
-                    else "codex app-server rejected the import.",
+                    message=_display_detail_or(
+                        detail, "codex app-server rejected the import.", prefix=""
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == 2 and "result" in msg:
@@ -1283,9 +1283,11 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 detail = error.get("message") if isinstance(error, dict) else None
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.PROTOCOL_ERROR,
-                    message=f"codex app-server initialize failed: {_display_text(detail)}"
-                    if detail
-                    else "codex app-server rejected initialize.",
+                    message=_display_detail_or(
+                        detail,
+                        "codex app-server rejected initialize.",
+                        prefix="codex app-server initialize failed: ",
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == 1 and "result" in msg and not read_sent:
@@ -1329,10 +1331,11 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 return RateLimitReadOutcome(
                     status=RateLimitReadStatus.PROTOCOL_ERROR,
                     codex_home=codex_home,
-                    message=f"codex app-server rejected the rate-limit read: "
-                    f"{_display_text(detail)}"
-                    if detail
-                    else "codex app-server rejected the rate-limit read.",
+                    message=_display_detail_or(
+                        detail,
+                        "codex app-server rejected the rate-limit read.",
+                        prefix="codex app-server rejected the rate-limit read: ",
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             if msg.get("id") == read_id and "result" in msg:

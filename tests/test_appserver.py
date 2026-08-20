@@ -2058,3 +2058,33 @@ def test_an_all_control_diagnostic_falls_back_instead_of_stranding_its_prefix():
     assert appserver._display_detail_or("\x07", "generic.", prefix="failed: ") == "generic."
     assert appserver._display_detail_or("boom", "generic.", prefix="failed: ") == "failed: boom"
     assert appserver._display_detail_or(None, "generic.", prefix="failed: ") == "generic."
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected"),
+    [
+        ("init_error_all_control", "codex app-server rejected initialize."),
+        ("invalid_params_all_control", "codex app-server rejected the import request."),
+        ("import_error_all_control", "codex app-server rejected the import."),
+    ],
+)
+def test_an_all_control_diagnostic_falls_back_at_the_call_sites(tmp_path, scenario, expected):
+    """Through the real transfer session, not the helper.
+
+    The helper-level test cannot tell a wired-up call site from an unwired one, which is
+    how three of the five sites kept composing a message from `_display_text` directly
+    after `_display_detail_or` was introduced to stop exactly that. The import-rejection
+    site was the worst: it has no static prefix, so an all-control diagnostic produced an
+    EMPTY message, and `transfer_failed` omits `app_server_stderr_tail`, leaving the agent
+    with no diagnostic at all.
+    """
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.message == expected, repr(outcome.message)

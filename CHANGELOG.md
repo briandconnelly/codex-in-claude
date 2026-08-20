@@ -34,6 +34,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
   wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
 
+  The catalog strings `codex_models` reads from `$CODEX_HOME` (`display_name`, `fetched_at`,
+  `client_version`) are covered too — foreign text on a rendered surface, like a config key a
+  rejection echoes. `slug` is left alone: it is the identifier, and it is pattern-validated.
+
+  Replay covers all three human-readable carriers on a stored error — `error.message`,
+  `repair.alternative`, and `app_server_stderr_tail`, the one with a published guarantee —
+  and a stored success's rendered fields, leaving `raw_response`, `diff`, and `meta` alone.
+
   The success channel is split rather than exempted, and the split is by FIELD, not by
   channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
   and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
@@ -42,8 +50,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
   control character turns it into an affirmative `pass` at `high` confidence. `severity`
   inverts the same way, and `file` is an identifier a reader uses to locate code. The same
-  reasoning covers `details.field`, job ids, and resource URIs, whose validate-don't-mutate
-  half is tracked as #529.
+  reasoning covers `details.field` and resource URIs, whose validate-don't-mutate half is
+  tracked as #529. Where such a value is ALSO composed into a prose message — the caller's
+  argument name, a missing job id — that copy is sanitized while the machine copy is not.
 
   `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
   model's output — `redact_text` still runs, and the delegate path also relativizes worktree

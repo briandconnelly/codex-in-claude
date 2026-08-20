@@ -391,7 +391,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{_safe_token(key)}' is refused: it could weaken the "
+                        f"config key '{_safe_token(key.strip())}' is refused: it could weaken the "
                         "sandbox / network / approval / host-env-isolation guarantees this "
                         "server advertises"
                     ),
@@ -400,8 +400,9 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{_safe_token(key)}' is refused: the plugin disables the "
-                        "remote_plugin connectors as a security guarantee (#287); an operator "
+                        f"config key '{_safe_token(key.strip())}' is refused: the plugin "
+                        "disables the remote_plugin connectors as a security guarantee "
+                        "(#287); an operator "
                         "override cannot re-enable them"
                     ),
                 )
@@ -411,8 +412,9 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{_safe_token(key)}' is reserved — it would contradict the "
-                        f"provenance reported in result envelopes ({meta_field}); set "
+                        f"config key '{_safe_token(key.strip())}' is reserved — it would "
+                        f"contradict the provenance reported in result envelopes "
+                        f"({meta_field}); set "
                         f"{env_var} or the per-call {param} parameter instead ({issue})"
                     ),
                 )
@@ -435,9 +437,9 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"feature '{_safe_token(value)}' is managed by the plugin and cannot "
-                        f"be set via {EXTRA_ARGS_ENV} (enable or disable): it disables the "
-                        "remote_plugin "
+                        f"feature '{_safe_token(value.strip())}' is managed by the plugin "
+                        f"and cannot be set via {EXTRA_ARGS_ENV} (enable or disable): it "
+                        "disables the remote_plugin "
                         "connectors as a security guarantee (#287)"
                     ),
                 )

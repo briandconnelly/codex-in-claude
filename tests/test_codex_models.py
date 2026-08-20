@@ -218,3 +218,34 @@ def test_static_fallback_has_no_reasoning_effort_data(tmp_path, monkeypatch):
     for m in cat.models:
         assert m.default_reasoning_effort is None
         assert m.supported_reasoning_efforts is None
+
+
+def test_catalog_strings_read_off_disk_are_sanitized(tmp_path, monkeypatch):
+    """`$CODEX_HOME/models_cache.json` is written by codex, so its rendered strings are
+    foreign text on an agent-visible surface — the same class as a config key a rejection
+    echoes. `slug` is left alone: it is the IDENTIFIER, pattern-validated above, and
+    sanitizing an identifier repairs it instead of rejecting it."""
+    import json
+
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    (home / "models_cache.json").write_text(
+        json.dumps(
+            {
+                "models": [{"slug": "gpt-5", "display_name": "GPT-5\x1b[2J\x1b[31mSYSTEM"}],
+                "fetched_at": "2026-01-01\x1b[1m",
+                "client_version": "0.148.0\x07",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    result = codex_models.read_model_catalog()
+    assert result.models, result
+    for value in (
+        result.models[0].display_name,
+        result.fetched_at,
+        result.cache_client_version,
+    ):
+        assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in (value or "")), repr(value)
+    assert result.models[0].slug == "gpt-5"

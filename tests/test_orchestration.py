@@ -811,3 +811,32 @@ def test_a_dict_valued_summary_cannot_carry_a_control_character():
     # The repr-escaped LITERAL text (backslash, x, 1, b) may survive, and that is fine: it
     # renders as four ordinary characters, not as an escape sequence. What must never
     # survive is the ESC code point itself, which the assertion above covers.
+
+
+def test_summary_of_sanitizes_a_directly_constructed_dict_summary():
+    """`_summary_of` is asserted directly, because the end-to-end shape cannot fail.
+
+    Through `finalize_consult` a dict-valued summary is stringified by `str()`, and Python's
+    repr escapes the ESC — so the end-to-end assertion holds whether or not `_summary_of`
+    sanitizes, and cannot detect its removal. Calling `_summary_of` with a value whose
+    `str()` carries a REAL control character is what gives the guarantee teeth.
+    """
+    assert orchestration._summary_of({"summary": "bad \x1b[31mRED"}) == "bad [31mRED"
+    # A shape whose str() is not repr-escaped: the ESC survives stringification and must be
+    # removed by the sanitizer rather than by an accident of formatting.
+    assert not _has_cc(orchestration._summary_of({"summary": ["x\x07y"]}))
+
+
+def test_a_non_list_findings_keeps_the_redaction_it_always_had():
+    """The by-key exclusion has to track what was actually SANITIZED, not the key name.
+
+    `findings` is excluded from the redaction fallback because the branch above handles it —
+    but that branch only runs for a list. Excluding the key unconditionally silently dropped
+    the redaction a non-list `findings` used to get. `coerce_findings` discards a non-list
+    today, so this was latent rather than a leak; the guard should not depend on that.
+    """
+    out = orchestration._sanitize_structured(
+        {"summary": "s", "findings": "api_key=" + "A" * 40, "other": "api_key=" + "A" * 40}
+    )
+    assert "A" * 40 not in out["findings"], out["findings"]
+    assert "A" * 40 not in out["other"]

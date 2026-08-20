@@ -9903,3 +9903,24 @@ async def test_stored_error_replay_sanitizes_app_server_stderr_tail(
     tail = res["error"]["app_server_stderr_tail"]
     assert not _has_control(tail), repr(tail)
     assert "RED" in tail  # the diagnostic text survives; only the escapes go
+
+
+async def test_unexpanded_env_placeholder_message_is_sanitized(monkeypatch, clean_env, tmp_path):
+    """Env var NAMES are operator-controlled text composed into a message."""
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EVIL\x1b[31m", "${UNEXPANDED}")
+    res = await server.codex_consult("hi", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unexpanded_env_placeholder"
+    assert not _has_control(res["error"]["message"]), repr(res["error"]["message"])
+
+
+async def test_job_not_found_message_sanitizes_the_echoed_job_id(clean_env, tmp_path):
+    """The caller's job_id is echoed so they can see which id missed; that copy is prose.
+    `details.field` names the PARAMETER, not the value, so it is unaffected."""
+    res = await server.codex_job_status(
+        job_id="job-\x1b[2J\x1b[31mFAKE", workspace_root=str(tmp_path)
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "job_not_found"
+    assert not _has_control(res["error"]["message"]), repr(res["error"]["message"])
+    assert res["error"]["details"]["field"] == "job_id"

@@ -188,12 +188,18 @@ def _sanitize_structured(parsed: dict) -> dict:
         if key in out:
             out[key] = _sanitize_prose_value(out[key])
     findings = out.get("findings")
-    if isinstance(findings, list):
+    findings_sanitized = isinstance(findings, list)
+    if findings_sanitized:
         out["findings"] = [_sanitize_finding(f) for f in findings]
-    # Every remaining leaf keeps the redaction it had before this change.
+    # Every remaining leaf keeps the redaction it had before this change — including a
+    # `findings` of some other shape, which the branch above does not touch. Excluding the
+    # key unconditionally would silently DROP the redaction it used to get; `coerce_findings`
+    # discards a non-list today, so that was latent rather than a leak, but the exclusion has
+    # to track what was actually sanitized, not the key name.
     for key, value in out.items():
-        if key not in _PROSE_KEYS and key != "findings":
-            out[key] = redaction.redact_tree(value)
+        if key in _PROSE_KEYS or (key == "findings" and findings_sanitized):
+            continue
+        out[key] = redaction.redact_tree(value)
     return out
 
 
