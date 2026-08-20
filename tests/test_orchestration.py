@@ -786,8 +786,28 @@ def test_structured_consult_presentation_is_sanitized_through_finalize_consult()
         out["findings"][0]["evidence"],
     ):
         assert not _has_cc(str(value)), repr(value)
-    # The exact-content carrier keeps the model's output as it already stood: redacted (and,
+    # The closest-to-source carrier keeps the model's output as it already stood: redacted (and,
     # on the delegate path, worktree-relativized), with its control characters intact. That
     # is the point of it — not that it is untransformed, but that THIS change does not
     # transform it.
     assert out["raw_response"]["text"] == payload
+
+
+def test_a_dict_valued_summary_cannot_carry_a_control_character():
+    """A model can return `summary` as any JSON shape, and a dict reaches `_summary_of` as
+    `str(dict)`.
+
+    Python's repr happens to escape control characters inside a nested string, so this shape
+    does not leak today — but a security guarantee resting on an incidental property of repr
+    is not a guarantee, and a future change to how this is formatted would silently remove
+    it. `_summary_of` sanitizes the stringified result, and this pins that.
+    """
+    payload = json.dumps({"summary": {"nested": "bad \x1b[31mRED"}, "findings": []})
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert not _has_cc(out["summary"]), repr(out["summary"])
+    # The repr-escaped LITERAL text (backslash, x, 1, b) may survive, and that is fine: it
+    # renders as four ordinary characters, not as an escape sequence. What must never
+    # survive is the ESC code point itself, which the assertion above covers.

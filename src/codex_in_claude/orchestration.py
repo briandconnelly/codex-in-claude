@@ -250,7 +250,17 @@ def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | N
 
 
 def _summary_of(structured: dict) -> str:
-    return str(structured.get("summary") or "").strip() or "(no summary)"
+    """The rendered summary, sanitized after stringification.
+
+    `_sanitize_structured` already cleans a string- or list-valued `summary`, but the model
+    can return one of any JSON shape, and a dict lands here as `str(dict)`. Python's repr
+    happens to escape control characters inside a nested string, so that shape does not leak
+    today — but relying on an incidental property of repr to hold a security guarantee is
+    not a guarantee. Sanitizing the final string makes it explicit and survives a future
+    change to how this is formatted."""
+    return redaction.sanitize_echo_prose(str(structured.get("summary") or "")).strip() or (
+        "(no summary)"
+    )
 
 
 def _enum(value: object, allowed: tuple[str, ...], default: str) -> Any:

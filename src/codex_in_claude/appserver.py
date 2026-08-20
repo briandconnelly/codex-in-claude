@@ -106,7 +106,13 @@ def _display_text(text: object) -> str:
     string that reaches an envelope (e.g. ``stderr_tail``, #275) must route through here.
 
     Callers decide *whether a diagnostic exists* by testing the RAW wire value, not this
-    function's output. Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
+    function's output — but that test alone is no longer sufficient. A truthy value could
+    never sanitize to ``""`` while redaction substituted a non-empty marker; a fragment of
+    nothing but control characters now can, stranding a static prefix with no diagnostic
+    after it. :func:`_display_detail_or` does both checks; use it rather than composing a
+    message from this function directly (#528).
+
+    Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
     ``{}``) carries no diagnostic text, but coercing one here yields a truthy string, so
     branching on the sanitized result would emit noise like ``rejected the import: {}``
     instead of a clean generic sentence. The converse cannot happen: a truthy ``detail``
@@ -119,6 +125,27 @@ def _display_text(text: object) -> str:
     if len(out) <= _MAX_DISPLAY_CHARS:
         return out
     return out[: _MAX_DISPLAY_CHARS - len(_DISPLAY_TRUNC_MARKER)] + _DISPLAY_TRUNC_MARKER
+
+
+def _display_detail_or(text: object, generic: str, *, prefix: str) -> str:
+    """A sanitized foreign fragment appended to a static prefix, or the generic sentence.
+
+    TWO emptiness checks, and both are load-bearing in opposite directions.
+
+    The RAW value decides whether a diagnostic exists at all. A falsey JSON `message`
+    (`0`, `{}`, `""`, `false`, `[]`) carries none, and `_display_text` would coerce it to a
+    truthy string, publishing noise like "rejected the import: {}" — see
+    `test_falsey_app_server_message_yields_our_generic_sentence`, which locks that.
+
+    The SANITIZED value decides whether anything survived. That check is new: a truthy
+    fragment used to be guaranteed non-empty (the redactor substitutes a marker), but a
+    fragment of nothing but control characters now sanitizes to "", which stranded a static
+    prefix — "codex app-server initialize failed: " with nothing after it (#528).
+    """
+    if not text:
+        return generic
+    fragment = _display_text(text)
+    return f"{prefix}{fragment}" if fragment else generic
 
 
 def _display_stderr_tail(raw: str | None) -> str | None:
@@ -868,9 +895,11 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                 detail = error.get("message") if isinstance(error, dict) else None
                 return TransferOutcome(
                     status=TransferStatus.PROTOCOL_ERROR,
-                    message=f"codex app-server initialize failed: {_display_text(detail)}"
-                    if detail
-                    else "codex app-server rejected initialize.",
+                    message=_display_detail_or(
+                        detail,
+                        "codex app-server rejected initialize.",
+                        prefix="codex app-server initialize failed: ",
+                    ),
                     stderr_tail=_display_stderr_tail(_settle()),
                 )
             # initialize response → capture codexHome, then send initialized + import.
@@ -934,10 +963,11 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
                     return TransferOutcome(
                         status=TransferStatus.PROTOCOL_ERROR,
                         codex_home=codex_home,
-                        message=f"codex app-server rejected the import request: "
-                        f"{_display_text(detail)}"
-                        if detail
-                        else "codex app-server rejected the import request.",
+                        message=_display_detail_or(
+                            detail,
+                            "codex app-server rejected the import request.",
+                            prefix="codex app-server rejected the import request: ",
+                        ),
                         stderr_tail=_display_stderr_tail(_settle()),
                     )
                 return TransferOutcome(

@@ -9866,7 +9866,7 @@ def test_stored_presentation_keys_cover_every_model_supplied_prose_field():
         "ok",
         "tool",
         "meta",  # envelope/machine metadata, never model prose
-        "raw_response",  # the exact-content carrier, deliberately untouched
+        "raw_response",  # the closest-to-source carrier, not additionally sanitized
         "diff",  # content, redacted at write time
         "verdict",
         "confidence",
@@ -9879,3 +9879,27 @@ def test_stored_presentation_keys_cover_every_model_supplied_prose_field():
                 f"{model.__name__}.{name} is neither covered by the replay presentation "
                 f"pass nor listed as a deliberate exclusion"
             )
+
+
+async def test_stored_error_replay_sanitizes_app_server_stderr_tail(
+    monkeypatch, clean_env, tmp_path
+):
+    """The third human-readable carrier on an error envelope, and the one with a PUBLISHED
+    guarantee: `app_server_stderr_tail`'s schema description promises no terminal escape
+    sequence survives. A record stored before this change made that promise false for the
+    whole TTL. The controls live ONLY in the tail here, so a pass that looked at
+    `message`/`repair` alone would not save it."""
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    err = _make_error("cli_contract_changed", "clean message with no controls")
+    err.app_server_stderr_tail = "panic \x1b[31mRED\x1b[0m"
+    stored = _serialize_error(_ErrorResult(error=err, meta=_meta_for(tmp_path)))
+    stored["meta"] = _meta_for(tmp_path).model_dump(mode="json")
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    tail = res["error"]["app_server_stderr_tail"]
+    assert not _has_control(tail), repr(tail)
+    assert "RED" in tail  # the diagnostic text survives; only the escapes go

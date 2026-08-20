@@ -4626,7 +4626,7 @@ async def _job_result_impl(
 
 
 # The presentation carriers a stored SUCCESS payload can hold. `raw_response` is
-# deliberately absent: it is the exact-content carrier, and `diff` is content too (already
+# deliberately absent: it is the closest-to-source carrier, and `diff` is content too (already
 # redacted at write time). Keys, not a blind tree walk, so replay cannot mutate a machine
 # identifier or `meta` (#528, #529).
 _STORED_PRESENTATION_KEYS = ("summary", "findings", "questions", "next_steps", "assumptions")
@@ -4767,7 +4767,7 @@ def _finished_job_envelope(
             validated.error.message or ""
         ):
             validated.error.message = redaction.sanitize_echo_prose(validated.error.message)
-        # `repair.alternative` is the OTHER human-readable carrier on an error envelope, and
+        # `repair.alternative` is another human-readable carrier on an error envelope, and
         # it quotes the same foreign text the message does (extra-args descriptors, for
         # one). Sanitizing only the message left it behind.
         if validated.error.repair is not None and appserver._has_control_char(
@@ -4775,6 +4775,13 @@ def _finished_job_envelope(
         ):
             validated.error.repair.alternative = redaction.sanitize_echo_prose(
                 validated.error.repair.alternative
+            )
+        # `app_server_stderr_tail` is the third, and the one with a PUBLISHED guarantee:
+        # its schema description promises no terminal escape sequence survives. A record
+        # stored before this change would have made that promise false for the whole TTL.
+        if appserver._has_control_char(validated.error.app_server_stderr_tail or ""):
+            validated.error.app_server_stderr_tail = redaction.sanitize_echo_prose(
+                validated.error.app_server_stderr_tail
             )
         return serialize_error(validated), True
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))

@@ -2044,3 +2044,17 @@ def test_display_stderr_tail_keeps_its_line_structure_when_nothing_is_redacted()
     them (which is every tail the redactor did not touch across a boundary)."""
     out = appserver._display_stderr_tail("first line\nsecond line\nthird line")
     assert out == "first line\nsecond line\nthird line"
+
+
+def test_an_all_control_diagnostic_falls_back_instead_of_stranding_its_prefix():
+    """Sanitation broke an invariant the callers relied on.
+
+    A truthy fragment used to be guaranteed non-empty — the redactor substitutes a marker —
+    so a caller could test the RAW wire value and safely append the sanitized fragment to
+    its own sentence. A fragment of nothing but control characters now sanitizes to "",
+    which produced "codex app-server initialize failed: " with nothing after it.
+    """
+    assert appserver._display_text("\x07") == ""  # the fragment really does vanish
+    assert appserver._display_detail_or("\x07", "generic.", prefix="failed: ") == "generic."
+    assert appserver._display_detail_or("boom", "generic.", prefix="failed: ") == "failed: boom"
+    assert appserver._display_detail_or(None, "generic.", prefix="failed: ") == "generic."

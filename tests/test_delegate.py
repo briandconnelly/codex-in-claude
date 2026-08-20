@@ -530,7 +530,8 @@ def test_run_delegate_classify_failure_relativizes_a_control_split_worktree_path
 def test_delegate_summary_is_sanitized_while_raw_response_stays_exact(monkeypatch, tmp_path):
     """#528 success-channel half: `summary` is a presentation this function composes (it
     prefixes its own sentence), so control characters go; `raw_response.text` is the
-    exact-content carrier and keeps them."""
+    closest-to-source carrier — still redacted and relativized, as it always was, but not
+    additionally control-sanitized — and keeps them."""
     result = _run_delegate_with_success(monkeypatch, "did \x1b[31mstuff\x1b[0m\x07", tmp_path)
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in result["summary"]), repr(
         result["summary"]
