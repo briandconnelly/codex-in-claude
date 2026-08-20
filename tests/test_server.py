@@ -9798,22 +9798,49 @@ async def test_stored_error_replay_sanitizes_repair_alternative_too(
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in alternative), repr(alternative)
 
 
-def test_stored_success_replay_sanitizes_presentation_fields_only():
-    """A record written before this change replays its control characters into the fields a
-    client renders, for the whole TTL after an upgrade. `raw_response` is left exact — it is
-    the content carrier — and `meta` is untouched."""
-    payload = {
+def _has_control(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+async def test_stored_success_replay_sanitizes_presentation_fields(
+    monkeypatch, clean_env, tmp_path
+):
+    """Through `codex_job_result`, the shipping replay path — not the helper.
+
+    A record written before this change replays its control characters into the fields a
+    client renders, for the whole TTL after an upgrade. `raw_response` is left as it was
+    stored (the content carrier) and `meta` is untouched.
+    """
+    stored = {
         "ok": True,
+        "tool": "codex_delegate",
         "summary": "bad \x1b[31mRED\x1b[0m",
-        "findings": [{"title": "x\x07y"}],
+        "diff": "--- a\n+++ b\n",
+        "findings": [
+            {
+                "title": "t\x07x",
+                "severity": "low",
+                "evidence": "e",
+                "risk": "r",
+                "recommendation": "rec",
+            }
+        ],
+        "assumptions": ["a\x07"],
+        "questions": [],
+        "next_steps": [],
         "raw_response": {"text": "exact \x1b[31mRED\x1b[0m"},
-        "meta": {"cwd": "/x"},
+        "meta": _meta_for(tmp_path).model_dump(mode="json"),
     }
-    out = server._sanitize_stored_presentation(dict(payload))
-    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in out["summary"])
-    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in out["findings"][0]["title"])
-    assert out["raw_response"]["text"] == "exact \x1b[31mRED\x1b[0m"
-    assert out["meta"] == {"cwd": "/x"}
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path), detail="full")
+    assert res["ok"] is True, res
+    assert not _has_control(res["summary"]), repr(res["summary"])
+    assert res["findings"], "the finding must survive, or the assertion below is vacuous"
+    assert not _has_control(res["findings"][0]["title"])
+    assert not _has_control(res["assumptions"][0])
+    # The content carrier is replayed as stored.
+    assert res["raw_response"]["text"] == "exact \x1b[31mRED\x1b[0m"
 
 
 def test_stored_success_replay_leaves_a_clean_payload_byte_identical():

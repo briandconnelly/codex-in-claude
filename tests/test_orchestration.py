@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import anyio
+import pytest
 from pontonier.core import redaction
 from pontonier.core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
 from pontonier.core.runtime import CommandRun
@@ -666,12 +667,17 @@ def test_review_invalid_response_preview_redacts_a_control_split_secret():
 def test_review_presentation_fields_are_sanitized_through_finalize_review():
     """Through the REAL entry point. The first version of this test called
     `_success_common`, which `finalize_review` never calls — so it passed while the review
-    path still used `redact_tree` and emitted control characters. A test that exercises a
-    different function than the one that ships proves nothing about the one that ships.
+    path still used `redact_tree` and emitted control characters. The second version's
+    finding omitted `evidence`/`risk`/`recommendation`, so `coerce_findings` DROPPED it and
+    the findings assertion ran over an empty list. A complete finding is supplied here and
+    asserted to survive, so the nested assertions are about real content.
     """
     payload = (
-        '{"verdict": "pass", "confidence": "high", "summary": "bad \\u001b[31mRED\\u001b[0m",'
-        ' "findings": [{"title": "x\\u0007y", "severity": "low"}]}'
+        '{"verdict": "pass", "confidence": "high", "summary": "bad \\u001b[31mRED",'
+        ' "questions": ["q\\u0007"], "assumptions": ["a\\u0007ssume"],'
+        ' "next_steps": ["n\\u0007ext"],'
+        ' "findings": [{"title": "t\\u0007x", "severity": "high", "file": "a.py",'
+        ' "evidence": "e\\u0007v", "risk": "r\\u0007k", "recommendation": "re\\u0007c"}]}'
     )
     result = codex.CodexExecResult(
         run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
@@ -680,10 +686,66 @@ def test_review_presentation_fields_are_sanitized_through_finalize_review():
         result, meta=_make_meta(), coverage=Coverage(status="complete")
     )
     assert out["ok"] is True, out
-    assert not _has_cc(str(out["summary"]))
-    assert not _has_cc(str(out["findings"]))
-    # The exact-content carrier is untouched.
+    assert len(out["findings"]) == 1, "the finding must survive, or the asserts below are vacuous"
+    finding = out["findings"][0]
+    for value in (
+        out["summary"],
+        *out["questions"],
+        *out["assumptions"],
+        *out["next_steps"],
+        finding["title"],
+        finding["evidence"],
+        finding["risk"],
+        finding["recommendation"],
+    ):
+        assert not _has_cc(str(value)), repr(value)
     assert out["raw_response"]["text"] == payload
+
+
+@pytest.mark.parametrize(
+    ("field", "bad", "expected"),
+    [("verdict", "pa\x07ss", "unknown"), ("confidence", "hi\x07gh", "medium")],
+)
+def test_a_control_split_machine_field_degrades_rather_than_being_repaired(field, bad, expected):
+    """The reason sanitation is schema-aware rather than a blind tree walk.
+
+    Stripping every string also REPAIRS the machine fields, and repairing is worse than
+    leaving them dirty: `"pa\\u0007ss"` is not a valid verdict and must degrade to
+    `unknown`, but a blind walk turns it into an affirmative `pass` — promoting untrusted
+    model output from an invalid judgment to a passing review at `high` confidence.
+    """
+    # Built as a dict so the malformed field REPLACES the good one; interpolating it into
+    # a JSON string literal produced a duplicate key, which is a different test.
+    fields = {"verdict": "pass", "confidence": "high", "summary": "s"}
+    fields[field] = bad
+    payload = json.dumps(fields)
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_review(
+        result, meta=_make_meta(), coverage=Coverage(status="complete")
+    )
+    assert out[field] == expected, out[field]
+
+
+def test_a_control_bearing_finding_identifier_is_not_silently_repaired():
+    """`file` is an identifier a reader uses to locate code. Deleting a byte from it points
+    them somewhere else, so it keeps exactly what the model wrote while the finding's PROSE
+    is sanitized. (Validating or rejecting such identifiers is #529.)"""
+    payload = (
+        '{"verdict": "pass", "confidence": "high", "summary": "s",'
+        ' "findings": [{"title": "t\\u0007x", "severity": "high", "file": "a\\u0007.py",'
+        ' "evidence": "e", "risk": "r", "recommendation": "rec"}]}'
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_review(
+        result, meta=_make_meta(), coverage=Coverage(status="complete")
+    )
+    finding = out["findings"][0]
+    assert finding["title"] == "tx"  # prose: cleaned
+    assert finding["file"] == "a\x07.py"  # machine: untouched
 
 
 def test_plain_consult_summary_is_sanitized_but_raw_response_is_exact():
@@ -699,22 +761,33 @@ def test_plain_consult_summary_is_sanitized_but_raw_response_is_exact():
     assert out["raw_response"]["text"] == prose
 
 
-def test_structured_presentation_fields_are_sanitized_but_raw_response_is_exact():
-    """#528, the success-channel half: the NORMALIZED fields are a presentation the server
-    composes, and they are the ones most likely to be rendered — so control characters go.
-    `raw_response.text` stays byte-exact, because an exact-content carrier is exactly what
-    it is for; a caller that needs the model's literal output reads it there.
-    """
-    payload = '{"summary": "bad \\u001b[31mRED\\u001b[0m", "findings": [{"title": "x\\u0007y"}]}'
+def test_structured_consult_presentation_is_sanitized_through_finalize_consult():
+    """Through `finalize_consult`, the shipping entry point — not `_success_common`, which
+    is a helper. A test that exercises the helper cannot tell a wired-up fix from an
+    unwired one."""
+    payload = (
+        '{"summary": "bad \\u001b[31mRED\\u001b[0m", "questions": ["q\\u0007"],'
+        ' "assumptions": ["a\\u0007"], "next_steps": ["n\\u0007"],'
+        ' "findings": [{"title": "x\\u0007y", "severity": "low", "evidence": "e\\u0007",'
+        ' "risk": "r", "recommendation": "rec"}]}'
+    )
     result = codex.CodexExecResult(
         run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
     )
-    structured, raw = orchestration._success_common(result, _make_meta())
-    assert structured is not None
-    assert not _has_cc(str(structured["summary"]))
-    assert not _has_cc(str(structured["findings"][0]["title"]))
-    # The exact-content carrier keeps what the model actually said, byte for byte. (Here
-    # that is the JSON SOURCE, where the control characters are `\\u001b` escape sequences
-    # rather than literal bytes — which is exactly why the decoded presentation fields, not
-    # this one, are where stripping matters.)
-    assert raw.text == payload
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert out["ok"] is True, out
+    assert len(out["findings"]) == 1, "the finding must survive, or the asserts are vacuous"
+    for value in (
+        out["summary"],
+        *out["questions"],
+        *out["assumptions"],
+        *out["next_steps"],
+        out["findings"][0]["title"],
+        out["findings"][0]["evidence"],
+    ):
+        assert not _has_cc(str(value)), repr(value)
+    # The exact-content carrier keeps the model's output as it already stood: redacted (and,
+    # on the delegate path, worktree-relativized), with its control characters intact. That
+    # is the point of it — not that it is untransformed, but that THIS change does not
+    # transform it.
+    assert out["raw_response"]["text"] == payload

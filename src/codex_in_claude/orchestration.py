@@ -154,25 +154,68 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     return None
 
 
-def _sanitize_tree(value: object) -> object:
-    """``redact_tree``'s traversal with the ECHO sanitizer at the leaves.
+# The PROSE members of a parsed structured payload — the text a client renders. Everything
+# not named here is left byte-identical, which is the whole point: see `_sanitize_structured`.
+_PROSE_KEYS = ("summary", "questions", "assumptions", "next_steps")
+# The prose members of one finding. `severity` is a closed enum, and `file`/`line`/`line_end`
+# are identifiers a reader uses to locate the code — machine fields, all of them.
+_FINDING_PROSE_KEYS = ("title", "evidence", "risk", "recommendation")
 
-    Same contract as ``redaction.redact_tree``: strings are replaced, non-string leaves are
-    returned untouched, and dict KEYS are left alone (they are field names, not content).
-    It replaces that call rather than running after it — sanitation has to be
-    strip-then-redact, and stripping AFTER a redaction pass is the ordering that reassembles
-    a control-split secret.
 
-    Bridge-local because the shared library exposes no echo-sanitizing tree walk yet; it is
-    a candidate to move upstream next to ``redact_tree`` (see AGENTS.md, Package boundary).
+def _sanitize_structured(parsed: dict) -> dict:
+    """Sanitize the PROSE leaves of a parsed structured payload, by key.
+
+    Deliberately not a blind tree walk. A walk that sanitizes every string also REPAIRS the
+    machine fields, and repairing them is worse than leaving them dirty: a `verdict` of
+    "pa\x07ss" is not a valid verdict and must degrade to "unknown", but stripping the
+    control character turns it into an affirmative "pass" — promoting untrusted model output
+    from an invalid judgment to a passing review with "high" confidence. `severity` inverts
+    the same way, and `file` is an identifier a reader uses to locate code, so silently
+    deleting a byte from it points them somewhere else.
+
+    So the machine fields reach `_enum` and `coerce_findings` exactly as the model wrote
+    them, and only text that is rendered as prose is cleaned. This mirrors the split the
+    error envelopes already draw between `error.message` and `details.field` (#528; the
+    validate-don't-mutate half for machine fields is #529).
+
+    Sanitation still REPLACES the `redact_tree` call rather than running after it — it has
+    to be strip-then-redact, and stripping after a redaction pass is the ordering that
+    reassembles a control-split secret. Non-prose leaves keep the plain redaction they
+    always had.
     """
+    out: dict = dict(parsed)
+    for key in _PROSE_KEYS:
+        if key in out:
+            out[key] = _sanitize_prose_value(out[key])
+    findings = out.get("findings")
+    if isinstance(findings, list):
+        out["findings"] = [_sanitize_finding(f) for f in findings]
+    # Every remaining leaf keeps the redaction it had before this change.
+    for key, value in out.items():
+        if key not in _PROSE_KEYS and key != "findings":
+            out[key] = redaction.redact_tree(value)
+    return out
+
+
+def _sanitize_finding(finding: object) -> object:
+    if not isinstance(finding, dict):
+        return redaction.redact_tree(finding)
+    out = dict(finding)
+    for key, value in out.items():
+        if key in _FINDING_PROSE_KEYS:
+            out[key] = _sanitize_prose_value(value)
+        else:
+            out[key] = redaction.redact_tree(value)
+    return out
+
+
+def _sanitize_prose_value(value: object) -> object:
+    """Apply the echo sanitizer to a prose leaf, or to each string in a prose list."""
     if isinstance(value, str):
         return redaction.sanitize_echo_prose(value)
     if isinstance(value, list):
-        return [_sanitize_tree(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _sanitize_tree(v) for k, v in value.items()}
-    return value
+        return [_sanitize_prose_value(v) for v in value]
+    return redaction.redact_tree(value)
 
 
 def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | None, RawResponse]:
@@ -186,15 +229,18 @@ def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | N
       PRESENTATION this server composes, and it is what a client renders. It goes through
       the echo sanitizer, so a control character in model output cannot reach a terminal
       through the field most likely to be displayed.
-    - ``raw_response.text`` is the exact-content carrier and keeps bare redaction. A caller
-      that needs what the model literally said reads it there, which is precisely why
-      deleting characters from it would be wrong.
+    - ``raw_response.text`` is the closest-to-source carrier and keeps the bare redaction
+      it always had. Not literally byte-identical to the model's output — ``redact_text``
+      still runs, and the delegate path also relativizes worktree paths — but THIS change
+      does not transform it, so its control characters survive. A caller that needs the
+      model's output as it stood reads it there, which is why deleting characters from it
+      would be wrong.
 
     Best-effort defense-in-depth, consistent with the diff redaction the review path already
     applies."""
     structured = normalize.parse_structured(result.last_message)
     if structured is not None:
-        structured = cast("dict[str, Any]", _sanitize_tree(structured))
+        structured = cast("dict[str, Any]", _sanitize_structured(structured))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,
@@ -308,7 +354,7 @@ def finalize_review(result: codex.CodexExecResult, *, meta: Meta, coverage: Cove
     status, parsed = normalize.classify_structured(result.last_message)
     if status != "ok":
         return _review_invalid_response_error(status, result.last_message, meta)
-    structured = cast("dict[str, Any]", _sanitize_tree(cast("dict", parsed)))
+    structured = cast("dict[str, Any]", _sanitize_structured(cast("dict", parsed)))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,

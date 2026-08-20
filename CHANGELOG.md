@@ -34,14 +34,21 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
   wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
 
-  The success channel is split rather than exempted. The NORMALIZED fields — a review's
-  `summary`, `findings`, `questions`, `next_steps`, and the delegate `summary` — are a
-  presentation this server composes, and they are what a client renders, so they are sanitized
-  too. `raw_response.text` keeps bare redaction and stays byte-exact: it is the exact-content
-  carrier, which is precisely why deleting characters from it would be wrong, and a caller that
-  needs what the model literally said reads it there. Machine identifier fields
-  (`details.field`, job ids, resource URIs) are unchanged: deleting characters from an
-  identifier corrupts it, so those want validation instead, tracked as #529.
+  The success channel is split rather than exempted, and the split is by FIELD, not by
+  channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
+  and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
+  delegate alike — is sanitized. The machine fields are deliberately left alone, because
+  sanitizing them would *repair* malformed values instead of letting them degrade: a
+  `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
+  control character turns it into an affirmative `pass` at `high` confidence. `severity`
+  inverts the same way, and `file` is an identifier a reader uses to locate code. The same
+  reasoning covers `details.field`, job ids, and resource URIs, whose validate-don't-mutate
+  half is tracked as #529.
+
+  `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
+  model's output — `redact_text` still runs, and the delegate path also relativizes worktree
+  paths — but this change does not transform it, so its control characters survive and a
+  caller that needs the output as it stood reads it there.
 
   Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
   which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored

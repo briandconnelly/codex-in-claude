@@ -4643,7 +4643,14 @@ def _sanitize_stored_presentation(payload: dict) -> dict:
     for key in _STORED_PRESENTATION_KEYS:
         value = payload.get(key)
         if value is not None and _tree_has_control_char(value):
-            payload[key] = orchestration._sanitize_tree(value)
+            # Same prose/machine split the live path uses: `findings` carries `severity`
+            # (a closed enum) and `file` (an identifier), and sanitizing those REPAIRS a
+            # malformed value into a valid-looking one instead of letting it degrade.
+            payload[key] = (
+                [orchestration._sanitize_finding(f) for f in value]
+                if key == "findings" and isinstance(value, list)
+                else orchestration._sanitize_prose_value(value)
+            )
     return payload
 
 

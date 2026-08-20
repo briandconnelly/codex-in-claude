@@ -188,8 +188,9 @@ async def run_delegate(
     # orchestration._success_common). `summary` is a PRESENTATION this function composes —
     # it prefixes its own sentence below, and it is what a client renders — so it goes
     # through the echo sanitizer. `last_message` keeps bare `sanitize_prose` and becomes
-    # `raw_response.text`, the exact-content carrier a caller reads when it needs what the
-    # model literally said; deleting characters from THAT would mutate requested content.
+    # `raw_response.text`, the closest-to-source carrier: still redacted and relativized,
+    # as it always was, but not additionally stripped — a caller reads it when it needs the
+    # model's output as it stood, so deleting characters from THAT would mutate content.
     last_message = worktree.sanitize_prose(result.last_message, wt_aliases)
     summary_text = worktree.sanitize_echo_prose(result.last_message, wt_aliases)
     summary = (summary_text or "").strip() or "(codex returned no summary)"
