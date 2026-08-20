@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pontonier.core import redaction
 from pontonier.core.jsoncache import read_bounded_json
 
 from codex_in_claude import cli_contract
@@ -91,6 +92,11 @@ def _parse_models(raw: object) -> tuple[list[ModelInfo], str | None, str | None]
             continue
         display = entry.get("display_name")
         display = display if isinstance(display, str) and len(display) <= 128 else None
+        # Read off disk from $CODEX_HOME, so it is foreign text on a rendered surface —
+        # the same class as a config key or path a rejection echoes (#528). Purely a label
+        # with no identity role (`slug` is the identifier, and it is pattern-validated
+        # above), so sanitizing it cannot repair a value something else matches on.
+        display = redaction.sanitize_echo(display) or None if display is not None else None
         models.append(
             ModelInfo(
                 slug=slug,
@@ -103,10 +109,14 @@ def _parse_models(raw: object) -> tuple[list[ModelInfo], str | None, str | None]
         )
     if not models:
         return None
+    # Both are provenance strings read off disk and rendered back, so they take the same
+    # single-token echo sanitizer as `display_name` (#528).
     fetched_at = raw.get("fetched_at")
     fetched_at = fetched_at if isinstance(fetched_at, str) and len(fetched_at) <= 64 else None
+    fetched_at = redaction.sanitize_echo(fetched_at) or None if fetched_at is not None else None
     version = raw.get("client_version")
     version = version if isinstance(version, str) and len(version) <= 64 else None
+    version = redaction.sanitize_echo(version) or None if version is not None else None
     return models, fetched_at, version
 
 

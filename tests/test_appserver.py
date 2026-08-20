@@ -2009,3 +2009,82 @@ def test_live_rate_limits_read_roundtrip():
     if outcome.status is RateLimitReadStatus.OK:
         assert outcome.snapshot is not None
         assert outcome.snapshot.primary is not None or outcome.snapshot.secondary is not None
+
+
+# --- #528: the two display helpers strip control characters before redacting ----------
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize("attack", ["\x1b[31mRED\x1b[0m", "bell\x07", "wipe\x1b[2K", "del\x7f"])
+def test_display_text_strips_control_characters(attack):
+    """Every app-server string reaching an envelope routes through here, so this is the
+    one place the transfer paths need the echo sanitizer."""
+    assert not _has_cc(appserver._display_text(f"import failed: {attack} at step 2"))
+
+
+@pytest.mark.parametrize("attack", ["\x1b[31mRED\x1b[0m", "bell\x07", "wipe\x1b[2K", "del\x7f"])
+def test_display_stderr_tail_strips_control_characters(attack):
+    """`app_server_stderr_tail` is child-process stderr — the most attacker-shaped text
+    this server echoes, and the one most likely to be read in a terminal."""
+    out = appserver._display_stderr_tail(f"panic: {attack} at line 9") or ""
+    assert not _has_cc(out), repr(out)
+
+
+def test_display_stderr_tail_redacts_a_control_split_secret():
+    out = appserver._display_stderr_tail("token sk-\x01ant-api03-" + "A" * 40) or ""
+    assert "A" * 40 not in out, repr(out)
+
+
+def test_display_stderr_tail_keeps_its_line_structure_when_nothing_is_redacted():
+    """The tail's value is that it is a multi-line diagnostic, so the PROSE variant is the
+    right one: line breaks survive wherever keeping them is provably as safe as removing
+    them (which is every tail the redactor did not touch across a boundary)."""
+    out = appserver._display_stderr_tail("first line\nsecond line\nthird line")
+    assert out == "first line\nsecond line\nthird line"
+
+
+def test_an_all_control_diagnostic_falls_back_instead_of_stranding_its_prefix():
+    """Sanitation broke an invariant the callers relied on.
+
+    A truthy fragment used to be guaranteed non-empty — the redactor substitutes a marker —
+    so a caller could test the RAW wire value and safely append the sanitized fragment to
+    its own sentence. A fragment of nothing but control characters now sanitizes to "",
+    which produced "codex app-server initialize failed: " with nothing after it.
+    """
+    assert appserver._display_text("\x07") == ""  # the fragment really does vanish
+    assert appserver._display_detail_or("\x07", "generic.", prefix="failed: ") == "generic."
+    assert appserver._display_detail_or("boom", "generic.", prefix="failed: ") == "failed: boom"
+    assert appserver._display_detail_or(None, "generic.", prefix="failed: ") == "generic."
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected"),
+    [
+        ("init_error_all_control", "codex app-server rejected initialize."),
+        ("invalid_params_all_control", "codex app-server rejected the import request."),
+        ("import_error_all_control", "codex app-server rejected the import."),
+    ],
+)
+def test_an_all_control_diagnostic_falls_back_at_the_call_sites(tmp_path, scenario, expected):
+    """Through the real transfer session, not the helper.
+
+    The helper-level test cannot tell a wired-up call site from an unwired one, which is
+    how three of the five sites kept composing a message from `_display_text` directly
+    after `_display_detail_or` was introduced to stop exactly that. The import-rejection
+    site was the worst: it has no static prefix, so an all-control diagnostic produced an
+    EMPTY message, and `transfer_failed` omits `app_server_stderr_tail`, leaving the agent
+    with no diagnostic at all.
+    """
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    t = _transcript(tmp_path)
+    outcome = transfer_session(
+        transcript_realpath=str(t.resolve()),
+        cwd=str(tmp_path),
+        command=_command(scenario, home),
+        timeout_seconds=15,
+    )
+    assert outcome.message == expected, repr(outcome.message)

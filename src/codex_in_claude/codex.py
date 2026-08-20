@@ -346,10 +346,16 @@ def _invalid_reasoning_effort_error() -> ErrorInfo:
 def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
     """Error for a drift that codex attributes to an operator-supplied extra arg (#231).
 
-    `matched` are the sanitized descriptors (allowlisted flag names / config keys /
-    profile/feature names — never a secret `-c` VALUE) whose text appeared in codex's
-    rejection, so the repair can name what to fix without echoing input."""
-    named = ", ".join(matched) if matched else config.EXTRA_ARGS_ENV
+    `matched` are the descriptors (allowlisted flag names / config keys / profile/feature
+    names — never a secret `-c` VALUE) whose text appeared in codex's rejection, so the
+    repair can name what to fix without echoing input.
+
+    Each descriptor is echoed through `_safe_echo`. They are operator-supplied rather than
+    codex-supplied, but they are still foreign text reaching an envelope, and they reached
+    it RAW: `config._safe_token` covers only the unsupported-argument path, while a valid
+    config key or profile name is recorded verbatim (#528). Both carriers are sanitized —
+    the message and the repair's alternative, which quotes the same names."""
+    named = ", ".join(_safe_echo(d) for d in matched) if matched else config.EXTRA_ARGS_ENV
     return make_error(
         "extra_args_rejected",
         f"codex rejected an argument from {config.EXTRA_ARGS_ENV} ({named}) — the "
@@ -362,33 +368,23 @@ def _extra_args_rejected_error(matched: list[str]) -> ErrorInfo:
     )
 
 
-# Control characters (Unicode category Cc: C0, DEL, and the C1 block) — stripped from any
-# text codex read off disk before it reaches an envelope. Secret redaction is best-effort
-# and says nothing about control characters, and these two channels are separate risks: an
-# escape sequence in a config KEY or a $CODEX_HOME path can corrupt or spoof how the
-# message renders in a terminal. Same category the reasoning-effort shape bounds reject.
-_CONTROL_CHARS = re.compile(r"[\x00-\x1F\x7F-\x9F]")
 # Bound on each echoed span; a real key or path is far shorter (cf. CODEX_HOME_MAX_BYTES).
 _ECHO_MAX_CHARS = 200
 
 
 def _safe_echo(text: str | None) -> str:
-    """Bound, redact, and strip control characters from untrusted echoed text.
+    """Bound an untrusted echoed span, after the shared echo sanitizer has cleaned it.
 
-    Applied to the config KEY and file path a strict-config rejection carries: codex read
-    both off disk, so they are untrusted, but they are also the whole actionable content
-    of the error — the caller cannot fix a key they are not told about.
+    Applied to a single-token span whose whole value is its actionable content — the
+    config KEY and file path a strict-config rejection carries, or a rejected flag name.
+    Codex read those off disk, so they are untrusted, but the caller cannot fix a key they
+    are not told about.
 
-    ORDER IS LOAD-BEARING, and it is strip-then-redact. A secret carrying an embedded
-    control character does not match the redactor's pattern, so redacting FIRST leaves it
-    untouched — and stripping afterwards then reassembles the contiguous secret in the
-    outgoing message (verified against the real redactor: `sk-\\x01ant-api03-…` came back
-    out whole). Stripping first only JOINS fragments while the matcher can still see
-    them, so it has no mirror-image failure. Truncation stays last, matching
-    classify_failure's reason for redacting before its own `[:300]`: a secret straddling
-    the cut would otherwise lose the tail its pattern needs."""
-    stripped = _CONTROL_CHARS.sub("", text or "")
-    return (redaction.redact_text(stripped) or "")[:_ECHO_MAX_CHARS]
+    The strip-then-redact ordering is `redaction.sanitize_echo`'s and is documented there;
+    this bridge does not re-derive it (#528). What stays here is bridge policy: the LENGTH
+    bound, and that truncation comes LAST, so a secret straddling the cut still had the
+    tail its pattern needed when the redactor saw it."""
+    return redaction.sanitize_echo(text)[:_ECHO_MAX_CHARS]
 
 
 def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -> ErrorInfo:
@@ -498,15 +494,15 @@ def classify_failure(
     own matched passthrough descriptors account for that signature, in which case
     the rejection is theirs (`extra_args_rejected`, #313).
 
-    `sanitize`, when given, REPLACES the generic `nonzero_exit` branch's `redact_text`
-    call (it already includes redaction — see `worktree.sanitize_prose`, the one
-    approved composition) and runs on the raw `event_error or run.stderr or run.stdout`
-    before the `[:300]` truncation, exactly where `redact_text` ran. `delegate.run_delegate`
-    passes a worktree-aware sanitizer so a delegate error can't quote a dead absolute path
-    into the (already torn-down) throwaway worktree (#420). Every classification decision
+    `sanitize`, when given, REPLACES the generic `nonzero_exit` branch's own sanitizer
+    (`redaction.sanitize_echo_prose`), so it must carry the same guarantees — redaction AND
+    control-character stripping, in that fixed order. `worktree.sanitize_echo_prose` is the
+    one approved composition; `delegate.run_delegate` passes it so a delegate error can't
+    quote a dead absolute path into the (already torn-down) throwaway worktree (#420).
+    It runs on the raw `event_error or run.stderr or run.stdout` before the `[:300]`
+    truncation, exactly where the default sanitizer runs. Every classification decision
     above (drift/auth/rate-limit signature matching) still reads the RAW strings — only the
-    emitted text changes. Omitted (the default), behavior is byte-identical to before this
-    parameter existed."""
+    emitted text changes."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
@@ -571,9 +567,12 @@ def classify_failure(
         if retry_after is None:
             retry_after = cli_contract.RATE_LIMIT_DEFAULT_BACKOFF_MS
         return _rate_limit_error(retry_after)
-    # Sanitize (or redact, when no `sanitize` was given) the full text *before* truncating:
-    # a secret or worktree path straddling the 300-char cut would otherwise lose the tail
-    # the redaction/relativization patterns need to match, leaking a prefix.
+    # Sanitize the full text *before* truncating: a secret or worktree path straddling the
+    # 300-char cut would otherwise lose the tail the redaction/relativization patterns need
+    # to match, leaking a prefix. The default sanitizer is the shared echo one, which also
+    # strips control characters ahead of redaction (#528) — this is multi-line stderr, so
+    # it is the PROSE variant, which keeps line breaks wherever that is provably as safe
+    # as removing them.
     raw = (event_error or run.stderr or run.stdout).strip()
-    detail = (sanitize(raw) if sanitize is not None else (redaction.redact_text(raw) or ""))[:300]
+    detail = (sanitize(raw) if sanitize is not None else redaction.sanitize_echo_prose(raw))[:300]
     return make_error("nonzero_exit", f"codex exited {run.exit_code}: {detail}")

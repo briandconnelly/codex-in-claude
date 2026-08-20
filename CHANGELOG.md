@@ -5,6 +5,84 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Control characters are stripped from every echoed diagnostic, not just the two spans a
+  `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
+  key and file path; every other path that quotes foreign text into an envelope still had the gap
+  — the generic `nonzero_exit` branch echoing codex's stderr, the `codex_transfer` diagnostics
+  including `app_server_stderr_tail`, the review path's raw-output preview, stored job-result
+  fragments, exception text, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and refusal
+  messages. Two consequences: an escape sequence reaching a terminal can recolor, reposition, or
+  erase — enough to spoof or hide surrounding output, and the text is attacker-influenceable,
+  since a repository under review can make codex print chosen text — and a control character
+  wedged into a secret defeats the redactor's patterns outright, so the value rides out as
+  plaintext.
+
+  Three findings corrected the issue's own scope while verifying it. `config._safe_token` covered
+  only the unsupported-argument path, so a valid config key or profile name reached both
+  `error.message` and `repair.alternative` raw. `redaction.exc_summary` fed three more sinks that
+  were not in the inventory. And a control character in a printed worktree path defeats
+  `sanitize_prose`'s alias matching, so the dead absolute path survives — a second, independent
+  leak of the #420 guarantee, which no amount of stripping the OUTPUT can fix.
+
+  The mechanism is upstream (`pontonier` 0.6.0: `redaction.sanitize_echo`,
+  `redaction.sanitize_echo_prose`, `worktree.sanitize_echo_prose`), because it is CLI-agnostic and
+  a sibling bridge has byte-identical call sites — see AGENTS.md, Package boundary. What stays
+  here is bridge policy: which spans are echoed, each one's length bound and truncation direction,
+  and which variant a span gets. Single-token spans (a config key, a path, a rejected flag name)
+  use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
+  wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
+
+  The catalog strings `codex_models` reads from `$CODEX_HOME` (`display_name`, `fetched_at`,
+  `client_version`) are covered too — foreign text on a rendered surface, like a config key a
+  rejection echoes. `slug` is left alone: it is the identifier, and it is pattern-validated.
+
+  Replay covers all three human-readable carriers on a stored error — `error.message`,
+  `repair.alternative`, and `app_server_stderr_tail`, the one with a published guarantee —
+  and a stored success's rendered fields, leaving `raw_response`, `diff`, and `meta` alone.
+
+  The success channel is split rather than exempted, and the split is by FIELD, not by
+  channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
+  and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
+  delegate alike — is sanitized. The machine fields are deliberately left alone, because
+  sanitizing them would *repair* malformed values instead of letting them degrade: a
+  `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
+  control character turns it into an affirmative `pass` at `high` confidence. `severity`
+  inverts the same way, and `file` is an identifier a reader uses to locate code. The same
+  reasoning covers `details.field` and resource URIs, whose validate-don't-mutate half is
+  tracked as #529. Where such a value is ALSO composed into a prose message — the caller's
+  argument name, a missing job id — that copy is sanitized while the machine copy is not.
+
+  `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
+  model's output — `redact_text` still runs, and the delegate path also relativizes worktree
+  paths — but this change does not transform it, so its control characters survive and a
+  caller that needs the output as it stood reads it there.
+
+  Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
+  which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
+  error records written before this change, which replayed their control characters for the whole
+  TTL after an upgrade. The replay pass runs the full strip-then-redact, never a strip alone — the
+  stored text was already redacted at write time, so stripping by itself is the redact-then-strip
+  ordering and would reassemble a control-split secret. It is taken only when a control character
+  is actually present, so a clean domain error still passes through verbatim rather than being
+  re-run through the heuristic redactor.
+
+  **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
+  own sanitation policy, and that policy changed. It now states the guarantee precisely — every
+  Unicode `Cc` code point (C0, DEL, C1) removed **except line feed**, which is kept so a
+  multi-line tail stays readable — and states its limits: the text may still contain LF, a line in
+  it can be one the child process chose, and category `Cf` bidi/format controls are not covered.
+  Not breaking: a strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since
+  the serialized shape and accepted types are untouched. Error-message prose changes carry no
+  fingerprint of their own (see AGENTS.md, Versioning).
+
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors are deliberately **not** sanitized where they are
+  built. A descriptor is an identity matched against codex's own rejection text, which quotes the
+  operator's name with its raw spelling; sanitizing or bounding it at construction changed what it
+  matched, so a control-bearing or over-long name stopped matching and the operator's own bad
+  passthrough was misattributed to plugin contract drift. Sanitation happens at emission instead.
+
 ### Changed
 
 - **BREAKING: `codex exec --strict-config` now guards the guarantee-bearing `-c` key pins, and a

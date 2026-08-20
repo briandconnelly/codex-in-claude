@@ -519,7 +519,13 @@ def _invalid_arguments_envelope(
 
     first = items[0]
     shown = f" (showing {len(items)} of {total})" if total > len(items) else ""
-    message = f"{tool_name}: {total} invalid argument(s){shown}: {first.field} — {first.reason}"
+    # `first.field` is the CALLER's own argument name. This copy is prose, so it is
+    # sanitized like any other echoed text (#528); the machine copies below
+    # (`details.field`, `invalid_arguments[].field`) keep the exact name, because deleting
+    # characters from an identifier corrupts the value a client uses to correct its call.
+    # Validating or rejecting those is #529.
+    safe_field = redaction.sanitize_echo(first.field)
+    message = f"{tool_name}: {total} invalid argument(s){shown}: {safe_field} — {first.reason}"
     # Type-aware repair: name the dominant fix, then point at the authoritative schema.
     types = {err.get("type") for err in errors}
     hints: list[str] = []
@@ -1072,7 +1078,11 @@ def _workspace_error_result(
         ErrorResult(
             error=make_error(
                 cast("ErrorCode", error_code),
-                error_detail or "invalid workspace",
+                # `error_detail` quotes the caller's own workspace_root and filesystem
+                # text back into the message, so it is echoed foreign text like any other
+                # (#528). `details.field` is a MACHINE field and is left alone — deleting
+                # characters from an identifier corrupts it; that half is #529.
+                redaction.sanitize_echo_prose(error_detail) or "invalid workspace",
                 details=ErrorDetail(field="workspace_root"),
                 candidate_roots=candidate_roots,
             ),
@@ -1089,7 +1099,10 @@ def _placeholder_error(meta: Meta) -> dict | None:
         ErrorResult(
             error=make_error(
                 "unexpanded_env_placeholder",
-                f"Unexpanded ${{...}} env placeholders: {', '.join(placeholders)}.",
+                # Env var NAMES are operator-controlled text reaching a message (#528).
+                redaction.sanitize_echo_prose(
+                    f"Unexpanded ${{...}} env placeholders: {', '.join(placeholders)}."
+                ),
                 repair_alternative=config.ENV_PLACEHOLDER_REPAIR,
             ),
             meta=meta,
@@ -2828,7 +2841,7 @@ async def _prepare_delegate(
             ErrorResult(
                 error=make_error(
                     "not_a_git_repo",
-                    str(exc),
+                    redaction.sanitize_echo_prose(str(exc)),
                     details=ErrorDetail(field="workspace_root"),
                 ),
                 meta=meta,
@@ -2837,7 +2850,7 @@ async def _prepare_delegate(
     except (worktree.NoCommitsError, worktree.WorktreeError) as exc:
         return serialize_error(
             ErrorResult(
-                error=make_error("worktree_error", str(exc)[:300]),
+                error=make_error("worktree_error", redaction.sanitize_echo_prose(str(exc))[:300]),
                 meta=meta,
             )
         )
@@ -4254,7 +4267,7 @@ async def codex_delegate_dry_run(
             ErrorResult(
                 error=make_error(
                     "not_a_git_repo",
-                    str(exc),
+                    redaction.sanitize_echo_prose(str(exc)),
                     details=ErrorDetail(field="workspace_root"),
                 ),
                 meta=meta,
@@ -4265,7 +4278,7 @@ async def codex_delegate_dry_run(
             ErrorResult(
                 error=make_error(
                     "worktree_error",
-                    str(exc)[:300],
+                    redaction.sanitize_echo_prose(str(exc))[:300],
                     # The preview is read-only (no worktree is created), so a dirty tree is
                     # fine; this fires only when the repo has no commit to base on or a git
                     # command failed.
@@ -4371,7 +4384,11 @@ def _job_not_found(job_id: str, meta: Meta, workspace_root: str | None = None) -
         ErrorResult(
             error=make_error(
                 "job_not_found",
-                f"No job '{job_id}' in this workspace.",
+                # The caller's job_id is echoed so they can see WHICH id missed. This copy
+                # is prose, so it is sanitized like the argument NAME at `_format_loc`
+                # (#528). `details.field` names the parameter, not the value, so it is
+                # unaffected; validating the id itself is #529.
+                f"No job '{redaction.sanitize_echo(job_id)}' in this workspace.",
                 details=ErrorDetail(field="job_id"),
                 repair_arguments=list_params or None,
             ),
@@ -4528,9 +4545,10 @@ def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) ->
         provenance += f", producer server_version {version}"
     if isinstance(fingerprint, str) and fingerprint:
         provenance += f", producer fingerprint {fingerprint}"
-    # The provenance strings and `detail` echo stored payload fragments, so redact the
+    # The provenance strings and `detail` echo stored payload fragments, so sanitize the
     # whole composed message at this single sink and bound its size, mirroring
-    # _job_result_corrupt.
+    # _job_result_corrupt. The echo sanitizer, not bare redaction: a stored payload is
+    # foreign text being quoted back, and can carry control characters (#528).
     message = (
         f"stored job result was written under a different result format ({provenance}): {detail}"
     )
@@ -4538,7 +4556,7 @@ def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) ->
         ErrorResult(
             error=make_error(
                 "job_result_incompatible",
-                (redaction.redact_text(message) or "")[:500],
+                redaction.sanitize_echo_prose(message)[:500],
             ),
             meta=meta,
         )
@@ -4547,12 +4565,13 @@ def _job_result_unreadable(detail: str, rec: dict, payload: dict, meta: Meta) ->
 
 def _job_result_corrupt(detail: str, meta: Meta) -> dict:
     # `detail` interpolates ValidationError text that can echo stored payload fragments
-    # (Pydantic's input_value), so redact at this single sink for both corrupt-result paths.
+    # (Pydantic's input_value), so sanitize at this single sink for both corrupt-result
+    # paths — echoed foreign text, so control characters go too (#528).
     return serialize_error(
         ErrorResult(
             error=make_error(
                 "internal_error",
-                f"job result could not be returned: {redaction.redact_text(detail) or ''}"[:300],
+                f"job result could not be returned: {redaction.sanitize_echo_prose(detail)}"[:300],
                 repair_alternative=(
                     "Start a new job; if this persists, run codex_status and check the server logs."
                 ),
@@ -4610,6 +4629,52 @@ async def _job_result_impl(
     return envelope
 
 
+# The presentation carriers a stored SUCCESS payload can hold. `raw_response` is
+# deliberately absent: it is the closest-to-source carrier, and `diff` is content too (already
+# redacted at write time). Keys, not a blind tree walk, so replay cannot mutate a machine
+# identifier or `meta` (#528, #529).
+_STORED_PRESENTATION_KEYS = ("summary", "findings", "questions", "next_steps", "assumptions")
+
+
+def _sanitize_stored_presentation(payload: dict) -> dict:
+    """Sanitize a pre-#528 stored payload's rendered fields at the replay boundary.
+
+    A record written before the echo sanitizer landed keeps its control characters for the
+    whole TTL after an upgrade — a day by default — and replays them into the same fields a
+    client renders. Only taken when a control character is actually present, so a clean
+    record is returned byte-identical rather than re-run through the heuristic redactor.
+    """
+    for key in _STORED_PRESENTATION_KEYS:
+        value = payload.get(key)
+        if value is not None and _tree_has_control_char(value):
+            # Same prose/machine split the live path uses: `findings` carries `severity`
+            # (a closed enum) and `file` (an identifier), and sanitizing those REPAIRS a
+            # malformed value into a valid-looking one instead of letting it degrade.
+            payload[key] = (
+                [orchestration._sanitize_finding(f) for f in value]
+                if key == "findings" and isinstance(value, list)
+                else orchestration._sanitize_prose_value(value)
+            )
+    return payload
+
+
+def _tree_has_control_char(value: object) -> bool:
+    """Whether any STRING leaf in a nested value carries a Cc code point.
+
+    Deliberately a walk, not a check over `json.dumps(value)`: JSON serialization escapes
+    a control character as a `\\u0007` sequence, so the dumped text contains no Cc at all
+    and the check would report False for every nested value — silently disabling the pass
+    it guards.
+    """
+    if isinstance(value, str):
+        return appserver._has_control_char(value)
+    if isinstance(value, list):
+        return any(_tree_has_control_char(v) for v in value)
+    if isinstance(value, dict):
+        return any(_tree_has_control_char(v) for v in value.values())
+    return False
+
+
 def _finished_job_envelope(
     rec: dict,
     payload: dict | None,
@@ -4652,6 +4717,8 @@ def _finished_job_envelope(
             if delivered and isinstance(validated_payload.get("meta"), dict):
                 validated_payload["meta"]["job_id"] = job_id
                 validated_payload["meta"]["fingerprint"] = FINGERPRINT
+            if delivered:
+                validated_payload = _sanitize_stored_presentation(validated_payload)
             # slim_meta AFTER apply_detail, and after the job_id/fingerprint stamping
             # above — both write non-null values, so neither reintroduces a null key.
             # This is the single delivery chokepoint the sync and replay paths share,
@@ -4682,13 +4749,44 @@ def _finished_job_envelope(
         # this read site trusts the worker's own persistence-boundary guard
         # (_worker._guard_invalid_arguments, #419) to have normalized any nonconformant
         # envelope before it ever reached disk.
-        # Boundary redact (#186/F10): a schema-valid payload written by a pre-fix worker
-        # (still within its TTL) could carry unredacted exception text in its message. Scope
-        # this belt-and-braces pass to `internal_error` — the code every raw-exception sink
-        # emits — so domain errors (already redacted at write time) aren't re-run through the
-        # heuristic redactor and can't be over-redacted.
-        if validated.error.code == "internal_error":
-            validated.error.message = redaction.redact_text(validated.error.message) or ""
+        # Boundary sanitize (#186/F10): a schema-valid payload written by a pre-fix worker
+        # (still within its TTL) could carry unredacted exception text in its message. This
+        # used to be scoped to `internal_error` — the code every raw-exception sink emits —
+        # so domain errors already redacted at write time were not re-run through the
+        # heuristic redactor. That scoping does not survive #528: a record written by a
+        # pre-#528 worker carries control characters under ANY code, and the default TTL
+        # keeps it readable for a day after the upgrade.
+        #
+        # Two conditions, because the two hazards differ. A stored message with no control
+        # character cannot have been damaged by one, so it keeps passing through verbatim —
+        # preserving the original scoping's point, that a domain error already redacted at
+        # write time must not be re-run through the heuristic redactor and over-redacted
+        # (a message merely RESEMBLING a token stays intact).
+        #
+        # A message that DOES carry one gets the full strip-then-redact pass under any code,
+        # never a strip alone: the text was already redacted at write time, so stripping by
+        # itself is the redact-then-strip ordering, and it would REASSEMBLE a control-split
+        # secret that write-time redaction missed.
+        if validated.error.code == "internal_error" or appserver._has_control_char(
+            validated.error.message or ""
+        ):
+            validated.error.message = redaction.sanitize_echo_prose(validated.error.message)
+        # `repair.alternative` is another human-readable carrier on an error envelope, and
+        # it quotes the same foreign text the message does (extra-args descriptors, for
+        # one). Sanitizing only the message left it behind.
+        if validated.error.repair is not None and appserver._has_control_char(
+            validated.error.repair.alternative or ""
+        ):
+            validated.error.repair.alternative = redaction.sanitize_echo_prose(
+                validated.error.repair.alternative
+            )
+        # `app_server_stderr_tail` is the third, and the one with a PUBLISHED guarantee:
+        # its schema description promises no terminal escape sequence survives. A record
+        # stored before this change would have made that promise false for the whole TTL.
+        if appserver._has_control_char(validated.error.app_server_stderr_tail or ""):
+            validated.error.app_server_stderr_tail = redaction.sanitize_echo_prose(
+                validated.error.app_server_stderr_tail
+            )
         return serialize_error(validated), True
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))
     # A still-running job is the one recoverable case: point at the poll tool with

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import anyio
+import pytest
 from pontonier.core import redaction
 from pontonier.core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
 from pontonier.core.runtime import CommandRun
@@ -637,3 +638,205 @@ def test_stamp_meta_effort_rejection_without_sent_effort_is_drift(monkeypatch):
     out = orchestration._stamp_meta(result, meta)
     assert out is not None
     assert out["error"]["code"] == "cli_contract_changed"
+
+
+# --- #528: echoed previews and exception text go through the echo sanitizer -----------
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+def test_review_invalid_response_preview_strips_control_characters():
+    """The preview quotes the model's raw output back into an error message — model text
+    is the most directly attacker-shaped input this server echoes."""
+    out = orchestration._review_invalid_response_error(
+        "invalid_json", "not json \x1b[31mRED\x1b[0m \x07here", _make_meta()
+    )
+    message = out["error"]["message"]
+    assert not _has_cc(message), repr(message)
+
+
+def test_review_invalid_response_preview_redacts_a_control_split_secret():
+    out = orchestration._review_invalid_response_error(
+        "invalid_json", "leak sk-\x01ant-api03-" + "A" * 40, _make_meta()
+    )
+    assert "A" * 40 not in out["error"]["message"]
+
+
+def test_review_presentation_fields_are_sanitized_through_finalize_review():
+    """Through the REAL entry point. The first version of this test called
+    `_success_common`, which `finalize_review` never calls — so it passed while the review
+    path still used `redact_tree` and emitted control characters. The second version's
+    finding omitted `evidence`/`risk`/`recommendation`, so `coerce_findings` DROPPED it and
+    the findings assertion ran over an empty list. A complete finding is supplied here and
+    asserted to survive, so the nested assertions are about real content.
+    """
+    payload = (
+        '{"verdict": "pass", "confidence": "high", "summary": "bad \\u001b[31mRED",'
+        ' "questions": ["q\\u0007"], "assumptions": ["a\\u0007ssume"],'
+        ' "next_steps": ["n\\u0007ext"],'
+        ' "findings": [{"title": "t\\u0007x", "severity": "high", "file": "a.py",'
+        ' "evidence": "e\\u0007v", "risk": "r\\u0007k", "recommendation": "re\\u0007c"}]}'
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_review(
+        result, meta=_make_meta(), coverage=Coverage(status="complete")
+    )
+    assert out["ok"] is True, out
+    assert len(out["findings"]) == 1, "the finding must survive, or the asserts below are vacuous"
+    finding = out["findings"][0]
+    for value in (
+        out["summary"],
+        *out["questions"],
+        *out["assumptions"],
+        *out["next_steps"],
+        finding["title"],
+        finding["evidence"],
+        finding["risk"],
+        finding["recommendation"],
+    ):
+        assert not _has_cc(str(value)), repr(value)
+    assert out["raw_response"]["text"] == payload
+
+
+@pytest.mark.parametrize(
+    ("field", "bad", "expected"),
+    [("verdict", "pa\x07ss", "unknown"), ("confidence", "hi\x07gh", "medium")],
+)
+def test_a_control_split_machine_field_degrades_rather_than_being_repaired(field, bad, expected):
+    """The reason sanitation is schema-aware rather than a blind tree walk.
+
+    Stripping every string also REPAIRS the machine fields, and repairing is worse than
+    leaving them dirty: `"pa\\u0007ss"` is not a valid verdict and must degrade to
+    `unknown`, but a blind walk turns it into an affirmative `pass` — promoting untrusted
+    model output from an invalid judgment to a passing review at `high` confidence.
+    """
+    # Built as a dict so the malformed field REPLACES the good one; interpolating it into
+    # a JSON string literal produced a duplicate key, which is a different test.
+    fields = {"verdict": "pass", "confidence": "high", "summary": "s"}
+    fields[field] = bad
+    payload = json.dumps(fields)
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_review(
+        result, meta=_make_meta(), coverage=Coverage(status="complete")
+    )
+    assert out[field] == expected, out[field]
+
+
+def test_a_control_bearing_finding_identifier_is_not_silently_repaired():
+    """`file` is an identifier a reader uses to locate code. Deleting a byte from it points
+    them somewhere else, so it keeps exactly what the model wrote while the finding's PROSE
+    is sanitized. (Validating or rejecting such identifiers is #529.)"""
+    payload = (
+        '{"verdict": "pass", "confidence": "high", "summary": "s",'
+        ' "findings": [{"title": "t\\u0007x", "severity": "high", "file": "a\\u0007.py",'
+        ' "evidence": "e", "risk": "r", "recommendation": "rec"}]}'
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_review(
+        result, meta=_make_meta(), coverage=Coverage(status="complete")
+    )
+    finding = out["findings"][0]
+    assert finding["title"] == "tx"  # prose: cleaned
+    assert finding["file"] == "a\x07.py"  # machine: untouched
+
+
+def test_plain_consult_summary_is_sanitized_but_raw_response_is_exact():
+    """The non-JSON consult path builds `summary` from the model's prose. It is the
+    rendered field, so it is sanitized; `raw_response.text` stays exact."""
+    prose = "plain \x1b[31mRED\x1b[0m \x07"
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=prose, events=""
+    )
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert out["ok"] is True, out
+    assert not _has_cc(out["summary"]), repr(out["summary"])
+    assert out["raw_response"]["text"] == prose
+
+
+def test_structured_consult_presentation_is_sanitized_through_finalize_consult():
+    """Through `finalize_consult`, the shipping entry point — not `_success_common`, which
+    is a helper. A test that exercises the helper cannot tell a wired-up fix from an
+    unwired one."""
+    payload = (
+        '{"summary": "bad \\u001b[31mRED\\u001b[0m", "questions": ["q\\u0007"],'
+        ' "assumptions": ["a\\u0007"], "next_steps": ["n\\u0007"],'
+        ' "findings": [{"title": "x\\u0007y", "severity": "low", "evidence": "e\\u0007",'
+        ' "risk": "r", "recommendation": "rec"}]}'
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert out["ok"] is True, out
+    assert len(out["findings"]) == 1, "the finding must survive, or the asserts are vacuous"
+    for value in (
+        out["summary"],
+        *out["questions"],
+        *out["assumptions"],
+        *out["next_steps"],
+        out["findings"][0]["title"],
+        out["findings"][0]["evidence"],
+    ):
+        assert not _has_cc(str(value)), repr(value)
+    # The closest-to-source carrier keeps the model's output as it already stood: redacted (and,
+    # on the delegate path, worktree-relativized), with its control characters intact. That
+    # is the point of it — not that it is untransformed, but that THIS change does not
+    # transform it.
+    assert out["raw_response"]["text"] == payload
+
+
+def test_a_dict_valued_summary_cannot_carry_a_control_character():
+    """A model can return `summary` as any JSON shape, and a dict reaches `_summary_of` as
+    `str(dict)`.
+
+    Python's repr happens to escape control characters inside a nested string, so this shape
+    does not leak today — but a security guarantee resting on an incidental property of repr
+    is not a guarantee, and a future change to how this is formatted would silently remove
+    it. `_summary_of` sanitizes the stringified result, and this pins that.
+    """
+    payload = json.dumps({"summary": {"nested": "bad \x1b[31mRED"}, "findings": []})
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert not _has_cc(out["summary"]), repr(out["summary"])
+    # The repr-escaped LITERAL text (backslash, x, 1, b) may survive, and that is fine: it
+    # renders as four ordinary characters, not as an escape sequence. What must never
+    # survive is the ESC code point itself, which the assertion above covers.
+
+
+def test_summary_of_sanitizes_a_directly_constructed_dict_summary():
+    """`_summary_of` is asserted directly, because the end-to-end shape cannot fail.
+
+    Through `finalize_consult` a dict-valued summary is stringified by `str()`, and Python's
+    repr escapes the ESC — so the end-to-end assertion holds whether or not `_summary_of`
+    sanitizes, and cannot detect its removal. Calling `_summary_of` with a value whose
+    `str()` carries a REAL control character is what gives the guarantee teeth.
+    """
+    assert orchestration._summary_of({"summary": "bad \x1b[31mRED"}) == "bad [31mRED"
+    # A shape whose str() is not repr-escaped: the ESC survives stringification and must be
+    # removed by the sanitizer rather than by an accident of formatting.
+    assert not _has_cc(orchestration._summary_of({"summary": ["x\x07y"]}))
+
+
+def test_a_non_list_findings_keeps_the_redaction_it_always_had():
+    """The by-key exclusion has to track what was actually SANITIZED, not the key name.
+
+    `findings` is excluded from the redaction fallback because the branch above handles it —
+    but that branch only runs for a list. Excluding the key unconditionally silently dropped
+    the redaction a non-list `findings` used to get. `coerce_findings` discards a non-list
+    today, so this was latent rather than a leak; the guard should not depend on that.
+    """
+    out = orchestration._sanitize_structured(
+        {"summary": "s", "findings": "api_key=" + "A" * 40, "other": "api_key=" + "A" * 40}
+    )
+    assert "A" * 40 not in out["findings"], out["findings"]
+    assert "A" * 40 not in out["other"]

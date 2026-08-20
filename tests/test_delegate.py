@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import codex
@@ -383,6 +384,41 @@ def test_run_delegate_survives_crafted_partial_alias_consumption(monkeypatch, tm
 # classify_failure's `sanitize` parameter.
 
 
+def _run_delegate_with_success(monkeypatch, last_message: str, tmp_path):
+    """Drive run_delegate through a SUCCESSFUL codex exec with a canned last_message."""
+    from types import SimpleNamespace
+
+    import anyio
+    from pontonier.core import worktree
+
+    from codex_in_claude import delegate
+
+    wt_path = str(tmp_path / "cic-worktree-s" / "tree")
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=last_message)
+
+    monkeypatch.setattr(
+        worktree, "create", lambda *a, **k: SimpleNamespace(path=wt_path, baseline_warning=None)
+    )
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+
+    return anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/repo",
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+
+
 def _run_delegate_with_failure(monkeypatch, stderr: str, *, wt_path: str, exit_code: int = 1):
     """Drive run_delegate through a failing codex exec (classify_failure's nonzero_exit
     branch) with a canned stderr and worktree path; return the result envelope."""
@@ -462,3 +498,89 @@ def test_run_delegate_classify_failure_sanitizes_sentence_final_root(monkeypatch
     result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
     assert wt not in result["error"]["message"]
     assert "cic-worktree-" not in result["error"]["message"]
+
+
+def test_run_delegate_classify_failure_strips_control_characters(monkeypatch, tmp_path):
+    """#528 end to end through the delegate error path: codex runs in the worktree and its
+    stderr is attacker-influenceable (a repository under review can make it print chosen
+    text), so an escape sequence must not reach the envelope."""
+    wt = str(tmp_path / "cic-worktree-g" / "tree")
+    stderr = f"error \x1b[31mRED\x1b[0m writing {wt}/out.txt\x07"
+    result = _run_delegate_with_failure(monkeypatch, stderr, wt_path=wt)
+    message = result["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    assert wt not in message
+
+
+def test_run_delegate_classify_failure_relativizes_a_control_split_worktree_path(
+    monkeypatch, tmp_path
+):
+    """The second, independent leak #528 turned up: a control character inside the printed
+    path defeats alias matching, so `sanitize_prose` alone surfaces the dead absolute path
+    even though the worktree is gone — the #420 guarantee, reopened by one byte. The strip
+    has to run inside the alias-staging composition, which is what
+    `worktree.sanitize_echo_prose` does."""
+    wt = str(tmp_path / "cic-worktree-h" / "tree")
+    damaged = wt[:8] + "\x1b" + wt[8:]
+    result = _run_delegate_with_failure(monkeypatch, f"error writing {damaged}/out.txt", wt_path=wt)
+    message = result["error"]["message"]
+    assert wt not in message, repr(message)
+    assert "./out.txt" in message
+
+
+def test_delegate_summary_is_sanitized_while_raw_response_stays_exact(monkeypatch, tmp_path):
+    """#528 success-channel half: `summary` is a presentation this function composes (it
+    prefixes its own sentence), so control characters go; `raw_response.text` is the
+    closest-to-source carrier — still redacted and relativized, as it always was, but not
+    additionally control-sanitized — and keeps them."""
+    result = _run_delegate_with_success(monkeypatch, "did \x1b[31mstuff\x1b[0m\x07", tmp_path)
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in result["summary"]), repr(
+        result["summary"]
+    )
+    assert "stuff" in result["summary"]
+    assert "\x1b" in result["raw_response"]["text"]
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+@pytest.mark.parametrize(
+    ("exc", "code"),
+    [
+        ("NotAGitRepoError", "not_a_git_repo"),
+        ("NoCommitsError", "worktree_error"),
+        ("WorktreeError", "worktree_error"),
+    ],
+)
+def test_delegate_worktree_exception_messages_are_sanitized(monkeypatch, tmp_path, exc, code):
+    """Each `str(exc)` sink in delegate.py, not just the one server.py happens to share.
+
+    An identical handler existing in `server.py` with its own test proves nothing about this
+    file: the two were separate call sites, and only one was covered.
+    """
+    import anyio
+    from pontonier.core import worktree
+
+    from codex_in_claude import delegate
+
+    def boom(*a, **k):
+        raise getattr(worktree, exc)("git failed \x1b[31mRED\x1b[0m at step\x07 2")
+
+    monkeypatch.setattr(worktree, "create", boom)
+    result = anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            str(tmp_path),
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+    assert result["ok"] is False
+    assert result["error"]["code"] == code
+    assert not _has_cc(result["error"]["message"]), repr(result["error"]["message"])
+    assert "RED" in result["error"]["message"]

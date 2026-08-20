@@ -130,6 +130,19 @@ nearly every redaction and stop being a useful signal. This is **best-effort
 defense-in-depth, not a guarantee**: it covers content the plugin itself surfaces, not whatever Codex
 may read or act on during a run. The schema is unchanged; the inline marker is the only signal.
 
+Control characters are deleted from those same rendered fields, before redaction runs. Two reasons:
+an escape sequence reaching a terminal can recolor, reposition, or erase, and the text is
+attacker-influenceable; and a control character wedged into a secret defeats the redactor's
+patterns, so stripping first is what lets the value be matched at all. Deleting every Unicode `Cc`
+code point (C0, DEL, C1) is what is promised — `Cf` bidi/format controls are **not** covered, so
+this is not a general anti-spoofing guarantee.
+
+Two categories are deliberately excluded. `raw_response.text` keeps the representation it already
+had, so a caller that needs the model's output as it stood can read it there. And machine fields —
+`verdict`, `confidence`, a finding's `severity`/`file`, `details.field`, job ids, resource URIs —
+are never mutated: deleting a character from an identifier corrupts it, and stripping one out of a
+malformed enum *repairs* it into a valid-looking value instead of letting it degrade.
+
 For a gathered diff specifically, `codex_review_changes`/`codex_dry_run`'s `coverage.redaction`
 breaks the `redacted` omission reason down further when a structured breakdown is available:
 `withheld_paths` names files whose hunk was dropped whole, `masked_paths` names files sent with

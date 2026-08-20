@@ -232,6 +232,10 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
   the same token (the match may have started mid-token). Neither marker is a guarantee either way:
   a free-form secret can contain almost any character, and flagging every unusual neighbor as
   suspect would fire on nearly every redaction and stop meaning anything.
+- Control characters are deleted from the same returned free text, before redaction runs — an
+  escape sequence in an envelope can corrupt or spoof how it renders, and one wedged into a secret
+  would defeat the redactor. `raw_response.text` and machine fields (a review `verdict`, a finding's
+  `file`, an argument name) are deliberately left alone; see [`docs/REFERENCE.md`](docs/REFERENCE.md).
 - The plugin never passes Codex's `--dangerously-bypass-*` flags.
 - Found a vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md).
 
