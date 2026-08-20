@@ -7,7 +7,7 @@ import tomllib
 
 import anyio
 import pytest
-from pontonier.core import worktree
+from pontonier.core import redaction, worktree
 from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import cli_contract, codex, config
@@ -1364,3 +1364,40 @@ def test_user_config_rejection_strips_control_characters(monkeypatch):
     # remainder of the key are still there.
     assert ":4" in message
     assert "key" in message
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "sk-\x01ant-api03-" + "A" * 40,  # control char breaks the redactor's prefix anchor
+        "s\x01k-ant-api03-" + "A" * 40,
+        "sk-ant\x7f-api03-" + "A" * 40,  # DEL, not just C0
+    ],
+)
+def test_safe_echo_strips_control_characters_before_redacting(attack):
+    """Control-char stripping must run BEFORE redaction, never after (#524).
+
+    A secret with an embedded control character does not match the redactor's pattern,
+    so redacting first leaves it intact — and stripping afterwards then REASSEMBLES the
+    contiguous secret in the outgoing message. Stripping first joins the fragments while
+    the redactor can still see them; it cannot split anything, so this order has no
+    mirror-image failure. Verified against the real redactor, which reconstituted the
+    full key in the old order.
+    """
+    secret = "sk-ant-api03-" + "A" * 40
+    out = codex._safe_echo(attack)
+    assert secret not in out, out
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in out)
+    # Positive control: the redactor really does catch this secret once contiguous, so
+    # the assertion above measures the ordering rather than a matcher that never fires.
+    assert secret not in (redaction.redact_text(secret) or "")
+
+
+def test_user_config_rejection_does_not_leak_a_control_split_secret(monkeypatch):
+    """The same ordering defect, end to end through the classifier."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    secret = "sk-ant-api03-" + "A" * 40
+    stderr = _file_stderr("junk_key", path=f"/tmp/sk-\x01ant-api03-{'A' * 40}/config.toml")
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "user_config_rejected"
+    assert secret not in (err.message or "")

@@ -377,10 +377,18 @@ def _safe_echo(text: str | None) -> str:
 
     Applied to the config KEY and file path a strict-config rejection carries: codex read
     both off disk, so they are untrusted, but they are also the whole actionable content
-    of the error — the caller cannot fix a key they are not told about. Stripping is done
-    AFTER redaction so a control character cannot split a secret past its matcher."""
-    redacted = redaction.redact_text(text or "") or ""
-    return _CONTROL_CHARS.sub("", redacted)[:_ECHO_MAX_CHARS]
+    of the error — the caller cannot fix a key they are not told about.
+
+    ORDER IS LOAD-BEARING, and it is strip-then-redact. A secret carrying an embedded
+    control character does not match the redactor's pattern, so redacting FIRST leaves it
+    untouched — and stripping afterwards then reassembles the contiguous secret in the
+    outgoing message (verified against the real redactor: `sk-\\x01ant-api03-…` came back
+    out whole). Stripping first only JOINS fragments while the matcher can still see
+    them, so it has no mirror-image failure. Truncation stays last, matching
+    classify_failure's reason for redacting before its own `[:300]`: a secret straddling
+    the cut would otherwise lose the tail its pattern needs."""
+    stripped = _CONTROL_CHARS.sub("", text or "")
+    return (redaction.redact_text(stripped) or "")[:_ECHO_MAX_CHARS]
 
 
 def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -> ErrorInfo:
