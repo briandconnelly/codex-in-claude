@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-83"
+FINGERPRINT = "codex-in-claude/0.1/schema-84"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -1160,16 +1160,33 @@ class RawDefaults(BaseModel):
     timeout_seconds: int
 
 
+# The `codex --version` surface (#531). `codex_version` is a lossy DISPLAY projection while
+# `version_supported` is parsed from the RAW probe output, so the two can legitimately
+# disagree — a client that read the emitted string as the identity would draw the wrong
+# conclusion from that disagreement, and no part of that is recoverable from `str | None`.
+# ONE field carries it: the wire budgets (`test_loosened_schemas_stay_under_byte_budget`,
+# `test_wire_catalog_under_cap`) leave no room for the same fact on all three, and this is
+# the field a reader is holding when it matters.
+_CODEX_VERSION_DESC = (
+    "Display copy of `codex --version`: control characters removed, secret-looking values "
+    "redacted, clipped to 200 characters with a trailing advisory `…[truncated]`; null if "
+    "codex did not run or nothing printable remained. Do not parse it — `version_supported` "
+    "is the verdict, and it is parsed from the raw output, which can differ from this."
+)
+
+
 class StatusResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ok: Literal[True] = True
     codex_found: bool
-    codex_version: str | None = None
+    # Description kept through stripping via _KEPT_DESCRIPTIONS; see the constant for why
+    # this fact ships on the wire and why it ships on this field only (#531).
+    codex_version: str | None = Field(default=None, description=_CODEX_VERSION_DESC)
     # Readiness probes (all free — no model call):
     codex_authenticated: bool | None = None  # None = could not determine
     auth_detail: str | None = None  # non-identifying method phrase (ChatGPT / API key)
-    version_supported: bool | None = None
-    version_warning: str | None = None  # advisory; never blocks
+    version_supported: bool | None = None  # parsed from the RAW probe output, not from above
+    version_warning: str | None = None  # advisory, static text; never blocks
     flags_warning: str | None = None  # a guarantee-bearing flag missing from --help
     ready: bool = False  # found AND authenticated
     readiness_detail: str
@@ -1702,6 +1719,7 @@ _KEPT_DESCRIPTIONS = frozenset(
         _DRY_RUN_EFFORT_DESC,
         _DEADLINE_ADVISORY_DESC,
         _FINGERPRINT_COVERS_DESC,
+        _CODEX_VERSION_DESC,
         # _TOOL_STABILITY_DESC: verified empirically (removing this entry leaves the full
         # suite green) that no current test needs this registration — its only wire route,
         # CAPABILITIES_RESULT_SCHEMA, is a raw TypeAdapter(...).json_schema() that

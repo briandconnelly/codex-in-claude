@@ -229,6 +229,69 @@ def test_status_auth_indeterminate(monkeypatch, clean_env):
     assert res["readiness_detail"] == "Could not determine codex auth status."
 
 
+# --- status: the echoed `codex --version` string (#531) -----------------------
+# The version string is subprocess stdout. It reached `codex_version` raw and unbounded, and
+# was interpolated into `version_warning`. Both are fixed here: the emitted copy is a bounded,
+# sanitized DISPLAY projection, and the warning no longer echoes foreign text at all.
+_HOSTILE_VERSION = "codex-cli 9.9.9\x1b[2K\x1b[31m rogue"
+
+
+def _has_cc(text: str) -> bool:
+    return any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in text)
+
+
+def test_status_emits_no_control_characters_from_a_hostile_version(monkeypatch, clean_env):
+    """RED before #531: both fields carried the raw ESC sequences to the client."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: _HOSTILE_VERSION)
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, None))
+    res = server.codex_status()
+    assert not _has_cc(res["codex_version"]), repr(res["codex_version"])
+    assert not _has_cc(res["version_warning"] or ""), repr(res["version_warning"])
+
+
+def test_status_bounds_a_long_version_with_an_explicit_marker(monkeypatch, clean_env):
+    """RED before #531: a 5010-character version came back at full length."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli " + "A" * 5000)
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, None))
+    res = server.codex_status()
+    assert len(res["codex_version"]) == codex._ECHO_MAX_CHARS
+    assert res["codex_version"].endswith(codex._ECHO_TRUNC_MARKER)
+
+
+def test_status_version_warning_never_echoes_the_version_string(monkeypatch, clean_env):
+    """The warning is static. The version reaches the client in its own field, so
+    interpolating it only duplicated untrusted text into a second sink."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: _HOSTILE_VERSION)
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, None))
+    res = server.codex_status()
+    assert res["version_supported"] is False
+    assert res["version_warning"] == server.VERSION_WARNING
+    assert "9.9.9" not in res["version_warning"]
+    assert "rogue" not in res["version_warning"]
+
+
+def test_status_keeps_the_support_verdict_on_the_raw_probe_output(monkeypatch, clean_env):
+    """Identity stays raw. `0.<BEL>148.0` DISPLAYS as a plausible supported version, but the
+    raw string does not parse — so the verdict must be null, never repaired into true."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.\x07148.0")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, None))
+    res = server.codex_status()
+    assert res["codex_version"] == "codex-cli 0.148.0"
+    assert res["version_supported"] is None
+    assert res["version_warning"] is None
+
+
+def test_status_all_control_version_is_found_but_has_no_displayable_version(monkeypatch, clean_env):
+    """`codex_found` is decided from the RAW value, so a version of nothing but control
+    characters still means codex ran — while the display copy sanitizes away to null."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "\x1b\x07")
+    monkeypatch.setattr(server.codex, "login_status", lambda: (False, None))
+    res = server.codex_status()
+    assert res["codex_found"] is True
+    assert res["codex_version"] is None
+    assert res["version_warning"] is None
+
+
 def test_capability_summary_covers_all_task_families():
     """First-read instructions name every task family + prereqs + negative scope (issue #7)."""
     summary = server.CAPABILITY_SUMMARY
@@ -2621,7 +2684,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-83"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-84"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6552,7 +6615,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-83")
+    assert result["fingerprint"].endswith("schema-84")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

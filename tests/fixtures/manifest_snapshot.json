@@ -913,7 +913,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-83",
+            "default": "codex-in-claude/0.1/schema-84",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1482,7 +1482,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-83",
+                "default": "codex-in-claude/0.1/schema-84",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2227,7 +2227,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 8096
+          "size_bytes": 8463
         }
       },
       "description": "The canonical full codex_status result schema. The tool's outputSchema opaques\n`rate_limit`/`raw_defaults`/`resolved_defaults` and points here for the full shape (#242).",
@@ -2606,7 +2606,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-83",
+            "default": "codex-in-claude/0.1/schema-84",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -2876,7 +2876,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 8096
+          "size_bytes": 8463
         }
       },
       "mimeType": "application/schema+json",
@@ -3271,6 +3271,7 @@
               }
             ],
             "default": null,
+            "description": "Display copy of `codex --version`: control characters removed, secret-looking values redacted, clipped to 200 characters with a trailing advisory `…[truncated]`; null if codex did not run or nothing printable remained. Do not parse it — `version_supported` is the verdict, and it is parsed from the raw output, which can differ from this.",
             "title": "Codex Version"
           },
           "extra_args_configured": {
@@ -3289,7 +3290,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-83",
+            "default": "codex-in-claude/0.1/schema-84",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -7511,7 +7512,8 @@
                   {
                     "type": "null"
                   }
-                ]
+                ],
+                "description": "Display copy of `codex --version`: control characters removed, secret-looking values redacted, clipped to 200 characters with a trailing advisory `…[truncated]`; null if codex did not run or nothing printable remained. Do not parse it — `version_supported` is the verdict, and it is parsed from the raw output, which can differ from this."
               },
               "extra_args_configured": {
                 "type": "boolean"
