@@ -1458,3 +1458,24 @@ def test_extra_args_rejected_strips_control_characters_from_descriptors(attack, 
     assert err.code == "extra_args_rejected"
     assert not _has_control(err.message or ""), repr(err.message)
     assert not _has_control((err.repair.alternative if err.repair else "") or "")
+
+
+@pytest.mark.parametrize("name", ["ev\x07il", "p" * 80])
+def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operator(
+    name, monkeypatch
+):
+    """Regression: sanitizing descriptors at CONSTRUCTION broke attribution.
+
+    A descriptor is matched against codex's rejection text, which quotes the operator's
+    name with its raw spelling. Stripping it (or bounding it to 60 chars) made the match
+    fail, so the operator's own bad passthrough came back as `cli_contract_changed` — the
+    fail-loud plugin-drift path, with repair guidance pointing at the wrong thing.
+
+    The rejection here names ONLY the descriptor, with no `--profile` token, so a match
+    can only come from the name itself; including the static flag would let this pass
+    without proving anything about the controlled name.
+    """
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile {name}")
+    err = codex.classify_failure(_run(stderr=f"error: unexpected argument '{name}' found"))
+    assert err.code == "extra_args_rejected"
+    assert not _has_control(err.message or ""), repr(err.message)

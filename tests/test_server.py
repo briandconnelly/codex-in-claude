@@ -9671,3 +9671,70 @@ async def test_worktree_error_message_strips_control_characters(monkeypatch, cle
     message = res["error"]["message"]
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
     assert "RED" in message  # the actionable text survives; only the escapes go
+
+
+async def test_workspace_error_message_strips_control_characters(clean_env, tmp_path):
+    """#528: `error_detail` quotes the caller's own workspace_root and filesystem text
+    back into the message. `details.field` stays a machine field and is not mutated (#529)."""
+    res = await server.codex_consult("hi", workspace_root="/definitely-missing/evil\x1b[31m")
+    assert res["ok"] is False
+    message = res["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    assert "evil" in message  # the actionable path text survives
+
+
+async def test_stored_error_replay_sanitizes_every_code_not_just_internal_error(
+    monkeypatch, clean_env, tmp_path
+):
+    """#528 regression: the boundary pass was scoped to `internal_error`, so a record
+    written by a pre-#528 worker replayed a DOMAIN error with its control characters intact
+    for the whole TTL after the upgrade (a day, by default).
+
+    It has to stay the full strip-then-redact pass: the stored text was already redacted at
+    write time, so a strip alone would be the redact-then-strip ordering and could
+    reassemble a control-split secret that write-time redaction missed.
+    """
+    from codex_in_claude.errors import make_error as _make_error
+    from codex_in_claude.errors import serialize_error as _serialize_error
+    from codex_in_claude.schemas import ErrorResult as _ErrorResult
+
+    secret = "sk-ant-api03-" + "A" * 40
+    stored = _serialize_error(
+        _ErrorResult(
+            error=_make_error(
+                "nonzero_exit",
+                "codex exited 1: bad \x1b[31mRED\x1b[0m\x07 sk-\x01ant-api03-" + "A" * 40,
+            ),
+            meta=_meta_for(tmp_path),
+        )
+    )
+    stored["meta"] = _meta_for(tmp_path).model_dump(mode="json")
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is False
+    assert res["error"]["code"] == "nonzero_exit"  # a DOMAIN error, not internal_error
+    message = res["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    # The split secret is rejoined by the strip and then caught by the redactor.
+    assert "A" * 40 not in message, repr(message)
+    assert secret not in message
+
+
+def test_stderr_tail_description_matches_what_the_code_actually_does():
+    """The advertised guarantee is checked against the implementation, not just written.
+
+    The description said "removes every Unicode Cc code point" while the prose sanitizer
+    deliberately KEEPS line feeds — and LF is Cc. A false guarantee in the discovery
+    surface is worse than a weaker true one, because clients cache it by fingerprint.
+    """
+    from codex_in_claude import appserver as _appserver
+    from codex_in_claude.schemas import ErrorInfo as _ErrorInfo
+
+    description = _ErrorInfo.model_fields["app_server_stderr_tail"].description or ""
+    kept = _appserver._display_stderr_tail("first line\nsecond line") or ""
+    assert "\n" in kept  # LF really does survive
+    assert "EXCEPT line feed" in description
+    # Everything the description claims IS removed, is removed.
+    dirty = _appserver._display_stderr_tail("a\x1b[31mb\x00c\x7fd\x85e") or ""
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in dirty.replace("\n", ""))

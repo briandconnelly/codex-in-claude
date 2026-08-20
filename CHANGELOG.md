@@ -40,13 +40,29 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   identifier fields (`details.field`, job ids, resource URIs) are also unchanged: deleting
   characters from an identifier corrupts it, so those want validation instead, tracked as #529.
 
+  Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
+  which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
+  error records written before this change, which replayed their control characters for the whole
+  TTL after an upgrade. The replay pass runs the full strip-then-redact, never a strip alone — the
+  stored text was already redacted at write time, so stripping by itself is the redact-then-strip
+  ordering and would reassemble a control-split secret. It is taken only when a control character
+  is actually present, so a clean domain error still passes through verbatim rather than being
+  re-run through the heuristic redactor.
+
   **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
   own sanitation policy, and that policy changed. It now states the guarantee precisely — every
-  Unicode `Cc` code point (C0, DEL, C1) removed, so no terminal escape sequence survives — and
-  states its limit, that category `Cf` bidi/format controls are not covered. Not breaking: a
-  strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since the serialized
-  shape and accepted types are untouched. Error-message prose changes carry no fingerprint of
-  their own (see AGENTS.md, Versioning).
+  Unicode `Cc` code point (C0, DEL, C1) removed **except line feed**, which is kept so a
+  multi-line tail stays readable — and states its limits: the text may still contain LF, a line in
+  it can be one the child process chose, and category `Cf` bidi/format controls are not covered.
+  Not breaking: a strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since
+  the serialized shape and accepted types are untouched. Error-message prose changes carry no
+  fingerprint of their own (see AGENTS.md, Versioning).
+
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors are deliberately **not** sanitized where they are
+  built. A descriptor is an identity matched against codex's own rejection text, which quotes the
+  operator's name with its raw spelling; sanitizing or bounding it at construction changed what it
+  matched, so a control-bearing or over-long name stopped matching and the operator's own bad
+  passthrough was misattributed to plugin contract drift. Sanitation happens at emission instead.
 
 ### Changed
 

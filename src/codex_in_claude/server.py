@@ -1072,7 +1072,11 @@ def _workspace_error_result(
         ErrorResult(
             error=make_error(
                 cast("ErrorCode", error_code),
-                error_detail or "invalid workspace",
+                # `error_detail` quotes the caller's own workspace_root and filesystem
+                # text back into the message, so it is echoed foreign text like any other
+                # (#528). `details.field` is a MACHINE field and is left alone — deleting
+                # characters from an identifier corrupts it; that half is #529.
+                redaction.sanitize_echo_prose(error_detail) or "invalid workspace",
                 details=ErrorDetail(field="workspace_root"),
                 candidate_roots=candidate_roots,
             ),
@@ -1089,7 +1093,10 @@ def _placeholder_error(meta: Meta) -> dict | None:
         ErrorResult(
             error=make_error(
                 "unexpanded_env_placeholder",
-                f"Unexpanded ${{...}} env placeholders: {', '.join(placeholders)}.",
+                # Env var NAMES are operator-controlled text reaching a message (#528).
+                redaction.sanitize_echo_prose(
+                    f"Unexpanded ${{...}} env placeholders: {', '.join(placeholders)}."
+                ),
                 repair_alternative=config.ENV_PLACEHOLDER_REPAIR,
             ),
             meta=meta,
@@ -4684,12 +4691,27 @@ def _finished_job_envelope(
         # this read site trusts the worker's own persistence-boundary guard
         # (_worker._guard_invalid_arguments, #419) to have normalized any nonconformant
         # envelope before it ever reached disk.
-        # Boundary redact (#186/F10): a schema-valid payload written by a pre-fix worker
-        # (still within its TTL) could carry unredacted exception text in its message. Scope
-        # this belt-and-braces pass to `internal_error` — the code every raw-exception sink
-        # emits — so domain errors (already redacted at write time) aren't re-run through the
-        # heuristic redactor and can't be over-redacted.
-        if validated.error.code == "internal_error":
+        # Boundary sanitize (#186/F10): a schema-valid payload written by a pre-fix worker
+        # (still within its TTL) could carry unredacted exception text in its message. This
+        # used to be scoped to `internal_error` — the code every raw-exception sink emits —
+        # so domain errors already redacted at write time were not re-run through the
+        # heuristic redactor. That scoping does not survive #528: a record written by a
+        # pre-#528 worker carries control characters under ANY code, and the default TTL
+        # keeps it readable for a day after the upgrade.
+        #
+        # Two conditions, because the two hazards differ. A stored message with no control
+        # character cannot have been damaged by one, so it keeps passing through verbatim —
+        # preserving the original scoping's point, that a domain error already redacted at
+        # write time must not be re-run through the heuristic redactor and over-redacted
+        # (a message merely RESEMBLING a token stays intact).
+        #
+        # A message that DOES carry one gets the full strip-then-redact pass under any code,
+        # never a strip alone: the text was already redacted at write time, so stripping by
+        # itself is the redact-then-strip ordering, and it would REASSEMBLE a control-split
+        # secret that write-time redaction missed.
+        if validated.error.code == "internal_error" or appserver._has_control_char(
+            validated.error.message or ""
+        ):
             validated.error.message = redaction.sanitize_echo_prose(validated.error.message)
         return serialize_error(validated), True
     code, message = _STATE_TO_ERROR.get(state, ("job_failed", "The job did not complete."))

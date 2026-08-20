@@ -718,11 +718,18 @@ def test_extra_args_refusals_never_echo_a_control_character(raw, expected_fragme
 
 
 @pytest.mark.parametrize("attack", ["\x1b[31m", "\x07", "\x7f", "\x85"])
-def test_descriptors_never_carry_a_control_character(attack, monkeypatch):
-    """Descriptors are matched against codex's rejection text AND echoed into the error.
-    A valid config key or profile name was recorded verbatim."""
-    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile ev{attack}il -c some.key{attack}=v")
+def test_descriptors_keep_their_raw_identity_for_matching(attack, monkeypatch):
+    """Descriptors are an IDENTITY, not display text, so they are deliberately NOT
+    sanitized here.
+
+    They are matched against codex's own rejection text, which quotes the operator's name
+    with its RAW spelling. Stripping or bounding them at construction changes what they
+    match: a control-bearing name (or one past a length bound) stops matching, and the
+    operator's own bad passthrough is misattributed to plugin contract drift — the
+    fail-loud path, with the wrong repair guidance. Sanitation belongs at emission, which
+    `test_extra_args_rejected_strips_control_characters_from_descriptors` covers (#528).
+    """
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, f"--profile ev{attack}il")
     ea = config.extra_args()
     assert ea.valid, ea.error
-    for descriptor in ea.descriptors:
-        assert not _has_control(descriptor), repr(descriptor)
+    assert f"ev{attack}il" in ea.descriptors

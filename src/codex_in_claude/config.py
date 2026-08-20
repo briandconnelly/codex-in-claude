@@ -412,7 +412,13 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
             # Record the flag too (not just the key), so a drift where codex rejects the
             # `-c`/`--config` flag token itself is still attributed to the passthrough.
             # The key is a config-path name (not a secret); the `-c` VALUE is never added.
-            descriptors += [flag, _safe_token(key)]
+            # Stored RAW on purpose. A descriptor is an IDENTITY matched against codex's
+            # own rejection text, not display text: sanitizing or bounding it here changes
+            # what it matches, so a control-bearing or >60-char name stops matching codex's
+            # raw spelling and its rejection is misattributed to plugin drift
+            # (`cli_contract_changed`) instead of the operator's passthrough. Sanitation
+            # belongs at EMISSION — see `codex._extra_args_rejected_error` (#528).
+            descriptors += [flag, key]
             config_keys.append(key)
         else:  # profile / feature — the value is a non-secret NAME
             if not value:
@@ -428,7 +434,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                     ),
                 )
             tokens += [flag, value]
-            descriptors += [flag, _safe_token(value)]
+            descriptors += [flag, value]
             if kind == "profile":
                 profile_names.append(value)
         count += 1
