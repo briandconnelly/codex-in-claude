@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-79"
+FINGERPRINT = "codex-in-claude/0.1/schema-80"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -644,7 +644,9 @@ class Meta(BaseModel):
     tier: Tier = Field(
         description=(
             "Codex intent tier of the run this envelope describes — consult (read-only, no "
-            "writes), propose (writes only inside a throwaway worktree), or apply. For a call "
+            "writes), propose (writes in a throwaway worktree plus the OS temp roots codex's "
+            "sandbox grants by default; the diff is gathered from the worktree only), or "
+            "apply. For a call "
             "that runs Codex it is that call's own tier; for a retrieved background-job result "
             "(codex_job_result/consume) it is the ORIGINATING run's tier (a completed delegate "
             "reads 'propose'); for a codex_delegate_dry_run preview it is the previewed run's "
@@ -657,8 +659,9 @@ class Meta(BaseModel):
     )
     sandbox: Sandbox = Field(
         description=(
-            "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree, "
-            "no network egress), or danger-full-access. It tracks `tier` across the same cases — "
+            "Sandbox the run this envelope describes uses: read-only, workspace-write (worktree "
+            "plus the OS temp roots, no network egress), or danger-full-access. It tracks "
+            "`tier` across the same cases — "
             "the call's own run, a retrieved job's originating run, or a dry-run's previewed run; "
             "lifecycle-generated errors report 'read-only'. Like tier, this describes Codex "
             "execution posture, not whether the call mutates this server's job state (see "
@@ -1292,7 +1295,11 @@ class CapabilitiesResult(BaseModel):
             "That's why codex_consult, codex_review_changes, and codex_delegate (and "
             "their _async variants) are readOnlyHint: false even though consult and "
             "review never write files, while codex_dry_run and codex_delegate_dry_run, "
-            "which create no job record, stay readOnlyHint: true."
+            "which create no job record, stay readOnlyHint: true. destructiveHint is "
+            "true only for the delegate tools: the workspace-write sandbox grants the "
+            "OS temp roots by default, where a task can overwrite pre-existing files "
+            "(#523); consult/review runs write nothing and their job records are "
+            "additive, so they stay destructiveHint: false."
         ),
         description=(
             "The server's documented reading of its `readOnlyHint` tool annotation: "

@@ -9,9 +9,12 @@ on this repository rather than opening a public issue.
 
 - **Read-only by default.** `codex_consult` and `codex_review_changes` run Codex with the
   `read-only` sandbox; Codex cannot modify files.
-- **Writes are isolated.** `codex_delegate` runs Codex with `workspace-write` but only inside a
-  throwaway git worktree seeded from your current tracked state. The plugin never modifies your
-  working tree; it returns a diff for you to review and apply yourself.
+- **Your working tree is never edited.** `codex_delegate` runs Codex with `workspace-write` in a
+  throwaway git worktree seeded from your current tracked state. The worktree does not bound
+  Codex's writes: codex's workspace-write sandbox also lets commands write the OS temp roots
+  (`/tmp` and `$TMPDIR`) by default, and those writes are neither captured in the returned diff
+  nor cleaned up (see `COMPATIBILITY.md`). The plugin never modifies your working tree; it
+  returns a diff for you to review and apply yourself.
 - **No sandbox bypass.** The plugin never passes `--dangerously-bypass-approvals-and-sandbox` or
   `--dangerously-bypass-hook-trust`.
 - **Prompt on stdin.** Prompts and gathered diffs are passed to `codex` over stdin, not argv, so

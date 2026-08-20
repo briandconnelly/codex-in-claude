@@ -7,6 +7,34 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **BREAKING: the propose-tier surface no longer promises "writes only inside a throwaway
+  worktree", and the delegate tools now advertise `destructiveHint: true`.** codex's
+  `workspace-write` sandbox grants the OS temp roots (`/tmp` and `$TMPDIR`) by default
+  (`exclude_slash_tmp`/`exclude_tmpdir_env_var` default false), verified live at this plugin's
+  exact argv with on-disk state judged and positive/negative controls (#523), so the exclusivity
+  claim never held. The `exclude_*` keys are deliberately not pinned closed — build tools, `uv`,
+  `git`, and test runners need `$TMPDIR` — so every carrier now discloses the grant instead: a new
+  canonical `cli_contract.WORKSPACE_WRITE_SCOPE_FACT` ("the worktree does not bound Codex's
+  writes...") is carried verbatim by both delegate descriptions, their `codex_capabilities`
+  `returns` entries, and a new `negative_scope` item, each alongside the persistence clause
+  (temp-root writes are neither captured in the returned diff nor cleaned up); the `Meta.tier` and
+  `Meta.sandbox` field descriptions carry a short form. The annotation preset splits: MCP defines
+  `destructiveHint: false` as "performs only additive updates", and a delegated task can overwrite
+  or delete pre-existing files under the temp roots, so `codex_delegate`/`codex_delegate_async`
+  flip to `destructiveHint: true` while consult/review (whose runs write nothing and whose job
+  records are additive) keep `false` — the split is stated on `annotations_reading`. Classified
+  **breaking** (not the #515/#516 disclosure-widening case): the retired carriers made an
+  exclusive promise ("writes **only** inside", "the worktree **bounds** what Codex may WRITE"),
+  and correcting them weakens a documented guarantee a client could have relied on, even though
+  runtime behavior is unchanged and the guarantee never held. What remains true and promised: the
+  plugin never applies anything to your working tree, and the returned diff is gathered from the
+  worktree only. **Fingerprint `schema-79` → `schema-80`.** Docs move with the wire: `README.md`
+  (Safety bullet and tier table), `SECURITY.md`, `COMPATIBILITY.md` (the #523 pointer resolves),
+  and the `collaborating-with-codex` skill's independent-attempt reference. Guards: exact
+  containment of the constant over the live delegate carriers, a legacy-clause and contradiction
+  sweep across every read- and write-scope runtime carrier and the four prose sites, and
+  guard-the-guard controls proving each matcher fails on the pre-#523 wording. Both byte gates
+  re-measured, within budget (`tools/list` 92,289 → 92,599; catalog 92,306 → 92,616).
 - **The dry-run previews no longer imply they bound what a paid call can send.** `codex_dry_run`
   led with "Preview what a `codex_review_changes` call would send" and `codex_delegate_dry_run`
   told callers to confirm scope; a clean preview therefore read as "nothing sensitive will be

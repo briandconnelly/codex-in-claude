@@ -204,22 +204,31 @@ _FREE_READ = {
     "readOnlyHint": True,
     "openWorldHint": False,
 }
-# propose tier: Codex writes, but only inside a throwaway worktree — the caller's
-# live tree is never touched, so destructiveHint stays False.
+# propose tier (delegate, sync and async): Codex works in a throwaway worktree — the
+# plugin never applies anything to the caller's live tree and the returned diff is
+# gathered from the worktree only — but the worktree does not bound the sandbox's
+# writes: codex's workspace-write default also grants the OS temp roots (/tmp and
+# $TMPDIR), where a delegated task can overwrite or delete pre-existing files (#523).
+# MCP defines destructiveHint:false as "performs only additive updates", so the
+# delegate tools must declare destructiveHint: True.
 _ACTIVE_PROPOSE = {
+    "readOnlyHint": False,
+    "openWorldHint": True,
+    "destructiveHint": True,
+    "idempotentHint": False,
+}
+# Every active consult/review call — sync AND async — spawns a background job that
+# commits to spend and reaches the API. The job record is observable (codex_job_list)
+# and mutable (codex_job_cancel/consume) — shared state that outlives the response —
+# so none may advertise readOnlyHint, even though the underlying run is read-only
+# (issue #138). Unlike the propose tier above, that run writes no files anywhere and
+# the job record it creates is additive, so destructiveHint stays False.
+_ACTIVE_READ_JOB = {
     "readOnlyHint": False,
     "openWorldHint": True,
     "destructiveHint": False,
     "idempotentHint": False,
 }
-# Every active consult/review/delegate call — sync AND async — now spawns a
-# background job that commits to spend and reaches the API. The job record is
-# observable (codex_job_list) and mutable (codex_job_cancel/consume) — shared state
-# that outlives the response — so none may advertise readOnlyHint, even consult/review
-# whose underlying run is read-only (issue #138). They share the propose-tier values:
-# any file writes stay inside a throwaway worktree, so the caller's live tree is never
-# touched and destructiveHint stays False.
-_ACTIVE_ASYNC = _ACTIVE_PROPOSE
 # Job lifecycle annotations, split by observable behavior. None call the model and
 # all are closed-world (they touch only this server's job state, never the user's
 # files/repo). Inspection tools (status/result/list) are read-only; destructiveHint/
@@ -2032,7 +2041,7 @@ def codex_capabilities(
                 "unapplied changes plus a summary. detail='summary' (default) omits "
                 "raw_response.text; detail='full' includes it. "
                 "Egress: sends your task (raw) to OpenAI; Codex works in the throwaway "
-                "worktree, which bounds what it may WRITE, not what it may read. "
+                f"worktree. {cli_contract.WORKSPACE_WRITE_SCOPE_FACT} "
                 f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
                 "worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
@@ -2058,8 +2067,8 @@ def codex_capabilities(
                 ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read with codex_job_result. "
-                "Egress: same as codex_delegate — sends your task (raw) to OpenAI. The "
-                "throwaway worktree bounds what Codex may WRITE, not what it may read. "
+                "Egress: same as codex_delegate — sends your task (raw) to OpenAI. "
+                f"{cli_contract.WORKSPACE_WRITE_SCOPE_FACT} "
                 f"{cli_contract.READ_SCOPE_FACT} "
                 f"{cli_contract.SKILLS_DISCOVERY_FACT_FULL} For delegate, that workspace is the "
                 "worktree; scrubbing it doesn't exclude $CODEX_HOME/skills/. "
@@ -2220,6 +2229,9 @@ def codex_capabilities(
         ],
         negative_scope=[
             "Does not apply edits to your working tree (delegate returns a diff).",
+            "Does not confine the propose tier's writes to the worktree. "
+            f"{cli_contract.WORKSPACE_WRITE_SCOPE_FACT} Temp-root writes are neither "
+            "captured in the returned diff nor cleaned up.",
             "Does not bypass the Codex sandbox or approvals.",
             "Does not keep your content on the machine: consult, review, and delegate "
             "(and their *_async variants) each send caller content to OpenAI via the "
@@ -2844,10 +2856,10 @@ async def _prepare_delegate(
     return meta, cwd, spec, detail_v
 
 
-# _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
+# _ACTIVE_READ_JOB (not read-only): the sync tool now creates an observable job record
 # via the detached worker, so it can't advertise readOnlyHint (issue #138).
 @mcp.tool(
-    annotations=_ACTIVE_ASYNC,
+    annotations=_ACTIVE_READ_JOB,
     output_schema=CONSULT_RESULT_SCHEMA,
     title="Consult Codex (paid)",
     meta=_tool_meta("codex_consult"),
@@ -2940,10 +2952,10 @@ async def codex_consult(
     )
 
 
-# _ACTIVE_ASYNC (not read-only): the sync tool now creates an observable job record
+# _ACTIVE_READ_JOB (not read-only): the sync tool now creates an observable job record
 # via the detached worker, so it can't advertise readOnlyHint (issue #138).
 @mcp.tool(
-    annotations=_ACTIVE_ASYNC,
+    annotations=_ACTIVE_READ_JOB,
     output_schema=REVIEW_RESULT_SCHEMA,
     title="Review git changes (paid)",
     meta=_tool_meta("codex_review_changes"),
@@ -3074,8 +3086,8 @@ async def codex_delegate(
     PAID — this spends Codex quota on every new call; use codex_delegate_dry_run or
     codex_status (both free) first if you only need to check scope or readiness.
 
-    Codex edits files with `workspace-write`, but only inside a throwaway worktree
-    seeded from your current tracked state. The returned `diff` is Codex's changes;
+    Codex edits files with `workspace-write` in a throwaway worktree seeded from
+    your current tracked state. The returned `diff` is Codex's changes;
     review it, then apply it yourself if you want it. Requires a git repo with at
     least one commit. Pass `workspace_root` (absolute).
 
@@ -3084,8 +3096,10 @@ async def codex_delegate(
     anything, `curl`, publish, or install dependencies (those fail inside the sandbox
     with a DNS/host-resolution error). Ask only for local code changes; do any network
     step yourself afterward. This does NOT mean nothing leaves the machine: the Codex
-    model call still sends your `task` to OpenAI. The worktree bounds what Codex may
-    WRITE, not what it may read.
+    model call still sends your `task` to OpenAI. The worktree does not bound Codex's
+    writes: codex's workspace-write sandbox also lets commands write the OS temp roots
+    (/tmp and $TMPDIR) by default. Temp-root writes are neither captured in the
+    returned diff nor cleaned up.
     Codex can read files outside the workspace — up to everything the OS user running it can
     read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
     workspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md`
@@ -3145,7 +3159,7 @@ async def codex_delegate(
 
 
 @mcp.tool(
-    annotations=_ACTIVE_ASYNC,
+    annotations=_ACTIVE_PROPOSE,
     output_schema=JOB_STARTED_SCHEMA,
     title="Delegate in background (paid)",
     meta=_tool_meta("codex_delegate_async"),
@@ -3181,7 +3195,9 @@ async def codex_delegate_async(
     self-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with
     a DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the
     machine: the Codex model call still sends your `task` (raw) to OpenAI. The worktree
-    bounds what Codex may WRITE, not what it may read.
+    does not bound Codex's writes: codex's workspace-write sandbox also lets commands
+    write the OS temp roots (/tmp and $TMPDIR) by default. Temp-root writes are neither
+    captured in the returned diff nor cleaned up.
     Codex can read files outside the workspace — up to everything the OS user running it can
     read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
     workspace is a read boundary. Codex auto-loads the resolved
@@ -3743,7 +3759,7 @@ async def _run_sync(
 
 
 @mcp.tool(
-    annotations=_ACTIVE_ASYNC,
+    annotations=_ACTIVE_READ_JOB,
     output_schema=JOB_STARTED_SCHEMA,
     title="Consult Codex in background (paid)",
     meta=_tool_meta("codex_consult_async"),
@@ -3818,7 +3834,7 @@ async def codex_consult_async(
 
 
 @mcp.tool(
-    annotations=_ACTIVE_ASYNC,
+    annotations=_ACTIVE_READ_JOB,
     output_schema=JOB_STARTED_SCHEMA,
     title="Review git changes in background (paid)",
     meta=_tool_meta("codex_review_changes_async"),

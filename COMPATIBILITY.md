@@ -114,8 +114,10 @@ rather than tightening it: the default already grants writes to the OS temp root
 (`exclude_tmpdir_env_var`, `exclude_slash_tmp`) are deliberately **not** pinned — their default
 (`false`) is the widest state, so the config file can only *narrow* them, which is the operator's
 own prerogative (an operator who sets one merely denies plugin-launched shell commands the
-matching temp root). The default temp-root grant itself — and the surface text it contradicts —
-is tracked as #523. Second, the pin binds the *config* layer only: the `--add-dir` **flag** layer
+matching temp root). The default temp-root grant is disclosed across the propose-tier surface
+itself (#523): the worktree does not bound Codex's writes, the tool descriptions and docs say
+so, and the delegate tools advertise `destructiveHint: true` because a task can overwrite
+pre-existing files under those roots. Second, the pin binds the *config* layer only: the `--add-dir` **flag** layer
 outranks it (verified in the same probes), which is why `--add-dir` stays reserved for
 plugin-owned use and no model-bearing call sends it today (see the builder's note in
 `codex.py`). Upstream completeness — that no *new* `sandbox_workspace_write` key has appeared

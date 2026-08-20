@@ -956,3 +956,135 @@ def test_skill_carries_a_binding_rule_not_only_background():
     assert _PREVIEW_LIMIT_RE.search(exposure) and _MODEL_READS_RE.search(exposure), (
         "Data exposure lost the preview-scope fact the binding rule cross-references"
     )
+
+
+# --- #523 write-scope disclosure ----------------------------------------------------
+# The propose-tier prose promised "writes only inside a throwaway worktree"; codex's
+# workspace-write sandbox grants the OS temp roots (/tmp and $TMPDIR) by default, so
+# every prose site describing that write boundary must state the grant and none may
+# re-assert the worktree as the bound. Same architecture as the #509 read-scope block
+# above: a site tuple two-way-checked against the RULE block in cli_contract.py, legacy
+# clauses, affirmative markers required together, a contradiction matcher, and
+# guard-the-guard controls.
+
+_WRITE_SCOPE_DOC_SITES = (
+    "README.md",
+    "SECURITY.md",
+    "COMPATIBILITY.md",
+    "skills/collaborating-with-codex/references/independent-attempt.md",
+)
+
+_LEGACY_EXCLUSIVE_WRITE_PROSE = (
+    "but only inside a throwaway git worktree",
+    "writes only inside a throwaway worktree",
+    "lets codex write, but only inside",
+    "which likewise bounds what it may write",
+    "writes are isolated.",
+)
+
+# Affirmative markers, required TOGETHER (the #509 pattern): a site must name the OS
+# temp roots as writable AND deny that the worktree bounds the writes. Requiring both
+# stops a site from naming /tmp while still asserting the old model.
+_TEMP_ROOT_GRANT_RE = re.compile(r"(?:os\s+temp\s+roots?|/tmp\b[^.]{0,60}\$?tmpdir)", re.IGNORECASE)
+_NOT_A_WRITE_BOUNDARY_RE = re.compile(
+    r"(?:worktree|workspace)\s+(?:does\s+not|doesn'?t)\s+bound"
+    r"|not\s+the\s+(?:sandbox'?s?\s+)?whole\s+write\s+grant"
+    r"|also\s+(?:lets\s+commands\s+write|grants?\s+(?:writes?\s+to\s+)?the\s+os\s+temp)"
+    r"|default\s+already\s+grants\s+writes\s+to\s+the\s+os\s+temp\s+roots"
+    r"|bounds\s+its\s+writes\s+\(the\s+worktree\s+plus",
+    re.IGNORECASE,
+)
+
+# Independent copy of the runtime matcher in tests/test_server.py, for the same reason
+# the read-scope block keeps one: the two guard different corpora.
+_CONTRADICTS_WRITE_SCOPE_PROSE = re.compile(
+    r"writes?\s+only\s+inside|only\s+inside\s+a\s+throwaway"
+    r"|worktree,?\s+which\s+bounds|worktree\s+bounds\s+what\b[^.]{0,40}\bwrite"
+    r"|(?:likewise|worktree)\s+bounds\s+what\s+it\s+may\s+write"
+    r"|writes?\s+(?:stay|stays|are\s+isolated)\b[^.]{0,50}\bworktree"
+    r"|writes?\b[^.]{0,30}\b(?:confined|limited|restricted)\s+to\b[^.]{0,40}\bworktree",
+    re.IGNORECASE,
+)
+
+
+def test_write_scope_site_list_matches_its_own_rule():
+    """The write-scope tuple and the `# RULE (write scope):` block must name the same
+    sites — two-way, so a site dropped from either side fails instead of silently
+    falling out of enforcement (the #509 pattern)."""
+    contract = (_REPO_ROOT / "src/codex_in_claude/cli_contract.py").read_text(encoding="utf-8")
+    assert contract.count("# RULE (write scope):") == 1
+    rule = contract.split("# RULE (write scope):", 1)[1].split("\n\n", 1)[0]
+
+    expected = {
+        "README.md": "README.md",
+        "SECURITY.md": "SECURITY.md",
+        "COMPATIBILITY.md": "COMPATIBILITY.md",
+        "independent-attempt.md": (
+            "skills/collaborating-with-codex/references/independent-attempt.md"
+        ),
+    }
+    named_in_rule = {token for token in expected if token in rule}
+    assert named_in_rule == set(expected), (
+        f"the write-scope RULE no longer names: {set(expected) - named_in_rule}"
+    )
+    assert set(_WRITE_SCOPE_DOC_SITES) == set(expected.values()), (
+        "the write-scope RULE and _WRITE_SCOPE_DOC_SITES have drifted"
+    )
+
+
+@pytest.mark.parametrize("relpath", _WRITE_SCOPE_DOC_SITES)
+def test_doc_site_does_not_scope_codex_writes_to_the_worktree(relpath):
+    """No prose site may present the worktree as the sandbox's whole write grant (#523)."""
+    text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8").lower())
+    for clause in _LEGACY_EXCLUSIVE_WRITE_PROSE:
+        assert clause not in text, (
+            f"{relpath} still scopes the propose tier's writes with {clause!r} (#523)"
+        )
+    contradiction = _CONTRADICTS_WRITE_SCOPE_PROSE.search(text)
+    assert contradiction is None, (
+        f"{relpath} asserts a worktree write bound ({contradiction.group(0)!r}) alongside "
+        "the corrected disclosure (#523)"
+    )
+
+
+@pytest.mark.parametrize("relpath", _WRITE_SCOPE_DOC_SITES)
+def test_doc_site_states_the_temp_root_grant(relpath):
+    text = _flat((_REPO_ROOT / relpath).read_text(encoding="utf-8"))
+    assert _TEMP_ROOT_GRANT_RE.search(text), f"{relpath} never names the OS temp roots as writable"
+    assert _NOT_A_WRITE_BOUNDARY_RE.search(text), (
+        f"{relpath} never denies that the worktree bounds the writes"
+    )
+
+
+def test_write_scope_prose_guard_rejects_the_pre_523_wording():
+    """Guard the guard: the wording #523 replaced must fail, the correction must pass,
+    and the inversion must not satisfy the affirmative matcher."""
+    for pre_523 in (
+        "`propose` (the `delegate` tools) lets Codex write, but only inside a throwaway "
+        "git worktree seeded from `HEAD`.",
+        "**Writes are isolated.** `codex_delegate` runs Codex with `workspace-write` but "
+        "only inside a throwaway git worktree.",
+        "Delegate works from the seeded worktree baseline, which likewise bounds what it "
+        "may write rather than what it may read.",
+    ):
+        low = _flat(pre_523.lower())
+        assert _CONTRADICTS_WRITE_SCOPE_PROSE.search(low) or any(
+            clause in low for clause in _LEGACY_EXCLUSIVE_WRITE_PROSE
+        ), pre_523
+        assert _NOT_A_WRITE_BOUNDARY_RE.search(low) is None, pre_523
+
+    corrected = _flat(
+        "The worktree does not bound Codex's writes: codex's workspace-write sandbox "
+        "also lets commands write the OS temp roots (`/tmp` and `$TMPDIR`) by default."
+    )
+    assert _TEMP_ROOT_GRANT_RE.search(corrected)
+    assert _NOT_A_WRITE_BOUNDARY_RE.search(corrected)
+    assert _CONTRADICTS_WRITE_SCOPE_PROSE.search(corrected.lower()) is None
+
+    # Naming /tmp while asserting the old model must still fail the denial half.
+    inverted = _flat(
+        "Codex writes stay inside the worktree; /tmp and $TMPDIR are excluded, so the "
+        "worktree bounds what it may write."
+    )
+    assert _NOT_A_WRITE_BOUNDARY_RE.search(inverted) is None
+    assert _CONTRADICTS_WRITE_SCOPE_PROSE.search(inverted.lower())

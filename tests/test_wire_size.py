@@ -168,6 +168,13 @@ from codex_in_claude.server import mcp
 # next 1,000 above the measured value. Compressing was rejected for the same reason as #509:
 # the only clause short enough to drop is the affirmative read half, which is the half that
 # tells the reader what a clean preview failed to cover.
+# Measured again 2026-08-19 (#523 — the propose-tier write scope. Both delegate
+# descriptions promised "writes only inside a throwaway worktree", but codex's
+# workspace-write default also grants the OS temp roots; both now carry
+# `cli_contract.WORKSPACE_WRITE_SCOPE_FACT` plus the persistence clause — temp-root
+# writes are neither in the diff nor cleaned up — replacing the two exclusivity
+# sentences they retire): 92,289 -> 92,599 bytes (+310 B) — still within budget, no
+# further change.
 TOOLS_LIST_BYTE_BUDGET = 93_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
@@ -180,7 +187,7 @@ TOOLS_LIST_BYTE_BUDGET = 93_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 92_289
+TOOLS_LIST_BYTE_TARGET = 92_599
 
 
 def _budget_failure_message(measured: int) -> str:
