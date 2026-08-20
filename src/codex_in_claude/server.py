@@ -519,7 +519,13 @@ def _invalid_arguments_envelope(
 
     first = items[0]
     shown = f" (showing {len(items)} of {total})" if total > len(items) else ""
-    message = f"{tool_name}: {total} invalid argument(s){shown}: {first.field} — {first.reason}"
+    # `first.field` is the CALLER's own argument name. This copy is prose, so it is
+    # sanitized like any other echoed text (#528); the machine copies below
+    # (`details.field`, `invalid_arguments[].field`) keep the exact name, because deleting
+    # characters from an identifier corrupts the value a client uses to correct its call.
+    # Validating or rejecting those is #529.
+    safe_field = redaction.sanitize_echo(first.field)
+    message = f"{tool_name}: {total} invalid argument(s){shown}: {safe_field} — {first.reason}"
     # Type-aware repair: name the dominant fix, then point at the authoritative schema.
     types = {err.get("type") for err in errors}
     hints: list[str] = []

@@ -9738,3 +9738,26 @@ def test_stderr_tail_description_matches_what_the_code_actually_does():
     # Everything the description claims IS removed, is removed.
     dirty = _appserver._display_stderr_tail("a\x1b[31mb\x00c\x7fd\x85e") or ""
     assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in dirty.replace("\n", ""))
+
+
+def test_invalid_arguments_message_strips_control_characters_but_field_is_exact():
+    """#528: the caller's own argument name is composed into `error.message`, which is
+    prose. The MACHINE copies (`details.field`, `invalid_arguments[].field`) keep the exact
+    name — deleting characters from an identifier corrupts it, and a client uses that value
+    to correct its call. Validating/rejecting those is #529's half, not this one's."""
+    out = server._invalid_arguments_envelope(
+        "codex_consult",
+        param_names={"question"},
+        property_schemas={},
+        errors=[
+            {"type": "unexpected_keyword_argument", "loc": ("ev\x1b[31mil",), "msg": "unexpected"}
+        ],
+    )
+    assert out is not None
+    message = out["error"]["message"]
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in message), repr(message)
+    # The printable payload of the escape survives — that is the documented bound (only the
+    # Cc code point goes), and it is why the machine copy below is the authoritative one.
+    assert "ev[31mil" in message
+    assert out["error"]["details"]["field"] == "ev\x1b[31mil"
+    assert out["error"]["invalid_arguments"][0]["field"] == "ev\x1b[31mil"
