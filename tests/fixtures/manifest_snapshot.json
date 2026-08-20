@@ -97,6 +97,7 @@
           "cli_contract_changed",
           "invalid_reasoning_effort",
           "extra_args_rejected",
+          "user_config_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -157,6 +158,7 @@
           "cli_contract_changed",
           "invalid_reasoning_effort",
           "extra_args_rejected",
+          "user_config_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -202,6 +204,7 @@
           "cli_contract_changed",
           "invalid_reasoning_effort",
           "extra_args_rejected",
+          "user_config_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -269,6 +272,7 @@
           "cli_contract_changed",
           "invalid_reasoning_effort",
           "extra_args_rejected",
+          "user_config_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -312,6 +316,7 @@
           "cli_contract_changed",
           "invalid_reasoning_effort",
           "extra_args_rejected",
+          "user_config_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -372,6 +377,7 @@
           "cli_contract_changed",
           "invalid_reasoning_effort",
           "extra_args_rejected",
+          "user_config_rejected",
           "codex_rate_limited",
           "internal_error",
           "idempotency_conflict",
@@ -638,7 +644,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 9622
+          "size_bytes": 9646
         }
       },
       "mimeType": "application/schema+json",
@@ -803,6 +809,7 @@
                     "unsupported_isolation",
                     "unsupported_sandbox",
                     "unsupported_tier",
+                    "user_config_rejected",
                     "workspace_outside_roots",
                     "worktree_error"
                   ],
@@ -906,7 +913,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-80",
+            "default": "codex-in-claude/0.1/schema-81",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1060,7 +1067,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 21652
+          "size_bytes": 21676
         }
       },
       "mimeType": "application/schema+json",
@@ -1247,6 +1254,7 @@
                   "unsupported_isolation",
                   "unsupported_sandbox",
                   "unsupported_tier",
+                  "user_config_rejected",
                   "workspace_outside_roots",
                   "worktree_error"
                 ],
@@ -1464,7 +1472,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-80",
+                "default": "codex-in-claude/0.1/schema-81",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2148,7 +2156,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 9622
+          "size_bytes": 9646
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
@@ -2160,7 +2168,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 21652
+          "size_bytes": 21676
         }
       },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
@@ -2588,7 +2596,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-80",
+            "default": "codex-in-claude/0.1/schema-81",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3271,7 +3279,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-80",
+            "default": "codex-in-claude/0.1/schema-81",
             "title": "Fingerprint",
             "type": "string"
           },

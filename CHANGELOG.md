@@ -7,6 +7,43 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **BREAKING: `codex exec --strict-config` now guards the guarantee-bearing `-c` key pins, and a
+  new `user_config_rejected` error code reports an unknown key in your own Codex config.** codex
+  silently tolerates an unknown config key, so an upstream rename of
+  `sandbox_workspace_write.network_access` (#518), `sandbox_workspace_write.writable_roots` (#520),
+  or `model_reasoning_effort` (#309) would have left the plugin sending a key codex no longer reads
+  — reopening the guarantee with no signal, guarded only by a manual semantic probe. The flag turns
+  that into a zero-spend startup failure (config parsing precedes auth and any model call, verified
+  live on codex-cli 0.148.0). It is `ALWAYS_SEND`-class but **emitted only on runs that carry a
+  `-c` override** — every `workspace-write` run, every effort-carrying run, and any run with an
+  operator `-c` in `CODEX_IN_CLAUDE_EXTRA_ARGS` — because at the default `inherit` isolation the
+  flag also hard-fails on an unknown key anywhere in the user's own config, including tables for
+  profiles the run never selects; a plain read-only consult carries no pin, so sending it there
+  would risk availability while guarding nothing. Classified **breaking**: a previously accepted
+  operator environment (a junk or version-skewed key in `$CODEX_HOME/config.toml`) now hard-fails
+  pin-carrying runs. Classification reads the anchored stderr grammar on **stderr alone** and runs
+  *before* the auth and drift checks, because codex echoes the offending key and path and either
+  can contain a substring those matchers fire on (`401` in a path, `invalid value` in a quoted TOML
+  key). Ownership keys on the rejected KEY, never on the shared `-c` descriptor that appears in
+  codex's own message: a rejected plugin pin is `cli_contract_changed` (the fail-loud drift signal
+  this exists to produce, and unstealable by an unrelated operator `-c` entry), an operator key or
+  an operator `--profile`-selected file is `extra_args_rejected`, and any other config file is the
+  new `user_config_rejected` — permanent, repairing with `correct_config`, naming the file and line
+  to fix and offering `isolation="ignore-config"` only as an explicitly lossy fallback (it drops
+  the user's entire config). Note neither `codex_status` nor a dry run parses Codex config, so
+  neither can predict this failure. Strict validates key **names** only, so a bad
+  `reasoning_effort` VALUE still takes the backend `invalid_reasoning_effort` path unchanged.
+  **Fingerprint `schema-80` → `schema-81`**, and **`RESULT_FORMAT` 8 → 9**: the new `ErrorCode`
+  literal is persisted in job records (`run_delegate`'s envelope is written to `result.json`
+  verbatim), so an older reader's closed schema would reject those bytes and misreport
+  cross-release incompatibility as corruption. Because the result-format snapshot's `serialized`
+  view is a sample rather than an enumeration of codes, it now renders a second error envelope
+  using the new code, so an `ErrorCode` change is visible there and not only in the `schemas` view.
+  Docs move with the wire: a new COMPATIBILITY.md strict-config section (scope, the validated-source
+  matrix, and the ownership table), its corrected failure-classification order and flag-class
+  wording, and `docs/UPGRADING-CODEX.md` — where the semantic probes stay **mandatory** (strict
+  catches a key RENAME; only the probes catch a key that keeps its name and changes meaning) and a
+  new zero-spend step re-verifies the stderr grammar the classifier depends on.
 - **BREAKING: the propose-tier surface no longer promises "writes only inside a throwaway
   worktree", and the delegate tools now advertise `destructiveHint: true`.** codex's
   `workspace-write` sandbox grants the OS temp roots (`/tmp` and `$TMPDIR`) by default

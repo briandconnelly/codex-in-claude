@@ -68,7 +68,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-80"
+FINGERPRINT = "codex-in-claude/0.1/schema-81"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -114,7 +114,20 @@ FINGERPRINT = "codex-in-claude/0.1/schema-80"
 # non-null, non-empty RedactionSummary, so the `serialized` view's `review_success` entry
 # gains the key WITH a populated value — a real shape addition to what a replaying reader
 # must be able to parse, not merely a schema-only change.
-RESULT_FORMAT: int = 8
+# #524 bumped 8->9: `ErrorCode` gained `user_config_rejected`. This is the case the
+# "only bump when the `serialized` view would move" shorthand above gets WRONG if applied
+# mechanically, so read it as the rule it abbreviates — can a persisted result.json ever
+# carry the new shape? Here it can: run_delegate returns classify_failure's envelope as
+# the job payload and _worker writes it to result.json verbatim, so a stored record can
+# carry this code, and an older reader's closed Literal rejects those bytes — reporting
+# corruption (`internal_error`) instead of the accurate `job_result_incompatible`, which
+# is precisely what this integer exists to prevent. The #185 counter-precedent differs on
+# that same test: those fields are populated only by middleware that never writes
+# result.json, so no persisted byte could ever differ. Because the `serialized` view is a
+# SAMPLE and not an enumeration of codes, this change would otherwise have moved only the
+# `schemas` view; result_format_snapshot.py therefore now renders a second error envelope
+# using this code, so the sample reflects the persisted-byte consequence.
+RESULT_FORMAT: int = 9
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -381,6 +394,12 @@ ErrorCode = Literal[
     # was actually sent and the failure carries the backend's markers; a rejection of
     # the config key itself stays cli_contract_changed) (#309).
     "invalid_reasoning_effort",
+    # Under `--strict-config` (sent on every run carrying a `-c` pin, #524) codex refused
+    # to start because a config FILE the user owns — $CODEX_HOME/config.toml, including
+    # its unselected [profiles.X] tables — holds a key this codex does not recognize.
+    # The user's own config to fix, NOT a plugin drift and NOT operator passthrough;
+    # the failure is at startup, before any model call, so it never costs spend.
+    "user_config_rejected",
     # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
     # (an unaccepted option / config key / profile). Operator config to fix, NOT a
     # plugin contract drift — kept distinct from cli_contract_changed so the fail-loud

@@ -19,6 +19,7 @@ Run Codex non-interactively
   --skip-git-repo-check
   --output-schema <FILE>
   --disable <FEATURE>
+  --strict-config
   -m, --model <MODEL>
 """
 

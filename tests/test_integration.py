@@ -8,6 +8,8 @@ tokens, so they are excluded from the default run.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from pontonier.core import runtime
 
@@ -194,3 +196,94 @@ async def test_unknown_model_returns_envelope_not_exception(tmp_path):
         workspace_root=str(tmp_path),
     )
     assert "ok" in res  # structured envelope, not an exception
+
+
+def _strict_probe(*extra: str, home: str, prompt: str = "hi") -> runtime.CommandRun:
+    """A live `codex exec --strict-config` startup probe against a scratch $CODEX_HOME.
+
+    ZERO SPEND, structurally: codex parses config before it authenticates, so a probe that
+    trips the guard dies at parsing. A probe that does NOT trip it would run on to a real
+    turn if it could authenticate, so the scratch `$CODEX_HOME` (no `auth.json`) is only
+    half the guard — `OPENAI_API_KEY` is stripped from the merged environment too, or a
+    machine that has one exported would spend here. What is left is a run that always
+    stops at auth."""
+    return runtime.run_sync_capture(
+        [
+            cli_contract.CODEX_BIN,
+            *cli_contract.EXEC_SUBCOMMAND,
+            cli_contract.STRICT_CONFIG_FLAG,
+            *extra,
+            "--skip-git-repo-check",
+            prompt,
+        ],
+        timeout_seconds=60,
+        # `env` REPLACES the environment (it goes straight to subprocess.run), so merge
+        # rather than pass the override alone — a bare dict would drop PATH and the probe
+        # would report codex_not_found instead of exercising anything.
+        env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
+        | {"CODEX_HOME": home},
+        stdin_text="",
+    )
+
+
+def test_strict_config_override_grammar_live(tmp_path):
+    # #524: the classifier depends on this exact stderr grammar. If upstream rewords it,
+    # a pin drift degrades from cli_contract_changed to a generic nonzero_exit — the run
+    # still fails, but the diagnosis is lost. Parse the REAL output with the REAL parser.
+    run = _strict_probe("-c", "bogus_key_xyz=1", home=str(tmp_path))
+    rejection = cli_contract.parse_strict_config_rejection(run.stderr)
+    assert rejection is not None, run.stderr
+    assert rejection.origin == "override"
+    assert rejection.key == "bogus_key_xyz"
+    # And the whole classification path, end to end, on real output.
+    assert codex.classify_failure(run).code in {"cli_contract_changed", "extra_args_rejected"}
+
+
+def test_strict_config_file_grammar_live(tmp_path):
+    # The second shape: an unknown key in the user's own config file, located by line.
+    (tmp_path / "config.toml").write_text("some_unknown_junk_key = true\n", encoding="utf-8")
+    run = _strict_probe(home=str(tmp_path))
+    rejection = cli_contract.parse_strict_config_rejection(run.stderr)
+    assert rejection is not None, run.stderr
+    assert rejection.origin == "file"
+    assert rejection.key == "some_unknown_junk_key"
+    assert rejection.source_path is not None
+    assert rejection.source_path.endswith("config.toml")
+    assert rejection.line == 1
+    assert codex.classify_failure(run).code == "user_config_rejected"
+
+
+def test_strict_config_unselected_profile_table_is_validated_live(tmp_path):
+    # The blast-radius fact the emission scope is chosen around: a table for a profile the
+    # run never selects is validated too. If upstream narrows this, the availability
+    # argument in COMPATIBILITY.md's strict-config section should be revisited.
+    (tmp_path / "config.toml").write_text(
+        "[profiles.myprof]\nsome_unknown_junk_key = true\n", encoding="utf-8"
+    )
+    run = _strict_probe(home=str(tmp_path))
+    rejection = cli_contract.parse_strict_config_rejection(run.stderr)
+    assert rejection is not None, run.stderr
+    assert rejection.key == "profiles.myprof.some_unknown_junk_key"
+
+
+def test_strict_config_is_exempted_by_ignore_user_config_live(tmp_path):
+    # The documented escape hatch, and the positive control for the two tests above: the
+    # SAME junk file that hard-fails at `inherit` must be exempt under --ignore-user-config,
+    # proving those failures come from the file rather than from anything else in the argv.
+    (tmp_path / "config.toml").write_text("some_unknown_junk_key = true\n", encoding="utf-8")
+    run = _strict_probe("--ignore-user-config", home=str(tmp_path))
+    assert cli_contract.parse_strict_config_rejection(run.stderr) is None, run.stderr
+
+
+def test_strict_config_accepts_the_plugins_own_pinned_keys_live(tmp_path):
+    # The guard must not fire on the argv the plugin actually sends: every pinned key is
+    # still a key this codex recognizes. This is the check that catches an upstream rename
+    # at upgrade time rather than at a user's first delegate run.
+    pins: list[str] = []
+    for key in sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS):
+        value = '"high"' if key == cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY else "false"
+        if key == cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY:
+            value = "[]"
+        pins += ["-c", f"{key}={value}"]
+    run = _strict_probe(*pins, home=str(tmp_path))
+    assert cli_contract.parse_strict_config_rejection(run.stderr) is None, run.stderr

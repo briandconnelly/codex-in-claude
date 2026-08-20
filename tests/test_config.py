@@ -628,3 +628,50 @@ def test_reasoning_effort_shape_rejects_every_surrogate():
         assert config.reasoning_effort_shape_error(chr(cp)) == "contains a surrogate code point"
     for cp in (0xD7FF, 0xE000, 0x1F600):  # range neighbours + an astral character
         assert config.reasoning_effort_shape_error(chr(cp)) is None
+
+
+# --- extra-args ownership helpers (#524) -------------------------------------------
+def test_extra_args_records_config_keys_and_profile_names(monkeypatch):
+    monkeypatch.setenv(
+        config.EXTRA_ARGS_ENV, "-c model_provider=x --profile myprof --config other.key=1"
+    )
+    ea = config.extra_args()
+    assert ea.valid
+    assert ea.config_keys == ("model_provider", "other.key")
+    assert ea.profile_names == ("myprof",)
+
+
+def test_extra_args_owns_config_key_matches_only_its_own_keys(monkeypatch):
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=x")
+    ea = config.extra_args()
+    assert ea.owns_config_key("model_provider") is True
+    # Case/quote/space variants normalize to the same key (the same conservative
+    # over-matching the denylist uses).
+    assert ea.owns_config_key(' "Model_Provider" ') is True
+    # A plugin-owned pin is NOT the operator's, even though both ride `-c`.
+    assert ea.owns_config_key("sandbox_workspace_write.network_access") is False
+    assert ea.owns_config_key("model_provider_other") is False
+
+
+def test_extra_args_ownership_is_false_when_unconfigured_or_invalid(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    ea = config.extra_args()
+    assert ea.owns_config_key("model_provider") is False
+    assert ea.owns_profile_file("/home/u/.codex/myprof.config.toml") is False
+    # An invalid knob must not lend ownership either (its parse produced no keys).
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--bogus-flag v")
+    bad = config.extra_args()
+    assert bad.valid is False
+    assert bad.owns_config_key("model_provider") is False
+
+
+def test_extra_args_owns_profile_file_by_codex_naming_convention(monkeypatch):
+    # Verified live on codex-cli 0.148.0: `--profile NAME` loads (and, under
+    # --strict-config, validates) $CODEX_HOME/NAME.config.toml, while an UNSELECTED
+    # NAME.config.toml is never read.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    ea = config.extra_args()
+    assert ea.owns_profile_file("/home/u/.codex/myprof.config.toml") is True
+    assert ea.owns_profile_file("/home/u/.codex/config.toml") is False
+    assert ea.owns_profile_file("/home/u/.codex/otherprof.config.toml") is False
+    assert ea.owns_profile_file(None) is False

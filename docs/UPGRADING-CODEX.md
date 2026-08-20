@@ -270,8 +270,10 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   on drift — silent for agents, so record a shape change in `CHANGELOG.md`).
 - **Reasoning-effort config key.** The `reasoning_effort` controls ride
   `-c model_reasoning_effort=…` (`MODEL_REASONING_EFFORT_CONFIG_KEY`) — a config key `--help`
-  cannot advertise, so the mechanical drift check can't see it, and a key rename/removal drifts
-  **silently** (codex tolerates unknown `-c` keys as junk): this manual step is the only guard.
+  cannot advertise, so the mechanical drift check can't see it. A key rename/removal is now caught
+  by `--strict-config` (#524), which rides every effort-carrying run; what this manual step still
+  guards — and the only thing strict cannot see — is a key that keeps its NAME and changes its
+  MEANING, default, or accepted values. Run it every time.
   Re-verify per COMPATIBILITY.md's reasoning-effort section, then refresh that section's verified
   dates. Probe 1 —
   `codex exec --json --ignore-user-config --ephemeral --skip-git-repo-check -c 'model_reasoning_effort="bogus"' -c model=bogus-model-xyz - <<< "hi"`
@@ -285,10 +287,10 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   `codex exec --help` for a new dedicated effort flag worth adopting.
 - **Workspace-write network pin.** The propose tiers pin the no-network-egress guarantee with
   `-c sandbox_workspace_write.network_access=false` (`WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`,
-  #518). Like the reasoning-effort key above, a rename/removal of the KEY drifts **silently** —
-  codex would ignore the pin as junk and the user's `$CODEX_HOME/config.toml` (or a profile) could
-  silently re-grant egress — so this semantic probe is the only guard, and it protects a security
-  guarantee. The probe needs a **scratch** `$CODEX_HOME` (the config file is the thing under
+  #518). Like the reasoning-effort key above, a rename/removal of the KEY is caught by
+  `--strict-config` (#524); this semantic probe guards the case strict cannot see — a key that keeps
+  its name while its meaning or default changes, silently re-granting egress from the user's
+  `$CODEX_HOME/config.toml` (or a profile). It protects a security guarantee, so run it every time. The probe needs a **scratch** `$CODEX_HOME` (the config file is the thing under
   test), which must carry an `auth.json` copy — a credential — so run the whole block in the
   explicit subshell below, whose `EXIT` trap removes the copy even when a probe is interrupted
   (never paste the steps individually into an interactive shell). It assumes file-backed auth
@@ -320,7 +322,8 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   the key drifted: update the constant and re-verify before shipping the version bump.
 - **Workspace-write writable-roots pin.** The filesystem sibling
   (`-c sandbox_workspace_write.writable_roots=[]`, `WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`,
-  #520) has the identical silent-rename hazard, so it gets the same probe treatment — same
+  #520) has the identical meaning-change hazard (its rename half is covered by `--strict-config`,
+  #524), so it gets the same probe treatment — same
   scratch-`$CODEX_HOME` discipline, same file-backed-auth assumption, and each of the three runs
   spends a trivial request. Two things differ from the network probe. Judge by **final on-disk state**, never the model's prose or the
   command's reported exit status. And the target directory must sit outside **every**
@@ -368,6 +371,36 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   `COMPATIBILITY.md`: native `codex review --output-schema` is **not** honored for the final message
   — `codex_review_changes` must keep using `codex exec` with a diff we gather ourselves. Re-confirm
   this hasn't regressed before considering the native review subcommand.)
+- **Strict-config grammar (zero spend).** The `--strict-config` guard (#524) is only as good as
+  the stderr grammar it is parsed from: if upstream rewords the message,
+  `parse_strict_config_rejection` stops matching and a pin drift degrades from
+  `cli_contract_changed` to a generic `nonzero_exit` — the run still fails loudly, but the
+  diagnosis is lost. Re-verify both shapes against a **scratch** `$CODEX_HOME` (no credential copy
+  needed: config parsing precedes auth, so these spend nothing and need no login):
+
+  ```bash
+  (
+    set -eu
+    scratch=$(mktemp -d)
+    trap 'rm -rf "$scratch"' EXIT
+    # 1. override form -> must print: unknown configuration field `bogus_key_xyz` in -c/--config override
+    CODEX_HOME=$scratch codex exec --strict-config -c bogus_key_xyz=1 \
+      --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+    # 2. file form -> must print a <path>:<line>:<col>: span for the same phrase
+    printf 'some_unknown_junk_key = true\n' > "$scratch/config.toml"
+    CODEX_HOME=$scratch codex exec --strict-config --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+    # 3. positive control: --ignore-user-config must EXEMPT the file (run proceeds past config)
+    CODEX_HOME=$scratch codex exec --strict-config --ignore-user-config \
+      --skip-git-repo-check 'hi' </dev/null 2>&1 | head -3
+  )
+  ```
+
+  Both rejections must still carry `Error loading config.toml` and ``unknown configuration field``,
+  the override form must still name `in -c/--config override`, and run 3 must get past config
+  parsing (it then fails on auth, which is the expected stopping point). Reconcile any wording
+  change with `STRICT_CONFIG_ERROR_PREFIX` / `STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE` and the two
+  patterns beside them, and refresh COMPATIBILITY.md's strict-config section. **Only encode
+  phrasings from real observed output.**
 - **Failure classification.** Trigger the no-spend parser failures (an unknown flag, an invalid
   `--sandbox` value) and confirm they still match `CONTRACT_DRIFT_STDERR_PATTERNS`. If you can safely
   observe new auth / rate-limit wording, reconcile it against `AUTH_FAILURE_PATTERNS` /
