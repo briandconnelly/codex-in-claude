@@ -415,3 +415,37 @@ def test_plugin_owned_config_keys_are_exactly_the_pinned_three():
     assert cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY in keys
     assert cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY in keys
     assert cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY in keys
+
+
+def test_strict_config_recognizer_tolerates_carriage_returns():
+    """A CRLF-terminated rejection still parses (#524).
+
+    The server is POSIX-first, but `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM=1`
+    documents a consult-only non-POSIX mode, and a stray `\\r` before the line end would
+    otherwise silently defeat the anchor — degrading a pin drift from
+    `cli_contract_changed` to a generic `nonzero_exit`. Tolerating it in the trailing run
+    costs no anchoring strength: `\\r` is accepted only where a space or tab already is.
+    """
+    override = (
+        "Error loading config.toml: unknown configuration field `k` in -c/--config override\r\n"
+    )
+    parsed = cli_contract.parse_strict_config_rejection(override)
+    assert parsed is not None
+    assert parsed.origin == "override"
+    assert parsed.key == "k"
+    in_file = (
+        "Error loading config.toml:\r\n"
+        "/home/u/.codex/config.toml:2:1: unknown configuration field `j`\r\n"
+    )
+    parsed_file = cli_contract.parse_strict_config_rejection(in_file)
+    assert parsed_file is not None
+    assert parsed_file.key == "j"
+    assert parsed_file.source_path == "/home/u/.codex/config.toml"
+    # Anchoring is unchanged: trailing junk still does not match.
+    assert (
+        cli_contract.parse_strict_config_rejection(
+            "Error loading config.toml: unknown configuration field `k` "
+            "in -c/--config override X\r\n"
+        )
+        is None
+    )

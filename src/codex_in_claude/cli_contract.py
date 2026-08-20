@@ -540,7 +540,10 @@ PLUGIN_OWNED_CONFIG_KEYS = frozenset(
 # merely QUOTES this phrasing (a clap error naming an operator profile so named) would
 # steal the classification. Recognition is deliberately run on stderr ALONE — the observed
 # failure is stderr-only and happens before any model output exists, so no model-produced
-# text can impersonate it.
+# text can impersonate it. The trailing run tolerates `\r` so a CRLF-terminated line still
+# matches (the server is POSIX-first, but ALLOW_UNSUPPORTED_PLATFORM documents a
+# consult-only non-POSIX mode); that costs no anchoring strength, since `\r` is accepted
+# only where a space or tab already is, and trailing junk still fails to match.
 STRICT_CONFIG_ERROR_PREFIX = "Error loading config.toml"
 STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE = "in -c/--config override"
 # Bounds on the echoed key/path: a span past these is drift or hostile text, not a real
@@ -550,12 +553,12 @@ STRICT_CONFIG_PATH_MAX_CHARS = 4096
 _STRICT_CONFIG_OVERRIDE_PATTERN = re.compile(
     rf"^{re.escape(STRICT_CONFIG_ERROR_PREFIX)}: unknown configuration field "
     rf"`(?P<key>[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})` "
-    rf"{re.escape(STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE)}[ \t]*$",
+    rf"{re.escape(STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE)}[ \t\r]*$",
     re.MULTILINE,
 )
 _STRICT_CONFIG_FILE_PATTERN = re.compile(
     rf"^(?P<path>[^\n]{{1,{STRICT_CONFIG_PATH_MAX_CHARS}}}?):(?P<line>\d{{1,9}}):\d{{1,9}}: "
-    rf"unknown configuration field `(?P<key>[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})`[ \t]*$",
+    rf"unknown configuration field `(?P<key>[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})`[ \t\r]*$",
     re.MULTILINE,
 )
 
