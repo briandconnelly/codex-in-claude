@@ -16,7 +16,7 @@ So machine fields are never sanitized. They are split by **who can fix the value
     runs, and reports only the static parameter NAME — never the value. The precedent is
     ``reasoning_effort`` (``config.REASONING_EFFORT_VALUE_PATTERN``).
 
-``PRESERVE_FIELDS``
+``PRESERVE_CARRIERS``
     A value that IS, or derives from, a real filesystem or model identity. POSIX permits a control
     character in a filename, so such a value may be entirely correct, and refusing it would refuse
     a legitimate repository. These keep their exact bytes forever; escaping is a *presentation*
@@ -57,26 +57,47 @@ REJECT_PARAMS: tuple[str, ...] = (
     "transcript_path",
 )
 
-# Machine identities kept byte-exact. Named for the completeness guard and for the reader deciding
-# where a NEW field belongs; there is no code path that mutates them, which is the point.
-PRESERVE_FIELDS: tuple[str, ...] = (
-    "cwd",
-    "candidate_roots",
-    "file",  # Finding.file
-    "session_id",
+# Machine identities kept byte-exact, named by CARRIER rather than by bare leaf name.
+#
+# The qualification is load-bearing, not cosmetic. `model` and `base` appear on both sides of
+# this module: as an INPUT they are rejected (`REJECT_PARAMS`), while the same names as stored
+# CARRIERS — `meta.model`, `meta.base` on a record written before that rejection existed — are
+# replayed byte-exact, because rewriting a stored value would report something the run never
+# sent. A registry keyed on the bare leaf could not express that at all, and would have had to
+# call one of the two behaviors a contradiction.
+#
+# There is deliberately no `preserve()` helper. Preservation is the ABSENCE of a sanitizer, so a
+# helper would have no production caller, and its tests would prove only that the helper returns
+# its argument. The tests instead drive the real functions — `orchestration._sanitize_finding`
+# and `server._sanitize_stored_presentation` — which is where a regression would appear.
+PRESERVE_CARRIERS: tuple[str, ...] = (
+    # Resolved workspace identity, whatever route it arrived by (param, MCP root, server cwd).
+    "meta.cwd",
+    "workspace.cwd",
+    "error.repair.arguments.workspace_root",
+    "error.candidate_roots",
+    # Model-produced identifiers.
+    "findings[].file",
+    "meta.session_id",
+    "raw_response.session_id",
+    # Resolved filesystem identity echoed back on a transfer.
     "source_path",
+    # Stored carriers on a pre-#529 record: rejected as new INPUTS, replayed as written.
+    "meta.model",
+    "meta.base",
+    "meta.commit",
+    "meta.paths[]",
 )
 
-
-def preserve(value: str) -> str:
-    """Return ``value`` unchanged.
-
-    A named no-op, not a placeholder. It marks the call sites that have *considered* control
-    characters and concluded the bytes must survive, so a later reader does not mistake the
-    absence of a sanitizer for an oversight and "fix" it. The tests assert length is preserved,
-    so replacing this body with a sanitizer fails loudly.
-    """
-    return value
+# Derived path LABELS, not callable filesystem paths: git is forced to C-quote control
+# characters (`pontonier.core.gitdiff`), so these already arrive escaped and are neither
+# preserved-byte-exact nor rejected. Listed so a reader does not mistake their absence above
+# for an oversight.
+DERIVED_PATH_LABELS: tuple[str, ...] = (
+    "meta.redacted_paths",
+    "coverage.redaction.withheld_paths",
+    "coverage.redaction.masked_paths",
+)
 
 
 async def advertised_patterns(mcp: FastMCP) -> dict[str, str | None]:

@@ -43,7 +43,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   **Fingerprint `schema-82` → `schema-83`**, and `RESULT_FORMAT` 9 → 10: `InvalidArgument` and
   `ErrorDetail` are closed schemas (`extra="forbid"`), so an older reader would reject a stored
   envelope carrying `field_withheld`. Breaking: five parameters narrow their accepted value set.
-  (#529)
+  (#529; the argument-validation LOG still echoes a rejected value — #532)
 
 - **Control characters are stripped from every echoed diagnostic, not just the two spans a
   `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config

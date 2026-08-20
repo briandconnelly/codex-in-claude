@@ -22,7 +22,7 @@ import json
 
 import pytest
 
-from codex_in_claude import field_policy, server
+from codex_in_claude import field_policy, orchestration, server
 
 # One control character from each Cc sub-range the policy names: C0, DEL, and C1.
 CC_SAMPLES = ("\x00", "\x07", "\x1b", "\x1f", "\x7f", "\x80", "\x9f")
@@ -78,10 +78,22 @@ async def test_every_reject_param_is_advertised_with_the_control_free_pattern():
     assert not missing, f"REJECT params not advertising the pattern: {missing}"
 
 
-def test_reject_and_preserve_families_are_disjoint():
-    """A field with two dispositions has none. This is the guard that keeps a later edit from
-    quietly moving a value into both lists."""
-    assert not (set(field_policy.REJECT_PARAMS) & set(field_policy.PRESERVE_FIELDS))
+def test_preserve_carriers_are_qualified_not_bare_leaf_names():
+    """The two families overlap by leaf name ON PURPOSE — `model` and `base` are rejected as
+    INPUTS while `meta.model` and `meta.base` are preserved as stored CARRIERS — so the
+    registry must name a carrier path, never a bare leaf. A bare name here would be a
+    disposition that cannot be acted on, and would read as a contradiction with REJECT_PARAMS.
+    """
+    bare = [c for c in field_policy.PRESERVE_CARRIERS if "." not in c and not c.endswith("]")]
+    assert bare == ["source_path"], f"unqualified carriers: {bare}"
+
+
+def test_the_two_families_are_distinguished_by_carrier_not_by_name():
+    """Pins the overlap the qualification exists to express: these leaf names appear on both
+    sides, and that is correct rather than a bug to be tidied away."""
+    for leaf in ("model", "base", "commit"):
+        assert leaf in field_policy.REJECT_PARAMS
+        assert f"meta.{leaf}" in field_policy.PRESERVE_CARRIERS
 
 
 async def test_registry_classifies_every_reject_param_that_exists():
@@ -126,10 +138,15 @@ async def test_reject_param_refuses_control_char_without_echoing_it(
     assert payload["error"]["code"] == "invalid_arguments"
     # The field NAME is reported (it is a static parameter name); the value is not.
     assert payload["error"]["details"]["field"] == param
-    serialized = json.dumps(payload)
-    assert value not in serialized
-    # Nor a stripped rendering of it, which is the corruption this issue exists to prevent.
-    assert value.replace(control, "") not in serialized
+    # Compared against the WALKED strings, never against `json.dumps(payload)`. Serialization
+    # escapes every Cc code point, so a search for the raw value in the dumped text reports
+    # "absent" even when the payload echoes it in full — the assertion would be vacuous for
+    # every sample in CC_SAMPLES. (This test had exactly that bug; #528 hit the same trap.)
+    stripped = value.replace(control, "")
+    for path, text in walk_strings(payload):
+        assert value not in text, f"raw value echoed at {path}"
+        # Nor a stripped rendering, which is the corruption this issue exists to prevent.
+        assert stripped not in text, f"stripped value echoed at {path}"
 
 
 @pytest.mark.parametrize(("tool", "base_args", "param"), REJECT_CASES)
@@ -167,20 +184,29 @@ async def test_reject_pattern_rejects_a_trailing_newline():
 # --------------------------------------------------------------------------- #
 
 
-def test_control_bearing_finding_file_is_preserved_byte_exact():
+@pytest.mark.parametrize("control", CC_SAMPLES)
+def test_control_bearing_finding_file_survives_the_real_sanitizer(control):
     """``Finding.file`` locates code for a reader. Deleting a byte points them at a different
-    path, so the model's bytes survive untouched while the finding's prose is cleaned."""
-    dirty = f"a{CC_PAYLOAD}.py"
-    assert field_policy.preserve(dirty) == dirty
+    path, so it survives the sanitizer that cleans the finding's prose beside it.
 
-
-def test_preserve_never_shortens_a_value():
-    """The failure mode this half guards is silent shortening. Any Cc-bearing input must come
-    back the same length, for every Cc sub-range."""
-    for control in CC_SAMPLES:
-        value = f"pre{control}post"
-        assert field_policy.preserve(value) == value
-        assert len(field_policy.preserve(value)) == len(value)
+    Driven through `orchestration._sanitize_finding` — the function the live and replay paths
+    both call — rather than through a helper that only proves this test agrees with itself.
+    """
+    dirty = f"a{control}.py"
+    out = orchestration._sanitize_finding(
+        {
+            "title": f"t{control}x",
+            "severity": "high",
+            "file": dirty,
+            "evidence": "e",
+            "risk": "r",
+            "recommendation": "rec",
+        }
+    )
+    assert out["file"] == dirty
+    assert len(out["file"]) == len(dirty)
+    # ...while the prose beside it IS cleaned, so this is a split and not a blanket exemption.
+    assert not has_control_char(out["title"])
 
 
 # --------------------------------------------------------------------------- #
@@ -223,13 +249,15 @@ def test_control_char_is_detected_before_the_length_bound():
     assert server._format_loc((buried,)) == server._WITHHELD_FIELD
 
 
-def test_a_literal_withheld_marker_from_the_caller_is_itself_withheld():
-    """The marker is not a reserved word, so a caller may send it as a real argument name.
-    Reporting it verbatim with `field_withheld: false` would make a genuine name
-    indistinguishable from a withheld one, so the marker is only ever emitted alongside the
-    flag."""
+def test_a_literal_withheld_name_from_the_caller_is_reported_verbatim():
+    """The marker is not a reserved word, so a caller may genuinely name an argument
+    `<withheld>`. That name is clean, so it is reported verbatim with `field_withheld: false`.
+
+    The pair stays unambiguous because the FLAG is the discriminator, not the marker string,
+    and the flag means exactly one thing: the real name carried a control character. Setting it
+    for a clean name would make the flag lie about the very fact it exists to report."""
     assert server._format_loc((server._WITHHELD_FIELD,)) == server._WITHHELD_FIELD
-    assert server._loc_is_withheld((server._WITHHELD_FIELD,)) is True
+    assert server._loc_is_withheld((server._WITHHELD_FIELD,)) is False
 
 
 # --------------------------------------------------------------------------- #

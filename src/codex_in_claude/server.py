@@ -375,9 +375,12 @@ _TOOL_POSTURE: dict[str, tuple[str, str]] = {}
 # character (#529). An unknown key is rejected *because* it is unknown, so there is no parameter
 # to hang a `pattern` on the way `field_policy.REJECT_PARAMS` does; and the name can be neither
 # echoed (caller-controlled) nor stripped (stripping an identifier corrupts it into a different
-# one). It is therefore withheld. The marker is not reserved — a caller may legitimately send an
-# argument named `<withheld>` — so it is meaningful only together with `field_withheld: true`,
-# which is the machine discriminator a client branches on.
+# one). It is therefore withheld.
+#
+# The marker is not a reserved word: a caller may legitimately send an argument named
+# `<withheld>`, and that name is reported VERBATIM with `field_withheld: false`. The pair stays
+# unambiguous because the flag — not the marker — is the discriminator, and the flag means
+# exactly one thing: the real name carried a control character.
 _WITHHELD_FIELD = "<withheld>"
 
 
@@ -387,16 +390,10 @@ def _loc_is_withheld(loc: tuple[object, ...]) -> bool:
     Checked on the RAW components, before `_format_loc` joins and truncates them: a control
     character past the length bound would otherwise be cut away by the truncation and the
     remaining prefix reported as if it were clean.
-
-    A location that is exactly the marker is also withheld, so a caller cannot forge an
-    indistinguishable `field_withheld: false` report by naming an argument `<withheld>`.
     """
-    for component in loc:
-        if isinstance(component, str) and (
-            appserver._has_control_char(component) or component == _WITHHELD_FIELD
-        ):
-            return True
-    return False
+    return any(
+        isinstance(component, str) and appserver._has_control_char(component) for component in loc
+    )
 
 
 def _format_loc(loc: tuple[object, ...]) -> str:
