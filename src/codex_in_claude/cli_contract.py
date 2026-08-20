@@ -13,6 +13,8 @@ Verified against `codex-cli 0.148.0`.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from typing import Literal
 
 from pontonier.backend import contract as _pontonier_contract
 
@@ -394,6 +396,17 @@ PREVIEW_SCOPE_FACT = (
     "and sends during the paid call."
 )
 
+# --- Strict config validation (issue #524) ---------------------------------------
+# `--strict-config` turns codex's silent tolerance of an unknown config KEY into a
+# zero-spend startup failure (config parsing precedes auth and any model call). It is the
+# mechanical guard for the three guarantee-bearing `-c` pins below, whose key names would
+# otherwise drift SILENTLY on an upstream rename — see each constant's note. The builder
+# emits it only on runs that CARRY a `-c` override (see codex.build_exec_command): at the
+# default `inherit` isolation the flag also hard-fails on an unknown key anywhere in the
+# user's own config, so sending it on an override-free run would trade availability for no
+# guarantee at all. The grammar it produces is parsed below.
+STRICT_CONFIG_FLAG = "--strict-config"
+
 # --- Flag classes (see COMPATIBILITY.md) ----------------------------------------
 # ALWAYS_SEND: guarantee-bearing flags, sent unconditionally for the invocations
 # that use them and NEVER gated on `--help` parsing. If upstream removes/renames
@@ -415,6 +428,7 @@ ALWAYS_SEND_FLAGS = frozenset(
         "--add-dir",  # extra writable dir for the propose/apply tiers
         "--output-schema",  # enforce a JSON Schema on the final response (structured findings)
         DISABLE_FEATURE_FLAG,  # isolation: disable remote_plugin connectors (#287)
+        STRICT_CONFIG_FLAG,  # fail loud on an unknown `-c` config KEY (#524)
     }
 )
 
@@ -438,12 +452,14 @@ HELP_GATED_FLAGS = {
 # config key, sent as `-c model_reasoning_effort=<value>`. A config KEY cannot be
 # help-gated — `--help` advertises flags, not config keys — so when a caller (or the
 # CODEX_IN_CLAUDE_REASONING_EFFORT default) requests an effort it is sent
-# unconditionally. Drift coverage is NARROWER than ALWAYS_SEND: only removal of the
-# `-c` flag itself fails loudly (arg-parse, zero spend, cli_contract_changed). A
-# rename/removal of the KEY drifts SILENTLY — codex tolerates unknown `-c` keys as
-# junk it never reads (verified for 0.144.3, #312) — so the effort would be quietly
-# ignored; the manual re-verification probe in docs/UPGRADING-CODEX.md is the only
-# guard for that case.
+# unconditionally. Removal of the `-c` flag itself fails loudly (arg-parse, zero spend,
+# cli_contract_changed). A rename/removal of the KEY used to drift SILENTLY — codex
+# tolerates unknown `-c` keys as junk it never reads (verified for 0.144.3, #312) — so the
+# effort was quietly ignored. STRICT_CONFIG_FLAG now closes that case (#524): the flag
+# rides every run carrying a `-c` override, so an unknown key is a zero-spend startup
+# failure classified as cli_contract_changed. What strict CANNOT see is a key that still
+# EXISTS but changes meaning, default, or accepted values — for that the semantic
+# re-verification probe in docs/UPGRADING-CODEX.md remains the only guard.
 #
 # The VALUE's semantic set is open — the plugin enforces only transport-shape bounds
 # (config.reasoning_effort_shape_error) and allowlists nothing: the CLI accepts any
@@ -464,11 +480,12 @@ MODEL_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
 # file and an operator `--profile` (codex resolves by config layer, not argv order),
 # so the pin holds at every isolation level and closes the --profile carve-out for
 # this one key.
-# Drift coverage is the same NARROW case as MODEL_REASONING_EFFORT_CONFIG_KEY above:
-# only removal of `-c` itself fails loudly. A rename/removal of the KEY drifts
-# SILENTLY — codex tolerates unknown `-c` keys as junk it never reads — and would
-# quietly reopen the egress channel; the semantic probe in docs/UPGRADING-CODEX.md is
-# the only guard for that case, so it must run on every supported-version change.
+# Drift coverage matches MODEL_REASONING_EFFORT_CONFIG_KEY above: removal of `-c` itself
+# fails loudly, and STRICT_CONFIG_FLAG (#524) now makes a rename/removal of the KEY fail
+# loudly too — it rides every workspace-write run, so an unknown key is a zero-spend
+# startup failure instead of a quietly reopened egress channel. A key that still exists
+# but changes MEANING or default is invisible to strict, so the semantic probe in
+# docs/UPGRADING-CODEX.md remains mandatory on every supported-version change.
 WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY = "sandbox_workspace_write.network_access"
 
 # --- workspace-write writable-roots pin (issue #520) --------------------------------
@@ -488,12 +505,100 @@ WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY = "sandbox_workspace_write.network_acc
 # the widest state, so the config file can only narrow them — an operator's own choice,
 # not a guarantee leak (COMPATIBILITY.md documents this; the default temp-dir grant
 # itself is disclosed as WORKSPACE_WRITE_SCOPE_FACT below, #523).
-# Drift coverage is the same NARROW case as the network key: only removal of `-c`
-# itself fails loudly. A rename/removal of the KEY drifts SILENTLY — codex tolerates
-# unknown `-c` keys as junk it never reads — and would quietly reopen the filesystem
-# channel; the semantic probe in docs/UPGRADING-CODEX.md is the only guard for that
-# case, so it must run on every supported-version change.
+# Drift coverage matches the network key: removal of `-c` itself fails loudly, and
+# STRICT_CONFIG_FLAG (#524) now makes a rename/removal of the KEY fail loudly too, rather
+# than quietly reopening the filesystem channel. A key that still exists but changes
+# MEANING or default is invisible to strict, so the semantic probe in
+# docs/UPGRADING-CODEX.md remains mandatory on every supported-version change.
 WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY = "sandbox_workspace_write.writable_roots"
+
+# --- Strict-config rejection grammar (issue #524) ----------------------------------
+# Every config KEY this plugin itself pins through `-c`. Under STRICT_CONFIG_FLAG a
+# rejection naming one of these is PROOF the key drifted upstream: codex echoes back the
+# key WE sent, so the match is exact and unambiguous — it can never be an operator's
+# passthrough key. That is what makes the override-form classification safe without
+# consulting the (shared, collision-prone) `-c` extra-args descriptor.
+PLUGIN_OWNED_CONFIG_KEYS = frozenset(
+    {
+        MODEL_REASONING_EFFORT_CONFIG_KEY,
+        WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY,
+        WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY,
+    }
+)
+
+# The two stderr shapes `--strict-config` emits for an unknown key, verified live on
+# codex-cli 0.148.0 (2026-08-20). They are distinguishable, and the distinction is the
+# whole classification: an OVERRIDE-form rejection names a key from argv (ours or the
+# operator's), while a FILE-form one names a key in a config file the USER owns.
+#
+#   override: Error loading config.toml: unknown configuration field `K` in -c/--config override
+#   file:     Error loading config.toml:
+#             /path/to/config.toml:LINE:COL: unknown configuration field `K`
+#
+# Matching is ANCHORED to whole lines and requires the header, not a loose substring
+# search: the rejection echoes an untrusted key and path, and a loose match on text that
+# merely QUOTES this phrasing (a clap error naming an operator profile so named) would
+# steal the classification. Recognition is deliberately run on stderr ALONE — the observed
+# failure is stderr-only and happens before any model output exists, so no model-produced
+# text can impersonate it. The trailing run tolerates `\r` so a CRLF-terminated line still
+# matches (the server is POSIX-first, but ALLOW_UNSUPPORTED_PLATFORM documents a
+# consult-only non-POSIX mode); that costs no anchoring strength, since `\r` is accepted
+# only where a space or tab already is, and trailing junk still fails to match.
+STRICT_CONFIG_ERROR_PREFIX = "Error loading config.toml"
+STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE = "in -c/--config override"
+# Bounds on the echoed key/path: a span past these is drift or hostile text, not a real
+# identifier (same defensive posture as TRANSFER_ID_MAX_BYTES / CODEX_HOME_MAX_BYTES).
+STRICT_CONFIG_KEY_MAX_CHARS = 256
+STRICT_CONFIG_PATH_MAX_CHARS = 4096
+_STRICT_CONFIG_OVERRIDE_PATTERN = re.compile(
+    rf"^{re.escape(STRICT_CONFIG_ERROR_PREFIX)}: unknown configuration field "
+    rf"`(?P<key>[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})` "
+    rf"{re.escape(STRICT_CONFIG_OVERRIDE_ORIGIN_PHRASE)}[ \t\r]*$",
+    re.MULTILINE,
+)
+_STRICT_CONFIG_FILE_PATTERN = re.compile(
+    rf"^(?P<path>[^\n]{{1,{STRICT_CONFIG_PATH_MAX_CHARS}}}?):(?P<line>\d{{1,9}}):\d{{1,9}}: "
+    rf"unknown configuration field `(?P<key>[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})`[ \t\r]*$",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class StrictConfigRejection:
+    """A parsed `--strict-config` unknown-key rejection.
+
+    `origin` is where codex read the key from: "override" (a `-c/--config` argv token —
+    this plugin's pin or an operator passthrough) or "file" (a config file the user owns).
+    `key` is the rejected dotted config path as codex echoed it; `source_path` and `line`
+    locate it and are set only for the file form."""
+
+    origin: Literal["override", "file"]
+    key: str
+    source_path: str | None = None
+    line: int | None = None
+
+
+def parse_strict_config_rejection(text: str | None) -> StrictConfigRejection | None:
+    """Parse codex's `--strict-config` unknown-key rejection out of STDERR, or None.
+
+    Pass `run.stderr` alone — never stdout, a last message, or an event blob (see the
+    grammar note above). Returns None for any text that is not this exact anchored
+    grammar, so an unrelated failure keeps its ordinary classification."""
+    if not text or STRICT_CONFIG_ERROR_PREFIX not in text:
+        return None
+    override = _STRICT_CONFIG_OVERRIDE_PATTERN.search(text)
+    if override is not None:
+        return StrictConfigRejection(origin="override", key=override.group("key"))
+    in_file = _STRICT_CONFIG_FILE_PATTERN.search(text)
+    if in_file is not None:
+        return StrictConfigRejection(
+            origin="file",
+            key=in_file.group("key"),
+            source_path=in_file.group("path"),
+            line=int(in_file.group("line")),
+        )
+    return None
+
 
 # --- workspace-write write scope (issue #523) ---------------------------------------
 # RULE (write scope): every prose site that describes the propose tier's write
@@ -785,9 +890,10 @@ PONTONIER_CONTRACT = _pontonier_contract.BackendContract(
     ),
     isolation_policy=_pontonier_contract.IsolationPolicy.SANDBOX_FLAG,
     needs_orphan_sweep=False,
-    # Codex rejects a bad effort VALUE loudly via the backend path; only a rename of
-    # the `-c model_reasoning_effort` KEY drifts silently, which the UPGRADING-CODEX
-    # probe covers. Local validation is therefore shape-only, not enumerated.
+    # Codex rejects a bad effort VALUE loudly via the backend path, and STRICT_CONFIG_FLAG
+    # now makes a rename of the `-c model_reasoning_effort` KEY fail loudly too (#524);
+    # only a same-name change of MEANING stays silent, which the UPGRADING-CODEX probe
+    # covers. Local validation is therefore shape-only, not enumerated.
     effort_silently_ignored_upstream=False,
     effort_validation="shape_only",
     usage_event_markers=USAGE_EVENT_MARKERS,

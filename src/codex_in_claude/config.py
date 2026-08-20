@@ -259,6 +259,13 @@ class ExtraArgs:
 
     tokens: tuple[str, ...] = ()
     descriptors: tuple[str, ...] = ()
+    # The `-c` KEYS and `--profile` NAMES on their own, split out of the flat
+    # `descriptors` blob (which mixes them with flag names) so an ownership question can
+    # be asked precisely (#524). Matching a strict-config rejection against `descriptors`
+    # would let the SHARED `-c` flag token — recorded for every config entry, and present
+    # in codex's own rejection text — answer "yes" for a key that is really the plugin's.
+    config_keys: tuple[str, ...] = ()
+    profile_names: tuple[str, ...] = ()
     option_count: int = 0
     configured: bool = False
     error: str | None = None
@@ -267,6 +274,30 @@ class ExtraArgs:
     def valid(self) -> bool:
         """True when the knob is unset, or set and parsed/validated cleanly."""
         return self.error is None
+
+    def owns_config_key(self, key: str) -> bool:
+        """Whether `key` — as codex echoed it in a rejection — is one of OUR `-c` KEYS.
+
+        Both sides are canonicalized with the same conservative normalization the
+        denylist uses, so a cased/quoted/spaced echo still matches. False whenever the
+        knob is unset or failed to parse: an unattributable rejection must stay
+        fail-loud rather than be blamed on a passthrough that never reached codex."""
+        if not (self.configured and self.valid):
+            return False
+        target = _normalize_config_key(key)
+        return any(_normalize_config_key(k) == target for k in self.config_keys)
+
+    def owns_profile_file(self, path: str | None) -> bool:
+        """Whether `path` is the config FILE codex loads for a profile WE select.
+
+        `--profile NAME` loads `$CODEX_HOME/NAME.config.toml` and, under
+        `--strict-config`, validates it; an unselected `NAME.config.toml` is never read
+        (both verified live on codex-cli 0.148.0). Matching on the basename keeps this
+        independent of where `$CODEX_HOME` resolves."""
+        if not (self.configured and self.valid) or not path:
+            return False
+        base = Path(path.strip()).name
+        return any(base == f"{name}.config.toml" for name in self.profile_names)
 
 
 def _extra_args_flag_kind(flag: str) -> str | None:
@@ -308,6 +339,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
         return ExtraArgs(configured=True, error="could not tokenize (unbalanced quotes?)")
     tokens: list[str] = []
     descriptors: list[str] = []
+    config_keys: list[str] = []
+    profile_names: list[str] = []
     count = 0
     i = 0
     while i < len(toks):
@@ -375,6 +408,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
             # `-c`/`--config` flag token itself is still attributed to the passthrough.
             # The key is a config-path name (not a secret); the `-c` VALUE is never added.
             descriptors += [flag, key]
+            config_keys.append(key)
         else:  # profile / feature — the value is a non-secret NAME
             if not value:
                 return ExtraArgs(configured=True, error=f"{flag} requires a non-empty value")
@@ -389,6 +423,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 )
             tokens += [flag, value]
             descriptors += [flag, value]
+            if kind == "profile":
+                profile_names.append(value)
         count += 1
         i += 1
     # De-dupe descriptors while preserving order (a stable, small match/echo set).
@@ -398,6 +434,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
     return ExtraArgs(
         tokens=tuple(tokens),
         descriptors=tuple(seen),
+        config_keys=tuple(dict.fromkeys(config_keys)),
+        profile_names=tuple(dict.fromkeys(profile_names)),
         option_count=count,
         configured=True,
     )

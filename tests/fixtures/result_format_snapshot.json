@@ -1,5 +1,5 @@
 {
-  "result_format": 8,
+  "result_format": 9,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -1760,6 +1760,7 @@
                 "internal_error",
                 "cli_contract_changed",
                 "invalid_reasoning_effort",
+                "user_config_rejected",
                 "extra_args_rejected",
                 "transfer_unsupported",
                 "transfer_failed",
@@ -3638,6 +3639,34 @@
         },
         "retry_after_ms": null,
         "temporary": true
+      },
+      "meta": {
+        "compat_warnings": [],
+        "cwd": "/repo",
+        "elapsed_ms": 1,
+        "fingerprint": "<fingerprint>",
+        "isolation": "inherit",
+        "redacted_paths": [],
+        "request_id": "00000000000000000000000000000000",
+        "sandbox": "read-only",
+        "security_warnings": [],
+        "server_version": "0.0.0",
+        "tier": "consult",
+        "timeout_seconds": 1,
+        "truncated": false
+      },
+      "ok": false
+    },
+    "error_user_config_rejected": {
+      "error": {
+        "code": "user_config_rejected",
+        "message": "m",
+        "repair": {
+          "alternative": "Your Codex config holds a key this codex version does not recognize. Fix or remove the key at the reported file and line, or upgrade/downgrade codex to the version that knows it, then rerun. As a last resort, isolation='ignore-config' skips your config file for the run — but it drops ALL of it (model provider, MCP servers, and every other setting), so prefer fixing the key.",
+          "next_step": "correct_config"
+        },
+        "retry_after_ms": null,
+        "temporary": false
       },
       "meta": {
         "compat_warnings": [],
