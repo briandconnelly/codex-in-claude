@@ -996,12 +996,16 @@ _NOT_A_WRITE_BOUNDARY_RE = re.compile(
 )
 
 # Independent copy of the runtime matcher in tests/test_server.py, for the same reason
-# the read-scope block keeps one: the two guard different corpora.
+# the read-scope block keeps one: the two guard different corpora. Unlike the runtime
+# copy, the "writes stay/are isolated" arm also accepts `workspace` as the named bound:
+# COMPATIBILITY.md restated the guarantee as "writes stay inside the workspace" — the
+# workspace-worded synonym of the worktree claim — and a worktree-only matcher passed it
+# (a Codex review caught the survivor).
 _CONTRADICTS_WRITE_SCOPE_PROSE = re.compile(
     r"writes?\s+only\s+inside|only\s+inside\s+a\s+throwaway"
     r"|worktree,?\s+which\s+bounds|worktree\s+bounds\s+what\b[^.]{0,40}\bwrite"
     r"|(?:likewise|worktree)\s+bounds\s+what\s+it\s+may\s+write"
-    r"|writes?\s+(?:stay|stays|are\s+isolated)\b[^.]{0,50}\bworktree"
+    r"|writes?\s+(?:stay|stays|are\s+isolated)\b[^.]{0,50}\b(?:worktree|workspace)"
     r"|writes?\b[^.]{0,30}\b(?:confined|limited|restricted)\s+to\b[^.]{0,40}\bworktree",
     re.IGNORECASE,
 )
@@ -1088,3 +1092,9 @@ def test_write_scope_prose_guard_rejects_the_pre_523_wording():
     )
     assert _NOT_A_WRITE_BOUNDARY_RE.search(inverted) is None
     assert _CONTRADICTS_WRITE_SCOPE_PROSE.search(inverted.lower())
+
+    # The workspace-worded synonym must trip the matcher too: COMPATIBILITY.md restated
+    # the guarantee as "writes stay inside the workspace", and a worktree-only matcher
+    # passed it (a Codex review caught the survivor).
+    workspace_worded = _flat("the sentence above — writes stay inside the workspace —")
+    assert _CONTRADICTS_WRITE_SCOPE_PROSE.search(workspace_worded.lower())

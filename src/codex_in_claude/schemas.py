@@ -1280,13 +1280,14 @@ class CapabilitiesResult(BaseModel):
             "(docs/adr/0004-mcp-2026-07-28-migration.md)."
         ),
     )
-    # The server's documented reading of its own `readOnlyHint` tool annotation (#426):
-    # a judgment call, not a restatement. The long-form rationale — and the annotation
-    # presets it governs (_FREE_READ/_ACTIVE_PROPOSE/_ACTIVE_ASYNC) — live in server.py
-    # (~server.py:181-204, esp. the observable-job-state paragraph on _ACTIVE_ASYNC);
-    # this field is the compact, agent-facing statement of that reading, kept free of
-    # the mechanics the comments already own. Verified against the live annotations by
-    # test_sync_active_tools_are_not_read_only / test_dry_run_tools_are_read_only
+    # The server's documented reading of its own `readOnlyHint` and `destructiveHint`
+    # tool annotations (#426, #523): judgment calls, not restatements. The long-form
+    # rationale — and the annotation presets it governs
+    # (_FREE_READ/_ACTIVE_PROPOSE/_ACTIVE_READ_JOB) — lives on those presets in
+    # server.py; this field is the compact, agent-facing statement of that reading,
+    # kept free of the mechanics the comments already own. Verified against the live
+    # annotations by test_sync_active_tools_are_not_read_only /
+    # test_dry_run_tools_are_read_only / test_delegate_tools_declare_destructive_writes
     # (alongside the existing test_async_launchers_are_not_read_only).
     annotations_reading: str = Field(
         default=(

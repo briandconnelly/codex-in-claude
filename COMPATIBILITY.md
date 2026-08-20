@@ -73,7 +73,8 @@ test does this live). See "Session transfer" below for the import flow.
 consult/review tiers, `workspace-write` for the propose tiers (`codex_delegate`,
 `codex_delegate_async`); we never pass `danger-full-access` or `--dangerously-bypass-*` by default.
 
-**`workspace-write` permits filesystem writes inside the workspace but blocks network egress.** This
+**`workspace-write` permits filesystem writes inside the workspace (plus the OS temp roots — see
+the temp-root note below) but blocks network egress.** This
 is codex's own sandbox boundary and we pass it through deliberately. The practical consequence: a
 propose/apply task **cannot perform network operations** — `git push`/`fetch`, `gh ...`, `curl`,
 `npm publish`, dependency installs, etc. all fail inside the sandbox (typically with a
@@ -97,7 +98,7 @@ One drift caveat: a `-c` KEY cannot fail loudly the way a flag does (codex ignor
 so an upstream rename would reopen the channel silently — `docs/UPGRADING-CODEX.md` carries the
 semantic probe that guards this on every version change.
 
-The filesystem half of the sentence above — writes stay inside the workspace — gets the same
+The filesystem half of the sentence above — the sandbox's write boundary — gets the same
 treatment (#520): every `workspace-write` run also sends
 `-c sandbox_workspace_write.writable_roots=[]`
 (`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`), so a user's own
