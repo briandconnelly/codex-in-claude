@@ -294,9 +294,9 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   (never paste the steps individually into an interactive shell). It assumes file-backed auth
   (`codex login`); each of the three runs spends a trivial request:
 
-  ```sh
+  ```bash
   (                                     # bounded: the trap dies with this subshell
-    set -u
+    set -eu                             # fail fast: a failed cp/mktemp must not run the probes
     home=${CODEX_HOME:-$HOME/.codex}    # the active home, not a hard-coded path
     scratch=$(mktemp -d)
     trap 'rm -rf "$scratch"' EXIT       # the credential copy never outlives the probe
