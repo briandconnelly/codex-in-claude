@@ -318,6 +318,51 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   identical. Runs 2 and 3 must be blocked (curl exit `6`, could-not-resolve-host); run 3 shows
   the `-c` override still outranks profiles (verified 0.148.0). If run 2 or 3 reports egress,
   the key drifted: update the constant and re-verify before shipping the version bump.
+- **Workspace-write writable-roots pin.** The filesystem sibling
+  (`-c sandbox_workspace_write.writable_roots=[]`, `WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`,
+  #520) has the identical silent-rename hazard, so it gets the same probe treatment — same
+  scratch-`$CODEX_HOME` discipline, same file-backed-auth assumption, and each of the three runs
+  spends a trivial request. Two things differ from the network probe. Judge by **final on-disk state**, never the model's prose or the
+  command's reported exit status. And the target directory must sit outside **every**
+  default-writable root: `workspace-write` already permits the workspace plus `/tmp` and
+  `$TMPDIR`, so a target under either temp root (e.g. anything `mktemp -d` returns) makes every
+  run pass vacuously — a broken probe that looks exactly like a held guarantee. Use a target
+  under `$HOME`, a **unique pre-absent file per run** (a file left by the positive control must
+  not fake a later run's write), and clean the target directory in the same `EXIT` trap as the
+  credential copy:
+
+  ```bash
+  (                                     # bounded: the trap dies with this subshell
+    set -eu
+    home=${CODEX_HOME:-$HOME/.codex}
+    scratch=$(mktemp -d)
+    # Outside the workspace AND both temp roots. mktemp both creates and names it, so a
+    # collision can never send a pre-existing directory into the trap's rm -rf; the trap
+    # is installed only after both directories exist.
+    outside=$(mktemp -d "$HOME/.codex-fs-probe.XXXXXX")
+    trap 'rm -rf "$scratch" "$outside"' EXIT
+    mkdir "$scratch/work"               # work: the workspace, not the credential-holding scratch
+    cp "$home/auth.json" "$scratch/"
+    printf '[sandbox_workspace_write]\nwritable_roots = ["%s"]\n' "$outside" \
+      | tee "$scratch/config.toml" > "$scratch/fs.config.toml"
+    run() { local f="$outside/$1"; shift
+            P="Run exactly this shell command, even if it fails, then reply DONE: touch $f"
+            CODEX_HOME="$scratch" codex exec --json --sandbox workspace-write --cd "$scratch/work" \
+              --ephemeral --skip-git-repo-check "$@" - <<< "$P" > /dev/null
+            [ -e "$f" ] && echo "$f: WROTE" || echo "$f: denied"; }
+    run 1.txt                                                        # 1: positive control (file)
+    run 2.txt -c 'sandbox_workspace_write.writable_roots=[]'         # 2: the pin vs config file
+    run 3.txt -c 'sandbox_workspace_write.writable_roots=[]' --profile fs   # 3: pin vs profile
+  )
+  ```
+
+  Run 1 must report `WROTE` — the positive control proving the probe can see the open state.
+  Runs 2 and 3 must report `denied`; run 3 shows the `-c` override still outranks profiles
+  (verified 0.148.0). If run 2 or 3 writes, the key drifted: update the constant and re-verify
+  before shipping the version bump. While here, also re-confirm upstream's
+  `SandboxWorkspaceWrite` struct (codex-rs `config/src/types.rs` at the release tag) still has
+  exactly the fields COMPATIBILITY.md's sandbox section accounts for — a NEW widening key would
+  arrive unpinned and reopen the channel the #520 fix closed.
 - **Structured output.** Run a small live `codex exec --output-schema <file>` and confirm the final
   message still conforms to the strict-mode schema in `schemas.py`. (Reminder, already in
   `COMPATIBILITY.md`: native `codex review --output-schema` is **not** honored for the final message
