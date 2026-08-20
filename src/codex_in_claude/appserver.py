@@ -115,9 +115,11 @@ def _display_text(text: object) -> str:
     Every falsey JSON value (``null``, ``""``, ``0``, ``false``, ``[]``,
     ``{}``) carries no diagnostic text, but coercing one here yields a truthy string, so
     branching on the sanitized result would emit noise like ``rejected the import: {}``
-    instead of a clean generic sentence. The converse cannot happen: a truthy ``detail``
-    never sanitizes to ``""`` (the redactor substitutes a non-empty placeholder), so no
-    caller can strand a prefix with an empty fragment after it.
+    instead of a clean generic sentence. The converse USED to be impossible — a truthy
+    ``detail`` could not sanitize to ``""``, because the redactor substitutes a non-empty
+    placeholder — which is why testing the raw value alone was once sufficient. Control-
+    character deletion ended that, as the paragraph above says; the two checks are not
+    interchangeable and :func:`_display_detail_or` does both.
     """
     if text is None:
         return ""
