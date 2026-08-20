@@ -154,21 +154,47 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     return None
 
 
+def _sanitize_tree(value: object) -> object:
+    """``redact_tree``'s traversal with the ECHO sanitizer at the leaves.
+
+    Same contract as ``redaction.redact_tree``: strings are replaced, non-string leaves are
+    returned untouched, and dict KEYS are left alone (they are field names, not content).
+    It replaces that call rather than running after it — sanitation has to be
+    strip-then-redact, and stripping AFTER a redaction pass is the ordering that reassembles
+    a control-split secret.
+
+    Bridge-local because the shared library exposes no echo-sanitizing tree walk yet; it is
+    a candidate to move upstream next to ``redact_tree`` (see AGENTS.md, Package boundary).
+    """
+    if isinstance(value, str):
+        return redaction.sanitize_echo_prose(value)
+    if isinstance(value, list):
+        return [_sanitize_tree(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _sanitize_tree(v) for k, v in value.items()}
+    return value
+
+
 def _success_common(result: codex.CodexExecResult, meta: Meta) -> tuple[dict | None, RawResponse]:
     """Parse the structured payload (or None for a plain message) and build the shared
     RawResponse. Returns (structured_or_None, raw).
 
     Inline secret-looking values are redacted from every free-text surface before it
-    leaves this process (#58): the parsed structured payload (summary/findings/etc.)
-    via redact_tree, and raw_response.text via redact_text. Deliberately redact_text and
-    NOT the echo sanitizer: raw_response.text is the SUCCESS channel — the answer the
-    caller asked for — and deleting control characters from it would mutate requested
-    content. The echo sanitizer is for text this server quotes back into a diagnostic, not
-    for text it was asked to return (#528). Best-effort defense-in-
-    depth, consistent with the diff redaction the review path already applies."""
+    leaves this process (#58). The two surfaces get DIFFERENT treatment, on purpose (#528):
+
+    - The parsed structured payload (summary/findings/questions/next_steps) is a
+      PRESENTATION this server composes, and it is what a client renders. It goes through
+      the echo sanitizer, so a control character in model output cannot reach a terminal
+      through the field most likely to be displayed.
+    - ``raw_response.text`` is the exact-content carrier and keeps bare redaction. A caller
+      that needs what the model literally said reads it there, which is precisely why
+      deleting characters from it would be wrong.
+
+    Best-effort defense-in-depth, consistent with the diff redaction the review path already
+    applies."""
     structured = normalize.parse_structured(result.last_message)
     if structured is not None:
-        structured = cast("dict[str, Any]", redaction.redact_tree(structured))
+        structured = cast("dict[str, Any]", _sanitize_tree(structured))
     raw = RawResponse(
         text=redaction.redact_text(result.last_message),
         session_id=meta.session_id,

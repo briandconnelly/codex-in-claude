@@ -661,3 +661,24 @@ def test_review_invalid_response_preview_redacts_a_control_split_secret():
         "invalid_json", "leak sk-\x01ant-api03-" + "A" * 40, _make_meta()
     )
     assert "A" * 40 not in out["error"]["message"]
+
+
+def test_structured_presentation_fields_are_sanitized_but_raw_response_is_exact():
+    """#528, the success-channel half: the NORMALIZED fields are a presentation the server
+    composes, and they are the ones most likely to be rendered — so control characters go.
+    `raw_response.text` stays byte-exact, because an exact-content carrier is exactly what
+    it is for; a caller that needs the model's literal output reads it there.
+    """
+    payload = '{"summary": "bad \\u001b[31mRED\\u001b[0m", "findings": [{"title": "x\\u0007y"}]}'
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 1, False), last_message=payload, events=""
+    )
+    structured, raw = orchestration._success_common(result, _make_meta())
+    assert structured is not None
+    assert not _has_cc(str(structured["summary"]))
+    assert not _has_cc(str(structured["findings"][0]["title"]))
+    # The exact-content carrier keeps what the model actually said, byte for byte. (Here
+    # that is the JSON SOURCE, where the control characters are `\\u001b` escape sequences
+    # rather than literal bytes — which is exactly why the decoded presentation fields, not
+    # this one, are where stripping matters.)
+    assert raw.text == payload

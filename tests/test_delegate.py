@@ -383,6 +383,41 @@ def test_run_delegate_survives_crafted_partial_alias_consumption(monkeypatch, tm
 # classify_failure's `sanitize` parameter.
 
 
+def _run_delegate_with_success(monkeypatch, last_message: str, tmp_path):
+    """Drive run_delegate through a SUCCESSFUL codex exec with a canned last_message."""
+    from types import SimpleNamespace
+
+    import anyio
+    from pontonier.core import worktree
+
+    from codex_in_claude import delegate
+
+    wt_path = str(tmp_path / "cic-worktree-s" / "tree")
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(run=CommandRun("", "", 0, 1, False), last_message=last_message)
+
+    monkeypatch.setattr(
+        worktree, "create", lambda *a, **k: SimpleNamespace(path=wt_path, baseline_warning=None)
+    )
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+
+    return anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/repo",
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+
+
 def _run_delegate_with_failure(monkeypatch, stderr: str, *, wt_path: str, exit_code: int = 1):
     """Drive run_delegate through a failing codex exec (classify_failure's nonzero_exit
     branch) with a canned stderr and worktree path; return the result envelope."""
@@ -490,3 +525,15 @@ def test_run_delegate_classify_failure_relativizes_a_control_split_worktree_path
     message = result["error"]["message"]
     assert wt not in message, repr(message)
     assert "./out.txt" in message
+
+
+def test_delegate_summary_is_sanitized_while_raw_response_stays_exact(monkeypatch, tmp_path):
+    """#528 success-channel half: `summary` is a presentation this function composes (it
+    prefixes its own sentence), so control characters go; `raw_response.text` is the
+    exact-content carrier and keeps them."""
+    result = _run_delegate_with_success(monkeypatch, "did \x1b[31mstuff\x1b[0m\x07", tmp_path)
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in result["summary"]), repr(
+        result["summary"]
+    )
+    assert "stuff" in result["summary"]
+    assert "\x1b" in result["raw_response"]["text"]

@@ -184,14 +184,15 @@ async def run_delegate(
     # because they interact: neither plain order is safe, and the safe combination is not
     # something a call site should have to remember. See that function for the two attacks.
     # One call covers both fields built from this text (summary and raw_response.text).
-    # Deliberately `sanitize_prose`, NOT the `sanitize_echo_prose` the failure path above
-    # uses: this is the SUCCESS channel — the answer the caller asked for. Deleting control
-    # characters from it would mutate requested content (a diff, a code sample, deliberate
-    # formatting), which is a different thing from cleaning a diagnostic we chose to echo.
-    # The echo sanitizer is for text we quote back, not for text we were asked to return
-    # (#528; the machine-identifier half is #529).
+    # Two products from one text, treated differently (#528, mirroring
+    # orchestration._success_common). `summary` is a PRESENTATION this function composes —
+    # it prefixes its own sentence below, and it is what a client renders — so it goes
+    # through the echo sanitizer. `last_message` keeps bare `sanitize_prose` and becomes
+    # `raw_response.text`, the exact-content carrier a caller reads when it needs what the
+    # model literally said; deleting characters from THAT would mutate requested content.
     last_message = worktree.sanitize_prose(result.last_message, wt_aliases)
-    summary = (last_message or "").strip() or "(codex returned no summary)"
+    summary_text = worktree.sanitize_echo_prose(result.last_message, wt_aliases)
+    summary = (summary_text or "").strip() or "(codex returned no summary)"
     if not diff.strip():
         summary = f"Codex made no changes. {summary}"
     else:

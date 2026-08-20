@@ -34,11 +34,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
   wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
 
-  Deliberately unchanged: `raw_response.text` and the delegate summary. Those are the SUCCESS
-  channel — the answer the caller asked for — and deleting control characters from returned
-  content is a different act from cleaning a diagnostic this server chose to quote. Machine
-  identifier fields (`details.field`, job ids, resource URIs) are also unchanged: deleting
-  characters from an identifier corrupts it, so those want validation instead, tracked as #529.
+  The success channel is split rather than exempted. The NORMALIZED fields — a review's
+  `summary`, `findings`, `questions`, `next_steps`, and the delegate `summary` — are a
+  presentation this server composes, and they are what a client renders, so they are sanitized
+  too. `raw_response.text` keeps bare redaction and stays byte-exact: it is the exact-content
+  carrier, which is precisely why deleting characters from it would be wrong, and a caller that
+  needs what the model literally said reads it there. Machine identifier fields
+  (`details.field`, job ids, resource URIs) are unchanged: deleting characters from an
+  identifier corrupts it, so those want validation instead, tracked as #529.
 
   Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
   which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
