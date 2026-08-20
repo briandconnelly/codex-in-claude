@@ -9584,6 +9584,10 @@ def test_annotations_reading_states_the_destructive_hint_split():
     text = _normalize(CapabilitiesResult.model_fields["annotations_reading"].default).lower()
     assert "destructivehint" in text
     assert "temp root" in text or "os temp roots" in text
+    # The field's schema `description` must name both hints too, or the schema docs
+    # contradict the default they describe (Copilot round 2 on #526).
+    desc = _normalize(CapabilitiesResult.model_fields["annotations_reading"].description).lower()
+    assert "destructivehint" in desc and "readonlyhint" in desc
 
 
 def test_write_scope_matcher_positive_and_negative_controls():

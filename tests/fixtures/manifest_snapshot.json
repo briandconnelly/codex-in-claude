@@ -638,7 +638,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 9575
+          "size_bytes": 9622
         }
       },
       "mimeType": "application/schema+json",
@@ -892,7 +892,7 @@
           },
           "annotations_reading": {
             "default": "readOnlyHint tracks whether a call changes observable state that outlives the response — a job record, committed spend — rather than file I/O. That's why codex_consult, codex_review_changes, and codex_delegate (and their _async variants) are readOnlyHint: false even though consult and review never write files, while codex_dry_run and codex_delegate_dry_run, which create no job record, stay readOnlyHint: true. destructiveHint is true only for the delegate tools: the workspace-write sandbox grants the OS temp roots by default, where a task can overwrite pre-existing files (#523); consult/review runs write nothing and their job records are additive, so they stay destructiveHint: false.",
-            "description": "The server's documented reading of its `readOnlyHint` tool annotation: what counts as read-only for tools that call Codex. Stated here because it's a judgment call a literal reader of the MCP spec could reach differently, not a restatement of server.py's annotation-preset mechanics.",
+            "description": "The server's documented reading of its `readOnlyHint` and `destructiveHint` tool annotations: what counts as read-only, and as destructive, for tools that call Codex. Stated here because both are judgment calls a literal reader of the MCP spec could reach differently, not a restatement of server.py's annotation-preset mechanics.",
             "title": "Annotations Reading",
             "type": "string"
           },
@@ -2148,7 +2148,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 9575
+          "size_bytes": 9622
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",

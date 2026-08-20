@@ -1303,10 +1303,11 @@ class CapabilitiesResult(BaseModel):
             "additive, so they stay destructiveHint: false."
         ),
         description=(
-            "The server's documented reading of its `readOnlyHint` tool annotation: "
-            "what counts as read-only for tools that call Codex. Stated here because "
-            "it's a judgment call a literal reader of the MCP spec could reach "
-            "differently, not a restatement of server.py's annotation-preset mechanics."
+            "The server's documented reading of its `readOnlyHint` and `destructiveHint` "
+            "tool annotations: what counts as read-only, and as destructive, for tools "
+            "that call Codex. Stated here because both are judgment calls a literal "
+            "reader of the MCP spec could reach differently, not a restatement of "
+            "server.py's annotation-preset mechanics."
         ),
     )
     # Where a RESOURCE-read failure travels (audit F9, #181). A resources/read of an
