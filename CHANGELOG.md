@@ -5,149 +5,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
-### Fixed
-
-- **The `codex --version` string is sanitized and bounded before it reaches `codex_status`.**
-  Subprocess stdout was echoed into `codex_version` raw and unbounded, and interpolated into
-  `version_warning`: a `codex` on `PATH` reporting `codex-cli 9.9.9<ESC>[2K<ESC>[31m rogue` put
-  those escape sequences in both fields, and a 5010-character version came back at full length.
-  The bug predates #528 and is the instance of that class the issue left open; the threat
-  model is weaker (it needs a hostile `codex` binary, which already controls every model-bearing
-  run), which is why it was not a blocker there.
-
-  The fix keeps the identity/display split: `codex.codex_version()` still returns the string RAW,
-  because that is what `config.parse_version` reads, and only the emitted copy is cleaned. That
-  ordering is load-bearing rather than stylistic — sanitizing at capture REPAIRS malformed
-  identity text, since deleting the control character out of `0.<BEL>148.0` yields a plausible
-  `codex-cli 0.148.0`, turning a version that does not parse into one that does. So the two
-  fields can legitimately disagree, and `codex_version` now carries a description saying so.
-
-  `version_warning` is now **static**. It never quoted anything the version string did not
-  already put in `codex_version`, so interpolating it only copied untrusted text into a second
-  sink. Truncation is now **marked** (`…[truncated]`, reserved inside the 200-character
-  budget) for every echoed span — the version and, for the same reason, the config keys and
-  rejected flag names `_safe_echo` already bounded silently: a clipped key that reads as a
-  complete one sends the caller after a key they never wrote.
-
-  Agent-visible: `FINGERPRINT` moves to `schema-84` for the new `codex_version` description. Not
-  breaking — no field is removed, renamed, or retyped, and no input narrows. `codex_version` is
-  byte-identical for every version string a real `codex` prints. `version_warning` DOES change
-  for an unsupported version: it no longer quotes the version. Its advisory meaning is unchanged
-  and it never blocked a call, so the reword weakens no documented guarantee.
-
-- **Machine-readable identifier fields validate control characters instead of echoing or
-  stripping them.** #528 deletes every Unicode `Cc` code point from echoed prose. That remedy is
-  wrong for a machine field, and the bug was live: a `job_id` of `abc<BEL><ESC>[31mdef` came back
-  as ``No job 'abc[31mdef'`` — the delete removed `ESC` and left the literal text `[31m`, naming
-  an id the caller never sent. A `repair.arguments` value is fed straight back into a follow-up
-  call, so a corrupted identifier that still looks well-formed is worse than a rejected one.
-
-  Fields now split by **who can fix the value**, not by where it came from. A caller-supplied
-  input the caller can correct is **rejected** at the MCP boundary: `job_id`, `base`, `commit`,
-  `model`, and `transcript_path` advertise `config.CONTROL_CHAR_FREE_PATTERN` in their own
-  inputSchema, so the call is refused before the handler runs, at zero spend, reporting the
-  static parameter NAME and never the value. This follows `reasoning_effort`, which already
-  worked this way. A value that IS or derives from a real filesystem or model identity —
-  `cwd`, `candidate_roots`, `Finding.file`, `session_id`, `source_path` — is **preserved
-  byte-exact**, because POSIX permits a control character in a filename, so such a value may be
-  entirely correct; a `repair.arguments.workspace_root` naming such a repository still round-trips.
-
-  An unknown ARGUMENT NAME is the one site no schema can cover, since it is rejected precisely
-  because it is unknown. Such a name is now **withheld** rather than echoed or stripped:
-  `details.field` and `invalid_arguments[].field` carry a fixed marker plus a new
-  `field_withheld: true`. The flag is the machine discriminator — the marker is not a reserved
-  word, so a caller may genuinely send an argument named `<withheld>`. Detection runs on the raw
-  location components, before the length bound truncates, so a control character past the bound
-  cannot be cut away and the remainder reported as clean.
-
-  Three corrections to the issue's own scope came out of verifying it. `error.resource_uri` was
-  listed as affected but is not: `ReadResourceRequestParams.uri` is a pydantic `AnyUrl`, which
-  percent-encodes any raw `Cc` before the field is populated. `meta.base`, `meta.commit`, and
-  `meta.model` were affected and were NOT listed. And dropping a control-bearing client MCP root —
-  an early candidate remedy — would have been unsafe: `pontonier.core.workspace.resolve` selects
-  `norm_roots[0]`, so discarding one silently promotes the next root or the server cwd and
-  retargets a PAID call at the wrong repository. No root is dropped.
-
-  **Fingerprint `schema-82` → `schema-83`**, and `RESULT_FORMAT` 9 → 10: `InvalidArgument` and
-  `ErrorDetail` are closed schemas (`extra="forbid"`), so an older reader would reject a stored
-  envelope carrying `field_withheld`. Breaking: five parameters narrow their accepted value set.
-  (#529; the argument-validation LOG still echoes a rejected value — #532)
-
-- **Control characters are stripped from every echoed diagnostic, not just the two spans a
-  `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
-  key and file path; every other path that quotes foreign text into an envelope still had the gap
-  — the generic `nonzero_exit` branch echoing codex's stderr, the `codex_transfer` diagnostics
-  including `app_server_stderr_tail`, the review path's raw-output preview, stored job-result
-  fragments, exception text, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and refusal
-  messages. Two consequences: an escape sequence reaching a terminal can recolor, reposition, or
-  erase — enough to spoof or hide surrounding output, and the text is attacker-influenceable,
-  since a repository under review can make codex print chosen text — and a control character
-  wedged into a secret defeats the redactor's patterns outright, so the value rides out as
-  plaintext.
-
-  Three findings corrected the issue's own scope while verifying it. `config._safe_token` covered
-  only the unsupported-argument path, so a valid config key or profile name reached both
-  `error.message` and `repair.alternative` raw. `redaction.exc_summary` fed three more sinks that
-  were not in the inventory. And a control character in a printed worktree path defeats
-  `sanitize_prose`'s alias matching, so the dead absolute path survives — a second, independent
-  leak of the #420 guarantee, which no amount of stripping the OUTPUT can fix.
-
-  The mechanism is upstream (`pontonier` 0.6.0: `redaction.sanitize_echo`,
-  `redaction.sanitize_echo_prose`, `worktree.sanitize_echo_prose`), because it is CLI-agnostic and
-  a sibling bridge has byte-identical call sites — see AGENTS.md, Package boundary. What stays
-  here is bridge policy: which spans are echoed, each one's length bound and truncation direction,
-  and which variant a span gets. Single-token spans (a config key, a path, a rejected flag name)
-  use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
-  wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
-
-  The catalog strings `codex_models` reads from `$CODEX_HOME` (`display_name`, `fetched_at`,
-  `client_version`) are covered too — foreign text on a rendered surface, like a config key a
-  rejection echoes. `slug` is left alone: it is the identifier, and it is pattern-validated.
-
-  Replay covers all three human-readable carriers on a stored error — `error.message`,
-  `repair.alternative`, and `app_server_stderr_tail`, the one with a published guarantee —
-  and a stored success's rendered fields, leaving `raw_response`, `diff`, and `meta` alone.
-
-  The success channel is split rather than exempted, and the split is by FIELD, not by
-  channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
-  and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
-  delegate alike — is sanitized. The machine fields are deliberately left alone, because
-  sanitizing them would *repair* malformed values instead of letting them degrade: a
-  `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
-  control character turns it into an affirmative `pass` at `high` confidence. `severity`
-  inverts the same way, and `file` is an identifier a reader uses to locate code. The same
-  reasoning covers `details.field` and resource URIs, whose validate-don't-mutate half is
-  tracked as #529. Where such a value is ALSO composed into a prose message — the caller's
-  argument name, a missing job id — that copy is sanitized while the machine copy is not.
-
-  `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
-  model's output — `redact_text` still runs, and the delegate path also relativizes worktree
-  paths — but this change does not transform it, so its control characters survive and a
-  caller that needs the output as it stood reads it there.
-
-  Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
-  which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
-  error records written before this change, which replayed their control characters for the whole
-  TTL after an upgrade. The replay pass runs the full strip-then-redact, never a strip alone — the
-  stored text was already redacted at write time, so stripping by itself is the redact-then-strip
-  ordering and would reassemble a control-split secret. It is taken only when a control character
-  is actually present, so a clean domain error still passes through verbatim rather than being
-  re-run through the heuristic redactor.
-
-  **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
-  own sanitation policy, and that policy changed. It now states the guarantee precisely — every
-  Unicode `Cc` code point (C0, DEL, C1) removed **except line feed**, which is kept so a
-  multi-line tail stays readable — and states its limits: the text may still contain LF, a line in
-  it can be one the child process chose, and category `Cf` bidi/format controls are not covered.
-  Not breaking: a strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since
-  the serialized shape and accepted types are untouched. Error-message prose changes carry no
-  fingerprint of their own (see AGENTS.md, Versioning).
-
-  `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors are deliberately **not** sanitized where they are
-  built. A descriptor is an identity matched against codex's own rejection text, which quotes the
-  operator's name with its raw spelling; sanitizing or bounding it at construction changed what it
-  matched, so a control-bearing or over-long name stopped matching and the operator's own bad
-  passthrough was misattributed to plugin contract drift. Sanitation happens at emission instead.
+## [0.19.0] - 2026-08-20
 
 ### Changed
 
@@ -460,6 +318,148 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   restatement is now a link to it. Docs only — no agent-visible surface change.
 
 ### Fixed
+
+- **The `codex --version` string is sanitized and bounded before it reaches `codex_status`.**
+  Subprocess stdout was echoed into `codex_version` raw and unbounded, and interpolated into
+  `version_warning`: a `codex` on `PATH` reporting `codex-cli 9.9.9<ESC>[2K<ESC>[31m rogue` put
+  those escape sequences in both fields, and a 5010-character version came back at full length.
+  The bug predates #528 and is the instance of that class the issue left open; the threat
+  model is weaker (it needs a hostile `codex` binary, which already controls every model-bearing
+  run), which is why it was not a blocker there.
+
+  The fix keeps the identity/display split: `codex.codex_version()` still returns the string RAW,
+  because that is what `config.parse_version` reads, and only the emitted copy is cleaned. That
+  ordering is load-bearing rather than stylistic — sanitizing at capture REPAIRS malformed
+  identity text, since deleting the control character out of `0.<BEL>148.0` yields a plausible
+  `codex-cli 0.148.0`, turning a version that does not parse into one that does. So the two
+  fields can legitimately disagree, and `codex_version` now carries a description saying so.
+
+  `version_warning` is now **static**. It never quoted anything the version string did not
+  already put in `codex_version`, so interpolating it only copied untrusted text into a second
+  sink. Truncation is now **marked** (`…[truncated]`, reserved inside the 200-character
+  budget) for every echoed span — the version and, for the same reason, the config keys and
+  rejected flag names `_safe_echo` already bounded silently: a clipped key that reads as a
+  complete one sends the caller after a key they never wrote.
+
+  Agent-visible: `FINGERPRINT` moves to `schema-84` for the new `codex_version` description. Not
+  breaking — no field is removed, renamed, or retyped, and no input narrows. `codex_version` is
+  byte-identical for every version string a real `codex` prints. `version_warning` DOES change
+  for an unsupported version: it no longer quotes the version. Its advisory meaning is unchanged
+  and it never blocked a call, so the reword weakens no documented guarantee.
+
+- **Machine-readable identifier fields validate control characters instead of echoing or
+  stripping them.** #528 deletes every Unicode `Cc` code point from echoed prose. That remedy is
+  wrong for a machine field, and the bug was live: a `job_id` of `abc<BEL><ESC>[31mdef` came back
+  as ``No job 'abc[31mdef'`` — the delete removed `ESC` and left the literal text `[31m`, naming
+  an id the caller never sent. A `repair.arguments` value is fed straight back into a follow-up
+  call, so a corrupted identifier that still looks well-formed is worse than a rejected one.
+
+  Fields now split by **who can fix the value**, not by where it came from. A caller-supplied
+  input the caller can correct is **rejected** at the MCP boundary: `job_id`, `base`, `commit`,
+  `model`, and `transcript_path` advertise `config.CONTROL_CHAR_FREE_PATTERN` in their own
+  inputSchema, so the call is refused before the handler runs, at zero spend, reporting the
+  static parameter NAME and never the value. This follows `reasoning_effort`, which already
+  worked this way. A value that IS or derives from a real filesystem or model identity —
+  `cwd`, `candidate_roots`, `Finding.file`, `session_id`, `source_path` — is **preserved
+  byte-exact**, because POSIX permits a control character in a filename, so such a value may be
+  entirely correct; a `repair.arguments.workspace_root` naming such a repository still round-trips.
+
+  An unknown ARGUMENT NAME is the one site no schema can cover, since it is rejected precisely
+  because it is unknown. Such a name is now **withheld** rather than echoed or stripped:
+  `details.field` and `invalid_arguments[].field` carry a fixed marker plus a new
+  `field_withheld: true`. The flag is the machine discriminator — the marker is not a reserved
+  word, so a caller may genuinely send an argument named `<withheld>`. Detection runs on the raw
+  location components, before the length bound truncates, so a control character past the bound
+  cannot be cut away and the remainder reported as clean.
+
+  Three corrections to the issue's own scope came out of verifying it. `error.resource_uri` was
+  listed as affected but is not: `ReadResourceRequestParams.uri` is a pydantic `AnyUrl`, which
+  percent-encodes any raw `Cc` before the field is populated. `meta.base`, `meta.commit`, and
+  `meta.model` were affected and were NOT listed. And dropping a control-bearing client MCP root —
+  an early candidate remedy — would have been unsafe: `pontonier.core.workspace.resolve` selects
+  `norm_roots[0]`, so discarding one silently promotes the next root or the server cwd and
+  retargets a PAID call at the wrong repository. No root is dropped.
+
+  **Fingerprint `schema-82` → `schema-83`**, and `RESULT_FORMAT` 9 → 10: `InvalidArgument` and
+  `ErrorDetail` are closed schemas (`extra="forbid"`), so an older reader would reject a stored
+  envelope carrying `field_withheld`. Breaking: five parameters narrow their accepted value set.
+  (#529; the argument-validation LOG still echoes a rejected value — #532)
+
+- **Control characters are stripped from every echoed diagnostic, not just the two spans a
+  `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
+  key and file path; every other path that quotes foreign text into an envelope still had the gap
+  — the generic `nonzero_exit` branch echoing codex's stderr, the `codex_transfer` diagnostics
+  including `app_server_stderr_tail`, the review path's raw-output preview, stored job-result
+  fragments, exception text, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and refusal
+  messages. Two consequences: an escape sequence reaching a terminal can recolor, reposition, or
+  erase — enough to spoof or hide surrounding output, and the text is attacker-influenceable,
+  since a repository under review can make codex print chosen text — and a control character
+  wedged into a secret defeats the redactor's patterns outright, so the value rides out as
+  plaintext.
+
+  Three findings corrected the issue's own scope while verifying it. `config._safe_token` covered
+  only the unsupported-argument path, so a valid config key or profile name reached both
+  `error.message` and `repair.alternative` raw. `redaction.exc_summary` fed three more sinks that
+  were not in the inventory. And a control character in a printed worktree path defeats
+  `sanitize_prose`'s alias matching, so the dead absolute path survives — a second, independent
+  leak of the #420 guarantee, which no amount of stripping the OUTPUT can fix.
+
+  The mechanism is upstream (`pontonier` 0.6.0: `redaction.sanitize_echo`,
+  `redaction.sanitize_echo_prose`, `worktree.sanitize_echo_prose`), because it is CLI-agnostic and
+  a sibling bridge has byte-identical call sites — see AGENTS.md, Package boundary. What stays
+  here is bridge policy: which spans are echoed, each one's length bound and truncation direction,
+  and which variant a span gets. Single-token spans (a config key, a path, a rejected flag name)
+  use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
+  wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
+
+  The catalog strings `codex_models` reads from `$CODEX_HOME` (`display_name`, `fetched_at`,
+  `client_version`) are covered too — foreign text on a rendered surface, like a config key a
+  rejection echoes. `slug` is left alone: it is the identifier, and it is pattern-validated.
+
+  Replay covers all three human-readable carriers on a stored error — `error.message`,
+  `repair.alternative`, and `app_server_stderr_tail`, the one with a published guarantee —
+  and a stored success's rendered fields, leaving `raw_response`, `diff`, and `meta` alone.
+
+  The success channel is split rather than exempted, and the split is by FIELD, not by
+  channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
+  and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
+  delegate alike — is sanitized. The machine fields are deliberately left alone, because
+  sanitizing them would *repair* malformed values instead of letting them degrade: a
+  `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
+  control character turns it into an affirmative `pass` at `high` confidence. `severity`
+  inverts the same way, and `file` is an identifier a reader uses to locate code. The same
+  reasoning covers `details.field` and resource URIs, whose validate-don't-mutate half is
+  tracked as #529. Where such a value is ALSO composed into a prose message — the caller's
+  argument name, a missing job id — that copy is sanitized while the machine copy is not.
+
+  `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
+  model's output — `redact_text` still runs, and the delegate path also relativizes worktree
+  paths — but this change does not transform it, so its control characters survive and a
+  caller that needs the output as it stood reads it there.
+
+  Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
+  which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
+  error records written before this change, which replayed their control characters for the whole
+  TTL after an upgrade. The replay pass runs the full strip-then-redact, never a strip alone — the
+  stored text was already redacted at write time, so stripping by itself is the redact-then-strip
+  ordering and would reassemble a control-split secret. It is taken only when a control character
+  is actually present, so a clean domain error still passes through verbatim rather than being
+  re-run through the heuristic redactor.
+
+  **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
+  own sanitation policy, and that policy changed. It now states the guarantee precisely — every
+  Unicode `Cc` code point (C0, DEL, C1) removed **except line feed**, which is kept so a
+  multi-line tail stays readable — and states its limits: the text may still contain LF, a line in
+  it can be one the child process chose, and category `Cf` bidi/format controls are not covered.
+  Not breaking: a strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since
+  the serialized shape and accepted types are untouched. Error-message prose changes carry no
+  fingerprint of their own (see AGENTS.md, Versioning).
+
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors are deliberately **not** sanitized where they are
+  built. A descriptor is an identity matched against codex's own rejection text, which quotes the
+  operator's name with its raw spelling; sanitizing or bounding it at construction changed what it
+  matched, so a control-bearing or over-long name stopped matching and the operator's own bad
+  passthrough was misattributed to plugin contract drift. Sanitation happens at emission instead.
 
 - **The `workspace-write` writes-stay-in-the-workspace boundary can no longer be widened through
   the config-file channel** (#520). The filesystem sibling of the #518 fix below: at `inherit`
