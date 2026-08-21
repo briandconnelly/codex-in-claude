@@ -7,515 +7,285 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [0.19.0] - 2026-08-20
 
+A sandbox-hardening and egress-disclosure release.
+
+Three `workspace-write` guarantees that were advertised but not enforced now hold at every
+isolation level: network egress and the writable-root set are pinned on the command line, where
+the user's own `$CODEX_HOME/config.toml` can no longer widen them, and `codex exec
+--strict-config` turns a pin codex silently ignores into a zero-spend startup failure instead of
+a guarantee that quietly stopped holding.
+
+The egress disclosures were corrected in the unsafe direction they were wrong in. Codex's reads
+are not bounded by the workspace; `AGENTS.md` is auto-loaded from the repository root and from
+`$CODEX_HOME` as well as from the resolved workspace; a discovered skill's *body* reaches OpenAI
+through a read the model itself issues after selecting it on its description alone; a dry-run
+preview does not bound what the paid call sends; and the propose tier's throwaway worktree does
+not bound where Codex writes, because `workspace-write` grants the OS temp roots by default.
+Every one of these was probed live on `codex-cli 0.148.0` with negative controls; none is a
+behavior change, and each corrects a claim that never held.
+
+Foreign text is no longer echoed raw. A rejected config key, codex's stderr, an unknown argument
+name, a job id, and the `codex --version` string are now sanitized, bounded, or rejected before
+they reach a result envelope, so a control character can neither spoof a terminal nor wedge
+itself into a secret to defeat the redactor.
+
+The tracked Codex version moves to `0.148`.
+
+Three breaking changes: an unknown key in your own Codex config now fails pin-carrying runs; the
+propose-tier surface retracts its "writes only inside a throwaway worktree" promise; and five
+parameters reject control characters in their values. The agent-visible surface changed nine
+times (result `fingerprint` `codex-in-claude/0.1/schema-75` → `schema-84`, and the persisted
+`RESULT_FORMAT` `8` → `10`), so pre-1.0 this is a minor release; clients that cache by
+`fingerprint` re-fetch the contract, and a reader older than `RESULT_FORMAT` `10` rejects newly
+stored job records.
+
 ### Changed
 
-- **BREAKING: `codex exec --strict-config` now guards the guarantee-bearing `-c` key pins, and a
-  new `user_config_rejected` error code reports an unknown key in your own Codex config.** codex
+- **BREAKING: `codex exec --strict-config` guards the guarantee-bearing `-c` key pins, and a new
+  `user_config_rejected` error code reports an unknown key in your own Codex config.** codex
   silently tolerates an unknown config key, so an upstream rename of
-  `sandbox_workspace_write.network_access` (#518), `sandbox_workspace_write.writable_roots` (#520),
-  or `model_reasoning_effort` (#309) would have left the plugin sending a key codex no longer reads
-  — reopening the guarantee with no signal, guarded only by a manual semantic probe. The flag turns
-  that into a zero-spend startup failure (config parsing precedes auth and any model call, verified
-  live on codex-cli 0.148.0). It is `ALWAYS_SEND`-class but **emitted only on runs that carry a
-  `-c` override** — every `workspace-write` run, every effort-carrying run, and any run with an
-  operator `-c` in `CODEX_IN_CLAUDE_EXTRA_ARGS` — because at the default `inherit` isolation the
-  flag also hard-fails on an unknown key anywhere in the user's own config, including tables for
-  profiles the run never selects; a plain read-only consult carries no pin, so sending it there
-  would risk availability while guarding nothing. Classified **breaking**: a previously accepted
-  operator environment (a junk or version-skewed key in `$CODEX_HOME/config.toml`) now hard-fails
-  pin-carrying runs. Classification reads the anchored stderr grammar on **stderr alone** and runs
-  *before* the auth and drift checks, because codex echoes the offending key and path and either
-  can contain a substring those matchers fire on (`401` in a path, `invalid value` in a quoted TOML
-  key). Ownership keys on the rejected KEY, never on the shared `-c` descriptor that appears in
-  codex's own message: a rejected plugin pin is `cli_contract_changed` (the fail-loud drift signal
-  this exists to produce, and unstealable by an unrelated operator `-c` entry), an operator key or
-  an operator `--profile`-selected file is `extra_args_rejected`, and any other config file is the
-  new `user_config_rejected` — permanent, repairing with `correct_config`, naming the file and line
-  to fix and offering `isolation="ignore-config"` only as an explicitly lossy fallback (it drops
-  the user's entire config). Note neither `codex_status` nor a dry run parses Codex config, so
+  `sandbox_workspace_write.network_access` (#518), `sandbox_workspace_write.writable_roots`
+  (#520), or `model_reasoning_effort` (#309) would leave the plugin sending a key codex no longer
+  reads — reopening the guarantee with no signal. The flag turns that into a zero-spend startup
+  failure, since config parsing precedes auth and any model call. It is emitted **only on runs
+  that carry a `-c` override** — every `workspace-write` run, every effort-carrying run, and any
+  run with an operator `-c` in `CODEX_IN_CLAUDE_EXTRA_ARGS` — because at the default `inherit`
+  isolation the flag also hard-fails on an unknown key anywhere in the user's own config,
+  including tables for profiles the run never selects; a plain read-only consult carries no pin,
+  so sending it there would risk availability while guarding nothing.
+
+  Breaking because a previously accepted operator environment — a junk or version-skewed key in
+  `$CODEX_HOME/config.toml` — now hard-fails pin-carrying runs. Ownership keys on the rejected
+  KEY, never on the shared `-c` descriptor codex's own message contains: a rejected plugin pin is
+  `cli_contract_changed` (the fail-loud drift signal this exists to produce), an operator key or
+  an operator `--profile`-selected file is `extra_args_rejected`, and any other config file is
+  the new `user_config_rejected` — permanent, repairing with `correct_config`, naming the file
+  and line to fix and offering `isolation="ignore-config"` only as an explicitly lossy fallback,
+  since it drops your entire config. Neither `codex_status` nor a dry run parses Codex config, so
   neither can predict this failure. Strict validates key **names** only, so a bad
   `reasoning_effort` VALUE still takes the backend `invalid_reasoning_effort` path unchanged.
-  **Fingerprint `schema-80` → `schema-81`**, and **`RESULT_FORMAT` 8 → 9**: the new `ErrorCode`
-  literal is persisted in job records (`run_delegate`'s envelope is written to `result.json`
-  verbatim), so an older reader's closed schema would reject those bytes and misreport
-  cross-release incompatibility as corruption. Because the result-format snapshot's `serialized`
-  view is a sample rather than an enumeration of codes, it now renders a second error envelope
-  using the new code, so an `ErrorCode` change is visible there and not only in the `schemas` view.
-  Docs move with the wire: a new COMPATIBILITY.md strict-config section (scope, the validated-source
-  matrix, and the ownership table), its corrected failure-classification order and flag-class
-  wording, and `docs/UPGRADING-CODEX.md` — where the semantic probes stay **mandatory** (strict
-  catches a key RENAME; only the probes catch a key that keeps its name and changes meaning) and a
-  new zero-spend step re-verifies the stderr grammar the classifier depends on.
+  (#524)
+
 - **BREAKING: the propose-tier surface no longer promises "writes only inside a throwaway
   worktree", and the delegate tools now advertise `destructiveHint: true`.** codex's
   `workspace-write` sandbox grants the OS temp roots (`/tmp` and `$TMPDIR`) by default
   (`exclude_slash_tmp`/`exclude_tmpdir_env_var` default false), verified live at this plugin's
-  exact argv with on-disk state judged and positive/negative controls (#523), so the exclusivity
-  claim never held. The `exclude_*` keys are deliberately not pinned closed — build tools, `uv`,
-  `git`, and test runners need `$TMPDIR` — so every carrier now discloses the grant instead: a new
-  canonical `cli_contract.WORKSPACE_WRITE_SCOPE_FACT` ("the worktree does not bound Codex's
-  writes...") is carried verbatim by both delegate descriptions, their `codex_capabilities`
-  `returns` entries, and a new `negative_scope` item, each alongside the persistence clause
-  (temp-root writes are neither captured in the returned diff nor cleaned up); the `Meta.tier` and
-  `Meta.sandbox` field descriptions carry a short form. The annotation preset splits: MCP defines
-  `destructiveHint: false` as "performs only additive updates", and a delegated task can overwrite
-  or delete pre-existing files under the temp roots, so `codex_delegate`/`codex_delegate_async`
-  flip to `destructiveHint: true` while consult/review (whose runs write nothing and whose job
-  records are additive) keep `false` — the split is stated on `annotations_reading`. Classified
-  **breaking** (not the #515/#516 disclosure-widening case): the retired carriers made an
-  exclusive promise ("writes **only** inside", "the worktree **bounds** what Codex may WRITE"),
-  and correcting them weakens a documented guarantee a client could have relied on, even though
-  runtime behavior is unchanged and the guarantee never held. What remains true and promised: the
-  plugin never applies anything to your working tree, and the returned diff is gathered from the
-  worktree only. **Fingerprint `schema-79` → `schema-80`.** Docs move with the wire: `README.md`
-  (Safety bullet and tier table), `SECURITY.md`, `COMPATIBILITY.md` (the #523 pointer resolves),
-  and the `collaborating-with-codex` skill's independent-attempt reference. Guards: exact
-  containment of the constant over the live delegate carriers, a legacy-clause and contradiction
-  sweep across every read- and write-scope runtime carrier and the four prose sites, and
-  guard-the-guard controls proving each matcher fails on the pre-#523 wording. Both byte gates
-  re-measured, within budget (`tools/list` 92,289 → 92,599; catalog 92,306 → 92,616).
-- **The dry-run previews no longer imply they bound what a paid call can send.** `codex_dry_run`
-  led with "Preview what a `codex_review_changes` call would send" and `codex_delegate_dry_run`
-  told callers to confirm scope; a clean preview therefore read as "nothing sensitive will be
-  sent". It cannot establish that. A dry run never invokes Codex, so the model's own reads have
-  not happened yet and none can be listed, and those reads are not bounded by the workspace (see
-  the read-scope entry below). A new canonical `cli_contract.PREVIEW_SCOPE_FACT` states the limit
-  at every carrier: both dry-run descriptions, their two `codex_capabilities` entries, a new
-  `negative_scope` item, and the server instructions block. The sentence is deliberately **scoped
-  to the model-initiated channel** — a preview genuinely does bound the half this plugin assembles,
-  enforcing the same `max_input_bytes` and reporting truncation, so an unscoped "does not bound
-  what the paid call sends" would have retracted a true, documented guarantee. Both dry-run
-  descriptions also now carry `READ_SCOPE_FACT`, which they never had: they are not egress tools,
-  and the preview fact is three negatives that leave a reader knowing the preview is not a bound
-  but not what the unbounded channel reaches. **Fingerprint `schema-78` → `schema-79`.** Not
-  breaking — no carrier promised a preview was exhaustive, and the sibling redaction clause
-  ("a check on scope, not confirmation that no secret remains") already disclaimed exactly this
-  reading, so this extends an existing disclaimer rather than retracting a promise. Docs move with
-  the wire: `README.md`, `docs/REFERENCE.md`, the `collaborating-with-codex` skill (a new **binding**
-  Privacy rule, not only background prose — a binding rule left narrower than the disclosure is the
-  #512 defect), and both `commands/codex/dry-run.md` and `commands/codex/review.md`, which steer to
-  a preview at the same decision point. `SECURITY.md` and `COMPATIBILITY.md` are deliberately not
-  carriers: neither mentions a preview, so neither makes the claim. Guards: exact containment of the
-  constant over the live `tools/list` and `codex_capabilities` payloads in every detail mode (a
-  default `detail="summary"` reader never sees `use_when`, which is why `negative_scope` carries it
-  too), plus a contradiction sweep for completeness claims — the bypass shape here is not the
-  read-scope one, since a text can assert "everything the paid call transmits has been previewed
-  here" without ever claiming a read bound. Both byte gates were re-measured and raised
-  (`tools/list` 91,447 → 92,289; catalog 91,464 → 92,306).
-- **The egress disclosures no longer scope Codex's reads to the workspace or the repo.** Several
-  agent-visible descriptions said Codex reads "files ... from its resolved working dir", "other
-  **repo** files", or "tracked files in the throwaway worktree". A reader takes that as a bound; it
-  is not one, and the understatement ran in the **unsafe direction**. `--sandbox read-only` bounds
-  **writes**: probed on `codex-cli 0.148.0` under this plugin's own `ALWAYS_SEND` flags with the
-  workspace a bare non-repo directory, the model shelled out and read a file in `$HOME` — outside
-  the workspace and outside any repo — on **both** the `read-only` and `workspace-write` tiers,
-  while a write attempt in the same read-only run was refused by the sandbox. That negative control
-  is what makes the read informative: the sandbox was in force, and it simply does not bound reads.
-  Nothing about the plugin's behavior changed — this corrects a **documentation defect**; the
-  described bound never held. A new canonical `cli_contract.READ_SCOPE_FACT` now states the truth at
-  every carrier: the server instructions block, the `codex_status` caveat, `codex_capabilities`'
-  `negative_scope`, all six active tools' `returns` and all six egress docstrings, plus
-  `readonly_honesty_statement`, the `extra_context` parameter contract, and `workspace_root`'s own
-  description (which now says it selects where Codex works, not what it can read). It is stated as a
-  **ceiling, not a warrant** — the probe shows reads far outside the workspace, not that every file
-  the OS user can read is reachable, since a platform sandbox can still deny individual paths.
-  **Fingerprint `schema-77` → `schema-78`.** Not breaking — no carrier ever promised reads were
-  confined (every one said "may read"), so this widens a disclosure rather than weakening a
-  guarantee, the same call as the `AGENTS.md` widening above. The one contrary case, considered and
-  rejected: the bundled skill's binding **Privacy** rule enumerated workspace-scoped locations as a
-  sufficiency checklist, and that checklist is now declared necessary-but-not-sufficient — a
-  client-procedure correction, not a schema incompatibility. The docs move with the wire: `README`,
-  `SECURITY.md`, `docs/REFERENCE.md`, `COMPATIBILITY.md` (which gains the probe table and drops the
-  "tracked separately" note for this half, keeping #510's), and the `collaborating-with-codex`
-  skill — whose **Privacy** and **Independence** binding rules are corrected too, not just its
-  background section, since the Independence rules had keyed their whole argument on a workspace
-  geometry that bounds nothing. Guards: the code side is pinned by exact containment of the constant
-  plus a rejection list of the eleven removed clauses swept over the runtime carrier strings (a
-  word-presence check would pass a confident inversion, and a `read.*workspace` shape regex would
-  reject the corrected sentence, which itself contains "read files outside the workspace"); the
-  prose sides get the same rejection list plus affirmative matchers, each with guard-the-guard
-  cases, and both reject a bound re-asserted *beside* the correct sentence — containment alone
-  stayed green on "…so no choice of workspace is a read boundary. Nevertheless, Codex is confined to
-  files under the workspace." The skill's binding rules are rebuilt on what an agent can actually
-  observe: machine-level read exposure is stated as a fact the operator accepted by installing and
-  authenticating the CLI (an agent cannot enumerate what the OS user can reach, so a rule asking it
-  to would always resolve to "proceed"), while the new per-call rule triggers on the transcript —
-  material *this session* identified as nondisclosable. Independence reclassification likewise drops
-  its unobservable "otherwise reached it" trigger for three checkable ones (supplied or named to
-  Codex; persisted in a path Codex was pointed at; the returned output carrying the draft's
-  content), since the result contract exposes no read audit. `tools/list` grew 2,417 bytes to 91,195 and the catalog to 91,212; both 89,000 gates moved
-  to 92,000 — the sentence was deliberately not compressed to fit, because the only clause short
-  enough to drop is the one that retires the "narrow the workspace to bound egress" mitigation.
+  exact argv, so the exclusivity claim never held. The `exclude_*` keys are deliberately **not**
+  pinned closed — build tools, `uv`, `git`, and test runners need `$TMPDIR` — so every carrier
+  discloses the grant instead: a canonical `cli_contract.WORKSPACE_WRITE_SCOPE_FACT` is carried
+  verbatim by both delegate descriptions, their `codex_capabilities` `returns` entries, and a new
+  `negative_scope` item, each alongside the persistence clause (temp-root writes are neither
+  captured in the returned diff nor cleaned up); `Meta.tier` and `Meta.sandbox` carry a short
+  form. The annotation preset splits: MCP defines `destructiveHint: false` as "performs only
+  additive updates", and a delegated task can overwrite or delete pre-existing files under the
+  temp roots, so `codex_delegate`/`codex_delegate_async` flip to `true` while consult and review
+  keep `false` — the split is stated on `annotations_reading`.
 
-- **The egress disclosure now names every `AGENTS.md` Codex auto-loads, not just the workspace's
-  own.** The published caveat said Codex auto-loads "the resolved workspace's `AGENTS.md`". Two
-  further sources reach the model, both understated in the **unsafe direction**, both probed on
-  `codex-cli 0.148.0` under the read-forbidding probe (`--json` stream asserted free of tool items,
-  so a codeword can only have arrived as auto-loaded context): **(1)** inside a repository the load
+  Breaking because the retired carriers made an exclusive promise ("writes **only** inside", "the
+  worktree **bounds** what Codex may WRITE"), and correcting them weakens a documented guarantee
+  a client could have relied on — even though runtime behavior is unchanged and the guarantee
+  never held. What remains true and promised: the plugin never applies anything to your working
+  tree, and the returned diff is gathered from the worktree only. (#523)
+
+- **The egress disclosures no longer scope Codex's reads to the workspace or the repo.** Several
+  descriptions said Codex reads "files ... from its resolved working dir", "other **repo** files",
+  or "tracked files in the throwaway worktree". A reader takes that as a bound; it is not one.
+  `--sandbox read-only` bounds **writes**: probed on `codex-cli 0.148.0` under this plugin's own
+  flags with the workspace a bare non-repo directory, the model shelled out and read a file in
+  `$HOME` on **both** tiers, while a write attempt in the same read-only run was refused — the
+  negative control that makes the read informative. A canonical `cli_contract.READ_SCOPE_FACT`
+  now states the truth at every carrier: the server instructions block, the `codex_status`
+  caveat, `codex_capabilities`' `negative_scope`, all six active tools' `returns` and docstrings,
+  `readonly_honesty_statement`, the `extra_context` parameter contract, and `workspace_root`'s
+  own description, which now says it selects where Codex works, not what it can read. It is a
+  **ceiling, not a warrant** — the probe shows reads far outside the workspace, not that every
+  file the OS user can read is reachable, since a platform sandbox can still deny individual
+  paths. Not breaking: no carrier ever promised reads were confined (every one said "may read"),
+  so this widens a disclosure. The practical consequence for callers: narrowing `workspace_root`
+  is no longer a mitigation for egress.
+
+- **The egress disclosure names every `AGENTS.md` Codex auto-loads, not just the workspace's own.**
+  Two further sources reach the model, both previously understated: inside a repository the load
   walks up from the resolved workspace to the repository root, so a caller who narrows
   `workspace_root` to a subdirectory precisely in order to bound egress still ships the repo-root
-  `AGENTS.md` — a file it never named (#472); outside a repository there is no walk at all.
-  **(2)** A **user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`** loads on
-  every call from any workspace — the `AGENTS.md` twin of the `$CODEX_HOME/skills/` hole (#358) —
-  and neither `--ignore-user-config` nor `-c project_doc_max_bytes=0` suppresses it, though the
-  latter does suppress the workspace and ancestor files. `cli_contract.SKILLS_DISCOVERY_FACT` and
-  every carrier now state all three sources. **Fingerprint `schema-76` → `schema-77`.** Not
-  breaking — it widens a disclosure rather than weakening a guarantee. Two drift guards land with
-  it: the constant is pinned against both omission and the specific over-claims the earlier
-  retracted evidence produced, and each doc site must state the ancestor and user-global sources in
-  the section that carries its skills-root disclosure. `COMPATIBILITY.md` gains the probe matrix and
-  two extra fixture markers for the upgrade procedure; it also records `--cd` versus process cwd as
-  making no difference, resolving one of that section's open unverified questions. `tools/list` grew
-  974 bytes to 88,778 and the catalog to 88,795; both 88,000 gates moved to 89,000.
+  `AGENTS.md` — a file it never named (#472); and a user-global `$CODEX_HOME/AGENTS.override.md`,
+  else `$CODEX_HOME/AGENTS.md`, loads on every call from any workspace — the `AGENTS.md` twin of
+  the `$CODEX_HOME/skills/` hole (#358). Neither `--ignore-user-config` nor
+  `-c project_doc_max_bytes=0` suppresses the user-global file, though the latter does suppress
+  the workspace and ancestor files. Outside a repository there is no walk at all.
+  `cli_contract.SKILLS_DISCOVERY_FACT` and every carrier state all three sources. Not breaking.
 
-- **The MCP wire surface now states HOW a skill's body reaches OpenAI, not just that skills are
-  discovered.** #480 established that the two halves of Codex's implicit context arrive
-  differently — `AGENTS.md` content is auto-**loaded**, already in context before the turn, while a
-  skill is auto-**discovered** as name and description only, and its **body** follows a read the
-  model itself issues once it selects that skill. #498 corrected every prose site; the wire kept
-  the older umbrella framing. The server instructions block no longer says "Codex also auto-loads
-  context implicitly"; the `codex_status` caveat, `codex_capabilities`' `negative_scope`, all six
-  active tools' `returns`, and all six egress tool descriptions now carry one canonical sentence
-  (`cli_contract.SKILL_BODY_FACT`). Four of the six gained disclosure rather than wording:
-  `codex_consult_async` and `codex_review_changes_async` named the skills roots with no mechanism
-  at all, and `codex_delegate`/`codex_delegate_async`'s `returns` did the same. **Fingerprint
-  `schema-75` → `schema-76`.** Not breaking — no guarantee weakens, and the disclosure gets
-  strictly more precise. A new `skill_body_read` guarantee matcher holds every carrier site, and
-  the six hand-copied descriptions are pinned against the constant (a paraphrase that satisfies the
-  word-presence matcher still fails the pin). `pontonier`'s declarative
-  `BackendContract.implicit_context_disclosure` — whose own contract is "what the CLI
-  auto-loads that isolation cannot suppress" — carries it too, so a contract consumer cannot
-  re-learn the wrong model. `tools/list` grew 513 bytes to 87,794; the budget and the
-  capability-catalog cap both moved 87,500 → 88,000.
-- **The posture on Codex's default-on `view_image` feature is now recorded: left enabled,
-  deliberately** (#479). `COMPATIBILITY.md` gains a section explaining that `view_image` is a
-  **model-invoked tool** taking a filesystem path — its JSON schema is in the `0.148.0` binary — and
-  so is not implicit context. A zero-spend `codex debug prompt-input` A/B (with an `-i` positive
-  control) found no image auto-attached to the prompt and no difference under `--disable
-  view_image`. Disabling it would buy no containment, since the read-only tiers already give the
-  model a shell over the same filesystem; it would only stop the model interpreting pixels. Unlike
-  `remote_plugin`, it opens no channel outside the sandbox. The published egress disclosures stay
-  modality-neutral ("files", "their content"), so nothing agent-visible changes. One assumption the
-  decision rests on — that the native handler enforces the same read boundary as shell execution —
-  is now **verified** (#507): the `rust-v0.148.0` handler routes both its metadata and read calls
-  through `turn.file_system_sandbox_context(...)`, and an exercised probe showed `view_image`
-  reading a PNG in `$HOME` that the shell could read in the same run — so it reaches no file the
-  shell cannot, and the posture rests on evidence. `docs/UPGRADING-CODEX.md` now carries a step to
-  re-check already-decided feature flags, not just scan for new ones. Verifying it surfaced two
-  unrelated gaps, filed as #509 (agent-visible descriptions scope Codex's reads to the working
-  directory, but a `read-only` run reads anywhere the OS user can) and #510 (`view_image` egress is
-  invisible in the `codex exec --json` stream). Documentation only — no fingerprint effect.
+- **Every disclosure now states HOW a skill's body reaches OpenAI, not just that skills are
+  discovered.** The two halves of Codex's implicit context arrive differently: `AGENTS.md`
+  content is auto-**loaded**, already in context before the turn, while a skill is
+  auto-**discovered** as name and description only, and its **body** follows a read the model
+  itself issues once it selects that skill (#480). The wire and the prose now agree on this, in
+  one canonical sentence (`cli_contract.SKILL_BODY_FACT`) across the server instructions block,
+  the `codex_status` caveat, `negative_scope`, all six active tools' `returns` and descriptions,
+  `SECURITY.md`, `README.md`, `COMPATIBILITY.md`, the `collaborating-with-codex` skill and its
+  fallback reference, and the upgrade docs. Four wire carriers gained disclosure rather than
+  wording: `codex_consult_async` and `codex_review_changes_async` named the skills roots with no
+  mechanism at all, as did both delegate `returns`. The warnings are **stronger**, not weaker —
+  each site now says the metadata alone is enough for the model to select a skill, and that
+  selecting it pulls the body to OpenAI even when the prompt names neither the skill nor the
+  file. Not breaking. (#498, #501)
 
-- **Safety-critical rules in the egress-caveat docs are no longer buried in narration.** No warning
-  weakens and no mechanism claim changes — this is placement only. `README.md`'s ~22-line Safety
-  bullet is split, with "do not target a workspace containing secrets you cannot disclose" promoted
-  from its tail to a bolded lead and the redaction-marker detail moved to its own bullet;
-  `SECURITY.md`'s compound bullet becomes one facts bullet plus a separate imperative for each of
-  its two obligations; and the fallback reference's abort rule joins the rule list it belongs to
-  instead of trailing the exposure prose. Documentation only — no fingerprint effect.
+- **The dry-run previews no longer imply they bound what a paid call can send.** `codex_dry_run`
+  led with "Preview what a `codex_review_changes` call would send", so a clean preview read as
+  "nothing sensitive will be sent". It cannot establish that: a dry run never invokes Codex, so
+  the model's own reads have not happened yet and none can be listed, and those reads are not
+  bounded by the workspace. A canonical `cli_contract.PREVIEW_SCOPE_FACT` states the limit at
+  both dry-run descriptions, their two `codex_capabilities` entries, a new `negative_scope` item,
+  and the server instructions block. It is deliberately **scoped to the model-initiated channel**
+  — a preview genuinely does bound the half this plugin assembles, enforcing `max_input_bytes`
+  and reporting truncation — so an unscoped claim would have retracted a true guarantee. Both
+  dry-run descriptions also now carry `READ_SCOPE_FACT`, which they never had. Not breaking: no
+  carrier promised a preview was exhaustive, and the sibling redaction clause already disclaimed
+  exactly this reading.
 
 - **Tracked Codex version is now `0.148`.** `SUPPORTED_VERSIONS` tracks `(0, 148)`; a `0.147` CLI
-  now warns as untracked (advisory only — it never blocks). `docs/UPGRADING-CODEX.md` was run end to
-  end against `codex-cli 0.148.0`, A/B'd against a side-by-side npm install of `0.147.0`, and the
-  npm/Homebrew channel check for `0.148.0` was clean. **No contract drift:** all 11
-  `ALWAYS_SEND_FLAGS`, the `--model` help-gated flag, and the three `--sandbox` values are present,
-  and the guarantee semantics were re-probed live — `read-only` blocked a write, `workspace-write`
-  allowed a workspace write while blocking network egress, `--output-last-message` received the
-  final message, and `--output-schema` output conformed to the strict-mode schema. The three
-  `CONTRACT_DRIFT_STDERR_PATTERNS` probes (`unexpected argument`, `invalid value`, `unknown feature
-  flag`) still match verbatim. `docs/codex-help/0.148.0/` carries fresh snapshots and the live
-  `integration` suite (10 tests, including the app-server transfer and rate-limit roundtrips) passes
-  against the new CLI.
-- **`KNOWN_MODEL_SLUGS` drops `gpt-5.6-sol-wm`**, refreshed from the `0.148.0`-written
-  `models_cache.json`. What was observed is only that the slug is absent from the backend-served
-  catalog cached by `0.148.0`; unlike the `0.147` *addition* — where a `0.146`-written cache already
-  carried the slug, so the move was demonstrably independent of the client — no contemporaneous
-  `0.147` observation was taken here, so this record does **not** establish that the removal is
-  independent of the new client. The upgrade's slug diff is what caught it either way. The
-  reasoning-effort discovery fields still hold their pinned shape (`default_reasoning_level` a
-  string, `supported_reasoning_levels` a list of `{effort, …}` objects), and the `-c
-  model_reasoning_effort` route was re-probed: it still parses, and a bogus effort on a valid model
-  still fails with both bracketed `REASONING_EFFORT_REJECTION_MARKERS`.
-- **New `0.148.0` surface is deliberately not adopted**: the top-level `migrate-rollouts` subcommand,
-  the `codex exec fork` subcommand, and ten new feature flags — none of which this plugin sends or
-  reads. `codex exec` gained **no** new flag. `remote_plugin` is still `stable`/default-on, so the
-  unconditional `--disable remote_plugin` isolation stays load-bearing.
-- App-server: the `0.147.0` → `0.148.0` generated-schema diff leaves every consumed schema
-  byte-identical after canonicalization; the inventory pass added three unconsumed v2 messages
-  (`NullableGetAccountTokenUsageParams`, `ThreadQueueChangedNotification`,
-  `ThreadRevertedNotification`) and removed none.
-- **Implicit-context probe re-run against both binaries** (`COMPATIBILITY.md` → "Implicit Codex
-  context"). Under the read-forbidding probe, both discovery captures passed the no-tool-item
-  assertion and the two presence matrices were **identical** to each other and to the `0.147` record:
-  a `$CODEX_HOME/skills/` skill is discovered despite `--ignore-user-config`, `.claude/skills/` is
-  not, and a parent `AGENTS.md` above the git root is not loaded. The unprompted-selection consult
-  returned the user-global skill's codeword on **both** binaries from a prompt naming neither the
-  skill nor the file, so the egress claim holds unchanged at `0.148.0`.
+  now warns as untracked (advisory only — it never blocks). `docs/UPGRADING-CODEX.md` was run end
+  to end against `codex-cli 0.148.0` and A/B'd against a side-by-side `0.147.0`. **No contract
+  drift:** all 11 `ALWAYS_SEND_FLAGS`, the `--model` help-gated flag, and the three `--sandbox`
+  values are present; the guarantee semantics were re-probed live (`read-only` blocked a write,
+  `workspace-write` allowed a workspace write while blocking network egress,
+  `--output-last-message` received the final message, `--output-schema` output conformed); and
+  the three `CONTRACT_DRIFT_STDERR_PATTERNS` still match verbatim. Alongside it:
 
-- **Every prose egress-warning site now states how a skill's body actually arrives** (#498). #480 established
-  the mechanism — `AGENTS.md` content is auto-**loaded**, while a skill is auto-**discovered** by
-  name and description, and its **body** follows only through a read the model itself issues once it
-  selects the skill — and corrected `COMPATIBILITY.md` and the `cli_contract.py` comment. The
-  remaining prose still called the whole thing "auto-loading", so the repo contradicted itself about
-  a security-relevant mechanism. Corrected in `SECURITY.md` (both spots), `README.md`,
-  the `collaborating-with-codex` skill and its `server-down-fallback.md` reference, two remaining
-  loose statements in `COMPATIBILITY.md` itself, the "what auto-loads into context" phrasing in
-  `docs/UPGRADING-CODEX.md` and `docs/codex-help/README.md`, and a stale comment in
-  `tests/test_server.py`. The warnings are **stronger**, not weaker: each site now says the metadata
-  alone is enough for the model to select a skill, and that selecting it pulls the body to OpenAI
-  even when the prompt names neither the skill nor the file. Dated `CHANGELOG` entries and scenario
-  run-record rows were left untouched as historical records. A new `tests/test_docs_disclosure.py`
-  guard fails if a bound disclosure site names a skills root without stating that mechanism; it is
-  scoped to the section that carries the disclosure, because every one of these files uses "select"
-  elsewhere for unrelated reasons and a file-wide check would have passed vacuously. No
-  agent-visible surface change — the built manifest is byte-identical to the committed snapshot,
-  verified against a mutation probe confirming the comparison can detect one. The **wire** surface
-  is deliberately untouched and is not fully swept: `CAPABILITY_SUMMARY` already states the
-  metadata/body split, but its umbrella phrase "Codex also auto-loads context implicitly" keeps the
-  loose framing, and the `_async` docstrings and delegate `returns` carry the discovery fact without
-  the mechanism. Correcting those would move the fingerprint, so they are tracked in #501. Separately, the `isolation_suppress` guarantee matcher in `tests/test_server.py` now requires an explicit negation: that guarantee *is* a negation ("the isolation flags don't suppress any of it"), and the old token check was satisfied by prose asserting the opposite, so the freeze would have stayed green through a reversal.
-- The implicit-context marker probe in `COMPATIBILITY.md` now **proves** the model did not read the
-  markers itself, instead of asking it to say so. The discovery consult forbids shell commands and
-  file reads, keeps every codeword and synthetic skill name *out* of the prompt (asking for an
-  inventory and matching it out of band), and is captured with `codex exec --json` so the operator
-  can assert over the run's own event stream: the capture must parse whole, must carry a
-  `turn.completed`, and must contain no item beyond `agent_message`/`reasoning` — an unknown item
-  type fails the run rather than passing silently. A failure is inconclusive, not a negative. The
-  section also explains why the pre-existing controls were blind to tool-assisted reading (a
-  removal-based negative control behaves identically under both hypotheses, and rules out
-  confabulation, which was never the failure mode), records what counts as "present" per marker
-  (an `AGENTS.md` arrives as content, a skill only as a name), splits row 1 into the two
-  independent observations it actually needs, scopes the assertion away from the deliberately
-  tool-using body-egress run, and states what must be retained beside each capture for provenance.
-- `COMPATIBILITY.md` and the matching `cli_contract.py` comment no longer claim implicit context
-  "needs no tool-directed read". That is true of `AGENTS.md` content and skill name/description,
-  which codex reads itself while assembling the prompt so that the model issues no read for them,
-  but a selected skill's **body** was observed arriving through a read the model itself issues. Both are still egress the caller never asked
-  for; only the first is auto-loading. Docs and comments only — no agent-visible surface change,
-  and the disclosed wording already said "a selected skill's body can reach the model".
-- The probe gains an **unprompted-selection** consult, which is what actually establishes the
-  security claim the other two cannot: with a global skill whose *description* matches an ordinary
-  task, a prompt naming neither the skill nor the file nor the codeword still brought the body back,
-  the model having selected it on its auto-loaded description alone (codex-cli 0.147.0,
-  2026-08-18). The "egress the caller never asked for" wording is now carried by that observation
-  rather than by a prompted read.
-- `docs/UPGRADING-CODEX.md`'s two-binary A/B loop — the place the probe is actually run — now uses
-  `--json`, per-binary capture files named from each binary's own `--version`, the exit-status
-  check, and the same assertion. It previously ran a bare consult with none of them, so following
-  the upgrade procedure could reproduce the very defect this change fixes.
-- Rows 1-3 of the published implicit-context matrix were re-verified 2026-08-18 under the fixed
-  probe against **both** codex-cli 0.147.0 and 0.146.0 side by side; both captures passed the
-  assertion and the matrices are identical, so the cross-version "pre-existing, not new" conclusion
-  now rests on the corrected instrument rather than the old one. This includes the `--cd repo/sub`
-  upward-walk observation that issue #472 rests on — established with no tool item in the stream,
-  where before it came from a probe that could read.
-- `AGENTS.md` gains a **Package boundary** section — the single home for deciding whether a change
-  belongs in this bridge or in upstream `pontonier`: the routing questions and their precedence,
-  the mixed mechanism-plus-policy case, the import direction (the whole `pontonier` package, not
-  only `pontonier.core`), deference to upstream's frozen backend-protocol rules, the
-  release-before-pin order, this repo's independent `FINGERPRINT`/breaking judgment for values
-  that reach the wire from upstream, and where each side is tested. `CONTRIBUTING.md`'s partial
-  restatement is now a link to it. Docs only — no agent-visible surface change.
+  - `KNOWN_MODEL_SLUGS` drops `gpt-5.6-sol-wm`, refreshed from the `0.148.0`-written
+    `models_cache.json`. What was observed is only that the slug is absent from the
+    backend-served catalog cached by `0.148.0`; no contemporaneous `0.147` observation was taken,
+    so this record does **not** establish that the removal is independent of the new client. The
+    reasoning-effort discovery fields still hold their pinned shape.
+  - New `0.148.0` surface is deliberately not adopted: the `migrate-rollouts` and `codex exec
+    fork` subcommands and ten new feature flags, none of which this plugin sends or reads. `codex
+    exec` gained no new flag. `remote_plugin` is still `stable`/default-on, so the unconditional
+    `--disable remote_plugin` isolation stays load-bearing.
+  - The `0.147.0` → `0.148.0` app-server schema diff leaves every consumed schema byte-identical
+    after canonicalization; three unconsumed v2 messages were added and none removed.
+  - The implicit-context probe was re-run against both binaries and the presence matrices are
+    identical to each other and to the `0.147` record: a `$CODEX_HOME/skills/` skill is
+    discovered despite `--ignore-user-config`, `.claude/skills/` is not, and a parent `AGENTS.md`
+    above the git root is not loaded.
+
+- **The posture on Codex's default-on `view_image` feature is recorded: left enabled,
+  deliberately** (#479). It is a **model-invoked tool** taking a filesystem path, not implicit
+  context — a zero-spend `codex debug prompt-input` A/B with a positive control found no image
+  auto-attached and no difference under `--disable view_image`. Disabling it would buy no
+  containment, since the read-only tiers already give the model a shell over the same filesystem;
+  it would only stop the model interpreting pixels, and unlike `remote_plugin` it opens no
+  channel outside the sandbox. The assumption the decision rests on — that the native handler
+  enforces the same read boundary as shell execution — is verified against the `rust-v0.148.0`
+  handler (#507). The published disclosures stay modality-neutral, so nothing agent-visible
+  changes.
+
+- **Documentation and internal conventions.** Safety-critical rules in the egress-caveat docs are
+  no longer buried in narration — `README.md`'s Safety bullet is split with "do not target a
+  workspace containing secrets you cannot disclose" promoted to a bolded lead, `SECURITY.md`'s
+  compound bullet becomes one facts bullet plus an imperative per obligation, and the fallback
+  reference's abort rule joins the rule list it belongs to; placement only, no warning weakens.
+  The `COMPATIBILITY.md` implicit-context probe was rebuilt to **prove** the model did not read
+  the markers itself rather than asking it to say so: it forbids shell commands and file reads,
+  keeps every codeword and synthetic skill name out of the prompt, and is captured with `codex
+  exec --json` so the operator can assert over the run's own event stream, with a failure treated
+  as inconclusive rather than negative. A new **unprompted-selection** consult is what actually
+  establishes the egress claim: with a global skill whose description matches an ordinary task, a
+  prompt naming neither the skill nor the file nor the codeword still brought the body back.
+  `docs/UPGRADING-CODEX.md`'s two-binary A/B loop uses the same instrument, so following the
+  upgrade procedure can no longer reproduce the defect this fixed. `AGENTS.md` gains a **Package
+  boundary** section — the single home for deciding whether a change belongs in this bridge or in
+  upstream `pontonier` — and `CONTRIBUTING.md`'s partial restatement becomes a link to it.
+  `COMPATIBILITY.md` no longer repeats the `recommended_plugins` paragraph, and a repo-wide guard
+  now scans every Markdown file for a verbatim-repeated prose paragraph, since every existing doc
+  guard is presence-based and a presence check passes at one occurrence and at ten.
 
 ### Fixed
 
-- **The `codex --version` string is sanitized and bounded before it reaches `codex_status`.**
-  Subprocess stdout was echoed into `codex_version` raw and unbounded, and interpolated into
-  `version_warning`: a `codex` on `PATH` reporting `codex-cli 9.9.9<ESC>[2K<ESC>[31m rogue` put
-  those escape sequences in both fields, and a 5010-character version came back at full length.
-  The bug predates #528 and is the instance of that class the issue left open; the threat
-  model is weaker (it needs a hostile `codex` binary, which already controls every model-bearing
-  run), which is why it was not a blocker there.
+- **The `workspace-write` guarantees can no longer be widened through the config-file channel.**
+  At the default `inherit` isolation the plugin sends no `--ignore-user-config`, so codex reads
+  the user's `$CODEX_HOME/config.toml` — where two settings that are perfectly reasonable for
+  someone's own interactive codex use silently widened the plugin's advertised bounds.
+  `[sandbox_workspace_write] network_access = true` re-granted the delegate tiers **full network
+  egress** (#518), and `writable_roots = [...]` let a delegate **write outside its throwaway
+  worktree** (#520). The `-c` denylist refused `sandbox_*` keys on the argv passthrough channel,
+  but nothing inspected the config file. Both were verified live on `codex-cli 0.148.0` under the
+  plugin's exact default flag set, with positive controls (`curl` reached example.com; writes
+  landed at pre-absent targets outside the worktree). Every `workspace-write` run now pins
+  `-c sandbox_workspace_write.network_access=false` and
+  `-c sandbox_workspace_write.writable_roots=[]`, both verified to outrank the config file **and**
+  an operator `--profile`, so the advertised promises hold at every isolation level and the
+  `--profile` operator-trust carve-out is closed for these two keys. codex's own implicit grants
+  (the worktree itself, and the temp roots disclosed above) are unaffected, so default-config runs
+  behave as before. No fingerprint change — the pins alter only the built argv, and the
+  agent-visible text already asserted the guarantees this makes true. `COMPATIBILITY.md`
+  discloses both pins, and `docs/UPGRADING-CODEX.md` gains the semantic probes that guard them
+  against silent upstream key drift, since codex ignores an unknown `-c` key rather than
+  rejecting it.
 
-  The fix keeps the identity/display split: `codex.codex_version()` still returns the string RAW,
-  because that is what `config.parse_version` reads, and only the emitted copy is cleaned. That
-  ordering is load-bearing rather than stylistic — sanitizing at capture REPAIRS malformed
-  identity text, since deleting the control character out of `0.<BEL>148.0` yields a plausible
-  `codex-cli 0.148.0`, turning a version that does not parse into one that does. So the two
-  fields can legitimately disagree, and `codex_version` now carries a description saying so.
+- **BREAKING: foreign text is sanitized, bounded, or rejected before it reaches a result
+  envelope.** Every path that quoted foreign text into an envelope echoed it raw: codex's stderr
+  on the generic `nonzero_exit` branch, the `codex_transfer` diagnostics including
+  `app_server_stderr_tail`, the review path's raw-output preview, stored job-result fragments,
+  exception text, config keys and profile names, the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and
+  refusal messages, the catalog strings `codex_models` reads from `$CODEX_HOME`, and the
+  `codex --version` string (unbounded — a 5010-character version came back at full length). Two
+  consequences: an escape sequence reaching a terminal can recolor, reposition, or erase — enough
+  to spoof or hide surrounding output, and the text is attacker-influenceable, since a repository
+  under review can make codex print chosen text — and a control character wedged into a secret
+  defeats the redactor's patterns outright, so the value rides out as plaintext.
 
-  `version_warning` is now **static**. It never quoted anything the version string did not
-  already put in `codex_version`, so interpolating it only copied untrusted text into a second
-  sink. Truncation is now **marked** (`…[truncated]`, reserved inside the 200-character
-  budget) for every echoed span — the version and, for the same reason, the config keys and
-  rejected flag names `_safe_echo` already bounded silently: a clipped key that reads as a
-  complete one sends the caller after a key they never wrote.
+  The remedy splits by **who can fix the value**, because deleting control characters is the
+  wrong answer for a machine field: it *repairs* a malformed value instead of letting it degrade.
+  A `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping turns
+  it into an affirmative `pass` at `high` confidence; a `job_id` of `abc<BEL><ESC>[31mdef` came
+  back as ``No job 'abc[31mdef'``, naming an id the caller never sent.
 
-  Agent-visible: `FINGERPRINT` moves to `schema-84` for the new `codex_version` description. Not
-  breaking — no field is removed, renamed, or retyped, and no input narrows. `codex_version` is
-  byte-identical for every version string a real `codex` prints. `version_warning` DOES change
-  for an unsupported version: it no longer quotes the version. Its advisory meaning is unchanged
-  and it never blocked a call, so the reword weakens no documented guarantee.
+  - **Rendered prose is sanitized.** `summary`, `questions`, `assumptions`, `next_steps`, a
+    finding's `title`/`evidence`/`risk`/`recommendation`, `error.message`, `repair.alternative`,
+    and `app_server_stderr_tail` — on consult, review, and delegate alike, on fresh and replayed
+    results. Single-token spans (a config key, a path, a rejected flag name) are bounded and
+    single-line; multi-line diagnostics keep line breaks wherever that is provably as safe, since
+    a rolling stderr tail exists to be read. Truncation is now **marked** (`…[truncated]`,
+    reserved inside the budget) for every echoed span: a clipped config key that reads as a
+    complete one sends the caller after a key they never wrote.
+  - **Caller-correctable inputs are rejected** at the MCP boundary, at zero spend, reporting the
+    static parameter NAME and never the value: `job_id`, `base`, `commit`, `model`, and
+    `transcript_path` advertise `config.CONTROL_CHAR_FREE_PATTERN` in their own inputSchema,
+    following `reasoning_effort`, which already worked this way. **This is the breaking half** —
+    five parameters narrow their accepted value set.
+  - **Identity-bearing values are preserved byte-exact**: `cwd`, `candidate_roots`,
+    `Finding.file`, `session_id`, `source_path`, `verdict`, `severity`, and the `--version` string
+    as `codex.codex_version()` returns it to `config.parse_version`. POSIX permits a control
+    character in a filename, so such a value may be entirely correct, and a
+    `repair.arguments.workspace_root` naming such a repository still round-trips. Sanitizing at
+    capture would repair identity text — deleting the control character out of `0.<BEL>148.0`
+    yields a plausible `codex-cli 0.148.0`, turning a version that does not parse into one that
+    does — so `codex_version` and `version_warning` can legitimately disagree, and
+    `codex_version`'s description now says so. `version_warning` is now **static**: it never
+    quoted anything `codex_version` did not already carry, so interpolating it only copied
+    untrusted text into a second sink.
+  - **An unknown argument NAME is withheld**, the one site no schema can cover, since it is
+    rejected precisely because it is unknown: `details.field` and `invalid_arguments[].field`
+    carry a fixed marker plus a new `field_withheld: true`. The flag is the machine
+    discriminator — the marker is not a reserved word, so a caller may genuinely send an argument
+    named `<withheld>`. Detection runs on the raw location components, before the length bound
+    truncates, so a control character past the bound cannot be cut away and the remainder
+    reported clean.
 
-- **Machine-readable identifier fields validate control characters instead of echoing or
-  stripping them.** #528 deletes every Unicode `Cc` code point from echoed prose. That remedy is
-  wrong for a machine field, and the bug was live: a `job_id` of `abc<BEL><ESC>[31mdef` came back
-  as ``No job 'abc[31mdef'`` — the delete removed `ESC` and left the literal text `[31m`, naming
-  an id the caller never sent. A `repair.arguments` value is fed straight back into a follow-up
-  call, so a corrupted identifier that still looks well-formed is worse than a rejected one.
+  Two carriers no client sees as prose are deliberately left alone: `raw_response`, `diff`, and
+  `meta`. `codex_models`' `slug` is left alone too — it is the identifier, and it is
+  pattern-validated. `error.resource_uri` needed nothing: `ReadResourceRequestParams.uri` is a
+  pydantic `AnyUrl`, which percent-encodes any raw `Cc` before the field is populated.
 
-  Fields now split by **who can fix the value**, not by where it came from. A caller-supplied
-  input the caller can correct is **rejected** at the MCP boundary: `job_id`, `base`, `commit`,
-  `model`, and `transcript_path` advertise `config.CONTROL_CHAR_FREE_PATTERN` in their own
-  inputSchema, so the call is refused before the handler runs, at zero spend, reporting the
-  static parameter NAME and never the value. This follows `reasoning_effort`, which already
-  worked this way. A value that IS or derives from a real filesystem or model identity —
-  `cwd`, `candidate_roots`, `Finding.file`, `session_id`, `source_path` — is **preserved
-  byte-exact**, because POSIX permits a control character in a filename, so such a value may be
-  entirely correct; a `repair.arguments.workspace_root` naming such a repository still round-trips.
-
-  An unknown ARGUMENT NAME is the one site no schema can cover, since it is rejected precisely
-  because it is unknown. Such a name is now **withheld** rather than echoed or stripped:
-  `details.field` and `invalid_arguments[].field` carry a fixed marker plus a new
-  `field_withheld: true`. The flag is the machine discriminator — the marker is not a reserved
-  word, so a caller may genuinely send an argument named `<withheld>`. Detection runs on the raw
-  location components, before the length bound truncates, so a control character past the bound
-  cannot be cut away and the remainder reported as clean.
-
-  Three corrections to the issue's own scope came out of verifying it. `error.resource_uri` was
-  listed as affected but is not: `ReadResourceRequestParams.uri` is a pydantic `AnyUrl`, which
-  percent-encodes any raw `Cc` before the field is populated. `meta.base`, `meta.commit`, and
-  `meta.model` were affected and were NOT listed. And dropping a control-bearing client MCP root —
-  an early candidate remedy — would have been unsafe: `pontonier.core.workspace.resolve` selects
-  `norm_roots[0]`, so discarding one silently promotes the next root or the server cwd and
-  retargets a PAID call at the wrong repository. No root is dropped.
-
-  **Fingerprint `schema-82` → `schema-83`**, and `RESULT_FORMAT` 9 → 10: `InvalidArgument` and
-  `ErrorDetail` are closed schemas (`extra="forbid"`), so an older reader would reject a stored
-  envelope carrying `field_withheld`. Breaking: five parameters narrow their accepted value set.
-  (#529; the argument-validation LOG still echoes a rejected value — #532)
-
-- **Control characters are stripped from every echoed diagnostic, not just the two spans a
-  `--strict-config` rejection carries.** #524/#527 added strip-then-redact for a rejected config
-  key and file path; every other path that quotes foreign text into an envelope still had the gap
-  — the generic `nonzero_exit` branch echoing codex's stderr, the `codex_transfer` diagnostics
-  including `app_server_stderr_tail`, the review path's raw-output preview, stored job-result
-  fragments, exception text, and the `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors and refusal
-  messages. Two consequences: an escape sequence reaching a terminal can recolor, reposition, or
-  erase — enough to spoof or hide surrounding output, and the text is attacker-influenceable,
-  since a repository under review can make codex print chosen text — and a control character
-  wedged into a secret defeats the redactor's patterns outright, so the value rides out as
-  plaintext.
-
-  Three findings corrected the issue's own scope while verifying it. `config._safe_token` covered
-  only the unsupported-argument path, so a valid config key or profile name reached both
-  `error.message` and `repair.alternative` raw. `redaction.exc_summary` fed three more sinks that
-  were not in the inventory. And a control character in a printed worktree path defeats
-  `sanitize_prose`'s alias matching, so the dead absolute path survives — a second, independent
-  leak of the #420 guarantee, which no amount of stripping the OUTPUT can fix.
-
-  The mechanism is upstream (`pontonier` 0.6.0: `redaction.sanitize_echo`,
-  `redaction.sanitize_echo_prose`, `worktree.sanitize_echo_prose`), because it is CLI-agnostic and
-  a sibling bridge has byte-identical call sites — see AGENTS.md, Package boundary. What stays
-  here is bridge policy: which spans are echoed, each one's length bound and truncation direction,
-  and which variant a span gets. Single-token spans (a config key, a path, a rejected flag name)
-  use `sanitize_echo`; multi-line diagnostics use the prose variant, which keeps line breaks
-  wherever that is provably as safe as removing them — a rolling stderr tail exists to be read.
-
-  The catalog strings `codex_models` reads from `$CODEX_HOME` (`display_name`, `fetched_at`,
-  `client_version`) are covered too — foreign text on a rendered surface, like a config key a
-  rejection echoes. `slug` is left alone: it is the identifier, and it is pattern-validated.
-
-  Replay covers all three human-readable carriers on a stored error — `error.message`,
-  `repair.alternative`, and `app_server_stderr_tail`, the one with a published guarantee —
-  and a stored success's rendered fields, leaving `raw_response`, `diff`, and `meta` alone.
-
-  The success channel is split rather than exempted, and the split is by FIELD, not by
-  channel. The prose a client renders — `summary`, `questions`, `assumptions`, `next_steps`,
-  and a finding's `title`/`evidence`/`risk`/`recommendation`, on consult, review, and
-  delegate alike — is sanitized. The machine fields are deliberately left alone, because
-  sanitizing them would *repair* malformed values instead of letting them degrade: a
-  `verdict` of `pa\x07ss` is not a valid verdict and must become `unknown`, but stripping the
-  control character turns it into an affirmative `pass` at `high` confidence. `severity`
-  inverts the same way, and `file` is an identifier a reader uses to locate code. The same
-  reasoning covers `details.field` and resource URIs, whose validate-don't-mutate half is
-  tracked as #529. Where such a value is ALSO composed into a prose message — the caller's
-  argument name, a missing job id — that copy is sanitized while the machine copy is not.
-
-  `raw_response.text` keeps the bare redaction it always had. It is not byte-identical to the
-  model's output — `redact_text` still runs, and the delegate path also relativizes worktree
-  paths — but this change does not transform it, so its control characters survive and a
-  caller that needs the output as it stood reads it there.
-
-  Two sinks a `redact_text` sweep cannot find are covered too: pontonier worktree exceptions,
-  which reached envelopes as bare `str(exc)[:300]` with no pass at this end at all, and stored
-  error records written before this change, which replayed their control characters for the whole
-  TTL after an upgrade. The replay pass runs the full strip-then-redact, never a strip alone — the
-  stored text was already redacted at write time, so stripping by itself is the redact-then-strip
-  ordering and would reassemble a control-split secret. It is taken only when a control character
-  is actually present, so a clean domain error still passes through verbatim rather than being
-  re-run through the heuristic redactor.
-
-  **Fingerprint `schema-81` → `schema-82`**: `app_server_stderr_tail`'s description documents its
-  own sanitation policy, and that policy changed. It now states the guarantee precisely — every
-  Unicode `Cc` code point (C0, DEL, C1) removed **except line feed**, which is kept so a
-  multi-line tail stays readable — and states its limits: the text may still contain LF, a line in
-  it can be one the child process chose, and category `Cf` bidi/format controls are not covered.
-  Not breaking: a strengthened guarantee on an unchanged field, and no `RESULT_FORMAT` bump, since
-  the serialized shape and accepted types are untouched. Error-message prose changes carry no
-  fingerprint of their own (see AGENTS.md, Versioning).
-
-  `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptors are deliberately **not** sanitized where they are
-  built. A descriptor is an identity matched against codex's own rejection text, which quotes the
-  operator's name with its raw spelling; sanitizing or bounding it at construction changed what it
-  matched, so a control-bearing or over-long name stopped matching and the operator's own bad
-  passthrough was misattributed to plugin contract drift. Sanitation happens at emission instead.
-
-- **The `workspace-write` writes-stay-in-the-workspace boundary can no longer be widened through
-  the config-file channel** (#520). The filesystem sibling of the #518 fix below: at `inherit`
-  isolation codex reads the user's `$CODEX_HOME/config.toml`, where `[sandbox_workspace_write]
-  writable_roots = ["..."]` — extra writable directories, reasonable for the user's own
-  interactive codex use — silently let a delegate write outside its throwaway worktree (verified
-  live on codex-cli 0.148.0, macOS, under the plugin's exact default flag set, judged by on-disk
-  state with positive controls; the first probe attempt was itself the cautionary tale, using
-  `mktemp -d` targets that sit inside the default-writable `$TMPDIR` and pass vacuously). Every
-  `workspace-write` run now also pins `-c sandbox_workspace_write.writable_roots=[]`
-  (`cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`) — codex's own default, so
-  default-config runs are unchanged — verified to outrank both the config file and an operator
-  `--profile`. The remaining `sandbox_workspace_write` keys (`exclude_tmpdir_env_var`,
-  `exclude_slash_tmp`) are deliberately not pinned: their default is already the widest state, so
-  the config file can only narrow them. Two disclosed bounds: the pins restore codex's default
-  boundary, which still grants the OS temp roots (tracked as #523 together with the surface text
-  it contradicts), and the `--add-dir` flag layer outranks the pin (no model-bearing call sends
-  it; the builder now documents that adopting it is a contract change).
-  `docs/UPGRADING-CODEX.md` gains the filesystem semantic probe (unique pre-absent targets,
-  on-disk-state judging, config and profile controls — executed as written before landing) plus
-  an upstream `SandboxWorkspaceWrite` struct completeness check, since a new upstream key would
-  arrive unpinned. **No fingerprint change** — the pin alters only the built argv, which no
-  discovered surface exposes. Not breaking.
-- **The `workspace-write` no-network-egress guarantee now holds at the default isolation level**
-  (#518). At `inherit` isolation the plugin sends no `--ignore-user-config`, so codex reads the
-  user's `$CODEX_HOME/config.toml` — where `[sandbox_workspace_write] network_access = true`, a
-  reasonable setting for the user's own interactive codex use, silently re-granted the delegate
-  tiers full network egress (verified live on codex-cli 0.148.0 with a positive control: `curl`
-  reached example.com under the plugin's exact default flag set). The `-c` denylist refuses
-  `sandbox_*` keys on the argv passthrough channel, but nothing inspected the config-file channel.
-  Every `workspace-write` run now pins `-c sandbox_workspace_write.network_access=false`
-  (`cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`), which was verified to outrank both
-  the config file and an operator `--profile`, so the advertised promise holds at every isolation
-  level and the `--profile` operator-trust carve-out is closed for this one key.
-  `docs/UPGRADING-CODEX.md` gains the semantic probe (with its positive control) that guards the
-  pin against silent upstream key drift, since codex ignores unknown `-c` keys rather than
-  rejecting them. **No fingerprint change** — the pin alters only the built argv, which no
-  discovered surface exposes, and the agent-visible text already asserted the guarantee this
-  change makes true. Not breaking. The sibling filesystem-scope keys were filed as #520 and are
-  closed by the entry above; `COMPATIBILITY.md` discloses both pins.
-- `COMPATIBILITY.md` no longer repeats the `recommended_plugins` paragraph. PR #511 re-added the
-  paragraph the #508 change had already placed in the "Image reading (`view_image`, #479)" section,
-  leaving two verbatim consecutive copies; the second is removed. Nothing else was lost in that
-  operation — the only other deletion there was the "Residual, unverified" paragraph, removed on
-  purpose when #507 closed. A regression guard lands with it: every Markdown file in the
-  repository tree (build and dependency directories aside) is scanned for a verbatim-repeated
-  prose paragraph, since every existing doc guard is presence-based (`"..." in text`) and a
-  presence check passes at one occurrence and at ten. The scan skips fenced code, tables, lists,
-  and headings, which recur by design. Its own blind spots were measured rather than assumed, and
-  three are closed: a `*` leader check hid every `**Rule:** ...` paragraph (432 of them here), a
-  two-physical-lines threshold hid every unwrapped paragraph (573), and a boolean fence toggle
-  closed a four-backtick fence on the three-backtick sample inside it. Coverage went from 1,430
-  paragraphs to 2,380. Each fix is pinned by a test that fails when the fix is reverted, and the
-  fence test asserts on what the scanner extracts, not on whether a duplicate is reported — the
-  "no duplicate found" phrasing passes against a scanner that sees nothing at all. Docs and tests
-  only — no agent-visible surface change, no `FINGERPRINT` bump.
+  The persisted `RESULT_FORMAT` moves to `10`: `InvalidArgument` and `ErrorDetail` are closed
+  schemas (`extra="forbid"`), so an older reader would reject a stored envelope carrying
+  `field_withheld`. The text-sanitizing mechanism is upstream (`pontonier` 0.6.0), since it is
+  CLI-agnostic; which spans are echoed, each one's bound and truncation direction, and which
+  variant a span gets are bridge policy and stay here. One related leak is fixed at the source
+  rather than the sink: a control character in a printed worktree path defeated the alias
+  matching that suppresses dead absolute paths, so the path survived — a second, independent leak
+  of the #420 guarantee that no amount of stripping the OUTPUT could fix. The
+  argument-validation LOG still echoes a rejected value, tracked as #532. (#528, #529, #531)
 
 ## [0.18.0] - 2026-08-18
 
