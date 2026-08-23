@@ -1,13 +1,11 @@
-"""Public `codex_bin()` entry point (#3): explicit-override precedence and
-validation, delegation to the candidate resolver, and process-level caching.
+"""Public `codex_bin()` entry point (#3).
 
 Precedence:
 
   1. `CODEX_IN_CLAUDE_CODEX_BIN`, if set to a non-empty value, wins outright
      and is used EXACTLY as given -- no `shutil.which` re-resolution, even
-     for a bare name with no path separators. If the given path does not
-     exist on disk this raises loudly (`BinaryNotFoundError`) rather than
-     silently falling through to the candidate resolver.
+     for a bare name with no path separators. A path that doesn't exist on
+     disk raises loudly (`BinaryNotFoundError`) rather than falling through.
   2. Otherwise, delegate to `binresolve.resolve_codex_bin()`.
   3. If that returns None, fall back to the bare literal `"codex"`
      (`cli_contract.CODEX_BIN`) -- never regress to "no codex invocation
