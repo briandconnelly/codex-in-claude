@@ -82,6 +82,10 @@ def test_cache_reused(monkeypatch):
         calls["n"] += 1
         return CommandRun(_HELP, "", 0, 1, False)
 
+    # Pin binary resolution so a machine with no real `codex` install doesn't fall
+    # through to the npm-probe candidate, which shares this same `runtime.run_sync_capture`
+    # seam and would otherwise inflate the call count this test is asserting on.
+    monkeypatch.setattr(preflight.binpath, "codex_bin", lambda: "codex")
     monkeypatch.setattr(preflight.runtime, "run_sync_capture", fake)
     preflight.reset_cache()
     preflight.flag_support()

@@ -10,7 +10,7 @@ import pytest
 from pontonier.core import redaction, worktree
 from pontonier.core.runtime import CommandRun
 
-from codex_in_claude import cli_contract, codex, config
+from codex_in_claude import binpath, cli_contract, codex, config
 from codex_in_claude.preflight import FlagSupport
 
 _ALL_FLAGS = FlagSupport(
@@ -20,7 +20,15 @@ _ALL_FLAGS = FlagSupport(
 _NO_MODEL = FlagSupport(supported=frozenset(cli_contract.ALWAYS_SEND_FLAGS), help_parsed=True)
 
 
-def test_build_exec_command_core(tmp_path):
+def test_build_exec_command_core(tmp_path, monkeypatch):
+    # This test is about the argv build, not binary resolution (that behavior is
+    # covered by tests/test_binresolve.py and tests/test_binpath.py) -- pin the
+    # resolved binary to a distinctive sentinel so the assertion below is both
+    # independent of whether this machine happens to have a real `codex` install
+    # AND actually verifies position 0 carries the *resolved* value (not a
+    # tautology against the bare literal).
+    resolved_bin = "/fake/resolved/codex"
+    monkeypatch.setattr(binpath, "codex_bin", lambda: resolved_bin)
     out = str(tmp_path / "last.txt")
     cmd, dropped = codex.build_exec_command(
         cwd="/repo",
@@ -30,7 +38,7 @@ def test_build_exec_command_core(tmp_path):
         model="gpt-5.4",
         flag_support=_ALL_FLAGS,
     )
-    assert cmd[0] == "codex"
+    assert cmd[0] == resolved_bin
     assert "exec" in cmd
     assert "--json" in cmd
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"

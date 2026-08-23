@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pontonier.backend.protocol import RunRequest
 from pontonier.core import redaction, runtime
 
-from codex_in_claude import cli_contract, config, normalize, preflight
+from codex_in_claude import binpath, cli_contract, config, normalize, preflight
 from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
 from codex_in_claude.schemas import ErrorDetail
@@ -102,7 +102,7 @@ def build_exec_command(
     and before the stdin ``-`` sentinel, so they can add config/profile/feature options
     without displacing the envelope-bearing flags."""
     fs = flag_support if flag_support is not None else preflight.flag_support()
-    tokens = [cli_contract.CODEX_BIN, *cli_contract.EXEC_SUBCOMMAND]
+    tokens = [binpath.codex_bin(), *cli_contract.EXEC_SUBCOMMAND]
     # Set wherever this function appends a real `-c` pair; read by the strict-config
     # decision below. Tracking the appends is what keeps a flag-shaped VALUE from being
     # mistaken for an override (see that comment).
@@ -275,7 +275,7 @@ def _read_last_message(path: str) -> str | None:
 def codex_version(timeout_seconds: int = 10) -> str | None:
     """Probe `codex --version`. Returns the trimmed version string, or None."""
     run = runtime.run_sync_capture(
-        [cli_contract.CODEX_BIN, *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
+        [binpath.codex_bin(), *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.exit_code != 0:
         return None
@@ -290,7 +290,7 @@ def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:
     exit code and method keyword — never the raw output, which may name an account.
     """
     run = runtime.run_sync_capture(
-        [cli_contract.CODEX_BIN, *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
+        [binpath.codex_bin(), *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.timed_out:
         return None, None

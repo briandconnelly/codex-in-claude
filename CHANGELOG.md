@@ -5,6 +5,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`codex` subprocess spawns now resolve the WSL2-native binary instead of a bare `"codex"`
+  lookup** (#538). Under WSL2 — this project's documented, supported way to run on Windows —
+  WSL's PATH interop forwards the Windows `PATH` into the WSL `PATH`, so a bare-name lookup could
+  resolve to a Windows-side npm-global `codex` shim instead of the WSL-native install, failing
+  confusingly instead of cleanly. Every spawn site now goes through `binpath.codex_bin()`, which
+  probes `$HOME/.local/bin/codex`, `/usr/local/bin/codex`, then the `npm bin -g` directory, before
+  falling back to `shutil.which("codex")` and finally the bare literal `"codex"` — resolved once
+  per process and cached. An explicit override via `CODEX_IN_CLAUDE_CODEX_BIN` still wins outright
+  and is used exactly as given. Internal only: no agent-visible surface changed.
+
 ## [0.19.0] - 2026-08-20
 
 A sandbox-hardening and egress-disclosure release.

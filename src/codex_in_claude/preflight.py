@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from pontonier.core import runtime
 
-from codex_in_claude import cli_contract
+from codex_in_claude import binpath, cli_contract
 
 _LONG_FLAG_RE = re.compile(r"--[a-z][a-z0-9-]+")
 
@@ -37,7 +37,7 @@ _cache: tuple[float, FlagSupport] | None = None
 def _probe_help() -> str:
     """Return the combined `codex exec --help` text, or "" on any failure."""
     run = runtime.run_sync_capture(
-        [cli_contract.CODEX_BIN, *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10
+        [binpath.codex_bin(), *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10
     )
     if run.binary_missing:
         return ""
