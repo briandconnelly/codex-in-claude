@@ -525,6 +525,33 @@ def test_login_status_logged_out(monkeypatch):
     assert "login" in detail
 
 
+def test_codex_version_returns_none_when_override_binary_missing(clean_env, tmp_path):
+    """A bad `CODEX_IN_CLAUDE_CODEX_BIN` override must not escape past this
+    function's documented "returns None on failure" contract as
+    `binpath.BinaryNotFoundError` -- the same bug already fixed for
+    `preflight._probe_help()` / `appserver.transfer_session()` /
+    `appserver.read_rate_limits()` in round 1 (commit 53c3b27)."""
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        result = codex.codex_version()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"codex_version() must return None, not raise {exc!r}")
+    assert result is None
+
+
+def test_login_status_returns_none_none_when_override_binary_missing(clean_env, tmp_path):
+    """Same escaping bug as `codex_version()` above, for `login_status()`'s
+    documented `(None, None)` failure return."""
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        result = codex.login_status()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"login_status() must return (None, None), not raise {exc!r}")
+    assert result == (None, None)
+
+
 def test_login_status_unknown_when_missing(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,

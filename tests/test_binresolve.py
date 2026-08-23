@@ -1,4 +1,4 @@
-"""Ordered candidate-directory resolver for the `codex` CLI binary (#3).
+"""Ordered candidate-directory resolver for the `codex` CLI binary (#537/#538).
 
 Covers `binresolve.resolve_codex_bin()`: the WSL2-npm-shim workaround that
 probes `$HOME/.local/bin`, `/usr/local/bin`, then the npm global bin dir
@@ -168,6 +168,27 @@ def test_wsl2_interop_false_when_proc_version_unreadable_does_not_raise(monkeypa
     a_directory = tmp_path / "proc_version_is_a_dir"
     a_directory.mkdir()
     monkeypatch.setattr(binresolve, "PROC_VERSION_PATH", a_directory, raising=False)
+    try:
+        result = binresolve._running_under_wsl2_interop()
+    except Exception as exc:  # the assertion IS "never raises" -- catch broadly on purpose
+        pytest.fail(f"_running_under_wsl2_interop() must never raise, raised {exc!r}")
+    assert result is False
+
+
+def test_wsl2_interop_false_when_proc_version_read_raises_unicode_decode_error(monkeypatch):
+    """`Path.read_text()` can raise `UnicodeDecodeError` -- distinct from the
+    `OSError` family the current guard catches -- when the target contains
+    bytes invalid for the decoding text encoding (e.g. a minimal/container
+    /proc/version-alike file, or any path an operator points
+    `PROC_VERSION_PATH` at via monkeypatching). Must degrade to False like
+    every other unreadable-input case in this section, never escape."""
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+
+    class _RaisesUnicodeDecodeError:
+        def read_text(self) -> str:
+            raise UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(binresolve, "PROC_VERSION_PATH", _RaisesUnicodeDecodeError(), raising=False)
     try:
         result = binresolve._running_under_wsl2_interop()
     except Exception as exc:  # the assertion IS "never raises" -- catch broadly on purpose

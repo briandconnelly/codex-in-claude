@@ -1,4 +1,4 @@
-"""Ordered candidate-directory resolver for the `codex` CLI binary (#3).
+"""Ordered candidate-directory resolver for the `codex` CLI binary (#537/#538).
 
 Under WSL2, every `codex` subprocess spawn used the bare literal `"codex"`.
 WSL2's PATH interop forwards the Windows `PATH` into the WSL `PATH`, so a
@@ -75,14 +75,14 @@ def _running_under_wsl2_interop() -> bool:
       - `PROC_VERSION_PATH` containing "microsoft" (case-insensitive), the
         standard WSL2 kernel-version signature.
 
-    False on a plain macOS/Linux host, or if `/proc/version` is missing or
-    unreadable.
+    False on a plain macOS/Linux host, or if `/proc/version` is missing,
+    unreadable, or contains bytes that can't be decoded as text.
     """
     if os.environ.get("WSL_DISTRO_NAME"):
         return True
     try:
         return "microsoft" in PROC_VERSION_PATH.read_text().lower()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
 
 

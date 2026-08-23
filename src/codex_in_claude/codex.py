@@ -274,8 +274,14 @@ def _read_last_message(path: str) -> str | None:
 
 def codex_version(timeout_seconds: int = 10) -> str | None:
     """Probe `codex --version`. Returns the trimmed version string, or None."""
+    try:
+        codex_path = binpath.codex_bin()
+    except binpath.BinaryNotFoundError:
+        # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
+        # other -- this function's contract is None on any failure, never a raise.
+        return None
     run = runtime.run_sync_capture(
-        [binpath.codex_bin(), *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
+        [codex_path, *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.exit_code != 0:
         return None
@@ -289,8 +295,15 @@ def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:
     (codex missing/timeout). detail is a NON-identifying phrase derived from the
     exit code and method keyword — never the raw output, which may name an account.
     """
+    try:
+        codex_path = binpath.codex_bin()
+    except binpath.BinaryNotFoundError:
+        # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
+        # other -- this function's contract is (None, None) on any failure,
+        # never a raise.
+        return None, None
     run = runtime.run_sync_capture(
-        [binpath.codex_bin(), *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
+        [codex_path, *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.timed_out:
         return None, None

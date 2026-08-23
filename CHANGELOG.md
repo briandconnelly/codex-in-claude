@@ -38,6 +38,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (internal refactor, no behavior change). README's Configuration table and `COMPATIBILITY.md`
   were updated to document the `CODEX_IN_CLAUDE_CODEX_BIN` override and the WSL2 PATH-interop
   rationale for WSL2-native resolution.
+- **`binresolve._running_under_wsl2_interop()` no longer escapes on a `UnicodeDecodeError`** from
+  reading `/proc/version` — it now degrades to `False` alongside the `OSError` family it already
+  caught, matching the guard already used elsewhere for reading last-message files.
+- **A `CODEX_IN_CLAUDE_CODEX_BIN` override naming a regular file that lacks the execute bit is now
+  rejected** with `binpath.BinaryNotFoundError`, the same as a missing path or a directory, instead
+  of being silently accepted and failing confusingly (`PermissionError`) at spawn time.
+- **`codex.codex_version()` and `codex.login_status()` no longer raise `binpath.BinaryNotFoundError`
+  for a bad override** — each now honors its own documented failure return (`None`, and
+  `(None, None)` respectively) instead of letting the exception escape, matching the guard already
+  applied to `preflight._probe_help()` / `appserver.transfer_session()` /
+  `appserver.read_rate_limits()`.
 
 ## [0.19.0] - 2026-08-20
 

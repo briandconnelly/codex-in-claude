@@ -1,12 +1,13 @@
-"""Public `codex_bin()` entry point (#3).
+"""Public `codex_bin()` entry point (#537/#538).
 
 Precedence:
 
   1. `CODEX_IN_CLAUDE_CODEX_BIN`, if set to a non-empty value, wins outright
      and is used EXACTLY as given -- no `shutil.which` re-resolution, even
      for a bare name with no path separators. A path that doesn't exist on
-     disk, or that exists but is a directory rather than a file, raises
-     loudly (`BinaryNotFoundError`) rather than falling through.
+     disk, that exists but is a directory rather than a file, or that is a
+     regular file lacking the execute bit, raises loudly
+     (`BinaryNotFoundError`) rather than falling through.
   2. Otherwise, delegate to `binresolve.resolve_codex_bin()`.
   3. If that returns None, fall back to the bare literal `"codex"`
      (`cli_contract.CODEX_BIN`) -- never regress to "no codex invocation
@@ -41,7 +42,7 @@ def codex_bin() -> str:
 
     Raises:
         BinaryNotFoundError: `CODEX_IN_CLAUDE_CODEX_BIN` is set to a
-            non-empty value that does not exist on disk.
+            non-empty value that does not name an executable file on disk.
     """
     global _cache  # noqa: PLW0603 - intentional process-level memoization
     if _cache is not None:
@@ -49,12 +50,14 @@ def codex_bin() -> str:
 
     override = os.environ.get(ENV_VAR, "")
     if override:
-        # `.is_file()` rejects both a nonexistent path AND a directory (`.exists()`
-        # alone accepts a directory, which then failed confusingly at spawn time
-        # instead of failing loudly here).
-        if not Path(override).is_file():
+        # `_is_executable_file()` rejects a nonexistent path, a directory
+        # (`.exists()` alone accepts a directory, which then failed
+        # confusingly at spawn time instead of failing loudly here), and a
+        # regular file lacking the execute bit (which failed just as
+        # confusingly, as a `PermissionError` at spawn time).
+        if not binresolve._is_executable_file(Path(override)):
             raise BinaryNotFoundError(
-                f"{ENV_VAR} is set to {override!r}, but no file exists at that path."
+                f"{ENV_VAR} is set to {override!r}, but no executable file exists at that path."
             )
         _cache = override
         return _cache

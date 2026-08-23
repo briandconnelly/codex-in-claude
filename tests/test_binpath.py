@@ -1,4 +1,4 @@
-"""Public `codex_bin()` entry point (#3): explicit-override precedence/validation,
+"""Public `codex_bin()` entry point (#537/#538): explicit-override precedence/validation,
 delegation to the candidate resolver, and process-level caching.
 
 Precedence, per the issue spec:
@@ -32,6 +32,10 @@ ENV_VAR = "CODEX_IN_CLAUDE_CODEX_BIN"
 def test_explicit_override_wins_and_is_returned_verbatim(clean_env, tmp_path):
     override = tmp_path / "my-custom-codex"
     override.write_text("#!/bin/sh\necho codex\n")
+    # Executable: a valid override must pass the executability check added in
+    # round 4 alongside the existing is_file() check, not just accidentally
+    # survive it via `write_text`'s default (non-executable, umask-dependent) mode.
+    override.chmod(0o755)
     clean_env.setenv(ENV_VAR, str(override))
     assert binpath.codex_bin() == str(override)
 
@@ -41,6 +45,7 @@ def test_explicit_override_does_not_consult_the_candidate_resolver(
 ):
     override = tmp_path / "my-custom-codex"
     override.write_text("#!/bin/sh\necho codex\n")
+    override.chmod(0o755)
     clean_env.setenv(ENV_VAR, str(override))
 
     def _boom():
@@ -98,6 +103,39 @@ def test_directory_override_raises_binary_not_found(clean_env, tmp_path):
     message = str(exc_info.value)
     assert ENV_VAR in message
     assert str(tmp_path) in message
+
+
+def test_non_executable_file_override_raises_binary_not_found(clean_env, tmp_path):
+    """A regular file that exists but carries no execute bit must be rejected
+    at the override boundary, the same way a nonexistent path or a directory
+    already is -- `Path.is_file()` alone accepts it, and the failure then
+    surfaced confusingly at actual subprocess-spawn time (`PermissionError`)
+    instead of failing loudly here."""
+    override = tmp_path / "not-executable-codex"
+    override.write_text("#!/bin/sh\necho codex\n")
+    override.chmod(0o644)
+    clean_env.setenv(ENV_VAR, str(override))
+    with pytest.raises(binpath.BinaryNotFoundError) as exc_info:
+        binpath.codex_bin()
+    message = str(exc_info.value)
+    assert ENV_VAR in message
+    assert str(override) in message
+
+
+def test_non_executable_file_override_does_not_fall_through_to_resolver(
+    clean_env, tmp_path, monkeypatch
+):
+    override = tmp_path / "not-executable-codex"
+    override.write_text("#!/bin/sh\necho codex\n")
+    override.chmod(0o644)
+
+    def _boom():
+        raise AssertionError("a bad (non-executable) override must fail loudly, never fall through")
+
+    monkeypatch.setattr(binresolve, "resolve_codex_bin", _boom)
+    clean_env.setenv(ENV_VAR, str(override))
+    with pytest.raises(binpath.BinaryNotFoundError):
+        binpath.codex_bin()
 
 
 def test_directory_override_does_not_fall_through_to_resolver(clean_env, tmp_path, monkeypatch):
