@@ -260,7 +260,7 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
 | `CODEX_IN_CLAUDE_LOG_LEVEL` | `WARNING` | server diagnostic log level (`DEBUG`\|`INFO`\|`WARNING`\|`ERROR`\|`CRITICAL`); logs go to **stderr** (never stdout) |
 | `CODEX_IN_CLAUDE_LOG_FILE` | unset | also mirror diagnostic logs to this file path |
 | `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM` | unset | set to `1` to downgrade the non-POSIX startup refusal to a stderr warning for knowingly consult-only, unsupported use; the async-job safety layer cannot hold, so do not run delegate/review against untrusted work (see [Requirements](#requirements) / `COMPATIBILITY.md`) |
-| `CODEX_IN_CLAUDE_CODEX_BIN` | unset | explicit override for which `codex` binary to invoke; a non-empty value is used exactly as given, with no `PATH` re-resolution, and must exist on disk as a regular file or a readiness error results. Unset leaves resolution automatic (WSL2-aware; falls back to the bare `codex` on `PATH` — see `COMPATIBILITY.md`) |
+| `CODEX_IN_CLAUDE_CODEX_BIN` | unset | explicit override for which `codex` binary to invoke; a non-empty value is used exactly as given, with no `PATH` re-resolution, and must exist on disk as an executable file (execute bit set) or a readiness error results. Unset leaves resolution automatic (WSL2-aware; falls back to the bare `codex` on `PATH` — see `COMPATIBILITY.md`) |
 
 Two further variables, `CODEX_IN_CLAUDE_TIER_DEFAULT` and `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`, exist
 ahead of the planned `apply` tier. They only change the defaults `codex_status` reports — every
