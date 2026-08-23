@@ -36,9 +36,13 @@ _cache: tuple[float, FlagSupport] | None = None
 
 def _probe_help() -> str:
     """Return the combined `codex exec --help` text, or "" on any failure."""
-    run = runtime.run_sync_capture(
-        [binpath.codex_bin(), *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10
-    )
+    try:
+        codex_path = binpath.codex_bin()
+    except binpath.BinaryNotFoundError:
+        # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
+        # other -- this function's contract is "" on any failure, never a raise.
+        return ""
+    run = runtime.run_sync_capture([codex_path, *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10)
     if run.binary_missing:
         return ""
     return f"{run.stdout}\n{run.stderr}"

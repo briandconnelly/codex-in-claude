@@ -12,10 +12,24 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   WSL's PATH interop forwards the Windows `PATH` into the WSL `PATH`, so a bare-name lookup could
   resolve to a Windows-side npm-global `codex` shim instead of the WSL-native install, failing
   confusingly instead of cleanly. Every spawn site now goes through `binpath.codex_bin()`, which
-  probes `$HOME/.local/bin/codex`, `/usr/local/bin/codex`, then the `npm bin -g` directory, before
-  falling back to `shutil.which("codex")` and finally the bare literal `"codex"` — resolved once
-  per process and cached. An explicit override via `CODEX_IN_CLAUDE_CODEX_BIN` still wins outright
-  and is used exactly as given. Internal only: no agent-visible surface changed.
+  probes `$HOME/.local/bin/codex`, `/usr/local/bin/codex`, then the npm global bin dir (derived
+  from `npm prefix -g`, since `npm bin -g` was removed in npm 9+), before falling back to
+  `shutil.which("codex")` and finally the bare literal `"codex"` — resolved once per process and
+  cached. An explicit override via `CODEX_IN_CLAUDE_CODEX_BIN` still wins outright and is used
+  exactly as given. Internal only: no agent-visible surface changed.
+- **The three WSL2-workaround candidate probes above now only run when actually under WSL2**
+  (`binresolve._running_under_wsl2_interop()`, gated on `$WSL_DISTRO_NAME` or a `microsoft` marker
+  in `/proc/version`) — a reviewer reproduced the unconditional probe shadowing a newer Homebrew
+  `codex` on macOS with a stale one left behind in `~/.local/bin`. Outside WSL2, resolution now
+  goes straight to `shutil.which("codex")`.
+- **A `CODEX_IN_CLAUDE_CODEX_BIN` override that names a directory, not a file, is now rejected**
+  with `binpath.BinaryNotFoundError` instead of being silently accepted and failing confusingly at
+  spawn time.
+- **A bad `CODEX_IN_CLAUDE_CODEX_BIN` override no longer raises out of `codex_status()`** or any
+  `codex app-server` spawn site (`transfer_session()`, `read_rate_limits()`) or the `--help`
+  feature-detection probe — each now reports the failure as a typed/readiness fact (e.g.
+  `codex_status()` returns `codex_found: false` with a `readiness_detail` naming the env var)
+  instead of letting `binpath.BinaryNotFoundError` escape as a raw error.
 
 ## [0.19.0] - 2026-08-20
 

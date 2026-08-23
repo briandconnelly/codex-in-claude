@@ -721,6 +721,29 @@ def test_spawn_failed_missing_binary(tmp_path):
     assert outcome.stderr_tail is None
 
 
+def test_spawn_failed_bad_codex_bin_override_does_not_raise(tmp_path, clean_env):
+    """`transfer_session()`'s docstring guarantees it never raises for a subprocess
+    failure -- but with no injected `command`, argv is built from
+    `binpath.codex_bin()` OUTSIDE the try/except OSError block, so a bad
+    CODEX_IN_CLAUDE_CODEX_BIN override (a path that doesn't exist) raised
+    BinaryNotFoundError before the subprocess was ever attempted."""
+    from codex_in_claude import binpath
+
+    t = _transcript(tmp_path)
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        outcome = transfer_session(
+            transcript_realpath=str(t.resolve()),
+            cwd=str(tmp_path),
+            timeout_seconds=5,
+        )
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"transfer_session() must never raise, raised {exc!r}")
+    assert outcome.status is TransferStatus.SPAWN_FAILED
+    assert outcome.stderr_tail is None
+
+
 # --- ledger reader edge cases ---------------------------------------------------
 
 
@@ -1686,6 +1709,23 @@ def test_rate_limits_prequeued_id2_is_not_trusted(tmp_path):
 
 def test_rate_limits_spawn_failure(tmp_path):
     out = read_rate_limits(command=[str(tmp_path / "does-not-exist")], timeout_seconds=10)
+    assert out.status is RateLimitReadStatus.SPAWN_FAILED
+
+
+def test_rate_limits_spawn_failed_bad_codex_bin_override_does_not_raise(tmp_path, clean_env):
+    """`read_rate_limits()`'s docstring guarantees it never raises for a subprocess
+    failure -- but with no injected `command`, argv is built from
+    `binpath.codex_bin()` OUTSIDE the try/except OSError block, so a bad
+    CODEX_IN_CLAUDE_CODEX_BIN override (a path that doesn't exist) raised
+    BinaryNotFoundError before the subprocess was ever attempted."""
+    from codex_in_claude import binpath
+
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        out = read_rate_limits(timeout_seconds=10)
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"read_rate_limits() must never raise, raised {exc!r}")
     assert out.status is RateLimitReadStatus.SPAWN_FAILED
 
 

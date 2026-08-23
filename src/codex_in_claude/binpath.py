@@ -5,7 +5,8 @@ Precedence:
   1. `CODEX_IN_CLAUDE_CODEX_BIN`, if set to a non-empty value, wins outright
      and is used EXACTLY as given -- no `shutil.which` re-resolution, even
      for a bare name with no path separators. A path that doesn't exist on
-     disk raises loudly (`BinaryNotFoundError`) rather than falling through.
+     disk, or that exists but is a directory rather than a file, raises
+     loudly (`BinaryNotFoundError`) rather than falling through.
   2. Otherwise, delegate to `binresolve.resolve_codex_bin()`.
   3. If that returns None, fall back to the bare literal `"codex"`
      (`cli_contract.CODEX_BIN`) -- never regress to "no codex invocation
@@ -48,7 +49,10 @@ def codex_bin() -> str:
 
     override = os.environ.get(ENV_VAR, "")
     if override:
-        if not Path(override).exists():
+        # `.is_file()` rejects both a nonexistent path AND a directory (`.exists()`
+        # alone accepts a directory, which then failed confusingly at spawn time
+        # instead of failing loudly here).
+        if not Path(override).is_file():
             raise BinaryNotFoundError(
                 f"{ENV_VAR} is set to {override!r}, but no file exists at that path."
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import cli_contract, preflight
@@ -72,6 +73,40 @@ def test_missing_expected_flags_detects_gap(monkeypatch):
 def test_missing_expected_flags_empty_on_failed_probe(monkeypatch):
     _patch_help(monkeypatch, None)
     fs = preflight.flag_support(force=True)
+    assert preflight.missing_expected_flags(fs) == []
+
+
+# --- _probe_help never raises, even when binpath.codex_bin() does (B4-adjacent) -
+
+
+def test_probe_help_returns_empty_string_on_bad_codex_bin_override(clean_env, tmp_path):
+    """`_probe_help()`'s own docstring guarantees "" on any failure, but it called
+    `binpath.codex_bin()` unguarded -- a bad CODEX_IN_CLAUDE_CODEX_BIN override
+    (a path that doesn't exist) raised BinaryNotFoundError instead of returning ""."""
+    from codex_in_claude import binpath
+
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        result = preflight._probe_help()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"_probe_help() must never raise, raised {exc!r}")
+    assert result == ""
+
+
+def test_flag_support_fails_open_on_bad_codex_bin_override(clean_env, tmp_path):
+    """The observable, documented behavior at the level callers actually use:
+    a probe failure -- of any kind -- must fail open (help_parsed=False), never
+    raise out of flag_support()."""
+    from codex_in_claude import binpath
+
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        fs = preflight.flag_support(force=True)
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"flag_support() must never raise, raised {exc!r}")
+    assert fs.help_parsed is False
     assert preflight.missing_expected_flags(fs) == []
 
 

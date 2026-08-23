@@ -4,9 +4,10 @@ delegation to the candidate resolver, and process-level caching.
 Precedence, per the issue spec:
   1. `CODEX_IN_CLAUDE_CODEX_BIN`, if set to a non-empty value, wins outright and is
      taken EXACTLY as given -- no `shutil.which` re-resolution, even for a bare
-     name with no path separators. If the given path does not exist on disk, this
-     raises loudly (`binpath.BinaryNotFoundError`) rather than silently falling
-     through to the candidate resolver.
+     name with no path separators. If the given path does not exist on disk, OR
+     exists but is a directory rather than a file, this raises loudly
+     (`binpath.BinaryNotFoundError`) rather than silently falling through to the
+     candidate resolver.
   2. Otherwise, delegate to `binresolve.resolve_codex_bin()`.
   3. If that returns None, fall back to the bare literal "codex" (matching
      `cli_contract.CODEX_BIN` -- never regress to "no codex invocation possible").
@@ -82,6 +83,29 @@ def test_bare_filename_override_is_validated_as_a_literal_path_and_raises(
     per point 2 of the spec."""
     monkeypatch.chdir(tmp_path)
     clean_env.setenv(ENV_VAR, "codex")
+    with pytest.raises(binpath.BinaryNotFoundError):
+        binpath.codex_bin()
+
+
+def test_directory_override_raises_binary_not_found(clean_env, tmp_path):
+    """A path that exists but is a directory, not a file, must be rejected the
+    same way a nonexistent path is -- `Path.exists()` alone is true for a
+    directory, so the pre-fix check silently accepted it and a later subprocess
+    spawn attempt failed confusingly instead of failing loudly here."""
+    clean_env.setenv(ENV_VAR, str(tmp_path))
+    with pytest.raises(binpath.BinaryNotFoundError) as exc_info:
+        binpath.codex_bin()
+    message = str(exc_info.value)
+    assert ENV_VAR in message
+    assert str(tmp_path) in message
+
+
+def test_directory_override_does_not_fall_through_to_resolver(clean_env, tmp_path, monkeypatch):
+    def _boom():
+        raise AssertionError("a bad (directory) override must fail loudly, never fall through")
+
+    monkeypatch.setattr(binresolve, "resolve_codex_bin", _boom)
+    clean_env.setenv(ENV_VAR, str(tmp_path))
     with pytest.raises(binpath.BinaryNotFoundError):
         binpath.codex_bin()
 

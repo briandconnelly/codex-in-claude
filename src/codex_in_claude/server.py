@@ -45,6 +45,7 @@ from pontonier.core.jobs import DiscardOutcome
 from codex_in_claude import (
     __version__,
     appserver,
+    binpath,
     cli_contract,
     codex,
     config,
@@ -1392,7 +1393,16 @@ def codex_status() -> dict:
     `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
     CODEX_HOME."""
     d = config.defaults()
-    version = codex.codex_version()
+    # A bad CODEX_IN_CLAUDE_CODEX_BIN override (missing path, or a directory) is a
+    # readiness FACT, not a raised exception (#B1) -- codex_version() resolves the
+    # binary internally and would otherwise let BinaryNotFoundError escape as a raw
+    # MCP protocol error instead of a reportable status.
+    bad_override_detail: str | None = None
+    try:
+        version = codex.codex_version()
+    except binpath.BinaryNotFoundError as exc:
+        version = None
+        bad_override_detail = str(exc)
     found = version is not None
     authenticated, auth_detail = codex.login_status() if found else (None, None)
     version_supported = config.version_supported(version)
@@ -1409,7 +1419,7 @@ def codex_status() -> dict:
 
     ready = bool(found and authenticated)
     if not found:
-        readiness_detail = "codex CLI not found on PATH."
+        readiness_detail = bad_override_detail or "codex CLI not found on PATH."
     elif authenticated is None:
         readiness_detail = "Could not determine codex auth status."
     elif not authenticated:

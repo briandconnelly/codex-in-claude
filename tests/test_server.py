@@ -292,6 +292,40 @@ def test_status_all_control_version_is_found_but_has_no_displayable_version(monk
     assert res["version_warning"] is None
 
 
+# --- status: a bad CODEX_IN_CLAUDE_CODEX_BIN override is a readiness fact, not a
+# raised exception (B1) -----------------------------------------------------------
+# codex_status() calls codex.codex_version() -> binpath.codex_bin() unguarded. A
+# BinaryNotFoundError (override set to a path that doesn't exist, or -- after the
+# B4 fix -- one that is a directory) must not escape as a raw MCP protocol error;
+# it must be caught and reported the same way every other "codex isn't usable
+# right now" case already is: codex_found=False with a readiness_detail.
+#
+# DEPENDS ON THE PREFLIGHT FIX LANDING TOO: even once codex_status() itself
+# catches the error from codex_version(), the SAME override still crashes the
+# `preflight.flag_support(force=True)` call a few lines later in codex_status()
+# (preflight._probe_help() -> binpath.codex_bin(), same unguarded call, the
+# B4-adjacent fix covered by tests/test_preflight.py). This test cannot go
+# green from the B1 fix alone -- fix preflight._probe_help() first.
+
+
+def test_status_reports_bad_override_as_readiness_fact_not_raised_exception(clean_env, tmp_path):
+    from codex_in_claude import binpath
+
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        res = server.codex_status()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(
+            f"codex_status() must not raise for a bad {binpath.ENV_VAR} override, raised {exc!r}"
+        )
+    assert res["codex_found"] is False
+    assert res["ready"] is False
+    # Specific enough to act on -- names the env var, not a generic "not found"
+    # message that could equally describe a plain missing-on-PATH scenario.
+    assert binpath.ENV_VAR in res["readiness_detail"]
+
+
 def test_capability_summary_covers_all_task_families():
     """First-read instructions name every task family + prereqs + negative scope (issue #7)."""
     summary = server.CAPABILITY_SUMMARY
