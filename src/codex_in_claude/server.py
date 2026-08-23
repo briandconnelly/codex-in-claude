@@ -1398,12 +1398,15 @@ def codex_status() -> dict:
     # binpath.codex_bin() directly to capture that specific detail: codex.codex_version()
     # itself now swallows BinaryNotFoundError so it never lets it escape as a raw MCP
     # protocol error, which would otherwise hide the override's identity behind a
-    # generic "not found".
+    # generic "not found". Only worth probing when the override is actually set --
+    # with no override, codex_bin() delegates straight to binresolve.resolve_codex_bin()
+    # and can never raise, so the probe would be a no-op guard.
     bad_override_detail: str | None = None
-    try:
-        binpath.codex_bin()
-    except binpath.BinaryNotFoundError as exc:
-        bad_override_detail = str(exc)
+    if os.environ.get(binpath.ENV_VAR):
+        try:
+            binpath.codex_bin()
+        except binpath.BinaryNotFoundError as exc:
+            bad_override_detail = str(exc)
     version = codex.codex_version()
     found = version is not None
     authenticated, auth_detail = codex.login_status() if found else (None, None)

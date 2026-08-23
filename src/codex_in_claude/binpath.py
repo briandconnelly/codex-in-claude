@@ -31,7 +31,8 @@ _cache: str | None = None
 
 class BinaryNotFoundError(RuntimeError):
     """Raised when an explicit `CODEX_IN_CLAUDE_CODEX_BIN` override names a
-    path that does not exist on disk."""
+    path that doesn't exist on disk, is a directory, or is a regular file
+    lacking the execute bit."""
 
 
 def codex_bin() -> str:

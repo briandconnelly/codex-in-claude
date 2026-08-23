@@ -52,6 +52,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `(None, None)` respectively) instead of letting the exception escape, matching the guard already
   applied to `preflight._probe_help()` / `appserver.transfer_session()` /
   `appserver.read_rate_limits()`.
+- **`binpath.BinaryNotFoundError`'s docstring now names all three rejection cases** (nonexistent
+  path, directory, non-executable file) instead of only the original "does not exist on disk" case.
+  **`codex_status()`'s early `binpath.codex_bin()` probe now only runs when
+  `CODEX_IN_CLAUDE_CODEX_BIN` is actually set** — with no override, `codex_bin()` delegates straight
+  to `binresolve.resolve_codex_bin()` and can never raise, so the unconditional probe was a no-op
+  guard in the common case (internal simplification, no behavior change). Companion change from the
+  same round: README's Configuration table wording was also corrected.
 
 ## [0.19.0] - 2026-08-20
 
