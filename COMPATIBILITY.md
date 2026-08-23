@@ -23,6 +23,13 @@ there instead of shipping a half-safe process model.
   stderr warning for operators who knowingly accept consult-only, unsupported use; do not
   use `codex_delegate`/`codex_review_changes` against untrusted work in that mode.
 
+WSL2's Windows-PATH interop forwards Windows `PATH` entries into the WSL `PATH`, so a bare
+`codex` lookup can resolve to a Windows-side npm-global shim instead of the WSL-native install.
+`codex-in-claude` works around this automatically; the probe order lives in
+[`src/codex_in_claude/binresolve.py`](src/codex_in_claude/binresolve.py) rather than being
+restated here. To force a specific binary, set `CODEX_IN_CLAUDE_CODEX_BIN` (see the README's
+Configuration table).
+
 The `pyproject.toml` trove classifiers declare `Operating System :: MacOS` and
 `Operating System :: POSIX :: Linux` (not `OS Independent`) so PyPI reflects this.
 
