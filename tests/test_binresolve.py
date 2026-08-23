@@ -373,10 +373,6 @@ def test_which_not_consulted_when_npm_candidate_wins(isolated, tmp_path, monkeyp
     assert isolated.which_calls == []
 
 
-def test_returns_none_when_which_also_misses(isolated):
-    assert binresolve.resolve_codex_bin() is None
-
-
 # --- npm prefix -g failure handling: must never crash the resolver -------------
 
 
@@ -435,4 +431,62 @@ def test_home_unset_does_not_crash(monkeypatch, tmp_path):
         lambda *a, **k: CommandRun("", "npm: command not found", 127, 1, False),
     )
     monkeypatch.setattr(binresolve.shutil, "which", lambda name: None)
+    assert binresolve.resolve_codex_bin() is None
+
+
+# --- defensive except clauses: an unexpected failure from an underlying probe
+# must degrade to None/False, never escape (non-blocking review finding) -------
+#
+# Each probe already has a documented "never raises" contract covering the
+# *expected* failure modes (a missing $HOME, a failing npm, etc. -- exercised
+# above). These four tests instead force the *unexpected* case each function's
+# own defensive `except` clause exists to catch, so the clause itself has
+# coverage rather than just the happy/expected-failure paths around it.
+
+
+def test_is_executable_file_returns_false_when_os_access_raises_oserror(monkeypatch, tmp_path):
+    """`Path.is_file()` succeeds but the `os.access` check itself raises OSError
+    (e.g. a transient filesystem error) -- must degrade to False, not raise."""
+    real_file = tmp_path / "codex"
+    real_file.write_text("#!/bin/sh\necho codex\n")
+
+    def raising_access(path, mode):
+        raise OSError("simulated filesystem error")
+
+    monkeypatch.setattr(binresolve.os, "access", raising_access)
+    assert binresolve._is_executable_file(real_file) is False
+
+
+def test_npm_global_bin_candidate_returns_none_when_run_sync_capture_itself_raises(monkeypatch):
+    """Distinct from the already-covered `exit_code != 0` / binary-missing paths:
+    here `runtime.run_sync_capture` raises directly (e.g. an unexpected internal
+    error in the subprocess helper), which must still yield None, not propagate."""
+
+    def raising_npm(cmd, *args, **kwargs):
+        raise RuntimeError("simulated run_sync_capture failure")
+
+    monkeypatch.setattr(binresolve.runtime, "run_sync_capture", raising_npm)
+    assert binresolve._npm_global_bin_candidate() is None
+
+
+def test_which_fallback_returns_none_when_shutil_which_raises(monkeypatch):
+    """`shutil.which` itself raising (unexpected) must degrade to None, matching
+    every other probe's never-raise contract."""
+
+    def raising_which(name):
+        raise RuntimeError("simulated shutil.which failure")
+
+    monkeypatch.setattr(binresolve.shutil, "which", raising_which)
+    assert binresolve._which_fallback() is None
+
+
+def test_resolve_codex_bin_returns_none_when_an_internal_probe_raises_unexpectedly(monkeypatch):
+    """Belt-and-suspenders: `resolve_codex_bin()`'s own outer `except Exception`
+    must catch a failure even from a helper that forgot to guard itself (here,
+    `_running_under_wsl2_interop` raising directly instead of returning bool)."""
+
+    def raising_interop():
+        raise RuntimeError("simulated unexpected probe failure")
+
+    monkeypatch.setattr(binresolve, "_running_under_wsl2_interop", raising_interop, raising=False)
     assert binresolve.resolve_codex_bin() is None

@@ -211,6 +211,21 @@ def test_status_not_found(monkeypatch, clean_env):
     assert res["ready"] is False
 
 
+def test_status_not_found_readiness_detail_does_not_claim_path_only(monkeypatch, clean_env):
+    """Resolution now also checks WSL2 candidate directories and any
+    CODEX_IN_CLAUDE_CODEX_BIN override, not just PATH (see binresolve.py) --
+    the generic "genuinely nothing found, no bad override involved" message
+    must not claim PATH is the only place that was checked (non-blocking
+    review finding, second round). Exact replacement wording is left to the
+    implementer; this only pins the stale claim's removal plus a sanity check
+    that the message still communicates "not found"."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    res = server.codex_status()
+    assert res["codex_found"] is False
+    assert "on PATH" not in res["readiness_detail"]
+    assert "not found" in res["readiness_detail"].lower()
+
+
 def test_status_not_authenticated(monkeypatch, clean_env):
     monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.148.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))

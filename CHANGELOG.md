@@ -30,6 +30,14 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   feature-detection probe — each now reports the failure as a typed/readiness fact (e.g.
   `codex_status()` returns `codex_found: false` with a `readiness_detail` naming the env var)
   instead of letting `binpath.BinaryNotFoundError` escape as a raw error.
+- **`codex_status()`'s generic "nothing found" `readiness_detail` no longer claims PATH is the
+  only place checked** — resolution also probes the WSL2 candidate directories and any
+  `CODEX_IN_CLAUDE_CODEX_BIN` override (see above), so the wording now reads "codex CLI not
+  found." when a bad override isn't the cause. `binresolve.py`'s remaining hardcoded `"codex"`
+  string literals were also replaced with the existing `cli_contract.CODEX_BIN` constant
+  (internal refactor, no behavior change). README's Configuration table and `COMPATIBILITY.md`
+  were updated to document the `CODEX_IN_CLAUDE_CODEX_BIN` override and the WSL2 PATH-interop
+  rationale for WSL2-native resolution.
 
 ## [0.19.0] - 2026-08-20
 

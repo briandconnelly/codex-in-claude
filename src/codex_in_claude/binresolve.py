@@ -32,6 +32,8 @@ from pathlib import Path
 
 from pontonier.core import runtime
 
+from codex_in_claude import cli_contract
+
 # Stands in for the real `/usr/local/bin` so tests can monkeypatch it.
 USR_LOCAL_BIN = Path("/usr/local/bin")
 
@@ -55,12 +57,12 @@ def _home_local_bin_candidate() -> Path | None:
     home = os.environ.get("HOME")
     if not home:
         return None
-    return Path(home) / ".local" / "bin" / "codex"
+    return Path(home) / ".local" / "bin" / cli_contract.CODEX_BIN
 
 
 def _usr_local_bin_candidate() -> Path:
     """`USR_LOCAL_BIN/codex`, read live so tests' monkeypatch takes effect."""
-    return USR_LOCAL_BIN / "codex"
+    return USR_LOCAL_BIN / cli_contract.CODEX_BIN
 
 
 def _running_under_wsl2_interop() -> bool:
@@ -102,13 +104,13 @@ def _npm_global_bin_candidate() -> Path | None:
     npm_prefix = run.stdout.strip()
     if not npm_prefix:
         return None
-    return Path(npm_prefix) / "bin" / "codex"
+    return Path(npm_prefix) / "bin" / cli_contract.CODEX_BIN
 
 
 def _which_fallback() -> str | None:
     """`shutil.which("codex")`, swallowing any unexpected failure."""
     try:
-        return shutil.which("codex")
+        return shutil.which(cli_contract.CODEX_BIN)
     except Exception:
         return None
 

@@ -1419,7 +1419,7 @@ def codex_status() -> dict:
 
     ready = bool(found and authenticated)
     if not found:
-        readiness_detail = bad_override_detail or "codex CLI not found on PATH."
+        readiness_detail = bad_override_detail or "codex CLI not found."
     elif authenticated is None:
         readiness_detail = "Could not determine codex auth status."
     elif not authenticated:
@@ -1505,6 +1505,10 @@ def _transfer_outcome_envelope(
         source = outcome.thread_id_source or appserver.ThreadIdSource.IMPORT_NOTIFICATION
         return TransferResult(
             thread_id=thread_id,
+            # Intentionally the bare literal, not cli_contract.CODEX_BIN /
+            # binpath.codex_bin() -- this is a copy-paste hint for the user's
+            # own shell, not a subprocess we spawn, so our WSL2/override
+            # resolution correctly does not apply here.
             resume_command=shlex.join(["codex", "resume", thread_id]),
             source_path=source_path,
             meta=TransferMeta(
