@@ -43,7 +43,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   caught, matching the guard already used elsewhere for reading last-message files.
 - **A `CODEX_IN_CLAUDE_CODEX_BIN` override naming a regular file that lacks the execute bit is now
   rejected** with `binpath.BinaryNotFoundError`, the same as a missing path or a directory, instead
-  of being silently accepted and failing confusingly (`PermissionError`) at spawn time.
+  of being silently accepted and failing confusingly (`PermissionError`) at spawn time. The
+  `BinaryNotFoundError` message text also changed for the missing-path and directory cases, from
+  "no file exists at that path" to "no executable file exists at that path", to describe the one
+  check that now covers all three rejection reasons.
 - **`codex.codex_version()` and `codex.login_status()` no longer raise `binpath.BinaryNotFoundError`
   for a bad override** — each now honors its own documented failure return (`None`, and
   `(None, None)` respectively) instead of letting the exception escape, matching the guard already
