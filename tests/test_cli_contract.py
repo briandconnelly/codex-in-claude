@@ -449,3 +449,38 @@ def test_strict_config_recognizer_tolerates_carriage_returns():
         )
         is None
     )
+
+
+# --- retired config SETTING rejection (codex 0.149, #542) -------------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25, scratch $CODEX_HOME, zero spend
+# — config parsing precedes auth). The SAME config was accepted by 0.148.0, so this is a
+# real upgrade-time break for any user whose config still selects the retired policy.
+# Kept as a literal so a recognizer rewritten to match a paraphrase fails here.
+_RETIRED_SETTING_STDERR = (
+    'Error: approval_policy = "untrusted" is no longer supported; remove this setting\n'
+)
+
+
+def test_retired_config_setting_is_recognized():
+    rej = cli_contract.parse_unsupported_config_setting(_RETIRED_SETTING_STDERR)
+    assert rej is not None
+    assert rej.key == "approval_policy"
+    assert rej.value == '"untrusted"'
+
+
+def test_retired_config_setting_does_not_match_the_strict_config_grammar():
+    # The two grammars are distinct: this key is RECOGNIZED (only its value is retired),
+    # so the unknown-field parser must not claim it, and vice versa.
+    assert cli_contract.parse_strict_config_rejection(_RETIRED_SETTING_STDERR) is None
+    assert cli_contract.parse_unsupported_config_setting(_STRICT_OVERRIDE_STDERR) is None
+    assert cli_contract.parse_unsupported_config_setting(_STRICT_FILE_STDERR) is None
+
+
+def test_retired_config_setting_negative_controls():
+    for text in (
+        "",
+        "some unrelated failure",
+        # the phrase alone, with no `key = value` head, is not a rejection we can act on
+        "this feature is no longer supported\n",
+    ):
+        assert cli_contract.parse_unsupported_config_setting(text) is None

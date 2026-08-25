@@ -318,7 +318,7 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   model's prose. Run 1 must report egress (curl exit `0`, HTTP `200`) — the positive control
   proving the probe can see the open state; without it a broken probe and a held guarantee look
   identical. Runs 2 and 3 must be blocked (curl exit `6`, could-not-resolve-host); run 3 shows
-  the `-c` override still outranks profiles (verified 0.148.0). If run 2 or 3 reports egress,
+  the `-c` override still outranks profiles (verified 0.148.0, re-verified 0.149.1). If run 2 or 3 reports egress,
   the key drifted: update the constant and re-verify before shipping the version bump.
 - **Workspace-write writable-roots pin.** The filesystem sibling
   (`-c sandbox_workspace_write.writable_roots=[]`, `WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY`,

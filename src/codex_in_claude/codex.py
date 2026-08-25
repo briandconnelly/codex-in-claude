@@ -443,6 +443,33 @@ def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -
     )
 
 
+def _retired_config_setting_error(
+    setting: cli_contract.UnsupportedConfigSetting, extra: config.ExtraArgs | None
+) -> ErrorInfo:
+    """Error for a config setting codex RETIRED (#542).
+
+    Distinct from the unknown-KEY strict-config path: the key still exists and only its
+    VALUE is refused, so the strict grammar cannot see it and no CONTRACT_DRIFT pattern
+    matches — before #542 this reached the caller as a generic `nonzero_exit`.
+
+    The message names no file and carries no `-c` marker, so ownership cannot be read off
+    it the way `_strict_config_error` reads its origin. Attribute it to the operator only
+    when their own passthrough sets that key; otherwise it is the user's config. The
+    echoed key and value are untrusted text codex read off disk, so they go through the
+    same redaction and length bound as every other surfaced failure detail."""
+    ea = config.extra_args() if extra is None else extra
+    if ea.owns_config_key(setting.key):
+        return _extra_args_rejected_error([setting.key])
+    key = _safe_echo(setting.key)
+    value = _safe_echo(setting.value)
+    return make_error(
+        "user_config_rejected",
+        f"codex refused to start: your Codex config sets `{key}` to {value}, which this "
+        f"codex version no longer supports. Remove or change that setting. No model call "
+        f"was made.",
+    )
+
+
 def _strict_config_error(
     rejection: cli_contract.StrictConfigRejection, extra: config.ExtraArgs | None
 ) -> ErrorInfo:
@@ -558,6 +585,13 @@ def classify_failure(
     strict = cli_contract.parse_strict_config_rejection(run.stderr)
     if strict is not None:
         return _strict_config_error(strict, extra_args)
+    # A RETIRED setting is the same class of failure one step later in config parsing:
+    # the key parses, its value no longer does (#542). It is checked here, beside the
+    # strict grammar and ahead of the auth/drift/rate-limit substring matchers, for the
+    # identical reason — it echoes untrusted text that could satisfy one of them.
+    retired = cli_contract.parse_unsupported_config_setting(run.stderr)
+    if retired is not None:
+        return _retired_config_setting_error(retired, extra_args)
     if cli_contract.is_auth_failure(run.stderr, run.stdout, last_message, event_error):
         return _auth_error()
     # Drift before rate-limit so a genuine contract change is never masked as a

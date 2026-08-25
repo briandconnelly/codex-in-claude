@@ -84,7 +84,8 @@ def test_build_exec_command_pins_network_access_exactly_on_workspace_write(
     # #518: at the default isolation (inherit) codex reads $CODEX_HOME/config.toml, where
     # `[sandbox_workspace_write] network_access = true` would silently void the advertised
     # no-network-egress guarantee. The pin closes that channel (and --profile — the `-c`
-    # override outranks both, verified live on 0.148.0) for every workspace-write run.
+    # override outranks both, verified live on 0.148.0 and re-verified on 0.149.1) for
+    # every workspace-write run.
     # The expected token is a LITERAL here on purpose: deriving it from the constant the
     # code reads would make this test unable to catch a wrong constant.
     cmd, _ = codex.build_exec_command(
@@ -144,8 +145,9 @@ def test_build_exec_command_pins_writable_roots_exactly_on_workspace_write(
     # writable_roots = [...]` would silently widen the delegate sandbox to write outside
     # the workspace, voiding the advertised writes-stay-in-the-workspace boundary. The
     # pin restores codex's own default ([]) and closes the config-file and --profile
-    # channels (the `-c` override outranks both, verified live on 0.148.0) for every
-    # workspace-write run. The expected token is a LITERAL here on purpose: deriving it
+    # channels (the `-c` override outranks both, verified live on 0.148.0 and re-verified
+    # on 0.149.1) for every workspace-write run. The expected token is a LITERAL here on
+    # purpose: deriving it
     # from the constant the code reads would make this test unable to catch a wrong
     # constant.
     cmd, _ = codex.build_exec_command(
@@ -200,7 +202,8 @@ def test_writable_roots_pin_key_constant_matches_codex_config_key():
 
 def test_build_exec_command_add_dir_composes_with_writable_roots_pin(tmp_path):
     # #520: --add-dir grants ride the FLAG layer, which outranks the `-c` config-layer
-    # pin (verified live on 0.148.0) — so a future add_dirs caller widens the sandbox
+    # pin (verified live on 0.148.0 and re-verified on 0.149.1) — so a future add_dirs
+    # caller widens the sandbox
     # DESPITE the pin. Both tokens coexisting in the argv is the documented behavior;
     # adopting add_dirs on a model-bearing path is a contract change needing its own
     # surface review (see the builder's add_dirs note).
@@ -481,9 +484,9 @@ def test_codex_version(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,
         "run_sync_capture",
-        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.148.0\n", "", 0, 1, False),
+        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.149.1\n", "", 0, 1, False),
     )
-    assert codex.codex_version() == "codex-cli 0.148.0"
+    assert codex.codex_version() == "codex-cli 0.149.1"
 
 
 def test_codex_version_missing(monkeypatch):
@@ -1488,7 +1491,7 @@ def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operato
 
 
 def test_version_display_passes_an_ordinary_version_through():
-    assert codex.version_display("codex-cli 0.148.0") == "codex-cli 0.148.0"
+    assert codex.version_display("codex-cli 0.149.1") == "codex-cli 0.149.1"
 
 
 @pytest.mark.parametrize("value", [None, ""])
@@ -1572,7 +1575,7 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
     in this package branches on the marker — it is text for a reader, never a
     machine-readable `truncated` flag — so a spoofed suffix misleads a reader and nothing
     more. `StatusResult` describes it as advisory for that reason."""
-    spoofed = "codex-cli 0.148.0" + codex._ECHO_TRUNC_MARKER
+    spoofed = "codex-cli 0.149.1" + codex._ECHO_TRUNC_MARKER
     assert len(spoofed) <= codex._ECHO_MAX_CHARS
     assert codex.version_display(spoofed) == spoofed
 
@@ -1580,12 +1583,12 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
 def test_version_display_never_repairs_a_control_split_version_for_the_verdict():
     """The display copy is LOSSY and is not the identity.
 
-    Deleting the control character out of `0.<BEL>148.0` yields a plausible
-    `codex-cli 0.148.0` — but `version_supported` must keep parsing the RAW probe output,
+    Deleting the control character out of `0.<BEL>149.1` yields a plausible
+    `codex-cli 0.149.1` — but `version_supported` must keep parsing the RAW probe output,
     which does not parse at all. Pinning both halves keeps a future refactor from routing
     the verdict through this copy."""
-    raw = "codex-cli 0.\x07148.0"
-    assert codex.version_display(raw) == "codex-cli 0.148.0"
+    raw = "codex-cli 0.\x07149.1"
+    assert codex.version_display(raw) == "codex-cli 0.149.1"
     assert config.parse_version(raw) is None
     assert config.version_supported(raw) is None
 
@@ -1596,3 +1599,65 @@ def test_safe_echo_bounds_an_over_cap_span_with_the_explicit_marker():
     out = codex._safe_echo("k" * 5000)
     assert len(out) == codex._ECHO_MAX_CHARS
     assert out.endswith(codex._ECHO_TRUNC_MARKER)
+
+
+# --- retired config SETTING classification (codex 0.149, #542) --------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25). 0.148.0 accepted the same
+# config, so a user upgrading hits this on their FIRST run at the default isolation.
+_RETIRED_SETTING_STDERR = (
+    'Error: approval_policy = "untrusted" is no longer supported; remove this setting\n'
+)
+
+
+def test_retired_config_setting_is_user_config_rejected(monkeypatch):
+    # Before #542 this matched no signature and fell through to a generic nonzero_exit,
+    # losing the diagnosis. It is the user's own config, so it repairs like one.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert err.code == "user_config_rejected"
+    assert err.temporary is False
+    assert err.repair is not None
+    assert err.repair.next_step == "correct_config"
+    # The key and the retired value are the entire actionable content.
+    assert "approval_policy" in (err.message or "")
+    assert "untrusted" in (err.message or "")
+
+
+def test_retired_config_setting_is_read_from_stderr_only(monkeypatch):
+    # Same reason as the strict grammar: recognition must not be manufacturable by
+    # model-produced text on stdout, in a last message, or in an event blob.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    text = _RETIRED_SETTING_STDERR
+    # Positive control: the identical text on STDERR *is* recognized, so each negative
+    # below is about the channel and not about the grammar failing to match.
+    assert codex.classify_failure(_run(stderr=text)).code == "user_config_rejected"
+    assert codex.classify_failure(_run(stdout=text)).code != "user_config_rejected"
+    assert codex.classify_failure(_run(), last_message=text).code != "user_config_rejected"
+
+
+def test_retired_config_setting_owned_by_an_operator_passthrough_is_theirs(monkeypatch):
+    # The message names no file and no `-c` marker, so ownership cannot be read off it.
+    # When the operator's own passthrough sets the retired key, the rejection is theirs.
+    # `model_provider` stands in for a retired key an operator CAN own: `approval_policy`
+    # itself never can (the test below pins why), so using it here would assert nothing.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=acme")
+    stderr = 'Error: model_provider = "acme" is no longer supported; remove this setting\n'
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "extra_args_rejected"
+    assert "model_provider" in (err.message or "")
+
+
+def test_a_retired_guarantee_key_can_never_be_operator_owned(monkeypatch):
+    # `approval_policy` is on the extra-args denylist precisely because it could weaken an
+    # advertised guarantee, so the ownership branch above can never fire for it and the
+    # rejection stays the USER's config. This pins that coupling: if the denylist ever
+    # stopped refusing the key, an operator passthrough could claim this rejection.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c approval_policy=untrusted")
+    assert config.extra_args().owns_config_key("approval_policy") is False
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert err.code == "user_config_rejected"
+
+
+def test_retired_config_setting_does_not_disturb_unrelated_failures(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    assert codex.classify_failure(_run(stderr="some unrelated boom")).code == "nonzero_exit"

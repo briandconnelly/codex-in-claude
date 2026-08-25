@@ -7,7 +7,7 @@ an upstream breaking change is centralized, greppable, and testable. Revising it
 takes the lockstep procedure in docs/UPGRADING-CODEX.md, not an edit to this file
 alone. See COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.148.0`.
+Verified against `codex-cli 0.149.1`.
 """
 
 from __future__ import annotations
@@ -600,6 +600,61 @@ def parse_strict_config_rejection(text: str | None) -> StrictConfigRejection | N
     return None
 
 
+# --- Retired config SETTING rejection (codex 0.149, issue #542) --------------------
+# 0.149 RETIRED the `untrusted` approval policy and refuses to start when the user's own
+# config still selects it (upstream PR #39630). This is a different failure from the
+# --strict-config unknown-KEY grammar above: here the key is RECOGNIZED and only its
+# VALUE is no longer accepted, so `parse_strict_config_rejection` cannot see it — and the
+# message matches no CONTRACT_DRIFT_STDERR_PATTERNS entry either, so before #542 the run
+# degraded to a generic `nonzero_exit` and the actionable diagnosis was lost.
+#
+# It reaches every model-bearing run at the DEFAULT `inherit` isolation, which does not
+# send --ignore-user-config, and it does NOT need --strict-config: codex rejects the
+# retired value while parsing config, ahead of auth, at zero spend.
+#
+# Captured verbatim from codex-cli 0.149.1 on 2026-08-25 (scratch $CODEX_HOME); the same
+# config was ACCEPTED by 0.148.0, so this is an upgrade-time break, not a standing one.
+# Only phrasings from real observed output are encoded here.
+UNSUPPORTED_CONFIG_SETTING_PREFIX = "Error: "
+UNSUPPORTED_CONFIG_SETTING_PHRASE = "is no longer supported"
+# The echoed key/value are untrusted text codex read off disk, so they carry the same
+# length bound as the strict-config spans.
+_UNSUPPORTED_CONFIG_SETTING_PATTERN = re.compile(
+    rf"^{re.escape(UNSUPPORTED_CONFIG_SETTING_PREFIX)}"
+    rf"(?P<key>[A-Za-z0-9_.]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}) = "
+    rf"(?P<value>[^\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}?) "
+    rf"{re.escape(UNSUPPORTED_CONFIG_SETTING_PHRASE)}",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class UnsupportedConfigSetting:
+    """A parsed "setting is no longer supported" rejection.
+
+    `key` is the config path codex echoed and `value` the retired value it names, both
+    exactly as printed. Unlike StrictConfigRejection there is no `origin`: the message
+    names no file and no `-c` marker, so ownership is decided by the caller."""
+
+    key: str
+    value: str
+
+
+def parse_unsupported_config_setting(text: str | None) -> UnsupportedConfigSetting | None:
+    """Parse codex's retired-setting rejection out of STDERR, or None.
+
+    Pass `run.stderr` alone, for the same reason as parse_strict_config_rejection: the
+    anchored grammar must not be satisfiable by model-produced text on stdout. Returns
+    None for any text that is not this exact grammar, so an unrelated failure keeps its
+    ordinary classification."""
+    if not text or UNSUPPORTED_CONFIG_SETTING_PHRASE not in text:
+        return None
+    m = _UNSUPPORTED_CONFIG_SETTING_PATTERN.search(text)
+    if m is None:
+        return None
+    return UnsupportedConfigSetting(key=m.group("key"), value=m.group("value"))
+
+
 # --- workspace-write write scope (issue #523) ---------------------------------------
 # RULE (write scope): every prose site that describes the propose tier's write
 # boundary — README.md, SECURITY.md, COMPATIBILITY.md, and
@@ -665,13 +720,20 @@ MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # malformed/hostile cache surfacing junk to an agent).
 MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Bundled advisory fallback used ONLY when the on-disk cache is absent/unreadable.
-# Copied from codex-cli 0.148.0's models_cache.json on 2026-08-19 (cache order preserved);
-# `gpt-5.6-sol-wm` was DROPPED in that refresh (it had been added in the 0.147.0-era refresh).
-# The catalog is served by the backend, not shipped in the binary, so a slug CAN appear or vanish
-# without a CLI release. Whether THIS drop was such a move is not established: the only observation
-# is the 0.148.0-written cache, with no contemporaneous 0.147.0 read to compare (contrast the
-# 0.147 addition, where a 0.146.0-written cache already carried the slug). Re-diff the slug set on
-# every upgrade anyway — this is the pass that catches it.
+# Copied from codex-cli 0.149.1's models_cache.json on 2026-08-25 (cache order preserved);
+# `gpt-reserve` was ADDED in that refresh. The catalog is served by the backend, not shipped in
+# the binary, so a slug CAN appear or vanish without a CLI release — and here that is not a
+# caveat but the measured result: a contemporaneous A/B (2026-08-25, both binaries pointed at
+# separate CACHE-FREE scratch $CODEX_HOME copies and run five seconds apart) had codex-cli
+# 0.148.0 fetch the identical slug set, `gpt-reserve` included. So the addition is a backend
+# catalog move, NOT a 0.149 client change. That is the one-way conclusion the evidence supports;
+# it does not date the move, which happened sometime after the 2026-08-19 refresh above.
+# (Contrast the 0.148 entry this replaces, which recorded a DROP it could not attribute because
+# no contemporaneous old-client read was taken. Taking one is now the rule, not the exception.)
+# `gpt-reserve` carries `visibility: "hide"`, which is deliberately NOT filtered: codex_models
+# copies the cache's slug set verbatim and lets `codex exec` be the real validator, so adding a
+# visibility filter would be a separate, deliberate policy change (#547).
+# Re-diff the slug set on every upgrade — this is the pass that catches it.
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
 # live account's available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping
 # the CLI.
@@ -679,6 +741,7 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    "gpt-reserve",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
@@ -690,11 +753,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.148.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.149.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 148)})
+SUPPORTED_VERSIONS = frozenset({(0, 149)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

@@ -52,6 +52,60 @@ def test_remote_plugin_disabled_by_plugin_flag_live():
         cli_contract.REMOTE_PLUGIN_FEATURE,
     )
     assert still_off == "false"
+    # ...in EITHER order (#542): pinning only one order would miss a change that made the
+    # last flag win, which is the shape an argv-precedence regression actually takes.
+    reversed_order = _feature_state(
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+        cli_contract.DISABLE_FEATURE_FLAG,
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+        "--enable",
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+    )
+    assert reversed_order == "false"
+    # ...and against the CONFIG layer too. `--disable X` is documented as exactly
+    # `-c features.X=false`, so an operator `-c` setting it true is the same layer and the
+    # precedence is worth pinning rather than assumed (#542).
+    over_config = _feature_state(
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+        "-c",
+        f"features.{cli_contract.REMOTE_PLUGIN_FEATURE}=true",
+        cli_contract.DISABLE_FEATURE_FLAG,
+        cli_contract.REMOTE_PLUGIN_FEATURE,
+    )
+    assert over_config == "false"
+
+
+def test_unknown_feature_name_fails_loud_live():
+    """The fail-loud half of the remote-plugin guarantee (#287, pinned #542).
+
+    If upstream ever renames or removes `remote_plugin`, the plugin must fail at arg-parse
+    (zero spend, classified `cli_contract_changed`) instead of silently running with the
+    feature back on. That conversion rests on codex rejecting an unknown feature NAME, so
+    pin the rejection itself — and pin that the plugin's own feature name is NOT rejected,
+    which is the positive control that keeps this from passing on a broken invocation."""
+    rejected = runtime.run_sync_capture(
+        [
+            cli_contract.CODEX_BIN,
+            "features",
+            "list",
+            cli_contract.DISABLE_FEATURE_FLAG,
+            "definitely_not_a_feature",
+        ],
+        timeout_seconds=30,
+    )
+    assert rejected.exit_code != 0
+    assert cli_contract.is_contract_drift(rejected.stderr, rejected.stdout) or (
+        "Unknown feature flag" in (rejected.stderr or "")
+    ), rejected.stderr
+    # Positive control: the real feature name is accepted by the same parser.
+    assert (
+        _feature_state(
+            cli_contract.REMOTE_PLUGIN_FEATURE,
+            cli_contract.DISABLE_FEATURE_FLAG,
+            cli_contract.REMOTE_PLUGIN_FEATURE,
+        )
+        == "false"
+    )
 
 
 def test_status_live():
