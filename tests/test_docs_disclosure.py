@@ -1117,19 +1117,31 @@ def _shared_workflow_section() -> str:
     return text[start:end]
 
 
+def _spend_step_two(section: str) -> str:
+    """Numbered step 2 of a Shared-workflow section, and only that step.
+
+    The guard is about the spend step, so it must not be satisfiable by wording that sits
+    in step 1 or step 3 (a Codex review caught the section-wide version).
+    """
+    start = section.index("\n2. ")
+    end = section.find("\n3. ", start)
+    return section[start : end if end != -1 else len(section)]
+
+
 def _spend_step_defects(section: str) -> list[str]:
     """The production check, as a predicate the guard-the-guard case runs too.
 
-    Returns every reason the section fails: the live-read fact missing, or any dead
+    Returns every reason step 2 fails: the live-read fact missing, or any dead
     persisted-snapshot phrase present. Extracted so the pre-review fixture below goes
     through the SAME logic the real assertion uses — a fixture that only asserts things
     about its own hard-coded string proves nothing about the guard (a Copilot review
     caught exactly that on the first version of this test).
     """
+    step = _spend_step_two(section)
     defects = []
-    if "reads it live" not in section:
+    if "reads it live" not in step:
         defects.append("missing the live-read fact")
-    defects.extend(phrase for phrase in _SPEND_STEP_DEAD_WORDING if phrase in section)
+    defects.extend(phrase for phrase in _SPEND_STEP_DEAD_WORDING if phrase in step)
     return defects
 
 
@@ -1154,10 +1166,14 @@ def test_spend_step_guard_rejects_the_pre_review_wording():
         "as_of",
         "home_unverified",
     ]
-    # A section that dropped the live-read fact is rejected on that ground alone.
-    assert _spend_step_defects("2. Treat `rate_limit` as advisory.") == [
+    # A section that dropped the live-read fact is rejected on that ground alone — and the
+    # fact counts only inside step 2, not when it drifted into a neighbouring step.
+    assert _spend_step_defects("\n2. Treat `rate_limit` as advisory.") == [
         "missing the live-read fact"
     ]
+    assert _spend_step_defects(
+        "\n1. codex_status reads it live.\n2. Treat `rate_limit` as advisory.\n3. reads it live"
+    ) == ["missing the live-read fact"]
     # …and the text as it actually stands is accepted by that same predicate.
     assert _spend_step_defects(_shared_workflow_section()) == []
 
