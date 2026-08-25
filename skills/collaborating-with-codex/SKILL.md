@@ -121,6 +121,21 @@ Facts to weigh before any active call:
 
 ## Binding rules
 
+- **Preflight — readiness:** Call `codex_status` before every paid call. Make the call only when
+  both `ready: true` and `extra_args_valid: true`; if either is false, stop and surface the
+  readiness or operator-configuration detail (see Shared workflow, step 1).
+- **Preflight — spend control:** Never make a paid call when `rate_limit.status` is `blocked`.
+  Deferring does not help — no quota reset clears a spend control — so tell the user spending
+  is administratively blocked on their Codex account (see Shared workflow, step 3).
+- **Spend — declare the cap:** State the paid-call cap for the decision before the first active
+  call, then stay within it.
+- **Routing — sync or async:** When a request matches both a sync row and the async row of the
+  route table, use the matching `_async` tool. Use the sync tool only for focused work that
+  finishes well inside the synchronous deadline.
+- **Composition — opt-in:** Select an independent-attempt or review–revise workflow only when the
+  user requested it or the task already declares it, **and** the value/risk gate clears (a
+  hard-to-reverse, load-bearing, or security-sensitive decision; a single opinion genuinely
+  insufficient; you can verify and synthesize the outputs). Otherwise make one call or none.
 - **Spend — one call per decision point:** Make one active call per ordinary decision point. Each
   async start counts as an active call, and never start both the sync and async forms for the same
   work.

@@ -1133,3 +1133,57 @@ def test_spend_step_guard_rejects_the_pre_review_wording():
         "or `home_unverified: true` as uncertainty. reads it live"
     )
     assert any(phrase in pre_review for phrase in _SPEND_STEP_DEAD_WORDING)
+
+
+# --- 2026-08-25 review, findings 3-5: rules must live in the rule section -------------
+# The separating-context-from-constraints audit (R1) found five rules that directed
+# behavior only from the "Shared workflow"/"Route the request" prose, and two compound
+# bullets (R4). This pins the promoted/split labels so a later edit cannot quietly fold them
+# back into narrative.
+_REQUIRED_BINDING_RULE_LABELS = (
+    "- **Preflight — readiness:**",
+    "- **Preflight — spend control:**",
+    "- **Spend — declare the cap:**",
+    "- **Routing — sync or async:**",
+    "- **Composition — opt-in:**",
+)
+_RETIRED_COMPOUND_RULE_LABELS = ("- **Delegation:**", "- **Retry:**")
+_SPLIT_RULE_LABELS = (
+    "- **Delegation — apply:**",
+    "- **Delegation — scope:**",
+    "- **Retry — no loops:**",
+    "- **Retry — replay:**",
+)
+
+
+def _binding_rules_section() -> str:
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    parts = text.split("## Binding rules", 1)
+    assert len(parts) == 2, "the Binding rules section is gone or renamed"
+    return parts[1]
+
+
+def test_binding_rules_carry_the_promoted_preflight_and_routing_rules():
+    rules = _binding_rules_section()
+    for label in _REQUIRED_BINDING_RULE_LABELS:
+        assert label in rules, f"{label} is missing from the Binding rules section"
+
+
+def test_binding_rules_split_the_compound_delegation_and_retry_rules():
+    rules = _binding_rules_section()
+    for label in _RETIRED_COMPOUND_RULE_LABELS:
+        assert label not in rules, f"{label} is the compound bullet the review split"
+    for label in _SPLIT_RULE_LABELS:
+        assert label in rules, f"{label} is missing from the Binding rules section"
+
+
+def test_privacy_group_stays_contiguous_after_the_promotion():
+    """The promoted bullets sit ABOVE the Spend group, so `_privacy_rule_text()`'s contiguous
+    slice is untouched. This fails if someone inserts a promoted bullet inside the group."""
+    rules = _binding_rules_section()
+    first_privacy = rules.index("- **Privacy")
+    for label in _REQUIRED_BINDING_RULE_LABELS + _SPLIT_RULE_LABELS:
+        if label in rules:
+            assert rules.index(label) < first_privacy or label.startswith(
+                ("- **Delegation", "- **Retry")
+            ), f"{label} was inserted at or after the Privacy group"
