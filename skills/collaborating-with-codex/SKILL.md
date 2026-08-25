@@ -23,11 +23,10 @@ and verification skills instead of replacing them.
    `extra_args_valid: true`. If either is false, stop and surface the corresponding readiness or
    operator-configuration detail.
 2. Treat `rate_limit` as advisory, with one exception. `codex_status` reads it live from the Codex
-   app-server (no model spend), so it is current when `ready: true`. Decide spend from it: proceed
-   on `available`; defer non-urgent calls on `limited` or `exhausted`; treat `unknown` (the live
-   read could not complete, or only a stale snapshot was available — `is_stale`/`as_of`),
-   `unavailable` (this codex/account exposes no quota data), or `home_unverified: true` as
-   uncertainty — neither permission nor denial.
+   app-server (no model spend, nothing persisted), so it is current when `ready: true`. Decide
+   spend from it: proceed on `available`; defer non-urgent calls on `limited` or `exhausted`;
+   treat `unknown` (the live read could not complete — retry may help) or `unavailable` (this
+   codex/account exposes no quota data) as uncertainty — neither permission nor denial.
    The account reports only the windows that currently bind it, so `primary` (shorter/rolling) or
    `secondary` (longer) may be null. Read `note` for plain-language caveats before relying on it.
 3. Do not make a paid call when `rate_limit.status` is `blocked`. This is the exception to
