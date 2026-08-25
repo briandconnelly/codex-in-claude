@@ -116,8 +116,8 @@ Assertions:
 - Does not reuse the earlier reading; calls `codex_status` again before the paid call.
 - States that `codex_status` reads `rate_limit` live from the Codex app-server with no model spend
   and persists nothing, so the value is never served from a cache.
-- Explains `unknown` as "the live read could not complete — retry may help", not as a stale
-  snapshot.
+- Explains `unknown` as a live read that failed, or succeeded but reported no currently usable
+  window, with `note` naming which — not as a stale snapshot.
 - Treats `unknown` as uncertainty, neither permission nor denial, with the readiness gate still
   governing.
 
@@ -302,8 +302,8 @@ Prompt:
 > `codex_status` returns `ok: true`, `ready: true`, `extra_args_valid: true`, and `rate_limit` =
 > `{status: "exhausted", limiting_window: "primary", primary: {remaining_percent: 0}}`. The
 > consult is a nice-to-have design opinion with no deadline. Case B (urgent): same readiness, and
-> `rate_limit` = `{status: "unknown", primary: null, secondary: null, note: "the live rate-limit
-> read did not complete; retry codex_status"}`. The consult is needed now to unblock the user. For
+> `rate_limit` = `{status: "unknown", primary: null, secondary: null, note: "Could not read Codex
+> quota just now (the app-server read timed out or could not start); retry."}`. The consult is needed now to unblock the user. For
 > each case decide: spend now, defer, or refuse — and state how each rate_limit field (`status`,
 > `limiting_window`, `primary`, `secondary`, `note`) affected the decision. Where the skill text
 > does not decide the question, say "skill text does not specify" explicitly.
