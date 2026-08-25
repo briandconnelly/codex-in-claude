@@ -1154,6 +1154,13 @@ _SPLIT_RULE_LABELS = (
     "- **Retry — no loops:**",
     "- **Retry — replay:**",
 )
+_PRIVACY_BULLET_LABELS = (
+    "- **Privacy — never justify a call by workspace placement:**",
+    "- **Privacy — session-identified material:**",
+    "- **Privacy — do not call:**",
+    "- **Privacy — a dry run is not a disclosure check:**",
+    "- **Privacy — untrusted workspaces:**",
+)
 
 
 def _binding_rules_section() -> str:
@@ -1179,7 +1186,8 @@ def test_binding_rules_split_the_compound_delegation_and_retry_rules():
 
 def test_privacy_group_stays_contiguous_after_the_promotion():
     """The promoted bullets sit ABOVE the Spend group, so `_privacy_rule_text()`'s contiguous
-    slice is untouched. This fails if someone inserts a promoted bullet inside the group."""
+    slice is untouched. It also fails if any bullet is inserted INSIDE the Privacy group,
+    which would truncate `_privacy_rule_text()`'s slice while the older guards stayed green."""
     rules = _binding_rules_section()
     first_privacy = rules.index("- **Privacy")
     for label in _REQUIRED_BINDING_RULE_LABELS + _SPLIT_RULE_LABELS:
@@ -1187,3 +1195,10 @@ def test_privacy_group_stays_contiguous_after_the_promotion():
             assert rules.index(label) < first_privacy or label.startswith(
                 ("- **Delegation", "- **Retry")
             ), f"{label} was inserted at or after the Privacy group"
+
+    group = _privacy_rule_text()
+    for label in _PRIVACY_BULLET_LABELS:
+        assert label in group, (
+            f"{label} fell outside the contiguous Privacy slice — a non-Privacy bullet was "
+            "inserted inside the group"
+        )

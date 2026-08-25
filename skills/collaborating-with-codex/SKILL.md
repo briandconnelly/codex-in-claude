@@ -138,7 +138,7 @@ Facts to weigh before any active call:
 - **Composition — opt-in:** Select an independent-attempt or review–revise workflow only when the
   user requested it or the task already declares it, **and** the value/risk gate clears (a
   hard-to-reverse, load-bearing, or security-sensitive decision; a single opinion genuinely
-  insufficient; you can verify and synthesize the outputs). Otherwise make one call or none.
+  insufficient; and you can verify and synthesize the outputs). Otherwise make one call or none.
 - **Spend — one call per decision point:** Make one active call per ordinary decision point. Each
   async start counts as an active call, and never start both the sync and async forms for the same
   work.
