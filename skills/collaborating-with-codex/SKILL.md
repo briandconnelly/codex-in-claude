@@ -50,7 +50,7 @@ and verification skills instead of replacing them.
 | Move the Claude session into a resumable Codex thread | `codex_transfer` | [session transfer](references/transfer.md) |
 | Claude and Codex attempt independently, then synthesize | independent two-member attempt | [independent attempt](references/independent-attempt.md) |
 | Claude drafts, Codex critiques, Claude revises | declared review–revise | [review–revise](references/review-revise.md) |
-| Optional parameters, idempotency, or a tool error | current tool | [options and errors](references/options-and-errors.md) |
+| Optional parameters, idempotency, or a tool error | the tool already selected | [options and errors](references/options-and-errors.md) |
 | MCP server unavailable | limited read-only CLI fallback | [server-down fallback](references/server-down-fallback.md) |
 | None of these, or a Codex call would not change the decision | no call — proceed without Codex | — |
 
@@ -176,8 +176,8 @@ Facts to weigh before any active call:
 - **Delegation — scope:** Keep a delegated task self-contained: no installs, remote git
   operations, `gh`, `curl`, or publishing inside it, because delegate runs have no network egress
   (see the active-workflows reference).
-- **Retry — no loops:** Never loop paid retries. Retry once at most, and only after the failing
-  condition has changed (see the options-and-errors reference).
+- **Retry — no loops:** Never loop paid retries: retry only after the failing condition has changed
+  (see the options-and-errors reference).
 - **Retry — replay:** After an ambiguous transport failure, retry the same concrete tool with the
   same arguments and `idempotency_key`. Never switch between sync and async expecting that key to
   replay the run.
