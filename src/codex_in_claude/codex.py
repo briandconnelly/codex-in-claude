@@ -462,11 +462,35 @@ def _retired_config_setting_error(
         return _extra_args_rejected_error([setting.key])
     key = _safe_echo(setting.key)
     value = _safe_echo(setting.value)
+    # Ownership is genuinely UNKNOWN when an operator profile is selected. `--profile NAME`
+    # makes codex load $CODEX_HOME/NAME.config.toml, and a profile can reintroduce a
+    # setting the extra-args denylist refuses on `-c` (the documented operator-trust
+    # boundary). The strict grammar resolves this by naming the offending FILE; this one
+    # reports no file, so the honest move is to disclose the ambiguity rather than assert
+    # the user's own config and send them to fix a file that may not hold the value.
+    where = "your Codex config"
+    if ea.profile_names:
+        selected = ", ".join(_safe_echo(n) for n in ea.profile_names)
+        where = (
+            f"your Codex config — or the operator profile selected by "
+            f"{config.EXTRA_ARGS_ENV} ({selected}), which this plugin cannot inspect"
+        )
     return make_error(
         "user_config_rejected",
-        f"codex refused to start: your Codex config sets `{key}` to {value}, which this "
-        f"codex version no longer supports. Remove or change that setting. No model call "
-        f"was made.",
+        f"codex refused to start: {where} sets `{key}` to {value}, which this codex "
+        f"version no longer supports. Remove or change that setting. No model call was made.",
+        # The shared table prose is written for the unknown-KEY grammar — it calls the key
+        # unrecognized and points at a reported file and line, neither of which applies
+        # here. Override it rather than send the caller looking for absent location data.
+        repair_alternative=(
+            "This codex version no longer supports that config VALUE (the key itself is "
+            "still recognized, and codex reports no file or line for it). Remove or change "
+            "the setting in your Codex config — checking any operator-selected profile too "
+            "— or upgrade/downgrade codex to a version that accepts it, then rerun. As a "
+            "last resort, isolation='ignore-config' skips your config file for the run — "
+            "but it drops ALL of it (model provider, MCP servers, and every other "
+            "setting), so prefer fixing the setting."
+        ),
     )
 
 

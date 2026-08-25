@@ -42,11 +42,17 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
 # [experimental] and the import method rides behind the `experimentalApi` capability),
 # so every wire assumption lives here; see COMPATIBILITY.md. Verified against
-# codex-cli 0.148.0 on 2026-08-19 via `codex app-server generate-json-schema --out <DIR>`
-# (the generator requires an --out directory instead of writing to stdout). The 0.147.0 -> 0.148.0
-# diff added three v2 messages we do NOT consume (`NullableGetAccountTokenUsageParams`,
-# `ThreadQueueChangedNotification`, `ThreadRevertedNotification`) and left every consumed
-# schema byte-identical after canonicalization. The 0.146.0 -> 0.147.0
+# codex-cli 0.149.1 on 2026-08-25 via `codex app-server generate-json-schema --out <DIR>`
+# (the generator requires an --out directory instead of writing to stdout). The 0.148.0 -> 0.149.1
+# diff added three v2 messages we do NOT consume (`ProjectChangedNotification`,
+# `StrictReviewRequiredNotification`, `ThreadProjectUpdatedNotification`), removed none, and left
+# six of the seven consumed schemas byte-identical after canonicalization; the seventh,
+# `GetAccountRateLimitsResponse`, gained two `PlanType` enum values (`edu_plus`, `edu_pro`), which
+# are absorbed because `planType` is read as a bounded free-form string, not against an allowlist.
+# The earlier 0.147.0 -> 0.148.0 diff added three DIFFERENT v2 messages we do not consume
+# (`NullableGetAccountTokenUsageParams`, `ThreadQueueChangedNotification`,
+# `ThreadRevertedNotification`) and left every consumed schema byte-identical.
+# The 0.146.0 -> 0.147.0
 # schema diff was additive only for the surface consumed here: an optional `extensions` map on
 # `InitializeParams` (MCP extension settings declared by the client; we do not send it, and the
 # pre-existing form-elicitation capability beside it is now documented as its legacy alias), an
@@ -617,13 +623,25 @@ def parse_strict_config_rejection(text: str | None) -> StrictConfigRejection | N
 # Only phrasings from real observed output are encoded here.
 UNSUPPORTED_CONFIG_SETTING_PREFIX = "Error: "
 UNSUPPORTED_CONFIG_SETTING_PHRASE = "is no longer supported"
+# The trailing imperative is part of the grammar, not decoration. Requiring it — and
+# anchoring the line END — is what makes the match EXACT rather than a prefix. Without
+# both, the non-greedy value group accepts any line merely CONTAINING the phrase, with
+# the value silently clipped at it: `Error: token = "401 unauthorized is no longer
+# supported" please login` would parse as a retired `token` setting. Because this
+# recognizer runs AHEAD of the auth/drift matchers (see classify_failure), such a prefix
+# match does not just mis-parse — it STEALS the classification from the matcher that
+# should have won. Only phrasings from real observed output are encoded, so a future
+# retired setting worded differently returns None and keeps its ordinary
+# classification: a lost diagnosis is the safe direction, a wrong one is not.
+UNSUPPORTED_CONFIG_SETTING_SUFFIX = "; remove this setting"
 # The echoed key/value are untrusted text codex read off disk, so they carry the same
 # length bound as the strict-config spans.
 _UNSUPPORTED_CONFIG_SETTING_PATTERN = re.compile(
     rf"^{re.escape(UNSUPPORTED_CONFIG_SETTING_PREFIX)}"
     rf"(?P<key>[A-Za-z0-9_.]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}) = "
     rf"(?P<value>[^\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}?) "
-    rf"{re.escape(UNSUPPORTED_CONFIG_SETTING_PHRASE)}",
+    rf"{re.escape(UNSUPPORTED_CONFIG_SETTING_PHRASE)}"
+    rf"{re.escape(UNSUPPORTED_CONFIG_SETTING_SUFFIX)}[ \t\r]*$",
     re.MULTILINE,
 )
 

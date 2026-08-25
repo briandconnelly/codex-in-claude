@@ -1661,3 +1661,37 @@ def test_a_retired_guarantee_key_can_never_be_operator_owned(monkeypatch):
 def test_retired_config_setting_does_not_disturb_unrelated_failures(monkeypatch):
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
     assert codex.classify_failure(_run(stderr="some unrelated boom")).code == "nonzero_exit"
+
+
+def test_retired_config_setting_repair_prose_fits_this_grammar(monkeypatch):
+    """The shared `user_config_rejected` repair prose is written for the OTHER grammar.
+
+    It says the key is one "this codex version does not recognize" and points at "the
+    reported file and line". For a retired setting both are wrong: the key IS recognized
+    (only its value is refused), and this message reports no file and no line. An agent
+    following that guidance looks for location data that was never sent."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert err.repair is not None
+    alt = err.repair.alternative or ""
+    assert "does not recognize" not in alt
+    assert "reported file and line" not in alt
+    # It must still carry the actionable instruction and the lossy fallback.
+    assert "no longer supports" in alt or "no longer supported" in alt
+    assert "ignore-config" in alt
+
+
+def test_retired_config_setting_discloses_a_selected_operator_profile(monkeypatch):
+    """Unlike the strict grammar, this message names no file — so ownership is UNKNOWN.
+
+    `--profile NAME` makes codex load `$CODEX_HOME/NAME.config.toml`, and a profile can
+    reintroduce a setting the extra-args denylist refuses on `-c`. When one is selected we
+    cannot tell whether the retired value came from the user's own config or from the
+    operator's profile, so the message must not assert the user's config definitively."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert "myprof" in (err.message or "")
+    # Positive control: with NO profile selected, the message is unqualified.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    plain = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert "myprof" not in (plain.message or "")

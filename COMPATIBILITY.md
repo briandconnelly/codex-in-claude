@@ -892,10 +892,13 @@ every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` con
 The 0.148.0 → 0.149.1 schema diff left six of the seven consumed schemas byte-identical after
 canonicalization; `GetAccountRateLimitsResponse` gained two `PlanType` enum values (`edu_plus`,
 `edu_pro`), which this plugin absorbs because it reads `planType` as a bounded free-form string
-rather than against an allowlist (`RATE_LIMIT_PLAN_TYPE_MAX_BYTES`). The inventory pass added three
-unconsumed v2 notifications and removed nothing;
-its inventory pass added three unconsumed v2 messages (`NullableGetAccountTokenUsageParams`,
-`ThreadQueueChangedNotification`, `ThreadRevertedNotification`) and removed none.
+rather than against an allowlist (`RATE_LIMIT_PLAN_TYPE_MAX_BYTES`). Its inventory pass added three
+unconsumed v2 notifications (`ProjectChangedNotification`, `StrictReviewRequiredNotification`,
+`ThreadProjectUpdatedNotification`) and removed none.
+The earlier 0.147.0 → 0.148.0 schema diff left every consumed schema byte-identical after
+canonicalization; its inventory pass added three different unconsumed v2 messages
+(`NullableGetAccountTokenUsageParams`, `ThreadQueueChangedNotification`,
+`ThreadRevertedNotification`) and removed none.
 The earlier 0.146.0 → 0.147.0 schema diff is additive only for the consumed surface (an optional
 `extensions` map on `InitializeParams`, which this plugin does not send; an optional `title` on the
 import progress/completed per-item results, which is read tolerantly and ignored; and two values

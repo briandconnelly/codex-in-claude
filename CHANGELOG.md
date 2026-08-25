@@ -15,7 +15,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `--strict-config`, and it reaches the default `inherit` isolation, so it is the failure a user
   meets on their first run after upgrading. `codex-cli 0.148.0` accepted the identical config.
   Attribution follows the strict-config discipline: the operator's passthrough when it owns the
-  key, the user's config otherwise. No new error code, so no `FINGERPRINT` change.
+  key, the user's config otherwise. Unlike the strict grammar this message names no file, so when
+  an operator `--profile` is selected — which can reintroduce a setting the extra-args denylist
+  refuses on `-c` — the error discloses that the profile may be the source instead of asserting the
+  user's own config. The repair guidance is overridden rather than inherited, because the shared
+  prose calls the key unrecognized and points at a reported file and line, and neither applies
+  here. No new error code, so no `FINGERPRINT` change.
 
 ### Changed
 
