@@ -13,7 +13,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - `collaborating-with-codex` skill: the readiness gate, `blocked` refusal, cap declaration, async
   preference, and composition opt-in gate are now explicit Binding rules; the compound `Delegation`
   and `Retry` rules are split; the untrusted-workspace rationale moved to Data exposure; the transfer
-  reference notes that a resumed thread auto-loads context.
+  reference notes that a resumed thread runs under Codex's own `AGENTS.md` auto-loading and
+  skill discovery (name/description up front, body on selection), outside the plugin's flags.
 
 ## [0.19.0] - 2026-08-20
 
