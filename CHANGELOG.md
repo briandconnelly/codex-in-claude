@@ -5,6 +5,12 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- `collaborating-with-codex` skill: the spend step now describes only the live `codex_status`
+  quota read (no persisted snapshot, so no `is_stale`/`home_unverified` branch); scenario S4 is
+  retargeted at that model and S13 uses inputs `codex_status` can emit.
+
 ## [0.19.0] - 2026-08-20
 
 A sandbox-hardening and egress-disclosure release.
