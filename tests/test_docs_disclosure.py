@@ -1207,10 +1207,18 @@ _PRIVACY_BULLET_LABELS = (
 
 
 def _binding_rules_section() -> str:
+    """The `## Binding rules` section and only that section.
+
+    Bounded at the next level-two heading, as `_shared_workflow_section()` is, so a label
+    that migrated into a later section cannot satisfy a "present in Binding rules" check
+    (a Codex review caught the unbounded version).
+    """
     text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
     parts = text.split("## Binding rules", 1)
     assert len(parts) == 2, "the Binding rules section is gone or renamed"
-    return parts[1]
+    body = parts[1]
+    nxt = body.find("\n## ")
+    return body if nxt == -1 else body[:nxt]
 
 
 def test_binding_rules_carry_the_promoted_preflight_and_routing_rules():
@@ -1252,3 +1260,14 @@ def test_privacy_group_stays_contiguous_after_the_promotion():
             f"{label} fell outside the contiguous Privacy slice — a non-Privacy bullet was "
             "inserted inside the group"
         )
+    # `_privacy_rule_text()` recognises boundaries only at `\n- **` bullets, so a plain
+    # `- text` bullet inside the group would be swallowed into the slice silently. Every
+    # top-level bullet between the first and last Privacy bullet must itself be a Privacy
+    # bullet (a Codex review caught this gap).
+    span = rules[first_privacy:last_privacy]
+    stray = [
+        line
+        for line in span.splitlines()
+        if line.startswith("- ") and not line.startswith("- **Privacy")
+    ]
+    assert stray == [], f"non-Privacy bullets inside the Privacy group: {stray}"

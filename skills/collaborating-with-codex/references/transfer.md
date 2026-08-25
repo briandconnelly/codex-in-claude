@@ -2,10 +2,9 @@
 
 Use `codex_transfer` only when the user wants to continue the current Claude Code conversation in a
 resumable Codex thread. Transfer is free of model spend, but it is not read-only with respect to
-Codex state: it creates a persistent thread in `$CODEX_HOME`. When the user later runs the resume
-command, that Codex session auto-loads `AGENTS.md` files and discovers skills exactly as any other
-Codex run does (see SKILL.md → Data exposure), so the transferred conversation is followed by the
-same implicit context egress.
+Codex state: it creates a persistent thread in `$CODEX_HOME`. The resume command starts an ordinary
+interactive Codex session outside this plugin, so Codex's own context loading (see SKILL.md → Data
+exposure) applies to the transferred conversation and none of the plugin's flags do.
 
 Pass the current Claude session transcript as `transcript_path`. Claude Code normally stores project
 transcripts as `.jsonl` files beneath `~/.claude/projects/<cwd-slug>/`; if multiple candidates could
