@@ -1105,7 +1105,9 @@ def test_write_scope_prose_guard_rejects_the_pre_523_wording():
 # path codex_status actually takes `is_stale` and `home_unverified` are always False and no
 # persisted snapshot exists (#321). Teaching an agent to branch on them describes a source
 # that cannot occur and lengthens the one step S13 shows agents quote verbatim.
-_SPEND_STEP_DEAD_WORDING = ("stale snapshot", "`is_stale`", "`as_of`", "`home_unverified`")
+# Bare identifiers, not backticked: the shipped wording was "`home_unverified: true`", which a
+# closing-backtick phrase never matches — the first version of this tuple missed it.
+_SPEND_STEP_DEAD_WORDING = ("stale snapshot", "is_stale", "as_of", "home_unverified")
 
 
 def _shared_workflow_section() -> str:
@@ -1115,21 +1117,46 @@ def _shared_workflow_section() -> str:
     return text[start:end]
 
 
+def _spend_step_defects(section: str) -> list[str]:
+    """The production check, as a predicate the guard-the-guard case runs too.
+
+    Returns every reason the section fails: the live-read fact missing, or any dead
+    persisted-snapshot phrase present. Extracted so the pre-review fixture below goes
+    through the SAME logic the real assertion uses — a fixture that only asserts things
+    about its own hard-coded string proves nothing about the guard (a Copilot review
+    caught exactly that on the first version of this test).
+    """
+    defects = []
+    if "reads it live" not in section:
+        defects.append("missing the live-read fact")
+    defects.extend(phrase for phrase in _SPEND_STEP_DEAD_WORDING if phrase in section)
+    return defects
+
+
 def test_skill_spend_step_teaches_the_live_read_only():
-    section = _shared_workflow_section()
-    assert "reads it live" in section, "step 2 lost the live-read fact"
-    for phrase in _SPEND_STEP_DEAD_WORDING:
-        assert phrase not in section, (
-            f"step 2 still teaches the persisted-snapshot branch via {phrase!r}; "
-            "codex_status does a live app-server read and never serves a stale cache"
-        )
+    assert _spend_step_defects(_shared_workflow_section()) == [], (
+        "step 2 still teaches the persisted-snapshot branch; codex_status does a live "
+        "app-server read and never serves a stale cache"
+    )
 
 
 def test_spend_step_guard_rejects_the_pre_review_wording():
-    """Guard the guard: the wording that shipped before the 2026-08-25 review must fail."""
+    """Guard the guard: the wording that shipped before the 2026-08-25 review must fail the
+    same predicate the production test uses, and the current text must pass it."""
     pre_review = (
         "## Shared workflow\n\n2. Treat `rate_limit` as advisory. treat `unknown` (the live "
         "read could not complete, or only a stale snapshot was available — `is_stale`/`as_of`), "
         "or `home_unverified: true` as uncertainty. reads it live"
     )
-    assert any(phrase in pre_review for phrase in _SPEND_STEP_DEAD_WORDING)
+    assert _spend_step_defects(pre_review) == [
+        "stale snapshot",
+        "is_stale",
+        "as_of",
+        "home_unverified",
+    ]
+    # A section that dropped the live-read fact is rejected on that ground alone.
+    assert _spend_step_defects("2. Treat `rate_limit` as advisory.") == [
+        "missing the live-read fact"
+    ]
+    # …and the text as it actually stands is accepted by that same predicate.
+    assert _spend_step_defects(_shared_workflow_section()) == []
