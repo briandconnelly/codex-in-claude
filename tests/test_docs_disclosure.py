@@ -1098,3 +1098,176 @@ def test_write_scope_prose_guard_rejects_the_pre_523_wording():
     # passed it (a Codex review caught the survivor).
     workspace_worded = _flat("the sentence above — writes stay inside the workspace —")
     assert _CONTRADICTS_WRITE_SCOPE_PROSE.search(workspace_worded.lower())
+
+
+# --- 2026-08-25 review, finding 2: the spend step must describe the LIVE read only ------
+# `rate_limit.live_read()` calls `interpret(captured_at=now)` with no `cache_home`, so on the
+# path codex_status actually takes `is_stale` and `home_unverified` are always False and no
+# persisted snapshot exists (#321). Teaching an agent to branch on them describes a source
+# that cannot occur and lengthens the one step S13 shows agents quote verbatim.
+# Bare identifiers, not backticked: the shipped wording was "`home_unverified: true`", which a
+# closing-backtick phrase never matches — the first version of this tuple missed it.
+_SPEND_STEP_DEAD_WORDING = ("stale snapshot", "is_stale", "as_of", "home_unverified")
+
+
+def _shared_workflow_section() -> str:
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    start = text.index("## Shared workflow")
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
+
+
+def _spend_step_two(section: str) -> str:
+    """Numbered step 2 of a Shared-workflow section, and only that step.
+
+    The guard is about the spend step, so it must not be satisfiable by wording that sits
+    in step 1 or step 3 (a Codex review caught the section-wide version).
+    """
+    start = section.index("\n2. ")
+    end = section.find("\n3. ", start)
+    return section[start : end if end != -1 else len(section)]
+
+
+def _spend_step_defects(section: str) -> list[str]:
+    """The production check, as a predicate the guard-the-guard case runs too.
+
+    Returns every reason step 2 fails: the live-read fact missing, or any dead
+    persisted-snapshot phrase present. Extracted so the pre-review fixture below goes
+    through the SAME logic the real assertion uses — a fixture that only asserts things
+    about its own hard-coded string proves nothing about the guard (a Copilot review
+    caught exactly that on the first version of this test).
+    """
+    step = _spend_step_two(section)
+    defects = []
+    if "reads it live" not in step:
+        defects.append("missing the live-read fact")
+    defects.extend(phrase for phrase in _SPEND_STEP_DEAD_WORDING if phrase in step)
+    return defects
+
+
+def test_skill_spend_step_teaches_the_live_read_only():
+    assert _spend_step_defects(_shared_workflow_section()) == [], (
+        "step 2 still teaches the persisted-snapshot branch; codex_status does a live "
+        "app-server read and never serves a stale cache"
+    )
+
+
+def test_spend_step_guard_rejects_the_pre_review_wording():
+    """Guard the guard: the wording that shipped before the 2026-08-25 review must fail the
+    same predicate the production test uses, and the current text must pass it."""
+    pre_review = (
+        "## Shared workflow\n\n2. Treat `rate_limit` as advisory. treat `unknown` (the live "
+        "read could not complete, or only a stale snapshot was available — `is_stale`/`as_of`), "
+        "or `home_unverified: true` as uncertainty. reads it live"
+    )
+    assert _spend_step_defects(pre_review) == [
+        "stale snapshot",
+        "is_stale",
+        "as_of",
+        "home_unverified",
+    ]
+    # A section that dropped the live-read fact is rejected on that ground alone — and the
+    # fact counts only inside step 2, not when it drifted into a neighbouring step.
+    assert _spend_step_defects("\n2. Treat `rate_limit` as advisory.") == [
+        "missing the live-read fact"
+    ]
+    assert _spend_step_defects(
+        "\n1. codex_status reads it live.\n2. Treat `rate_limit` as advisory.\n3. reads it live"
+    ) == ["missing the live-read fact"]
+    # …and the text as it actually stands is accepted by that same predicate.
+    assert _spend_step_defects(_shared_workflow_section()) == []
+
+
+# --- 2026-08-25 review, findings 3-5: rules must live in the rule section -------------
+# The separating-context-from-constraints audit (R1) found five rules that directed
+# behavior only from the "Shared workflow"/"Route the request" prose, and two compound
+# bullets (R4). This pins the promoted/split labels so a later edit cannot quietly fold them
+# back into narrative.
+_REQUIRED_BINDING_RULE_LABELS = (
+    "- **Preflight — readiness:**",
+    "- **Preflight — spend control:**",
+    "- **Spend — declare the cap:**",
+    "- **Routing — sync or async:**",
+    "- **Composition — opt-in:**",
+)
+_RETIRED_COMPOUND_RULE_LABELS = ("- **Delegation:**", "- **Retry:**")
+_SPLIT_RULE_LABELS = (
+    "- **Delegation — apply:**",
+    "- **Delegation — scope:**",
+    "- **Retry — no loops:**",
+    "- **Retry — replay:**",
+)
+_PRIVACY_BULLET_LABELS = (
+    "- **Privacy — never justify a call by workspace placement:**",
+    "- **Privacy — session-identified material:**",
+    "- **Privacy — do not call:**",
+    "- **Privacy — a dry run is not a disclosure check:**",
+    "- **Privacy — untrusted workspaces:**",
+)
+
+
+def _binding_rules_section() -> str:
+    """The `## Binding rules` section and only that section.
+
+    Bounded at the next level-two heading, as `_shared_workflow_section()` is, so a label
+    that migrated into a later section cannot satisfy a "present in Binding rules" check
+    (a Codex review caught the unbounded version).
+    """
+    text = (_REPO_ROOT / _SKILL_PATH).read_text(encoding="utf-8")
+    parts = text.split("## Binding rules", 1)
+    assert len(parts) == 2, "the Binding rules section is gone or renamed"
+    body = parts[1]
+    nxt = body.find("\n## ")
+    return body if nxt == -1 else body[:nxt]
+
+
+def test_binding_rules_carry_the_promoted_preflight_and_routing_rules():
+    rules = _binding_rules_section()
+    for label in _REQUIRED_BINDING_RULE_LABELS:
+        assert label in rules, f"{label} is missing from the Binding rules section"
+
+
+def test_binding_rules_split_the_compound_delegation_and_retry_rules():
+    rules = _binding_rules_section()
+    for label in _RETIRED_COMPOUND_RULE_LABELS:
+        assert label not in rules, f"{label} is the compound bullet the review split"
+    for label in _SPLIT_RULE_LABELS:
+        assert label in rules, f"{label} is missing from the Binding rules section"
+
+
+def test_privacy_group_stays_contiguous_after_the_promotion():
+    """The promoted bullets sit ABOVE the first Privacy bullet and the split bullets BELOW
+    the last one, so `_privacy_rule_text()`'s contiguous slice is untouched. It also fails
+    if any bullet is inserted INSIDE the Privacy group, which would truncate that slice while
+    the older guards stayed green. (The first version exempted the split labels by prefix,
+    which would have accepted one of them landing inside the group — a Copilot review
+    caught it.)"""
+    rules = _binding_rules_section()
+    first_privacy = rules.index("- **Privacy")
+    last_privacy = rules.rindex("- **Privacy")
+    for label in _REQUIRED_BINDING_RULE_LABELS:
+        assert rules.index(label) < first_privacy, (
+            f"{label} was inserted at or after the Privacy group"
+        )
+    for label in _SPLIT_RULE_LABELS:
+        assert rules.index(label) > last_privacy, (
+            f"{label} was inserted at or before the last Privacy bullet"
+        )
+
+    group = _privacy_rule_text()
+    for label in _PRIVACY_BULLET_LABELS:
+        assert label in group, (
+            f"{label} fell outside the contiguous Privacy slice — a non-Privacy bullet was "
+            "inserted inside the group"
+        )
+    # `_privacy_rule_text()` recognises boundaries only at `\n- **` bullets, so a plain
+    # `- text` bullet inside the group would be swallowed into the slice silently. Every
+    # top-level bullet between the first and last Privacy bullet must itself be a Privacy
+    # bullet (a Codex review caught this gap).
+    span = rules[first_privacy:last_privacy]
+    stray = [
+        line
+        for line in span.splitlines()
+        if line.startswith("- ") and not line.startswith("- **Privacy")
+    ]
+    assert stray == [], f"non-Privacy bullets inside the Privacy group: {stray}"

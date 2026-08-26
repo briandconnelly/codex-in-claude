@@ -293,20 +293,28 @@ class ExtraArgs:
         """Whether `key` — as codex echoed it in a rejection — is one of OUR `-c` KEYS.
 
         Both sides are canonicalized with the same conservative normalization the
-        denylist uses, so a cased/quoted/spaced echo still matches. False whenever the
-        knob is unset or failed to parse: an unattributable rejection must stay
-        fail-loud rather than be blamed on a passthrough that never reached codex."""
+        denylist uses, so a cased/quoted/spaced echo still matches. A dotted DESCENDANT
+        of one of our keys is ours too: a `-c t={k=v}` parent-table assignment is echoed
+        by codex as the child path `t.k` (probed on 0.149.1, #550), and only whole
+        segments count — `t.k` never owns `t.kx`. False whenever the knob is unset or
+        failed to parse: an unattributable rejection must stay fail-loud rather than be
+        blamed on a passthrough that never reached codex."""
         if not (self.configured and self.valid):
             return False
         target = _normalize_config_key(key)
-        return any(_normalize_config_key(k) == target for k in self.config_keys)
+        for own in self.config_keys:
+            own_n = _normalize_config_key(own)
+            if target == own_n or target.startswith(own_n + "."):
+                return True
+        return False
 
     def owns_profile_file(self, path: str | None) -> bool:
         """Whether `path` is the config FILE codex loads for a profile WE select.
 
         `--profile NAME` loads `$CODEX_HOME/NAME.config.toml` and, under
         `--strict-config`, validates it; an unselected `NAME.config.toml` is never read
-        (both verified live on codex-cli 0.148.0). Matching on the basename keeps this
+        (both verified live on codex-cli 0.148.0, re-verified on 0.149.1). Matching on the
+        basename keeps this
         independent of where `$CODEX_HOME` resolves."""
         if not (self.configured and self.valid) or not path:
             return False

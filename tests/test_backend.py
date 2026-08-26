@@ -17,7 +17,7 @@ from pontonier.core.runtime import CommandRun
 from pontonier.testing import conformance
 
 from codex_in_claude import backend as backend_mod
-from codex_in_claude import codex, preflight
+from codex_in_claude import codex, config, preflight
 from codex_in_claude.cli_contract import PONTONIER_CONTRACT
 
 BACKEND = backend_mod.CodexBackend()
@@ -165,3 +165,36 @@ def test_finalize_extracts_structured_answer_and_usage():
 def test_scrub_env_is_identity_for_codex():
     env = {"PATH": "/bin", "CODEX_HOME": "/x", "ANTHROPIC_API_KEY": "k"}
     assert BACKEND.scrub_env(dict(env), None) == env
+
+
+_INVALID_PIN_VALUE_STDERR = (
+    'Error loading config.toml: invalid type: string "yes", expected a boolean\n'
+    "in `sandbox_workspace_write.network_access`\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("kind", "access", "expected_code"),
+    [
+        # A delegate resolves to workspace-write, which pins this key: the refused value
+        # can only be the plugin's own -> drift.
+        ("delegate", None, "cli_contract_changed"),
+        # A consult resolves to read-only, which sends no pin: the user's own file.
+        ("consult", None, "user_config_rejected"),
+        # An explicit access override is what prepare() builds the argv from, so the
+        # classifier must resolve the sandbox the same way.
+        ("consult", "workspace-write", "cli_contract_changed"),
+    ],
+)
+def test_classify_failure_attributes_a_pinned_key_by_the_resolved_sandbox(
+    kind, access, expected_code, monkeypatch
+):
+    """The adapter must hand the classifier the `-c` keys THIS request's argv carried (#550).
+
+    The direct classifier tests cannot see this seam: dropping `plugin_config_keys=` here
+    leaves them green while every pontonier caller gets a workspace-write pin rejection
+    reported as the user's config."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    request = RunRequest(kind=kind, prompt="q", cwd=".", timeout_seconds=10, access=access)
+    result = BACKEND.classify_failure(_failed_outcome(_INVALID_PIN_VALUE_STDERR), request)
+    assert result.code == expected_code

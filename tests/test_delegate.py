@@ -584,3 +584,70 @@ def test_delegate_worktree_exception_messages_are_sanitized(monkeypatch, tmp_pat
     assert result["error"]["code"] == code
     assert not _has_cc(result["error"]["message"]), repr(result["error"]["message"])
     assert "RED" in result["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("stderr_key", "expected_code"),
+    [
+        # The delegate always runs workspace-write, so both workspace pins rode its argv:
+        # a rejection of one is the plugin's own value -> drift.
+        ("sandbox_workspace_write.network_access", "cli_contract_changed"),
+        # A key the plugin never pins is the user's file, even on a workspace-write run.
+        ("approval_policy", "user_config_rejected"),
+    ],
+)
+def test_run_delegate_attributes_a_config_value_rejection_by_its_own_pins(
+    stderr_key, expected_code, monkeypatch
+):
+    """The delegate failure path must hand the classifier the keys its argv pinned (#550).
+
+    The direct classifier tests cannot see this seam: dropping `plugin_config_keys=` in
+    run_delegate leaves them green while a real delegate reports the plugin's own pin
+    rejection as `user_config_rejected`."""
+    from types import SimpleNamespace
+
+    import anyio
+    from pontonier.core import worktree
+
+    from codex_in_claude import config, delegate
+
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = (
+        'Error loading config.toml: invalid type: string "yes", expected a boolean\n'
+        f"in `{stderr_key}`\n\n"
+    )
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(
+            run=CommandRun("", stderr, 1, 1, False), last_message=None, events=""
+        )
+
+    monkeypatch.setattr(
+        worktree, "create", lambda *a, **k: SimpleNamespace(path="/tmp/wt", baseline_warning=None)
+    )
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+    meta = Meta(
+        cwd="/tmp",
+        tier="propose",
+        sandbox="workspace-write",
+        isolation="inherit",
+        timeout_seconds=10,
+        elapsed_ms=0,
+    )
+    out = anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/tmp",
+            meta,
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            reasoning_effort=None,
+            git_timeout=30,
+        )
+    )
+    assert out["ok"] is False
+    assert out["error"]["code"] == expected_code

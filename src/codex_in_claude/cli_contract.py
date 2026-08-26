@@ -7,7 +7,7 @@ an upstream breaking change is centralized, greppable, and testable. Revising it
 takes the lockstep procedure in docs/UPGRADING-CODEX.md, not an edit to this file
 alone. See COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.148.0`.
+Verified against `codex-cli 0.149.1`.
 """
 
 from __future__ import annotations
@@ -42,11 +42,17 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
 # [experimental] and the import method rides behind the `experimentalApi` capability),
 # so every wire assumption lives here; see COMPATIBILITY.md. Verified against
-# codex-cli 0.148.0 on 2026-08-19 via `codex app-server generate-json-schema --out <DIR>`
-# (the generator requires an --out directory instead of writing to stdout). The 0.147.0 -> 0.148.0
-# diff added three v2 messages we do NOT consume (`NullableGetAccountTokenUsageParams`,
-# `ThreadQueueChangedNotification`, `ThreadRevertedNotification`) and left every consumed
-# schema byte-identical after canonicalization. The 0.146.0 -> 0.147.0
+# codex-cli 0.149.1 on 2026-08-25 via `codex app-server generate-json-schema --out <DIR>`
+# (the generator requires an --out directory instead of writing to stdout). The 0.148.0 -> 0.149.1
+# diff added three v2 messages we do NOT consume (`ProjectChangedNotification`,
+# `StrictReviewRequiredNotification`, `ThreadProjectUpdatedNotification`), removed none, and left
+# six of the seven consumed schemas byte-identical after canonicalization; the seventh,
+# `GetAccountRateLimitsResponse`, gained two `PlanType` enum values (`edu_plus`, `edu_pro`), which
+# are absorbed because `planType` is read as a bounded free-form string, not against an allowlist.
+# The earlier 0.147.0 -> 0.148.0 diff added three DIFFERENT v2 messages we do not consume
+# (`NullableGetAccountTokenUsageParams`, `ThreadQueueChangedNotification`,
+# `ThreadRevertedNotification`) and left every consumed schema byte-identical.
+# The 0.146.0 -> 0.147.0
 # schema diff was additive only for the surface consumed here: an optional `extensions` map on
 # `InitializeParams` (MCP extension settings declared by the client; we do not send it, and the
 # pre-existing form-elicitation capability beside it is now documented as its legacy alias), an
@@ -600,6 +606,174 @@ def parse_strict_config_rejection(text: str | None) -> StrictConfigRejection | N
     return None
 
 
+# --- Retired config SETTING rejection (codex 0.149, issue #542) --------------------
+# 0.149 RETIRED the `untrusted` approval policy and refuses to start when the user's own
+# config still selects it (upstream PR #39630). This is a different failure from the
+# --strict-config unknown-KEY grammar above: here the key is RECOGNIZED and only its
+# VALUE is no longer accepted, so `parse_strict_config_rejection` cannot see it — and the
+# message matches no CONTRACT_DRIFT_STDERR_PATTERNS entry either, so before #542 the run
+# degraded to a generic `nonzero_exit` and the actionable diagnosis was lost.
+#
+# It reaches every model-bearing run at the DEFAULT `inherit` isolation, which does not
+# send --ignore-user-config, and it does NOT need --strict-config: codex rejects the
+# retired value while parsing config, ahead of auth, at zero spend.
+#
+# Captured verbatim from codex-cli 0.149.1 on 2026-08-25 (scratch $CODEX_HOME); the same
+# config was ACCEPTED by 0.148.0, so this is an upgrade-time break, not a standing one.
+# Only phrasings from real observed output are encoded here.
+UNSUPPORTED_CONFIG_SETTING_PREFIX = "Error: "
+UNSUPPORTED_CONFIG_SETTING_PHRASE = "is no longer supported"
+# The trailing imperative is part of the grammar, not decoration. Requiring it — and
+# anchoring the line END — is what makes the match EXACT rather than a prefix. Without
+# both, the non-greedy value group accepts any line merely CONTAINING the phrase, with
+# the value silently clipped at it: `Error: token = "401 unauthorized is no longer
+# supported" please login` would parse as a retired `token` setting. Because this
+# recognizer runs AHEAD of the auth/drift matchers (see classify_failure), such a prefix
+# match does not just mis-parse — it STEALS the classification from the matcher that
+# should have won. Only phrasings from real observed output are encoded, so a future
+# retired setting worded differently returns None and keeps its ordinary
+# classification: a lost diagnosis is the safe direction, a wrong one is not.
+UNSUPPORTED_CONFIG_SETTING_SUFFIX = "; remove this setting"
+# The echoed key/value are untrusted text codex read off disk, so they carry the same
+# length bound as the strict-config spans.
+_UNSUPPORTED_CONFIG_SETTING_PATTERN = re.compile(
+    rf"^{re.escape(UNSUPPORTED_CONFIG_SETTING_PREFIX)}"
+    rf"(?P<key>[A-Za-z0-9_.]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}) = "
+    rf"(?P<value>[^\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}?) "
+    rf"{re.escape(UNSUPPORTED_CONFIG_SETTING_PHRASE)}"
+    rf"{re.escape(UNSUPPORTED_CONFIG_SETTING_SUFFIX)}[ \t\r]*$",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class UnsupportedConfigSetting:
+    """A parsed "setting is no longer supported" rejection.
+
+    `key` is the config path codex echoed and `value` the retired value it names, both
+    exactly as printed. Unlike StrictConfigRejection there is no `origin`: the message
+    names no file and no `-c` marker, so ownership is decided by the caller."""
+
+    key: str
+    value: str
+
+
+def parse_unsupported_config_setting(text: str | None) -> UnsupportedConfigSetting | None:
+    """Parse codex's retired-setting rejection out of STDERR, or None.
+
+    Pass `run.stderr` alone, for the same reason as parse_strict_config_rejection: the
+    anchored grammar must not be satisfiable by model-produced text on stdout. Returns
+    None for any text that is not this exact grammar, so an unrelated failure keeps its
+    ordinary classification."""
+    if not text or UNSUPPORTED_CONFIG_SETTING_PHRASE not in text:
+        return None
+    m = _UNSUPPORTED_CONFIG_SETTING_PATTERN.search(text)
+    if m is None:
+        return None
+    return UnsupportedConfigSetting(key=m.group("key"), value=m.group("value"))
+
+
+# --- Invalid config VALUE rejection (codex 0.149, issue #550) -----------------------
+# The THIRD config-parse grammar. A recognized key whose value fails serde's own
+# validation — the wrong enum variant, or the wrong TOML type — is refused with a
+# two-line message: the serde diagnostic under the strict-config header, then the key on
+# its own line. It shares the header with the --strict-config grammar but not the body,
+# and it matches no CONTRACT_DRIFT_STDERR_PATTERNS entry either, so before #550 it
+# degraded to a generic `nonzero_exit` — for a config TYPO, which is plausibly more
+# common than the retired setting #542 handles. Like that grammar it needs no `-c` pin
+# and no --strict-config, fires at the default `inherit` isolation, and costs no spend.
+#
+# Captured verbatim from codex-cli 0.149.1 on 2026-08-25 (scratch $CODEX_HOME). Two
+# sub-grammars were observed and ONLY those two are encoded — a serde message worded
+# differently returns None and keeps its ordinary classification:
+#
+#   Error loading config.toml: unknown variant `V`, expected one of `A`, `B`, ...
+#   in `KEY`
+#
+#   Error loading config.toml: invalid type: string "V", expected a boolean
+#   in `KEY`
+#
+# Three properties of the observed output shape the pattern:
+# - The identical text is printed whether the value came from config.toml or from a `-c`
+#   override (probed both ways), so ownership cannot be read off the message; the caller
+#   attributes it. Even a `-c` parent-table assignment (`-c t={k=1}`) echoes the dotted
+#   CHILD path, so an operator's key can be an ancestor of the echoed one.
+# - The two lines are the ENTIRE stderr (a blank line follows; nothing precedes). The
+#   pattern is anchored to the whole blob — \A and \Z, not line anchors — because this
+#   recognizer runs ahead of the auth/drift/rate-limit substring matchers, and a
+#   config-shaped pair quoted ahead of a genuine diagnostic must not steal its
+#   classification. Trailing whitespace is the one tolerated trailer.
+# - The offending VALUE is consumed but never captured. It is free-form text the user
+#   typed into the wrong key — plausibly a secret — and no pattern-based redactor can
+#   recognize an arbitrary one, so it is kept out of the parse result entirely. The key
+#   and what codex EXPECTED are the actionable content. For the same reason the value
+#   span is NOT length-bounded (only the surfaced key/expected spans are): a parse that
+#   failed on an over-long value would fall through to the generic `nonzero_exit`
+#   branch, which quotes the head of stderr — i.e. the value — into the envelope. The
+#   value is confined to its line, so the bound it lacks costs nothing to matching time.
+INVALID_CONFIG_VALUE_UNKNOWN_VARIANT_PHRASE = "unknown variant "
+INVALID_CONFIG_VALUE_INVALID_TYPE_PHRASE = "invalid type: "
+INVALID_CONFIG_VALUE_KEY_LINE_PREFIX = "in `"
+# One allowed-variant list entry per enum value; codex's largest enum is far below this.
+INVALID_CONFIG_VALUE_MAX_VARIANTS = 64
+_INVALID_CONFIG_VALUE_PATTERN = re.compile(
+    rf"\A{re.escape(STRICT_CONFIG_ERROR_PREFIX)}: (?:"
+    # unknown variant `V`, expected one of `A`, `B`, ...
+    rf"{re.escape(INVALID_CONFIG_VALUE_UNKNOWN_VARIANT_PHRASE)}"
+    rf"`[^\n]*?`, expected one of "
+    rf"(?P<variants>`[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`"
+    rf"(?:, `[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`)"
+    rf"{{0,{INVALID_CONFIG_VALUE_MAX_VARIANTS - 1}}})"
+    rf"|"
+    # invalid type: <actual>, expected <type>   (the actual span may itself contain
+    # ", expected " — serde prints the offending string verbatim — so the expected-type
+    # group excludes commas and the actual group is non-greedy within its bound)
+    rf"{re.escape(INVALID_CONFIG_VALUE_INVALID_TYPE_PHRASE)}"
+    rf"[^\n]*?, expected "
+    rf"(?P<expected_type>[^\n,]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})"
+    rf")[ \t\r]*\n"
+    rf"{re.escape(INVALID_CONFIG_VALUE_KEY_LINE_PREFIX)}"
+    rf"(?P<key>[A-Za-z0-9_.]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})`[ \t\r\n]*\Z"
+)
+
+
+@dataclass(frozen=True)
+class InvalidConfigValue:
+    """A parsed invalid-config-VALUE rejection (#550).
+
+    `key` is the dotted config path codex echoed on the second line. `kind` names which
+    observed sub-grammar matched, and `expected` is what codex said it would accept: the
+    backtick-quoted allowed-variant list for "unknown_variant", or the type phrase
+    ("a boolean") for "invalid_type". The offending value is deliberately absent (see the
+    grammar note above). Like UnsupportedConfigSetting there is no `origin`: ownership is
+    decided by the caller."""
+
+    key: str
+    kind: Literal["unknown_variant", "invalid_type"]
+    expected: str
+
+
+def parse_invalid_config_value(text: str | None) -> InvalidConfigValue | None:
+    """Parse codex's invalid-config-value rejection out of STDERR, or None.
+
+    Pass `run.stderr` alone, for the same reason as the two sibling recognizers: the
+    anchored grammar must not be satisfiable by model-produced text on stdout. Returns
+    None for any text that is not exactly one of the two observed grammars, so an
+    unrelated failure keeps its ordinary classification."""
+    if not text or not text.startswith(STRICT_CONFIG_ERROR_PREFIX):
+        return None
+    m = _INVALID_CONFIG_VALUE_PATTERN.match(text)
+    if m is None:
+        return None
+    if m.group("variants") is not None:
+        return InvalidConfigValue(
+            key=m.group("key"), kind="unknown_variant", expected=m.group("variants")
+        )
+    return InvalidConfigValue(
+        key=m.group("key"), kind="invalid_type", expected=m.group("expected_type")
+    )
+
+
 # --- workspace-write write scope (issue #523) ---------------------------------------
 # RULE (write scope): every prose site that describes the propose tier's write
 # boundary — README.md, SECURITY.md, COMPATIBILITY.md, and
@@ -665,13 +839,20 @@ MODELS_CACHE_MAX_ENTRIES = 256  # ignore anything past this many model entries
 # malformed/hostile cache surfacing junk to an agent).
 MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Bundled advisory fallback used ONLY when the on-disk cache is absent/unreadable.
-# Copied from codex-cli 0.148.0's models_cache.json on 2026-08-19 (cache order preserved);
-# `gpt-5.6-sol-wm` was DROPPED in that refresh (it had been added in the 0.147.0-era refresh).
-# The catalog is served by the backend, not shipped in the binary, so a slug CAN appear or vanish
-# without a CLI release. Whether THIS drop was such a move is not established: the only observation
-# is the 0.148.0-written cache, with no contemporaneous 0.147.0 read to compare (contrast the
-# 0.147 addition, where a 0.146.0-written cache already carried the slug). Re-diff the slug set on
-# every upgrade anyway — this is the pass that catches it.
+# Copied from codex-cli 0.149.1's models_cache.json on 2026-08-25 (cache order preserved);
+# `gpt-reserve` was ADDED in that refresh. The catalog is served by the backend, not shipped in
+# the binary, so a slug CAN appear or vanish without a CLI release — and here that is not a
+# caveat but the measured result: a contemporaneous A/B (2026-08-25, both binaries pointed at
+# separate CACHE-FREE scratch $CODEX_HOME copies and run five seconds apart) had codex-cli
+# 0.148.0 fetch the identical slug set, `gpt-reserve` included. So the addition is a backend
+# catalog move, NOT a 0.149 client change. That is the one-way conclusion the evidence supports;
+# it does not date the move, which happened sometime after the 2026-08-19 refresh above.
+# (Contrast the 0.148 entry this replaces, which recorded a DROP it could not attribute because
+# no contemporaneous old-client read was taken. Taking one is now the rule, not the exception.)
+# `gpt-reserve` carries `visibility: "hide"`, which is deliberately NOT filtered: codex_models
+# copies the cache's slug set verbatim and lets `codex exec` be the real validator, so adding a
+# visibility filter would be a separate, deliberate policy change (#547).
+# Re-diff the slug set on every upgrade — this is the pass that catches it.
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
 # live account's available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping
 # the CLI.
@@ -679,6 +860,7 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    "gpt-reserve",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
@@ -690,11 +872,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.148.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.149.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 148)})
+SUPPORTED_VERSIONS = frozenset({(0, 149)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

@@ -1731,10 +1731,11 @@ _RUNTIME_ERRORS: tuple[ErrorCode, ...] = (
     # before any subprocess. The two paths carry different machine repairs.
     "invalid_reasoning_effort",
     "extra_args_rejected",
-    # Reachable on any run that carries a `-c` config pin (#524): codex refuses to start
-    # when the user's own config holds a key it does not recognize. Advertised on the six
+    # Reachable on any run that carries a `-c` config pin (#524, an unrecognized config
+    # KEY under --strict-config) and on EVERY model-bearing run regardless of pins (#542,
+    # a recognized key whose VALUE this codex version retired). Advertised on the six
     # model-bearing tools only — the dry runs never invoke codex, and codex_transfer
-    # drives `codex app-server`, which takes no such flag.
+    # drives `codex app-server`, which takes neither flag.
     "user_config_rejected",
     "codex_rate_limited",
     "internal_error",

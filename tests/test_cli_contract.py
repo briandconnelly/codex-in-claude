@@ -449,3 +449,325 @@ def test_strict_config_recognizer_tolerates_carriage_returns():
         )
         is None
     )
+
+
+# --- retired config SETTING rejection (codex 0.149, #542) -------------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25, scratch $CODEX_HOME, zero spend
+# — config parsing precedes auth). The SAME config was accepted by 0.148.0, so this is a
+# real upgrade-time break for any user whose config still selects the retired policy.
+# Kept as a literal so a recognizer rewritten to match a paraphrase fails here.
+_RETIRED_SETTING_STDERR = (
+    'Error: approval_policy = "untrusted" is no longer supported; remove this setting\n'
+)
+
+
+def test_retired_config_setting_is_recognized():
+    rej = cli_contract.parse_unsupported_config_setting(_RETIRED_SETTING_STDERR)
+    assert rej is not None
+    assert rej.key == "approval_policy"
+    assert rej.value == '"untrusted"'
+
+
+def test_retired_config_setting_does_not_match_the_strict_config_grammar():
+    # The two grammars are distinct: this key is RECOGNIZED (only its value is retired),
+    # so the unknown-field parser must not claim it, and vice versa.
+    assert cli_contract.parse_strict_config_rejection(_RETIRED_SETTING_STDERR) is None
+    assert cli_contract.parse_unsupported_config_setting(_STRICT_OVERRIDE_STDERR) is None
+    assert cli_contract.parse_unsupported_config_setting(_STRICT_FILE_STDERR) is None
+
+
+def test_retired_config_setting_negative_controls():
+    for text in (
+        "",
+        "some unrelated failure",
+        # the phrase alone, with no `key = value` head, is not a rejection we can act on
+        "this feature is no longer supported\n",
+    ):
+        assert cli_contract.parse_unsupported_config_setting(text) is None
+
+
+def test_retired_config_setting_is_anchored_to_a_line_start():
+    """Mid-line text must not satisfy the grammar.
+
+    codex prints this rejection as its own line. Without the anchor, any prose that
+    happened to quote the phrase — a diff, a commit message, a model's own answer echoed
+    into stderr — could manufacture the classification."""
+    mid = 'blah blah Error: k = "v" is no longer supported; remove this setting'
+    assert cli_contract.parse_unsupported_config_setting(mid) is None
+    # Positive control: the identical text on its own line IS recognized, so the negative
+    # above is about the anchor and not about the rest of the pattern failing to match.
+    own_line = 'preamble\nError: k = "v" is no longer supported; remove this setting'
+    rej = cli_contract.parse_unsupported_config_setting(own_line)
+    assert rej is not None and rej.key == "k"
+
+
+def test_retired_config_setting_value_never_spans_lines():
+    # The value group is bounded to a single line, so a multi-line span cannot be pulled
+    # into the echoed value (which reaches an envelope).
+    assert (
+        cli_contract.parse_unsupported_config_setting(
+            'Error: k = "a\nb" is no longer supported; remove this setting'
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("field", ["key", "value"])
+def test_retired_config_setting_fails_closed_on_an_over_cap_span(field):
+    """An implausibly long key or value is drift or hostile text, not a real setting.
+
+    The bound makes it return None, so the run keeps its ordinary `nonzero_exit`
+    classification. That is the safe direction: a lost diagnosis, never a wrong one, and
+    never an unbounded span echoed into an error envelope."""
+    big = "x" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10)
+    text = (
+        f'Error: {big} = "v" is no longer supported; remove this setting'
+        if field == "key"
+        else f'Error: k = "{big}" is no longer supported; remove this setting'
+    )
+    assert cli_contract.parse_unsupported_config_setting(text) is None
+
+
+@pytest.mark.parametrize("n", [1_000, 10_000, 100_000])
+def test_retired_config_setting_pattern_has_no_catastrophic_backtracking(n):
+    """The pattern runs in linear time on adversarial shapes built from its own slots.
+
+    A stderr blob is untrusted text of substantial size, so a quadratic matcher here would
+    be a denial of service on the failure path — the path a drifting codex takes."""
+    import time
+
+    for shape in (
+        "Error: " + "a" * n,
+        "Error: " + "a." * n,
+        "Error: " + "k = v " * n + "is no longer supported; remove this setting",
+    ):
+        started = time.perf_counter()
+        cli_contract.parse_unsupported_config_setting(shape)
+        assert time.perf_counter() - started < 1.0
+
+
+def test_retired_config_setting_requires_the_complete_observed_grammar():
+    """The phrase alone is not the grammar — the full observed suffix is required.
+
+    A non-greedy value group with no required suffix accepts a PREFIX: any line where the
+    phrase appears inside an echoed value matches, with the value silently truncated at
+    the phrase. That is not a cosmetic parse error. `parse_unsupported_config_setting`
+    runs AHEAD of the auth/drift matchers precisely so an echoed key cannot fool them, so
+    a prefix match steals the classification from the matcher that should have won."""
+    stolen_from_auth = 'Error: token = "401 unauthorized is no longer supported" please login'
+    # Positive control: this text really is an auth failure, so the assertion below is
+    # about ordering being safe and not about an inert string.
+    assert cli_contract.is_auth_failure(stolen_from_auth) is True
+    assert cli_contract.parse_unsupported_config_setting(stolen_from_auth) is None
+
+    for near_miss in (
+        # phrase inside the value, no real suffix
+        'Error: model_provider = "x is no longer supported" failed to initialize provider',
+        # right shape, wrong/absent suffix
+        'Error: k = "v" is no longer supported',
+        'Error: k = "v" is no longer supported; do something else',
+        'Error: k = "v" is no longer supported; remove this setting AND MORE',
+    ):
+        assert cli_contract.parse_unsupported_config_setting(near_miss) is None, near_miss
+
+    # The real thing still parses — the anchor must not have broken the actual grammar.
+    rej = cli_contract.parse_unsupported_config_setting(_RETIRED_SETTING_STDERR)
+    assert rej is not None and rej.key == "approval_policy"
+    assert rej.value == '"untrusted"'
+
+
+# --- invalid config VALUE rejection (codex 0.149, #550) ----------------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25, scratch $CODEX_HOME, zero spend —
+# config parsing precedes auth). Two serde sub-grammars, both two-line with the key on the
+# SECOND line, and both terminate stderr (a blank line follows). The identical text is
+# printed whether the value came from config.toml or from a `-c` override. Kept as
+# literals so a recognizer rewritten to match a paraphrase fails here.
+_INVALID_VARIANT_STDERR = (
+    "Error loading config.toml: unknown variant `bogus`, expected one of `untrusted`, "
+    "`on-failure`, `on-request`, `granular`, `never`\n"
+    "in `approval_policy`\n\n"
+)
+_INVALID_TYPE_STDERR = (
+    'Error loading config.toml: invalid type: string "yes", expected a boolean\n'
+    "in `sandbox_workspace_write.network_access`\n\n"
+)
+_INVALID_TYPE_INTEGER_STDERR = (
+    "Error loading config.toml: invalid type: integer `3`, expected a sequence\n"
+    "in `sandbox_workspace_write.writable_roots`\n\n"
+)
+
+
+def test_invalid_config_value_unknown_variant_is_recognized():
+    rej = cli_contract.parse_invalid_config_value(_INVALID_VARIANT_STDERR)
+    assert rej is not None
+    assert rej.key == "approval_policy"
+    assert rej.kind == "unknown_variant"
+    assert rej.expected == "`untrusted`, `on-failure`, `on-request`, `granular`, `never`"
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "expected"),
+    [
+        (_INVALID_TYPE_STDERR, "sandbox_workspace_write.network_access", "a boolean"),
+        (_INVALID_TYPE_INTEGER_STDERR, "sandbox_workspace_write.writable_roots", "a sequence"),
+    ],
+)
+def test_invalid_config_value_wrong_type_is_recognized(text, key, expected):
+    # The key is a DOTTED nested path here — the shape the plugin's own pins take.
+    rej = cli_contract.parse_invalid_config_value(text)
+    assert rej is not None
+    assert rej.key == key
+    assert rej.kind == "invalid_type"
+    assert rej.expected == expected
+
+
+def test_invalid_config_value_never_carries_the_offending_value():
+    """The rejected VALUE is deliberately not a field of the parse result.
+
+    It is free-form text the user typed into the wrong key — plausibly a secret — and no
+    pattern-based redactor can recognize an arbitrary one. The key and what codex EXPECTED
+    are the actionable content; the value itself never reaches an envelope."""
+    for text in (_INVALID_VARIANT_STDERR, _INVALID_TYPE_STDERR):
+        rej = cli_contract.parse_invalid_config_value(text)
+        assert rej is not None
+        assert "bogus" not in repr(rej)
+        assert "yes" not in repr(rej)
+
+
+def test_invalid_config_value_is_distinct_from_the_other_two_config_grammars():
+    # Three grammars, three recognizers: none may claim another's text.
+    assert cli_contract.parse_invalid_config_value(_STRICT_OVERRIDE_STDERR) is None
+    assert cli_contract.parse_invalid_config_value(_STRICT_FILE_STDERR) is None
+    assert cli_contract.parse_invalid_config_value(_RETIRED_SETTING_STDERR) is None
+    for text in (_INVALID_VARIANT_STDERR, _INVALID_TYPE_STDERR):
+        assert cli_contract.parse_strict_config_rejection(text) is None
+        assert cli_contract.parse_unsupported_config_setting(text) is None
+
+
+def test_invalid_config_value_negative_controls():
+    for text in (
+        None,
+        "",
+        "some unrelated failure",
+        # the header alone
+        "Error loading config.toml:\n",
+        # line 1 without the key line
+        'Error loading config.toml: invalid type: string "yes", expected a boolean\n',
+        # the key line without line 1
+        "in `approval_policy`\n",
+        # a serde message this recognizer does not know — only observed phrasings are
+        # encoded, so a new one returns None and keeps its ordinary classification
+        "Error loading config.toml: missing field `model`\nin `profiles.x`\n",
+    ):
+        assert cli_contract.parse_invalid_config_value(text) is None
+
+
+def test_invalid_config_value_requires_the_key_on_the_very_next_line():
+    # The key line is part of the grammar, not an optional trailer.
+    apart = _INVALID_TYPE_STDERR.replace("\nin `", "\nsomething else\nin `")
+    assert cli_contract.parse_invalid_config_value(apart) is None
+    # CRLF-terminated lines still match (consult-only non-POSIX mode).
+    crlf = _INVALID_TYPE_STDERR.replace("\n", "\r\n")
+    rej = cli_contract.parse_invalid_config_value(crlf)
+    assert rej is not None and rej.key == "sandbox_workspace_write.network_access"
+
+
+def test_invalid_config_value_is_anchored_to_the_whole_blob():
+    """The observed grammar is the ENTIRE stderr: no preamble, nothing after the key line.
+
+    This recognizer runs ahead of the auth/drift/rate-limit substring matchers, so a
+    config-shaped pair merely QUOTED ahead of a genuine diagnostic must not steal the
+    classification from the matcher that should have won."""
+    for tail in ("please run codex login\n", "usage limit reached\n", "unexpected argument\n"):
+        stolen = _INVALID_TYPE_STDERR.rstrip("\n") + "\n" + tail
+        # Positive control: a downstream matcher really does claim the tail.
+        assert (
+            cli_contract.is_auth_failure(stolen)
+            or cli_contract.is_rate_limited(stolen)
+            or cli_contract.is_contract_drift(stolen)
+        )
+        assert cli_contract.parse_invalid_config_value(stolen) is None, tail
+    assert cli_contract.parse_invalid_config_value("preamble\n" + _INVALID_TYPE_STDERR) is None
+    # Trailing whitespace/newlines are the one tolerated trailer — the real output ends in
+    # a blank line, and a bare newline or none at all must parse too.
+    for end in ("\n\n", "\n", "", "  \r\n"):
+        text = _INVALID_TYPE_STDERR.rstrip("\n") + end
+        assert cli_contract.parse_invalid_config_value(text) is not None, repr(end)
+
+
+@pytest.mark.parametrize("field", ["key", "expected"])
+def test_invalid_config_value_fails_closed_on_an_over_cap_surfaced_span(field):
+    """An implausibly long KEY or EXPECTED span is drift or hostile text, not a real
+    rejection — those two are the spans an envelope surfaces, so they stay bounded.
+
+    Returning None keeps the run's ordinary `nonzero_exit` classification — a lost
+    diagnosis, never a wrong one, and never an unbounded span echoed into an envelope."""
+    big = "x" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10)
+    text = {
+        "key": _INVALID_TYPE_STDERR.replace("sandbox_workspace_write.network_access", big),
+        "expected": _INVALID_TYPE_STDERR.replace("a boolean", big),
+    }[field]
+    assert cli_contract.parse_invalid_config_value(text) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "x" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10),
+        "x" * 20_000,
+        "back`tick and, expected a comma",
+        "please run codex login",
+    ],
+)
+def test_invalid_config_value_still_parses_an_unbounded_or_delimiter_laden_value(value):
+    """The offending VALUE is deliberately NOT bounded or delimiter-restricted.
+
+    The value is what the recognizer exists to keep OUT of the envelope. A parse that
+    failed on an over-long or backtick-laden value would fall through to the generic
+    `nonzero_exit` branch — which quotes the head of stderr, i.e. the value — and would
+    hand the value's substrings to the auth/drift/rate-limit matchers. So any single-line
+    value must still parse (an independent Codex review of #550 caught the bound)."""
+    for text in (
+        _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{value}`"),
+        _INVALID_TYPE_STDERR.replace('"yes"', f'"{value}"'),
+    ):
+        rej = cli_contract.parse_invalid_config_value(text)
+        assert rej is not None, text[:80]
+        assert value not in repr(rej)
+
+
+def test_invalid_config_value_key_and_expected_boundaries_at_the_cap():
+    # Exactly at the cap parses; one past it does not — the bound is exact, not fuzzy.
+    cap = cli_contract.STRICT_CONFIG_KEY_MAX_CHARS
+    at = _INVALID_TYPE_STDERR.replace("sandbox_workspace_write.network_access", "k" * cap)
+    over = _INVALID_TYPE_STDERR.replace("sandbox_workspace_write.network_access", "k" * (cap + 1))
+    assert cli_contract.parse_invalid_config_value(at) is not None
+    assert cli_contract.parse_invalid_config_value(over) is None
+
+
+@pytest.mark.parametrize("n", [1_000, 10_000, 100_000])
+def test_invalid_config_value_pattern_has_no_catastrophic_backtracking(n):
+    """Linear time on adversarial shapes built from the pattern's own slots."""
+    import time
+
+    head = "Error loading config.toml: "
+    for shape in (
+        head + "unknown variant `" + "a" * n,
+        head + "unknown variant `a`, expected one of " + "`a`, " * n,
+        head + "invalid type: " + ", expected " * n,
+        head + "invalid type: " + "a, " * n + "expected a boolean\nin `k`",
+        head + 'invalid type: string "x", expected a boolean\nin `' + "a." * n + "`",
+    ):
+        started = time.perf_counter()
+        cli_contract.parse_invalid_config_value(shape)
+        assert time.perf_counter() - started < 1.0
+
+
+def test_invalid_config_value_actual_with_an_embedded_expected_clause_still_parses():
+    # serde prints the offending string verbatim, so it can itself contain ", expected ".
+    text = (
+        'Error loading config.toml: invalid type: string "a, expected b", expected a boolean\n'
+        "in `k`\n"
+    )
+    rej = cli_contract.parse_invalid_config_value(text)
+    assert rej is not None and rej.expected == "a boolean"

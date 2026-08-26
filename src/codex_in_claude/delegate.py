@@ -162,6 +162,10 @@ async def run_delegate(
                 # of them (see the comment on the last_message rewrite below, and #528). It
                 # REPLACES classify_failure's own sanitizer rather than adding a pass.
                 sanitize=lambda t: worktree.sanitize_echo_prose(t, wt_aliases) or "",
+                # The `-c` keys THIS run pinned (#550) — see orchestration._stamp_meta.
+                plugin_config_keys=codex.plugin_config_keys_for(
+                    sandbox=sandbox, reasoning_effort=meta.reasoning_effort
+                ),
             )
             return serialize_error(ErrorResult(error=err, meta=meta))
         diff = worktree.capture_diff(wt.path, timeout=git_timeout, config=config.WORKTREE_CONFIG)

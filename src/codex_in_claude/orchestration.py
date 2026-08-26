@@ -149,6 +149,11 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
             # so a backend effort rejection is attributed to the caller's argument
             # (invalid_reasoning_effort), not misread as contract drift (#309).
             reasoning_effort=meta.reasoning_effort,
+            # The `-c` keys THIS run pinned, so a config-value rejection naming one is
+            # the plugin's own argv and any other is the user's/operator's (#550).
+            plugin_config_keys=codex.plugin_config_keys_for(
+                sandbox=meta.sandbox, reasoning_effort=meta.reasoning_effort
+            ),
         )
         return serialize_error(ErrorResult(error=err, meta=meta))
     return None

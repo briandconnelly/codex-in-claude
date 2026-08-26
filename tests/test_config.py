@@ -138,7 +138,7 @@ def test_placeholder_env_vars(clean_env):
 
 @pytest.mark.parametrize(
     "version,expected",
-    [("codex-cli 0.148.0", True), ("codex-cli 0.999.0", False), ("garbage", None), (None, None)],
+    [("codex-cli 0.149.1", True), ("codex-cli 0.999.0", False), ("garbage", None), (None, None)],
 )
 def test_version_supported(version, expected, clean_env):
     assert config.version_supported(version) is expected
@@ -147,12 +147,12 @@ def test_version_supported(version, expected, clean_env):
 def test_supported_versions_env_override(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "0.999")
     assert config.version_supported("codex-cli 0.999.3") is True
-    assert config.version_supported("codex-cli 0.148.0") is False
+    assert config.version_supported("codex-cli 0.149.1") is False
 
 
 def test_supported_versions_bad_env_falls_back(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "garbage")
-    assert config.version_supported("codex-cli 0.148.0") is True
+    assert config.version_supported("codex-cli 0.149.1") is True
 
 
 def test_state_dir_default(clean_env, monkeypatch):
@@ -653,6 +653,21 @@ def test_extra_args_owns_config_key_matches_only_its_own_keys(monkeypatch):
     assert ea.owns_config_key("model_provider_other") is False
 
 
+def test_extra_args_owns_the_dotted_children_of_its_own_keys(monkeypatch):
+    """A `-c t={k=v}` parent-table assignment is echoed by codex as the dotted CHILD
+    path (`t.k`, probed on 0.149.1 for #550), so ownership must cover descendants of a
+    configured key — but only whole dotted segments, never a name-prefix."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_providers.acme={base_url=3}")
+    ea = config.extra_args()
+    assert ea.owns_config_key("model_providers.acme") is True
+    assert ea.owns_config_key("model_providers.acme.base_url") is True
+    assert ea.owns_config_key("model_providers.acme.wire.api") is True
+    # Same segments, different case/quoting still match; a sibling or a name-prefix does not.
+    assert ea.owns_config_key(' "Model_Providers".ACME.base_url ') is True
+    assert ea.owns_config_key("model_providers.acmeX.base_url") is False
+    assert ea.owns_config_key("model_providers") is False
+
+
 def test_extra_args_ownership_is_false_when_unconfigured_or_invalid(monkeypatch):
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
     ea = config.extra_args()
@@ -666,7 +681,7 @@ def test_extra_args_ownership_is_false_when_unconfigured_or_invalid(monkeypatch)
 
 
 def test_extra_args_owns_profile_file_by_codex_naming_convention(monkeypatch):
-    # Verified live on codex-cli 0.148.0: `--profile NAME` loads (and, under
+    # Verified live on codex-cli 0.149.1: `--profile NAME` loads (and, under
     # --strict-config, validates) $CODEX_HOME/NAME.config.toml, while an UNSELECTED
     # NAME.config.toml is never read.
     monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")

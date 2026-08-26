@@ -92,7 +92,8 @@ def test_build_exec_command_pins_network_access_exactly_on_workspace_write(
     # #518: at the default isolation (inherit) codex reads $CODEX_HOME/config.toml, where
     # `[sandbox_workspace_write] network_access = true` would silently void the advertised
     # no-network-egress guarantee. The pin closes that channel (and --profile — the `-c`
-    # override outranks both, verified live on 0.148.0) for every workspace-write run.
+    # override outranks both, verified live on 0.148.0 and re-verified on 0.149.1) for
+    # every workspace-write run.
     # The expected token is a LITERAL here on purpose: deriving it from the constant the
     # code reads would make this test unable to catch a wrong constant.
     cmd, _ = codex.build_exec_command(
@@ -152,8 +153,9 @@ def test_build_exec_command_pins_writable_roots_exactly_on_workspace_write(
     # writable_roots = [...]` would silently widen the delegate sandbox to write outside
     # the workspace, voiding the advertised writes-stay-in-the-workspace boundary. The
     # pin restores codex's own default ([]) and closes the config-file and --profile
-    # channels (the `-c` override outranks both, verified live on 0.148.0) for every
-    # workspace-write run. The expected token is a LITERAL here on purpose: deriving it
+    # channels (the `-c` override outranks both, verified live on 0.148.0 and re-verified
+    # on 0.149.1) for every workspace-write run. The expected token is a LITERAL here on
+    # purpose: deriving it
     # from the constant the code reads would make this test unable to catch a wrong
     # constant.
     cmd, _ = codex.build_exec_command(
@@ -208,7 +210,8 @@ def test_writable_roots_pin_key_constant_matches_codex_config_key():
 
 def test_build_exec_command_add_dir_composes_with_writable_roots_pin(tmp_path):
     # #520: --add-dir grants ride the FLAG layer, which outranks the `-c` config-layer
-    # pin (verified live on 0.148.0) — so a future add_dirs caller widens the sandbox
+    # pin (verified live on 0.148.0 and re-verified on 0.149.1) — so a future add_dirs
+    # caller widens the sandbox
     # DESPITE the pin. Both tokens coexisting in the argv is the documented behavior;
     # adopting add_dirs on a model-bearing path is a contract change needing its own
     # surface review (see the builder's add_dirs note).
@@ -489,9 +492,9 @@ def test_codex_version(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,
         "run_sync_capture",
-        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.148.0\n", "", 0, 1, False),
+        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.149.1\n", "", 0, 1, False),
     )
-    assert codex.codex_version() == "codex-cli 0.148.0"
+    assert codex.codex_version() == "codex-cli 0.149.1"
 
 
 def test_codex_version_missing(monkeypatch):
@@ -1523,7 +1526,7 @@ def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operato
 
 
 def test_version_display_passes_an_ordinary_version_through():
-    assert codex.version_display("codex-cli 0.148.0") == "codex-cli 0.148.0"
+    assert codex.version_display("codex-cli 0.149.1") == "codex-cli 0.149.1"
 
 
 @pytest.mark.parametrize("value", [None, ""])
@@ -1607,7 +1610,7 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
     in this package branches on the marker — it is text for a reader, never a
     machine-readable `truncated` flag — so a spoofed suffix misleads a reader and nothing
     more. `StatusResult` describes it as advisory for that reason."""
-    spoofed = "codex-cli 0.148.0" + codex._ECHO_TRUNC_MARKER
+    spoofed = "codex-cli 0.149.1" + codex._ECHO_TRUNC_MARKER
     assert len(spoofed) <= codex._ECHO_MAX_CHARS
     assert codex.version_display(spoofed) == spoofed
 
@@ -1615,12 +1618,12 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
 def test_version_display_never_repairs_a_control_split_version_for_the_verdict():
     """The display copy is LOSSY and is not the identity.
 
-    Deleting the control character out of `0.<BEL>148.0` yields a plausible
-    `codex-cli 0.148.0` — but `version_supported` must keep parsing the RAW probe output,
+    Deleting the control character out of `0.<BEL>149.1` yields a plausible
+    `codex-cli 0.149.1` — but `version_supported` must keep parsing the RAW probe output,
     which does not parse at all. Pinning both halves keeps a future refactor from routing
     the verdict through this copy."""
-    raw = "codex-cli 0.\x07148.0"
-    assert codex.version_display(raw) == "codex-cli 0.148.0"
+    raw = "codex-cli 0.\x07149.1"
+    assert codex.version_display(raw) == "codex-cli 0.149.1"
     assert config.parse_version(raw) is None
     assert config.version_supported(raw) is None
 
@@ -1631,3 +1634,344 @@ def test_safe_echo_bounds_an_over_cap_span_with_the_explicit_marker():
     out = codex._safe_echo("k" * 5000)
     assert len(out) == codex._ECHO_MAX_CHARS
     assert out.endswith(codex._ECHO_TRUNC_MARKER)
+
+
+# --- retired config SETTING classification (codex 0.149, #542) --------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25). 0.148.0 accepted the same
+# config, so a user upgrading hits this on their FIRST run at the default isolation.
+_RETIRED_SETTING_STDERR = (
+    'Error: approval_policy = "untrusted" is no longer supported; remove this setting\n'
+)
+
+
+def test_retired_config_setting_is_user_config_rejected(monkeypatch):
+    # Before #542 this matched no signature and fell through to a generic nonzero_exit,
+    # losing the diagnosis. It is the user's own config, so it repairs like one.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert err.code == "user_config_rejected"
+    assert err.temporary is False
+    assert err.repair is not None
+    assert err.repair.next_step == "correct_config"
+    # The key and the retired value are the entire actionable content.
+    assert "approval_policy" in (err.message or "")
+    assert "untrusted" in (err.message or "")
+
+
+def test_retired_config_setting_is_read_from_stderr_only(monkeypatch):
+    # Same reason as the strict grammar: recognition must not be manufacturable by
+    # model-produced text on stdout, in a last message, or in an event blob.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    text = _RETIRED_SETTING_STDERR
+    # Positive control: the identical text on STDERR *is* recognized, so each negative
+    # below is about the channel and not about the grammar failing to match.
+    assert codex.classify_failure(_run(stderr=text)).code == "user_config_rejected"
+    assert codex.classify_failure(_run(stdout=text)).code != "user_config_rejected"
+    assert codex.classify_failure(_run(), last_message=text).code != "user_config_rejected"
+
+
+def test_retired_config_setting_owned_by_an_operator_passthrough_is_theirs(monkeypatch):
+    # The message names no file and no `-c` marker, so ownership cannot be read off it.
+    # When the operator's own passthrough sets the retired key, the rejection is theirs.
+    # `model_provider` stands in for a retired key an operator CAN own: `approval_policy`
+    # itself never can (the test below pins why), so using it here would assert nothing.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=acme")
+    stderr = 'Error: model_provider = "acme" is no longer supported; remove this setting\n'
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "extra_args_rejected"
+    assert "model_provider" in (err.message or "")
+
+
+def test_a_retired_guarantee_key_can_never_be_operator_owned(monkeypatch):
+    # `approval_policy` is on the extra-args denylist precisely because it could weaken an
+    # advertised guarantee, so the ownership branch above can never fire for it and the
+    # rejection stays the USER's config. This pins that coupling: if the denylist ever
+    # stopped refusing the key, an operator passthrough could claim this rejection.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c approval_policy=untrusted")
+    assert config.extra_args().owns_config_key("approval_policy") is False
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert err.code == "user_config_rejected"
+
+
+def test_retired_config_setting_does_not_disturb_unrelated_failures(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    assert codex.classify_failure(_run(stderr="some unrelated boom")).code == "nonzero_exit"
+
+
+def test_retired_config_setting_repair_prose_fits_this_grammar(monkeypatch):
+    """The shared `user_config_rejected` repair prose is written for the OTHER grammar.
+
+    It says the key is one "this codex version does not recognize" and points at "the
+    reported file and line". For a retired setting both are wrong: the key IS recognized
+    (only its value is refused), and this message reports no file and no line. An agent
+    following that guidance looks for location data that was never sent."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert err.repair is not None
+    alt = err.repair.alternative or ""
+    assert "does not recognize" not in alt
+    assert "reported file and line" not in alt
+    # It must still carry the actionable instruction and the lossy fallback.
+    assert "no longer supports" in alt or "no longer supported" in alt
+    assert "ignore-config" in alt
+
+
+def test_retired_config_setting_discloses_a_selected_operator_profile(monkeypatch):
+    """Unlike the strict grammar, this message names no file — so ownership is UNKNOWN.
+
+    `--profile NAME` makes codex load `$CODEX_HOME/NAME.config.toml`, and a profile can
+    reintroduce a setting the extra-args denylist refuses on `-c`. When one is selected we
+    cannot tell whether the retired value came from the user's own config or from the
+    operator's profile, so the message must not assert the user's config definitively."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    err = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert "myprof" in (err.message or "")
+    # Positive control: with NO profile selected, the message is unqualified.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    plain = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
+    assert "myprof" not in (plain.message or "")
+
+
+@pytest.mark.parametrize("key", sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS))
+def test_retired_value_on_a_plugin_pinned_key_is_drift_only_when_this_run_sent_it(key, monkeypatch):
+    """A retired VALUE on a key the plugin pins is drift — IF this run sent the key.
+
+    The strict sibling has this branch and its docstring calls it security-relevant. This
+    path needs it for the same reason: when the plugin sends one of these keys, codex
+    refusing its value is a statement about OUR argv, not about the user's `config.toml`
+    (a `-c` override outranks the file entirely, so the file cannot be what failed).
+    Blaming the user would send them to edit a file that does not contain the setting.
+
+    But membership in PLUGIN_OWNED_CONFIG_KEYS is not proof the key was SENT: the
+    workspace pins ride only `workspace-write` runs and the effort key only when an
+    effort was requested (#550). On any other run the retired value can only be the
+    user's own, and calling it drift sends them after a plugin update instead of their
+    file. So attribution turns on the keys THIS run emitted, defaulting to none."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = f"Error: {key} = false is no longer supported; remove this setting\n"
+    # Positive control: the grammar really does match, so the assertions below are about
+    # attribution and not about the line being unparseable.
+    assert cli_contract.parse_unsupported_config_setting(stderr) is not None
+    assert codex.classify_failure(_run(stderr=stderr)).code == "user_config_rejected"
+    sent = codex.classify_failure(_run(stderr=stderr), plugin_config_keys=frozenset({key}))
+    assert sent.code == "cli_contract_changed"
+
+
+@pytest.mark.parametrize(
+    "signature",
+    ["please run codex login", "usage limit reached", "unexpected argument"],
+)
+def test_retired_config_setting_is_classified_before_the_substring_matchers(signature):
+    """Pins the ORDER, which is behavior and not commentary.
+
+    The echoed value is untrusted text codex read off disk, and a real retired setting can
+    legitimately hold a value carrying an auth, rate-limit, or drift signature. Those
+    matchers are substring tests, so whichever runs first wins. Moving this check below
+    them silently reclassifies these runs — and the whole suite still passed when that
+    mutation was applied, which is why this test exists."""
+    stderr = f'Error: k = "{signature}" is no longer supported; remove this setting\n'
+    # Positive control: a downstream matcher really does claim this text, so the assertion
+    # is about ordering rather than about an inert string.
+    assert (
+        cli_contract.is_auth_failure(stderr)
+        or cli_contract.is_rate_limited(stderr)
+        or cli_contract.is_contract_drift(stderr)
+    )
+    assert codex.classify_failure(_run(stderr=stderr)).code == "user_config_rejected"
+
+
+def test_retired_config_setting_profile_disclosure_is_a_readable_sentence(monkeypatch):
+    # The disclosure is spliced into the middle of the sentence, so it has to leave a
+    # grammatical one behind — "cannot inspect sets `k`" is not.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    msg = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR)).message or ""
+    assert "inspect sets" not in msg
+    assert "myprof" in msg
+
+
+# --- invalid config VALUE classification (codex 0.149, #550) -----------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25). The third config-parse grammar:
+# a recognized key whose value fails serde validation — a typo, plausibly more common
+# than the retired setting above, and hit at the default isolation with no pin.
+_INVALID_VARIANT_STDERR = (
+    "Error loading config.toml: unknown variant `bogus`, expected one of `untrusted`, "
+    "`on-failure`, `on-request`, `granular`, `never`\n"
+    "in `approval_policy`\n\n"
+)
+_INVALID_TYPE_STDERR = (
+    'Error loading config.toml: invalid type: string "yes", expected a boolean\n'
+    "in `sandbox_workspace_write.network_access`\n\n"
+)
+
+
+def _invalid_type_stderr(key: str) -> str:
+    return (
+        f'Error loading config.toml: invalid type: string "yes", expected a boolean\nin `{key}`\n\n'
+    )
+
+
+def test_plugin_config_keys_for_mirrors_build_exec_command():
+    """The emitted-key helper must agree with the argv builder for every run shape.
+
+    Ownership attribution (#550) turns on which `-c` KEYS THIS run sent, so the helper
+    is checked against the keys actually parsed out of `build_exec_command`'s tokens —
+    a hand-maintained mirror that drifted would misattribute silently."""
+    for sandbox in cli_contract.VALID_SANDBOXES:
+        for effort in (None, "high", ""):
+            cmd, _ = codex.build_exec_command(
+                cwd="/w",
+                sandbox=sandbox,
+                isolation="inherit",
+                output_last_message_path="/x",
+                reasoning_effort=effort,
+                flag_support=_ALL_FLAGS,
+            )
+            emitted = {cmd[i + 1].split("=", 1)[0] for i, tok in enumerate(cmd[:-1]) if tok == "-c"}
+            assert (
+                codex.plugin_config_keys_for(sandbox=sandbox, reasoning_effort=effort) == emitted
+            ), (sandbox, effort)
+    # Every emitted key is a plugin-owned one, and each plugin-owned key is emitted by
+    # SOME run shape — otherwise the set below and the pins have drifted apart.
+    union: set[str] = set()
+    for sandbox in cli_contract.VALID_SANDBOXES:
+        for effort in (None, "high"):
+            keys = codex.plugin_config_keys_for(sandbox=sandbox, reasoning_effort=effort)
+            assert keys <= cli_contract.PLUGIN_OWNED_CONFIG_KEYS
+            union |= keys
+    assert union == cli_contract.PLUGIN_OWNED_CONFIG_KEYS
+
+
+def test_invalid_config_value_is_user_config_rejected(monkeypatch):
+    # Before #550 this matched no signature and fell through to a generic nonzero_exit.
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_INVALID_VARIANT_STDERR))
+    assert err.code == "user_config_rejected"
+    assert err.temporary is False
+    assert err.repair is not None
+    assert err.repair.next_step == "correct_config"
+    assert "approval_policy" in (err.message or "")
+    # What codex would ACCEPT is the actionable content and is surfaced.
+    assert "`on-failure`" in (err.message or "")
+
+
+def test_invalid_config_value_never_echoes_the_offending_value(monkeypatch):
+    """The rejected value is user free text — plausibly a secret pasted into the wrong
+    key — and no pattern-based redactor can recognize an arbitrary one, so it must not
+    reach the envelope at all (the key and what codex expected are enough to fix it)."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    # A short value, an over-cap one (a parse failure would fall through to the generic
+    # branch, which quotes the head of stderr — the value), and a delimiter-laden one.
+    for secret in (
+        "hunter2-not-a-known-token-shape",
+        "S" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10),
+        "sec`ret, expected a comma",
+    ):
+        for stderr in (
+            _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{secret}`"),
+            _INVALID_TYPE_STDERR.replace('"yes"', f'"{secret}"'),
+        ):
+            err = codex.classify_failure(_run(stderr=stderr))
+            # Positive control: the grammar matched, so the absence below is deliberate.
+            assert err.code == "user_config_rejected"
+            assert secret not in (err.message or "")
+            assert secret[:200] not in (err.message or "")
+            assert secret not in (err.repair.alternative if err.repair else "")
+
+
+def test_invalid_config_value_wrong_type_message_names_the_expected_type(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    # On a READ-ONLY run the plugin does not send this key, so it is the user's file.
+    err = codex.classify_failure(_run(stderr=_INVALID_TYPE_STDERR))
+    assert err.code == "user_config_rejected"
+    assert "sandbox_workspace_write.network_access" in (err.message or "")
+    assert "a boolean" in (err.message or "")
+
+
+def test_invalid_config_value_is_read_from_stderr_only(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    text = _INVALID_VARIANT_STDERR
+    assert codex.classify_failure(_run(stderr=text)).code == "user_config_rejected"
+    assert codex.classify_failure(_run(stdout=text)).code != "user_config_rejected"
+    assert codex.classify_failure(_run(), last_message=text).code != "user_config_rejected"
+
+
+def test_invalid_config_value_owned_by_an_operator_passthrough_is_theirs(monkeypatch):
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_provider=acme")
+    stderr = (
+        "Error loading config.toml: unknown variant `acme`, expected one of `openai`, `x`\n"
+        "in `model_provider`\n"
+    )
+    err = codex.classify_failure(_run(stderr=stderr))
+    assert err.code == "extra_args_rejected"
+    assert "model_provider" in (err.message or "")
+
+
+def test_invalid_config_value_under_an_operator_parent_table_is_theirs(monkeypatch):
+    """A `-c t={k=v}` parent-table assignment echoes the dotted CHILD path (probed live
+    on 0.149.1), so exact key matching would hand the operator's own mistake to the user."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_providers.acme={base_url=3}")
+    err = codex.classify_failure(_run(stderr=_invalid_type_stderr("model_providers.acme.base_url")))
+    assert err.code == "extra_args_rejected"
+
+
+@pytest.mark.parametrize("key", sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS))
+def test_invalid_value_on_a_pinned_key_is_drift_only_when_this_run_sent_it(key, monkeypatch):
+    """Membership in PLUGIN_OWNED_CONFIG_KEYS is not proof the plugin sent the key.
+
+    The workspace pins ride only `workspace-write` runs and the effort key only when an
+    effort was requested. A user whose own config mistypes one of those keys on a
+    read-only consult would otherwise be told the PLUGIN drifted — and sent after an
+    update instead of their file. When the plugin DID send the key, a `-c` override
+    outranks the file entirely (probed live: a bad file value under a good override
+    does not fail at all), so this grammar naming it can only mean OUR value was
+    refused: genuine cli_contract_changed."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = _invalid_type_stderr(key)
+    assert cli_contract.parse_invalid_config_value(stderr) is not None
+    # Default context — no keys emitted — is the user's config.
+    assert codex.classify_failure(_run(stderr=stderr)).code == "user_config_rejected"
+    not_sent = codex.classify_failure(_run(stderr=stderr), plugin_config_keys=frozenset())
+    assert not_sent.code == "user_config_rejected"
+    sent = codex.classify_failure(_run(stderr=stderr), plugin_config_keys=frozenset({key}))
+    assert sent.code == "cli_contract_changed"
+
+
+def test_invalid_config_value_repair_prose_fits_this_grammar(monkeypatch):
+    # The shared table prose is for the unknown-KEY grammar (see the #542 sibling).
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    err = codex.classify_failure(_run(stderr=_INVALID_VARIANT_STDERR))
+    assert err.repair is not None
+    alt = err.repair.alternative or ""
+    assert "does not recognize" not in alt
+    assert "reported file and line" not in alt
+    assert "ignore-config" in alt
+
+
+def test_invalid_config_value_discloses_a_selected_operator_profile(monkeypatch):
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    err = codex.classify_failure(_run(stderr=_INVALID_VARIANT_STDERR))
+    assert "myprof" in (err.message or "")
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    plain = codex.classify_failure(_run(stderr=_INVALID_VARIANT_STDERR))
+    assert "myprof" not in (plain.message or "")
+
+
+@pytest.mark.parametrize(
+    "signature",
+    ["please run codex login", "usage limit reached", "unexpected argument"],
+)
+def test_invalid_config_value_is_classified_before_the_substring_matchers(signature):
+    """Pins the ORDER. The allowed-variant list is codex's, but the offending value is
+    the user's and is consumed by the grammar — it can carry any substring."""
+    stderr = _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{signature}`")
+    assert (
+        cli_contract.is_auth_failure(stderr)
+        or cli_contract.is_rate_limited(stderr)
+        or cli_contract.is_contract_drift(stderr)
+    )
+    assert codex.classify_failure(_run(stderr=stderr)).code == "user_config_rejected"
+
+
+def test_invalid_config_value_does_not_disturb_unrelated_failures(monkeypatch):
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    assert codex.classify_failure(_run(stderr="some unrelated boom")).code == "nonzero_exit"
