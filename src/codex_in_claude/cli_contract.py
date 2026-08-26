@@ -706,7 +706,11 @@ def parse_unsupported_config_setting(text: str | None) -> UnsupportedConfigSetti
 # - The offending VALUE is consumed but never captured. It is free-form text the user
 #   typed into the wrong key — plausibly a secret — and no pattern-based redactor can
 #   recognize an arbitrary one, so it is kept out of the parse result entirely. The key
-#   and what codex EXPECTED are the actionable content.
+#   and what codex EXPECTED are the actionable content. For the same reason the value
+#   span is NOT length-bounded (only the surfaced key/expected spans are): a parse that
+#   failed on an over-long value would fall through to the generic `nonzero_exit`
+#   branch, which quotes the head of stderr — i.e. the value — into the envelope. The
+#   value is confined to its line, so the bound it lacks costs nothing to matching time.
 INVALID_CONFIG_VALUE_UNKNOWN_VARIANT_PHRASE = "unknown variant "
 INVALID_CONFIG_VALUE_INVALID_TYPE_PHRASE = "invalid type: "
 INVALID_CONFIG_VALUE_KEY_LINE_PREFIX = "in `"
@@ -716,7 +720,7 @@ _INVALID_CONFIG_VALUE_PATTERN = re.compile(
     rf"\A{re.escape(STRICT_CONFIG_ERROR_PREFIX)}: (?:"
     # unknown variant `V`, expected one of `A`, `B`, ...
     rf"{re.escape(INVALID_CONFIG_VALUE_UNKNOWN_VARIANT_PHRASE)}"
-    rf"`[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`, expected one of "
+    rf"`[^\n]*?`, expected one of "
     rf"(?P<variants>`[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`"
     rf"(?:, `[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`)"
     rf"{{0,{INVALID_CONFIG_VALUE_MAX_VARIANTS - 1}}})"
@@ -725,7 +729,7 @@ _INVALID_CONFIG_VALUE_PATTERN = re.compile(
     # ", expected " — serde prints the offending string verbatim — so the expected-type
     # group excludes commas and the actual group is non-greedy within its bound)
     rf"{re.escape(INVALID_CONFIG_VALUE_INVALID_TYPE_PHRASE)}"
-    rf"[^\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}?, expected "
+    rf"[^\n]*?, expected "
     rf"(?P<expected_type>[^\n,]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})"
     rf")[ \t\r]*\n"
     rf"{re.escape(INVALID_CONFIG_VALUE_KEY_LINE_PREFIX)}"

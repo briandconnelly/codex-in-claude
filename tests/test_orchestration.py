@@ -10,7 +10,7 @@ from pontonier.core import redaction
 from pontonier.core.gitdiff import DiffResult, DiffSummary, InvalidUntrackedError
 from pontonier.core.runtime import CommandRun
 
-from codex_in_claude import codex, orchestration
+from codex_in_claude import codex, config, orchestration
 from codex_in_claude.schemas import Coverage, Meta
 
 # events string containing a token_count event with a rate_limits block
@@ -841,3 +841,30 @@ def test_a_non_list_findings_keeps_the_redaction_it_always_had():
     )
     assert "A" * 40 not in out["findings"], out["findings"]
     assert "A" * 40 not in out["other"]
+
+
+# --- #550: the `-c` keys THIS run pinned reach the failure classifier -----------------
+_INVALID_PIN_VALUE_STDERR = (
+    'Error loading config.toml: invalid type: string "yes", expected a boolean\n'
+    "in `sandbox_workspace_write.network_access`\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "expected_code"),
+    [("workspace-write", "cli_contract_changed"), ("read-only", "user_config_rejected")],
+)
+def test_stamp_meta_attributes_a_pinned_key_by_the_run_sandbox(sandbox, expected_code, monkeypatch):
+    """The classifier learns which pins rode THIS run from meta (#550).
+
+    Without the handoff the direct classifier tests stay green while a workspace-write
+    run's rejection of the plugin's own pin is reported as the user's config."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    meta = _make_meta()
+    meta.sandbox = sandbox
+    result = codex.CodexExecResult(
+        run=CommandRun("", _INVALID_PIN_VALUE_STDERR, 1, 12, False), last_message=None, events=""
+    )
+    out = orchestration._stamp_meta(result, meta)
+    assert out is not None
+    assert out["error"]["code"] == expected_code

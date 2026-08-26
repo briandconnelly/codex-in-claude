@@ -695,9 +695,10 @@ def test_invalid_config_value_is_anchored_to_the_whole_blob():
         assert cli_contract.parse_invalid_config_value(text) is not None, repr(end)
 
 
-@pytest.mark.parametrize("field", ["key", "expected", "variant", "actual"])
-def test_invalid_config_value_fails_closed_on_an_over_cap_span(field):
-    """An implausibly long span is drift or hostile text, not a real rejection.
+@pytest.mark.parametrize("field", ["key", "expected"])
+def test_invalid_config_value_fails_closed_on_an_over_cap_surfaced_span(field):
+    """An implausibly long KEY or EXPECTED span is drift or hostile text, not a real
+    rejection — those two are the spans an envelope surfaces, so they stay bounded.
 
     Returning None keeps the run's ordinary `nonzero_exit` classification — a lost
     diagnosis, never a wrong one, and never an unbounded span echoed into an envelope."""
@@ -705,10 +706,34 @@ def test_invalid_config_value_fails_closed_on_an_over_cap_span(field):
     text = {
         "key": _INVALID_TYPE_STDERR.replace("sandbox_workspace_write.network_access", big),
         "expected": _INVALID_TYPE_STDERR.replace("a boolean", big),
-        "variant": _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{big}`"),
-        "actual": _INVALID_TYPE_STDERR.replace('"yes"', f'"{big}"'),
     }[field]
     assert cli_contract.parse_invalid_config_value(text) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "x" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10),
+        "x" * 20_000,
+        "back`tick and, expected a comma",
+        "please run codex login",
+    ],
+)
+def test_invalid_config_value_still_parses_an_unbounded_or_delimiter_laden_value(value):
+    """The offending VALUE is deliberately NOT bounded or delimiter-restricted.
+
+    The value is what the recognizer exists to keep OUT of the envelope. A parse that
+    failed on an over-long or backtick-laden value would fall through to the generic
+    `nonzero_exit` branch — which quotes the head of stderr, i.e. the value — and would
+    hand the value's substrings to the auth/drift/rate-limit matchers. So any single-line
+    value must still parse (an independent Codex review of #550 caught the bound)."""
+    for text in (
+        _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{value}`"),
+        _INVALID_TYPE_STDERR.replace('"yes"', f'"{value}"'),
+    ):
+        rej = cli_contract.parse_invalid_config_value(text)
+        assert rej is not None, text[:80]
+        assert value not in repr(rej)
 
 
 def test_invalid_config_value_key_and_expected_boundaries_at_the_cap():

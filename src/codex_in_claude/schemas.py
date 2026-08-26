@@ -395,7 +395,7 @@ ErrorCode = Literal[
     # the config key itself stays cli_contract_changed) (#309).
     "invalid_reasoning_effort",
     # Three emitters, all "the user's own config to fix" — NOT a plugin drift and NOT
-    # operator passthrough — and both at startup, before any model call, so neither costs
+    # operator passthrough — and all at startup, before any model call, so none costs
     # spend. (1) Under `--strict-config` (sent on every run carrying a `-c` pin, #524)
     # codex refused to start because a config FILE the user owns — $CODEX_HOME/config.toml,
     # including its unselected [profiles.X] tables — holds a key this codex does not

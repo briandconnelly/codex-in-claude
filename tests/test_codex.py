@@ -1824,16 +1824,23 @@ def test_invalid_config_value_never_echoes_the_offending_value(monkeypatch):
     key — and no pattern-based redactor can recognize an arbitrary one, so it must not
     reach the envelope at all (the key and what codex expected are enough to fix it)."""
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
-    secret = "hunter2-not-a-known-token-shape"
-    for stderr in (
-        _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{secret}`"),
-        _INVALID_TYPE_STDERR.replace('"yes"', f'"{secret}"'),
+    # A short value, an over-cap one (a parse failure would fall through to the generic
+    # branch, which quotes the head of stderr — the value), and a delimiter-laden one.
+    for secret in (
+        "hunter2-not-a-known-token-shape",
+        "S" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10),
+        "sec`ret, expected a comma",
     ):
-        err = codex.classify_failure(_run(stderr=stderr))
-        # Positive control: the grammar matched, so the absence below is deliberate.
-        assert err.code == "user_config_rejected"
-        assert secret not in (err.message or "")
-        assert secret not in (err.repair.alternative if err.repair else "")
+        for stderr in (
+            _INVALID_VARIANT_STDERR.replace("`bogus`", f"`{secret}`"),
+            _INVALID_TYPE_STDERR.replace('"yes"', f'"{secret}"'),
+        ):
+            err = codex.classify_failure(_run(stderr=stderr))
+            # Positive control: the grammar matched, so the absence below is deliberate.
+            assert err.code == "user_config_rejected"
+            assert secret not in (err.message or "")
+            assert secret[:200] not in (err.message or "")
+            assert secret not in (err.repair.alternative if err.repair else "")
 
 
 def test_invalid_config_value_wrong_type_message_names_the_expected_type(monkeypatch):
