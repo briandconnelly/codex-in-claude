@@ -138,7 +138,7 @@ def test_placeholder_env_vars(clean_env):
 
 @pytest.mark.parametrize(
     "version,expected",
-    [("codex-cli 0.148.0", True), ("codex-cli 0.999.0", False), ("garbage", None), (None, None)],
+    [("codex-cli 0.149.1", True), ("codex-cli 0.999.0", False), ("garbage", None), (None, None)],
 )
 def test_version_supported(version, expected, clean_env):
     assert config.version_supported(version) is expected
@@ -147,12 +147,12 @@ def test_version_supported(version, expected, clean_env):
 def test_supported_versions_env_override(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "0.999")
     assert config.version_supported("codex-cli 0.999.3") is True
-    assert config.version_supported("codex-cli 0.148.0") is False
+    assert config.version_supported("codex-cli 0.149.1") is False
 
 
 def test_supported_versions_bad_env_falls_back(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "garbage")
-    assert config.version_supported("codex-cli 0.148.0") is True
+    assert config.version_supported("codex-cli 0.149.1") is True
 
 
 def test_state_dir_default(clean_env, monkeypatch):
@@ -666,7 +666,7 @@ def test_extra_args_ownership_is_false_when_unconfigured_or_invalid(monkeypatch)
 
 
 def test_extra_args_owns_profile_file_by_codex_naming_convention(monkeypatch):
-    # Verified live on codex-cli 0.148.0: `--profile NAME` loads (and, under
+    # Verified live on codex-cli 0.149.1: `--profile NAME` loads (and, under
     # --strict-config, validates) $CODEX_HOME/NAME.config.toml, while an UNSELECTED
     # NAME.config.toml is never read.
     monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")

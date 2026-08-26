@@ -5,7 +5,64 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Added
+
+- **`user_config_rejected` now covers a config setting codex has RETIRED** (#542). `0.149` retired
+  the `untrusted` approval policy and refuses to start when the user's config still selects it.
+  That message is a different grammar from the `--strict-config` unknown-KEY one — the key still
+  exists and only its value is refused — and it matched no drift signature either, so the run
+  surfaced as a bare `nonzero_exit` with the actionable diagnosis lost. It needs no `-c` pin and no
+  `--strict-config`, and it reaches the default `inherit` isolation, so it is the failure a user
+  meets on their first run after upgrading. `codex-cli 0.148.0` accepted the identical config.
+  Attribution follows the strict-config discipline: the operator's passthrough when it owns the
+  key, the user's config otherwise. Unlike the strict grammar this message names no file, so when
+  an operator `--profile` is selected — which can reintroduce a setting the extra-args denylist
+  refuses on `-c` — the error discloses that the profile may be the source instead of asserting the
+  user's own config. The repair guidance is overridden rather than inherited, because the shared
+  prose calls the key unrecognized and points at a reported file and line, and neither applies
+  here. A retired value on a key the plugin ITSELF pins is `cli_contract_changed`, not the user's
+  config — the same three-owner attribution the strict path makes, because codex refusing one of
+  those values is a statement about this plugin's argv rather than about anything on the user's
+  disk. No new error code, so no `FINGERPRINT` change.
+
 ### Changed
+
+- **Tracked Codex version is now `0.149`.** `SUPPORTED_VERSIONS` tracks `(0, 149)`; a `0.148` CLI
+  now warns in `codex_status` (advisory only — it never blocks). Verified end to end against
+  `codex-cli 0.149.1` and A/B'd against a side-by-side `0.148.0`. **No contract break:** all 12
+  `ALWAYS_SEND` flags, `--model`, and all three sandbox values are present and unchanged.
+  - Re-verified live, each with its own positive control: the `workspace-write` network-egress and
+    writable-roots pins (both still outrank the config file *and* `--profile`); the read boundary on
+    both tiers, with the write negative control proving the sandbox was in force; `--ignore-rules`
+    (rules load by default and the flag drops them); `model_reasoning_effort` (still read and
+    applied); `--output-schema` conformance together with `--output-last-message` receiving exactly
+    the final `agent_message`; and the `--strict-config` rejection grammar, unchanged in both forms.
+  - The implicit-context marker probe (`AGENTS.md` sources, both skills roots, all four variants)
+    produced a **presence matrix identical** to `0.148.0` across both binaries — notable because
+    `0.149` reworked skill selection and carried an upstream change titled "Enforce filesystem
+    permissions when loading `AGENTS.md`".
+  - `KNOWN_MODEL_SLUGS` gains `gpt-reserve`, refreshed from the `0.149.1`-written cache. A
+    contemporaneous A/B — both binaries pointed at separate cache-free scratch `$CODEX_HOME` copies
+    and run five seconds apart — had `0.148.0` fetch the identical set, so this is a **backend
+    catalog move, not a client change**. Its `visibility: "hide"` is deliberately not filtered
+    (#547).
+  - The `0.148.0` → `0.149.1` app-server schema diff leaves six of the seven consumed schemas
+    byte-identical after canonicalization. `GetAccountRateLimitsResponse` gains two `PlanType` enum
+    values (`edu_plus`, `edu_pro`), absorbed because `planType` is read as a bounded free-form
+    string rather than against an allowlist. Three unconsumed v2 notifications were added; nothing
+    was removed.
+  - New `0.149` surface is deliberately not adopted: the `agents` and `queue` subcommands and the
+    `exec --thread-source` flag are unused, and the retired `untrusted` approval value was never
+    sent. `remote_plugin`, `view_image`, and `recommended_plugins` all hold their recorded postures.
+- **The `remote_plugin` guarantee now says which half of it is actually verified** (#542, #548).
+  The mechanism half is re-verified and further pinned in the live integration suite: `--disable`
+  wins over `--enable` in **either** order and over `-c features.remote_plugin=true`, and an unknown
+  feature name still fails loud. The tool-surface half — proving no connector *tool* is exposed —
+  needs a machine where a connector is installed to serve as a positive control, and none is; it is
+  recorded as **not exercised** rather than as a pass, and `COMPATIBILITY.md` now tells the next
+  agent to check for that control first. Upstream `0.149.0`'s "Remove the workspace settings gate
+  for apps and plugins" was read at the source: it touches only the `app-server` and `chatgpt`
+  crates, so it does not reach the `codex exec` path this guarantee covers.
 
 - `collaborating-with-codex` skill: the spend step now describes only the live `codex_status`
   quota read (no persisted snapshot, so no `is_stale`/`home_unverified` branch); scenario S4 is

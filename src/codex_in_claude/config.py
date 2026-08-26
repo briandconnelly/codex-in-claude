@@ -306,7 +306,8 @@ class ExtraArgs:
 
         `--profile NAME` loads `$CODEX_HOME/NAME.config.toml` and, under
         `--strict-config`, validates it; an unselected `NAME.config.toml` is never read
-        (both verified live on codex-cli 0.148.0). Matching on the basename keeps this
+        (both verified live on codex-cli 0.148.0, re-verified on 0.149.1). Matching on the
+        basename keeps this
         independent of where `$CODEX_HOME` resolves."""
         if not (self.configured and self.valid) or not path:
             return False

@@ -443,6 +443,67 @@ def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -
     )
 
 
+def _retired_config_setting_error(
+    setting: cli_contract.UnsupportedConfigSetting, extra: config.ExtraArgs | None
+) -> ErrorInfo:
+    """Error for a config setting codex RETIRED (#542).
+
+    Distinct from the unknown-KEY strict-config path: the key still exists and only its
+    VALUE is refused, so the strict grammar cannot see it and no CONTRACT_DRIFT pattern
+    matches — before #542 this reached the caller as a generic `nonzero_exit`.
+
+    The message names no file and carries no `-c` marker, so ownership cannot be read off
+    it the way `_strict_config_error` reads its origin. Attribute it to the operator only
+    when their own passthrough sets that key; otherwise it is the user's config. The
+    echoed key and value are untrusted text codex read off disk, so they go through the
+    same redaction and length bound as every other surfaced failure detail."""
+    # A retired value on a key the PLUGIN pins is a statement about our own argv, not about
+    # anything in the user's config — the same attribution the strict sibling makes first,
+    # and for the same security-relevant reason. Blaming the user here would send them to
+    # edit a file that does not hold the setting while the real repair is a plugin update.
+    if setting.key in cli_contract.PLUGIN_OWNED_CONFIG_KEYS:
+        return contract_changed_error()
+    ea = config.extra_args() if extra is None else extra
+    if ea.owns_config_key(setting.key):
+        return _extra_args_rejected_error([setting.key])
+    key = _safe_echo(setting.key)
+    value = _safe_echo(setting.value)
+    # Ownership is genuinely UNKNOWN when an operator profile is selected. `--profile NAME`
+    # makes codex load $CODEX_HOME/NAME.config.toml, and a profile can reintroduce a
+    # setting the extra-args denylist refuses on `-c` (the documented operator-trust
+    # boundary). The strict grammar resolves this by naming the offending FILE; this one
+    # reports no file, so the honest move is to disclose the ambiguity rather than assert
+    # the user's own config and send them to fix a file that may not hold the value.
+    where = "your Codex config"
+    caveat = ""
+    if ea.profile_names:
+        selected = ", ".join(_safe_echo(n) for n in ea.profile_names)
+        where = "your Codex config"
+        caveat = (
+            f" The setting may instead come from the operator profile selected by "
+            f"{config.EXTRA_ARGS_ENV} ({selected}), which this plugin cannot inspect — "
+            f"check there too."
+        )
+    return make_error(
+        "user_config_rejected",
+        f"codex refused to start: {where} sets `{key}` to {value}, which this codex "
+        f"version no longer supports. Remove or change that setting.{caveat} No model call "
+        f"was made.",
+        # The shared table prose is written for the unknown-KEY grammar — it calls the key
+        # unrecognized and points at a reported file and line, neither of which applies
+        # here. Override it rather than send the caller looking for absent location data.
+        repair_alternative=(
+            "This codex version no longer supports that config VALUE (the key itself is "
+            "still recognized, and codex reports no file or line for it). Remove or change "
+            "the setting in your Codex config — checking any operator-selected profile too "
+            "— or upgrade/downgrade codex to a version that accepts it, then rerun. As a "
+            "last resort, isolation='ignore-config' skips your config file for the run — "
+            "but it drops ALL of it (model provider, MCP servers, and every other "
+            "setting), so prefer fixing the setting."
+        ),
+    )
+
+
 def _strict_config_error(
     rejection: cli_contract.StrictConfigRejection, extra: config.ExtraArgs | None
 ) -> ErrorInfo:
@@ -558,6 +619,13 @@ def classify_failure(
     strict = cli_contract.parse_strict_config_rejection(run.stderr)
     if strict is not None:
         return _strict_config_error(strict, extra_args)
+    # A RETIRED setting is the same class of failure one step later in config parsing:
+    # the key parses, its value no longer does (#542). It is checked here, beside the
+    # strict grammar and ahead of the auth/drift/rate-limit substring matchers, for the
+    # identical reason — it echoes untrusted text that could satisfy one of them.
+    retired = cli_contract.parse_unsupported_config_setting(run.stderr)
+    if retired is not None:
+        return _retired_config_setting_error(retired, extra_args)
     if cli_contract.is_auth_failure(run.stderr, run.stdout, last_message, event_error):
         return _auth_error()
     # Drift before rate-limit so a genuine contract change is never masked as a

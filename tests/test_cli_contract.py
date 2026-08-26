@@ -449,3 +449,128 @@ def test_strict_config_recognizer_tolerates_carriage_returns():
         )
         is None
     )
+
+
+# --- retired config SETTING rejection (codex 0.149, #542) -------------------------
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25, scratch $CODEX_HOME, zero spend
+# — config parsing precedes auth). The SAME config was accepted by 0.148.0, so this is a
+# real upgrade-time break for any user whose config still selects the retired policy.
+# Kept as a literal so a recognizer rewritten to match a paraphrase fails here.
+_RETIRED_SETTING_STDERR = (
+    'Error: approval_policy = "untrusted" is no longer supported; remove this setting\n'
+)
+
+
+def test_retired_config_setting_is_recognized():
+    rej = cli_contract.parse_unsupported_config_setting(_RETIRED_SETTING_STDERR)
+    assert rej is not None
+    assert rej.key == "approval_policy"
+    assert rej.value == '"untrusted"'
+
+
+def test_retired_config_setting_does_not_match_the_strict_config_grammar():
+    # The two grammars are distinct: this key is RECOGNIZED (only its value is retired),
+    # so the unknown-field parser must not claim it, and vice versa.
+    assert cli_contract.parse_strict_config_rejection(_RETIRED_SETTING_STDERR) is None
+    assert cli_contract.parse_unsupported_config_setting(_STRICT_OVERRIDE_STDERR) is None
+    assert cli_contract.parse_unsupported_config_setting(_STRICT_FILE_STDERR) is None
+
+
+def test_retired_config_setting_negative_controls():
+    for text in (
+        "",
+        "some unrelated failure",
+        # the phrase alone, with no `key = value` head, is not a rejection we can act on
+        "this feature is no longer supported\n",
+    ):
+        assert cli_contract.parse_unsupported_config_setting(text) is None
+
+
+def test_retired_config_setting_is_anchored_to_a_line_start():
+    """Mid-line text must not satisfy the grammar.
+
+    codex prints this rejection as its own line. Without the anchor, any prose that
+    happened to quote the phrase — a diff, a commit message, a model's own answer echoed
+    into stderr — could manufacture the classification."""
+    mid = 'blah blah Error: k = "v" is no longer supported; remove this setting'
+    assert cli_contract.parse_unsupported_config_setting(mid) is None
+    # Positive control: the identical text on its own line IS recognized, so the negative
+    # above is about the anchor and not about the rest of the pattern failing to match.
+    own_line = 'preamble\nError: k = "v" is no longer supported; remove this setting'
+    rej = cli_contract.parse_unsupported_config_setting(own_line)
+    assert rej is not None and rej.key == "k"
+
+
+def test_retired_config_setting_value_never_spans_lines():
+    # The value group is bounded to a single line, so a multi-line span cannot be pulled
+    # into the echoed value (which reaches an envelope).
+    assert (
+        cli_contract.parse_unsupported_config_setting(
+            'Error: k = "a\nb" is no longer supported; remove this setting'
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("field", ["key", "value"])
+def test_retired_config_setting_fails_closed_on_an_over_cap_span(field):
+    """An implausibly long key or value is drift or hostile text, not a real setting.
+
+    The bound makes it return None, so the run keeps its ordinary `nonzero_exit`
+    classification. That is the safe direction: a lost diagnosis, never a wrong one, and
+    never an unbounded span echoed into an error envelope."""
+    big = "x" * (cli_contract.STRICT_CONFIG_KEY_MAX_CHARS + 10)
+    text = (
+        f'Error: {big} = "v" is no longer supported; remove this setting'
+        if field == "key"
+        else f'Error: k = "{big}" is no longer supported; remove this setting'
+    )
+    assert cli_contract.parse_unsupported_config_setting(text) is None
+
+
+@pytest.mark.parametrize("n", [1_000, 10_000, 100_000])
+def test_retired_config_setting_pattern_has_no_catastrophic_backtracking(n):
+    """The pattern runs in linear time on adversarial shapes built from its own slots.
+
+    A stderr blob is untrusted text of substantial size, so a quadratic matcher here would
+    be a denial of service on the failure path — the path a drifting codex takes."""
+    import time
+
+    for shape in (
+        "Error: " + "a" * n,
+        "Error: " + "a." * n,
+        "Error: " + "k = v " * n + "is no longer supported; remove this setting",
+    ):
+        started = time.perf_counter()
+        cli_contract.parse_unsupported_config_setting(shape)
+        assert time.perf_counter() - started < 1.0
+
+
+def test_retired_config_setting_requires_the_complete_observed_grammar():
+    """The phrase alone is not the grammar — the full observed suffix is required.
+
+    A non-greedy value group with no required suffix accepts a PREFIX: any line where the
+    phrase appears inside an echoed value matches, with the value silently truncated at
+    the phrase. That is not a cosmetic parse error. `parse_unsupported_config_setting`
+    runs AHEAD of the auth/drift matchers precisely so an echoed key cannot fool them, so
+    a prefix match steals the classification from the matcher that should have won."""
+    stolen_from_auth = 'Error: token = "401 unauthorized is no longer supported" please login'
+    # Positive control: this text really is an auth failure, so the assertion below is
+    # about ordering being safe and not about an inert string.
+    assert cli_contract.is_auth_failure(stolen_from_auth) is True
+    assert cli_contract.parse_unsupported_config_setting(stolen_from_auth) is None
+
+    for near_miss in (
+        # phrase inside the value, no real suffix
+        'Error: model_provider = "x is no longer supported" failed to initialize provider',
+        # right shape, wrong/absent suffix
+        'Error: k = "v" is no longer supported',
+        'Error: k = "v" is no longer supported; do something else',
+        'Error: k = "v" is no longer supported; remove this setting AND MORE',
+    ):
+        assert cli_contract.parse_unsupported_config_setting(near_miss) is None, near_miss
+
+    # The real thing still parses — the anchor must not have broken the actual grammar.
+    rej = cli_contract.parse_unsupported_config_setting(_RETIRED_SETTING_STDERR)
+    assert rej is not None and rej.key == "approval_policy"
+    assert rej.value == '"untrusted"'
