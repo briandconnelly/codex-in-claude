@@ -7,6 +7,32 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Added
 
+- **`user_config_rejected` now covers an INVALID config value — the wrong enum variant or the
+  wrong TOML type** (#550). This is the third config-parse grammar: the key is recognized and
+  serde refuses its value, in a two-line message with the key on the second line. It matched
+  neither the `--strict-config` unknown-key recognizer nor the retired-setting one below, so a
+  plain typo in `config.toml` — plausibly more common than a retired setting — surfaced as a bare
+  `nonzero_exit`. Like the retired grammar it needs no `-c` pin and no `--strict-config`, and it
+  fires at the default `inherit` isolation. Captured verbatim from `codex-cli 0.149.1`; only the
+  two observed phrasings are encoded, and the recognizer is anchored to the whole of stderr so a
+  config-shaped pair quoted ahead of a genuine auth/drift/rate-limit diagnostic cannot steal the
+  classification. The offending value is deliberately never echoed — it is free text the user
+  typed into the wrong key, plausibly a secret no pattern-based redactor recognizes — while what
+  codex *expected* (the allowed variants, or the type) is surfaced as the actionable content.
+  No new error code, so no `FINGERPRINT` change.
+- **Config-value rejections are attributed to the plugin only for a key THIS run actually
+  sent** (#550, also correcting the unreleased #542 path). The workspace pins ride only
+  `workspace-write` runs and the effort key only when an effort was requested, so membership in
+  `PLUGIN_OWNED_CONFIG_KEYS` alone proved nothing about a given run: a user mistyping
+  `sandbox_workspace_write.network_access` in their own file on a read-only consult would have
+  been told the plugin drifted and sent after an update instead of their file. `classify_failure`
+  now takes the emitted key set (`plugin_config_keys_for`, pinned against the argv builder by a
+  test); a rejection naming an emitted key is `cli_contract_changed` — verified live that a `-c`
+  override outranks a bad file value entirely, so the refused value can only have been ours —
+  and anything else is the user's or operator's. Operator ownership also covers the dotted
+  children of a passthrough key, because a `-c t={k=v}` parent-table assignment is echoed by
+  codex as `t.k`.
+
 - **`user_config_rejected` now covers a config setting codex has RETIRED** (#542). `0.149` retired
   the `untrusted` approval policy and refuses to start when the user's config still selects it.
   That message is a different grammar from the `--strict-config` unknown-KEY one — the key still

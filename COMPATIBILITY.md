@@ -815,6 +815,48 @@ Three properties make this worth its own recognizer rather than a broadened stri
   fire — the extra-args parser already refuses that key as one that could weaken an advertised
   guarantee — so the rejection stays the user's, and a test pins that coupling.
 
+### An INVALID value is a third grammar (#550)
+
+A recognized key whose value fails serde's own validation — the wrong enum variant, or the wrong
+TOML type — is a third message, two lines with the key on the second. Captured verbatim from
+`codex-cli 0.149.1` (2026-08-25, scratch `$CODEX_HOME`, zero spend); these two sub-grammars, and
+only these, are what `parse_invalid_config_value` encodes:
+
+```text
+Error loading config.toml: unknown variant `bogus`, expected one of `untrusted`, `on-failure`, `on-request`, `granular`, `never`
+in `approval_policy`
+```
+
+```text
+Error loading config.toml: invalid type: string "yes", expected a boolean
+in `sandbox_workspace_write.network_access`
+```
+
+It shares the retired grammar's blast radius (no pin, no `--strict-config`, the default isolation)
+and its ownership problem — the identical text is printed whether the value came from `config.toml`
+or from a `-c` override (probed both ways), so the message carries no origin. Three further facts
+were established live and shape the recognizer and its attribution:
+
+- **The two lines are the entire stderr** (a blank line follows; nothing precedes). The pattern is
+  anchored to the whole blob, not to lines: it runs ahead of the auth/drift/rate-limit substring
+  matchers, and a config-shaped pair quoted ahead of a genuine diagnostic must not steal its
+  classification.
+- **A `-c` override outranks a bad file value entirely.** With `network_access = "yes"` in the file
+  *and* the plugin's `-c sandbox_workspace_write.network_access=false` on the argv, the run does not
+  fail at all. So when this grammar names a key the plugin pinned on **this run**, the refused value
+  can only have been the plugin's own — `cli_contract_changed`. When the plugin did not send the key
+  (the pins ride only `workspace-write` runs; the effort key only when an effort was requested) the
+  same message is the user's file or the operator's passthrough. `classify_failure` takes the
+  emitted key set (`plugin_config_keys_for`) for this reason; membership in
+  `PLUGIN_OWNED_CONFIG_KEYS` alone is not proof the key was sent, and the retired-setting path
+  above now uses the same rule.
+- **A parent-table `-c t={k=v}` is echoed as the dotted child `t.k`**, so operator ownership
+  (`owns_config_key`) covers the dotted descendants of a passthrough key, whole segments only.
+
+The offending value is consumed by the grammar but never captured or echoed: it is free-form text
+the user typed into the wrong key — plausibly a secret — and no pattern-based redactor recognizes
+an arbitrary one. What codex *expected* is codex's own text and is surfaced instead.
+
 ## Operator extra-args passthrough (`CODEX_IN_CLAUDE_EXTRA_ARGS`, #231)
 
 An opt-in operator knob adds extra **global** `codex` options to every paid `exec` invocation
@@ -947,21 +989,26 @@ a generic one:
    the strict-config section above. First because codex parses config before it authenticates or
    calls a model — so this is never an auth or rate-limit failure — while the key and path it echoes
    can contain substrings the matchers below would fire on.
-2. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
-3. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`, **unless** the
+2. **retired config setting** (`parse_unsupported_config_setting`, stderr alone, #542) and then
+   **invalid config value** (`parse_invalid_config_value`, stderr alone, #550) → the same three
+   codes, attributed by whether *this run* pinned the key, then operator passthrough, else the
+   user's config (see the two subsections above). Same position, same reason: both consume a
+   value the user wrote, which can carry any substring the matchers below fire on.
+3. **auth** (`AUTH_FAILURE_PATTERNS`) → `codex_auth_required`.
+4. **contract drift** (`CONTRACT_DRIFT_STDERR_PATTERNS`) → `cli_contract_changed`, **unless** the
    rejection names an operator `CODEX_IN_CLAUDE_EXTRA_ARGS` descriptor → `extra_args_rejected` instead
    (user-owned passthrough, not a plugin-contract drift; see the passthrough section above), **or**
    this run sent a first-class reasoning-effort override and the failure carries the backend's
    `REASONING_EFFORT_REJECTION_MARKERS` → `invalid_reasoning_effort` (a caller value to correct; see
    the reasoning-effort section above). Checked
    before rate-limit so a genuine contract change is never mistaken for a transient (retryable) failure.
-4. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
+5. **rate limit** (`RATE_LIMIT_PATTERNS`: `rate limit`, `too many requests`, `usage limit`, `quota`,
    `retry-after`, plus `429` matched with word boundaries so an incidental digit run can't fire it)
    → `codex_rate_limited`, `temporary=True` with `retry_after_ms` set from a parsed
    `Retry-After`/"retry after Ns" value **when it is seconds-valued** (a non-second unit or HTTP-date
    is ignored), else `RATE_LIMIT_DEFAULT_BACKOFF_MS` (60s). Lets a caller back off deterministically
    instead of retry-storming a transient limit.
-5. everything else → `nonzero_exit`.
+6. everything else → `nonzero_exit`.
 
 Signatures are confirmed against real `codex` output; this file is the source of truth for the
 phrasings, so update `cli_contract.py` (one place) when upstream wording changes.

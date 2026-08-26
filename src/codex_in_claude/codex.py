@@ -427,6 +427,23 @@ def version_display(version: str | None) -> str | None:
     return _safe_echo(version) or None
 
 
+def plugin_config_keys_for(*, sandbox: str, reasoning_effort: str | None) -> frozenset[str]:
+    """The `-c` config KEYS `build_exec_command` emits for a run of this shape.
+
+    Failure attribution turns on which pinned keys THIS run actually sent (#550): the
+    workspace pins ride only `workspace-write` runs and the effort key only when an
+    effort was requested. Membership in PLUGIN_OWNED_CONFIG_KEYS alone proves nothing
+    about a given run. This mirrors the builder's branches and a test pins the two
+    together by parsing the built argv, so a drift between them fails loudly."""
+    keys: set[str] = set()
+    if sandbox == cli_contract.SANDBOX_WORKSPACE_WRITE:
+        keys.add(cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY)
+        keys.add(cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY)
+    if reasoning_effort is not None:
+        keys.add(cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY)
+    return frozenset(keys)
+
+
 def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -> ErrorInfo:
     """Error for a `--strict-config` rejection of a key in the USER's own config (#524).
 
@@ -443,42 +460,50 @@ def _user_config_rejected_error(rejection: cli_contract.StrictConfigRejection) -
     )
 
 
-def _retired_config_setting_error(
-    setting: cli_contract.UnsupportedConfigSetting, extra: config.ExtraArgs | None
+def _config_value_error(
+    key: str,
+    *,
+    what_is_wrong: str,
+    repair_alternative: str,
+    extra: config.ExtraArgs | None,
+    plugin_config_keys: frozenset[str],
 ) -> ErrorInfo:
-    """Error for a config setting codex RETIRED (#542).
+    """Attribute and word a rejection of a recognized key's VALUE (#542, #550).
 
-    Distinct from the unknown-KEY strict-config path: the key still exists and only its
-    VALUE is refused, so the strict grammar cannot see it and no CONTRACT_DRIFT pattern
-    matches — before #542 this reached the caller as a generic `nonzero_exit`.
+    Both value grammars — a RETIRED value and an INVALID one — share this: the key still
+    exists and only its value is refused, so the strict unknown-KEY grammar cannot see
+    it and no CONTRACT_DRIFT pattern matches. The message names no file and carries no
+    `-c` marker, so ownership cannot be read off it the way `_strict_config_error` reads
+    its origin; it is decided here, in order:
 
-    The message names no file and carries no `-c` marker, so ownership cannot be read off
-    it the way `_strict_config_error` reads its origin. Attribute it to the operator only
-    when their own passthrough sets that key; otherwise it is the user's config. The
-    echoed key and value are untrusted text codex read off disk, so they go through the
-    same redaction and length bound as every other surfaced failure detail."""
-    # A retired value on a key the PLUGIN pins is a statement about our own argv, not about
-    # anything in the user's config — the same attribution the strict sibling makes first,
-    # and for the same security-relevant reason. Blaming the user here would send them to
-    # edit a file that does not hold the setting while the real repair is a plugin update.
-    if setting.key in cli_contract.PLUGIN_OWNED_CONFIG_KEYS:
+    1. A key THIS run pinned (`plugin_config_keys`, from `plugin_config_keys_for`) is a
+       statement about our own argv: a `-c` override outranks the config file entirely
+       (probed on 0.149.1: a bad file value under a good override does not fail at all),
+       so codex refusing the value means OURS was refused — cli_contract_changed, the
+       same security-relevant attribution the strict sibling makes first. Membership in
+       PLUGIN_OWNED_CONFIG_KEYS is NOT enough (#550): the pins ride only some run
+       shapes, and a user mistyping one of those keys on a read-only consult would be
+       sent after a plugin update instead of their file.
+    2. A key the operator's passthrough sets (or a dotted child of one) is theirs.
+    3. Otherwise the user's config. `what_is_wrong` is the grammar-specific clause
+       spliced after "sets `KEY`" — its caller has already bounded and sanitized every
+       echoed span — and `repair_alternative` overrides the table prose, which is written
+       for the unknown-KEY grammar (it calls the key unrecognized and points at a
+       reported file and line, neither of which applies)."""
+    if key in plugin_config_keys:
         return contract_changed_error()
     ea = config.extra_args() if extra is None else extra
-    if ea.owns_config_key(setting.key):
-        return _extra_args_rejected_error([setting.key])
-    key = _safe_echo(setting.key)
-    value = _safe_echo(setting.value)
+    if ea.owns_config_key(key):
+        return _extra_args_rejected_error([key])
     # Ownership is genuinely UNKNOWN when an operator profile is selected. `--profile NAME`
     # makes codex load $CODEX_HOME/NAME.config.toml, and a profile can reintroduce a
     # setting the extra-args denylist refuses on `-c` (the documented operator-trust
-    # boundary). The strict grammar resolves this by naming the offending FILE; this one
-    # reports no file, so the honest move is to disclose the ambiguity rather than assert
+    # boundary). The strict grammar resolves this by naming the offending FILE; these
+    # report no file, so the honest move is to disclose the ambiguity rather than assert
     # the user's own config and send them to fix a file that may not hold the value.
-    where = "your Codex config"
     caveat = ""
     if ea.profile_names:
         selected = ", ".join(_safe_echo(n) for n in ea.profile_names)
-        where = "your Codex config"
         caveat = (
             f" The setting may instead come from the operator profile selected by "
             f"{config.EXTRA_ARGS_ENV} ({selected}), which this plugin cannot inspect — "
@@ -486,21 +511,73 @@ def _retired_config_setting_error(
         )
     return make_error(
         "user_config_rejected",
-        f"codex refused to start: {where} sets `{key}` to {value}, which this codex "
-        f"version no longer supports. Remove or change that setting.{caveat} No model call "
-        f"was made.",
-        # The shared table prose is written for the unknown-KEY grammar — it calls the key
-        # unrecognized and points at a reported file and line, neither of which applies
-        # here. Override it rather than send the caller looking for absent location data.
+        f"codex refused to start: your Codex config sets `{_safe_echo(key)}` "
+        f"{what_is_wrong} Remove or change that setting.{caveat} No model call was made.",
+        repair_alternative=repair_alternative,
+    )
+
+
+_CONFIG_VALUE_REPAIR_TAIL = (
+    "Remove or change the setting in your Codex config — checking any operator-selected "
+    "profile too — then rerun. As a last resort, isolation='ignore-config' skips your "
+    "config file for the run — but it drops ALL of it (model provider, MCP servers, and "
+    "every other setting), so prefer fixing the setting."
+)
+
+
+def _retired_config_setting_error(
+    setting: cli_contract.UnsupportedConfigSetting,
+    extra: config.ExtraArgs | None,
+    plugin_config_keys: frozenset[str],
+) -> ErrorInfo:
+    """Error for a config setting codex RETIRED (#542) — see `_config_value_error`.
+
+    The retired value is a known enum literal codex named in its own message, so it is
+    echoed (bounded and sanitized like every surfaced span): "no longer supported" is
+    only actionable if the caller knows WHICH value."""
+    return _config_value_error(
+        setting.key,
+        what_is_wrong=(
+            f"to {_safe_echo(setting.value)}, which this codex version no longer supports."
+        ),
         repair_alternative=(
             "This codex version no longer supports that config VALUE (the key itself is "
-            "still recognized, and codex reports no file or line for it). Remove or change "
-            "the setting in your Codex config — checking any operator-selected profile too "
-            "— or upgrade/downgrade codex to a version that accepts it, then rerun. As a "
-            "last resort, isolation='ignore-config' skips your config file for the run — "
-            "but it drops ALL of it (model provider, MCP servers, and every other "
-            "setting), so prefer fixing the setting."
+            "still recognized, and codex reports no file or line for it). "
+            + _CONFIG_VALUE_REPAIR_TAIL.replace(
+                "then rerun", "or upgrade/downgrade codex to a version that accepts it, then rerun"
+            )
         ),
+        extra=extra,
+        plugin_config_keys=plugin_config_keys,
+    )
+
+
+def _invalid_config_value_error(
+    rejection: cli_contract.InvalidConfigValue,
+    extra: config.ExtraArgs | None,
+    plugin_config_keys: frozenset[str],
+) -> ErrorInfo:
+    """Error for a recognized key whose VALUE failed serde validation (#550).
+
+    Unlike the retired sibling, the offending value is NOT echoed — the parser never
+    captured it (see cli_contract's grammar note): it is free-form text the user typed,
+    plausibly a secret, and no pattern-based redactor recognizes an arbitrary one. What
+    codex EXPECTED is codex's own text and is the actionable content, so it is surfaced."""
+    expected = _safe_echo(rejection.expected)
+    if rejection.kind == "unknown_variant":
+        what = f"to a value this codex version does not accept (expected one of {expected})."
+    else:
+        what = f"to a value of the wrong type (expected {expected})."
+    return _config_value_error(
+        rejection.key,
+        what_is_wrong=what,
+        repair_alternative=(
+            "codex refused that config VALUE: the key itself is recognized, but the value "
+            "is not one it accepts (the message names what it expected), and codex reports "
+            "no file or line for it. " + _CONFIG_VALUE_REPAIR_TAIL
+        ),
+        extra=extra,
+        plugin_config_keys=plugin_config_keys,
     )
 
 
@@ -575,6 +652,7 @@ def classify_failure(
     extra_args: config.ExtraArgs | None = None,
     reasoning_effort: str | None = None,
     sanitize: Callable[[str], str] | None = None,
+    plugin_config_keys: frozenset[str] = frozenset(),
 ) -> ErrorInfo:
     """Classify a non-success `codex exec` run into a recoverable ErrorInfo.
 
@@ -603,7 +681,13 @@ def classify_failure(
     It runs on the raw `event_error or run.stderr or run.stdout` before the `[:300]`
     truncation, exactly where the default sanitizer runs. Every classification decision
     above (drift/auth/rate-limit signature matching) still reads the RAW strings — only the
-    emitted text changes."""
+    emitted text changes.
+
+    `plugin_config_keys` is the set of `-c` KEYS this run's argv pinned — obtain it from
+    `plugin_config_keys_for` with the run's sandbox and effort. A config-VALUE rejection
+    naming one of them is attributed to the plugin (cli_contract_changed); the default,
+    an empty set, attributes such a rejection to the user or operator instead (#550), so a
+    caller that omits it can never blame the plugin for a key it did not send."""
     if run.binary_missing:
         return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
     if run.timed_out:
@@ -625,7 +709,13 @@ def classify_failure(
     # identical reason — it echoes untrusted text that could satisfy one of them.
     retired = cli_contract.parse_unsupported_config_setting(run.stderr)
     if retired is not None:
-        return _retired_config_setting_error(retired, extra_args)
+        return _retired_config_setting_error(retired, extra_args, plugin_config_keys)
+    # An INVALID value — wrong enum variant or wrong type — is the third config-parse
+    # grammar (#550): the key parses, serde refuses the value. Same position, same reason:
+    # it consumes the user's free-form value, which can carry any substring below.
+    invalid = cli_contract.parse_invalid_config_value(run.stderr)
+    if invalid is not None:
+        return _invalid_config_value_error(invalid, extra_args, plugin_config_keys)
     if cli_contract.is_auth_failure(run.stderr, run.stdout, last_message, event_error):
         return _auth_error()
     # Drift before rate-limit so a genuine contract change is never masked as a
