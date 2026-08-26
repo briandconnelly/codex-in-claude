@@ -20,7 +20,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   refuses on `-c` — the error discloses that the profile may be the source instead of asserting the
   user's own config. The repair guidance is overridden rather than inherited, because the shared
   prose calls the key unrecognized and points at a reported file and line, and neither applies
-  here. No new error code, so no `FINGERPRINT` change.
+  here. A retired value on a key the plugin ITSELF pins is `cli_contract_changed`, not the user's
+  config — the same three-owner attribution the strict path makes, because codex refusing one of
+  those values is a statement about this plugin's argv rather than about anything on the user's
+  disk. No new error code, so no `FINGERPRINT` change.
 
 ### Changed
 

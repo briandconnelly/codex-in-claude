@@ -457,6 +457,12 @@ def _retired_config_setting_error(
     when their own passthrough sets that key; otherwise it is the user's config. The
     echoed key and value are untrusted text codex read off disk, so they go through the
     same redaction and length bound as every other surfaced failure detail."""
+    # A retired value on a key the PLUGIN pins is a statement about our own argv, not about
+    # anything in the user's config — the same attribution the strict sibling makes first,
+    # and for the same security-relevant reason. Blaming the user here would send them to
+    # edit a file that does not hold the setting while the real repair is a plugin update.
+    if setting.key in cli_contract.PLUGIN_OWNED_CONFIG_KEYS:
+        return contract_changed_error()
     ea = config.extra_args() if extra is None else extra
     if ea.owns_config_key(setting.key):
         return _extra_args_rejected_error([setting.key])
@@ -469,16 +475,20 @@ def _retired_config_setting_error(
     # reports no file, so the honest move is to disclose the ambiguity rather than assert
     # the user's own config and send them to fix a file that may not hold the value.
     where = "your Codex config"
+    caveat = ""
     if ea.profile_names:
         selected = ", ".join(_safe_echo(n) for n in ea.profile_names)
-        where = (
-            f"your Codex config — or the operator profile selected by "
-            f"{config.EXTRA_ARGS_ENV} ({selected}), which this plugin cannot inspect"
+        where = "your Codex config"
+        caveat = (
+            f" The setting may instead come from the operator profile selected by "
+            f"{config.EXTRA_ARGS_ENV} ({selected}), which this plugin cannot inspect — "
+            f"check there too."
         )
     return make_error(
         "user_config_rejected",
         f"codex refused to start: {where} sets `{key}` to {value}, which this codex "
-        f"version no longer supports. Remove or change that setting. No model call was made.",
+        f"version no longer supports. Remove or change that setting.{caveat} No model call "
+        f"was made.",
         # The shared table prose is written for the unknown-KEY grammar — it calls the key
         # unrecognized and points at a reported file and line, neither of which applies
         # here. Override it rather than send the caller looking for absent location data.

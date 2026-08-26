@@ -361,7 +361,8 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
 
   Run 1 must report `WROTE` — the positive control proving the probe can see the open state.
   Runs 2 and 3 must report `denied`; run 3 shows the `-c` override still outranks profiles
-  (verified 0.148.0). If run 2 or 3 writes, the key drifted: update the constant and re-verify
+  (verified 0.148.0, re-verified 0.149.1). If run 2 or 3 writes, the key drifted: update the
+  constant and re-verify
   before shipping the version bump. While here, also re-confirm upstream's
   `SandboxWorkspaceWrite` struct (codex-rs `config/src/types.rs` at the release tag) still has
   exactly the fields COMPATIBILITY.md's sandbox section accounts for — a NEW widening key would

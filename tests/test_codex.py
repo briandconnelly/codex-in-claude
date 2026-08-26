@@ -1695,3 +1695,53 @@ def test_retired_config_setting_discloses_a_selected_operator_profile(monkeypatc
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
     plain = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR))
     assert "myprof" not in (plain.message or "")
+
+
+@pytest.mark.parametrize("key", sorted(cli_contract.PLUGIN_OWNED_CONFIG_KEYS))
+def test_retired_value_on_a_plugin_pinned_key_is_contract_drift(key, monkeypatch):
+    """A retired VALUE on a key the plugin itself pins is drift, not the user's config.
+
+    The strict sibling has this branch and its docstring calls it security-relevant. This
+    path needs it for the same reason: the plugin sends these keys on the command line, so
+    codex refusing their value is a statement about OUR argv, not about anything in the
+    user's `config.toml`. Blaming the user would send them to edit a file that does not
+    contain the setting, while the real repair is a plugin update — reopening, in this new
+    code path, exactly the misattribution class #524 closed."""
+    monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
+    stderr = f"Error: {key} = false is no longer supported; remove this setting\n"
+    # Positive control: the grammar really does match, so the assertion below is about
+    # attribution and not about the line being unparseable.
+    assert cli_contract.parse_unsupported_config_setting(stderr) is not None
+    assert codex.classify_failure(_run(stderr=stderr)).code == "cli_contract_changed"
+
+
+@pytest.mark.parametrize(
+    "signature",
+    ["please run codex login", "usage limit reached", "unexpected argument"],
+)
+def test_retired_config_setting_is_classified_before_the_substring_matchers(signature):
+    """Pins the ORDER, which is behavior and not commentary.
+
+    The echoed value is untrusted text codex read off disk, and a real retired setting can
+    legitimately hold a value carrying an auth, rate-limit, or drift signature. Those
+    matchers are substring tests, so whichever runs first wins. Moving this check below
+    them silently reclassifies these runs — and the whole suite still passed when that
+    mutation was applied, which is why this test exists."""
+    stderr = f'Error: k = "{signature}" is no longer supported; remove this setting\n'
+    # Positive control: a downstream matcher really does claim this text, so the assertion
+    # is about ordering rather than about an inert string.
+    assert (
+        cli_contract.is_auth_failure(stderr)
+        or cli_contract.is_rate_limited(stderr)
+        or cli_contract.is_contract_drift(stderr)
+    )
+    assert codex.classify_failure(_run(stderr=stderr)).code == "user_config_rejected"
+
+
+def test_retired_config_setting_profile_disclosure_is_a_readable_sentence(monkeypatch):
+    # The disclosure is spliced into the middle of the sentence, so it has to leave a
+    # grammatical one behind — "cannot inspect sets `k`" is not.
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "--profile myprof")
+    msg = codex.classify_failure(_run(stderr=_RETIRED_SETTING_STDERR)).message or ""
+    assert "inspect sets" not in msg
+    assert "myprof" in msg

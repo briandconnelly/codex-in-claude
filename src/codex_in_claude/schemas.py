@@ -394,11 +394,15 @@ ErrorCode = Literal[
     # was actually sent and the failure carries the backend's markers; a rejection of
     # the config key itself stays cli_contract_changed) (#309).
     "invalid_reasoning_effort",
-    # Under `--strict-config` (sent on every run carrying a `-c` pin, #524) codex refused
-    # to start because a config FILE the user owns — $CODEX_HOME/config.toml, including
-    # its unselected [profiles.X] tables — holds a key this codex does not recognize.
-    # The user's own config to fix, NOT a plugin drift and NOT operator passthrough;
-    # the failure is at startup, before any model call, so it never costs spend.
+    # Two emitters, both "the user's own config to fix" — NOT a plugin drift and NOT
+    # operator passthrough — and both at startup, before any model call, so neither costs
+    # spend. (1) Under `--strict-config` (sent on every run carrying a `-c` pin, #524)
+    # codex refused to start because a config FILE the user owns — $CODEX_HOME/config.toml,
+    # including its unselected [profiles.X] tables — holds a key this codex does not
+    # RECOGNIZE. (2) A config setting whose key IS recognized but whose VALUE this codex
+    # version has RETIRED (#542): that path needs no `-c` pin and no `--strict-config`, and
+    # it reports no file or line, so its repair prose is overridden per-envelope rather
+    # than inherited from the table.
     "user_config_rejected",
     # codex rejected an operator-supplied CODEX_IN_CLAUDE_EXTRA_ARGS passthrough entry
     # (an unaccepted option / config key / profile). Operator config to fix, NOT a
