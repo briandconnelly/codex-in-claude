@@ -119,6 +119,12 @@ class CodexBackend:
             last_message=outcome.artifact_texts.get("last-message"),
             events=outcome.events or None,
             reasoning_effort=request.reasoning_effort,
+            plugin_config_keys=codex.plugin_config_keys_for(
+                # The same sandbox resolution `prepare` uses to build the argv.
+                sandbox=request.access
+                or config.sandbox_for_tier("propose" if request.kind == "delegate" else "consult"),
+                reasoning_effort=request.reasoning_effort,
+            ),
         )
         return ClassifiedFailure(
             code=info.code,

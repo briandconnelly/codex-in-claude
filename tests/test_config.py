@@ -653,6 +653,21 @@ def test_extra_args_owns_config_key_matches_only_its_own_keys(monkeypatch):
     assert ea.owns_config_key("model_provider_other") is False
 
 
+def test_extra_args_owns_the_dotted_children_of_its_own_keys(monkeypatch):
+    """A `-c t={k=v}` parent-table assignment is echoed by codex as the dotted CHILD
+    path (`t.k`, probed on 0.149.1 for #550), so ownership must cover descendants of a
+    configured key — but only whole dotted segments, never a name-prefix."""
+    monkeypatch.setenv(config.EXTRA_ARGS_ENV, "-c model_providers.acme={base_url=3}")
+    ea = config.extra_args()
+    assert ea.owns_config_key("model_providers.acme") is True
+    assert ea.owns_config_key("model_providers.acme.base_url") is True
+    assert ea.owns_config_key("model_providers.acme.wire.api") is True
+    # Same segments, different case/quoting still match; a sibling or a name-prefix does not.
+    assert ea.owns_config_key(' "Model_Providers".ACME.base_url ') is True
+    assert ea.owns_config_key("model_providers.acmeX.base_url") is False
+    assert ea.owns_config_key("model_providers") is False
+
+
 def test_extra_args_ownership_is_false_when_unconfigured_or_invalid(monkeypatch):
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
     ea = config.extra_args()

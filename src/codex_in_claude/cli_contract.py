@@ -673,6 +673,107 @@ def parse_unsupported_config_setting(text: str | None) -> UnsupportedConfigSetti
     return UnsupportedConfigSetting(key=m.group("key"), value=m.group("value"))
 
 
+# --- Invalid config VALUE rejection (codex 0.149, issue #550) -----------------------
+# The THIRD config-parse grammar. A recognized key whose value fails serde's own
+# validation — the wrong enum variant, or the wrong TOML type — is refused with a
+# two-line message: the serde diagnostic under the strict-config header, then the key on
+# its own line. It shares the header with the --strict-config grammar but not the body,
+# and it matches no CONTRACT_DRIFT_STDERR_PATTERNS entry either, so before #550 it
+# degraded to a generic `nonzero_exit` — for a config TYPO, which is plausibly more
+# common than the retired setting #542 handles. Like that grammar it needs no `-c` pin
+# and no --strict-config, fires at the default `inherit` isolation, and costs no spend.
+#
+# Captured verbatim from codex-cli 0.149.1 on 2026-08-25 (scratch $CODEX_HOME). Two
+# sub-grammars were observed and ONLY those two are encoded — a serde message worded
+# differently returns None and keeps its ordinary classification:
+#
+#   Error loading config.toml: unknown variant `V`, expected one of `A`, `B`, ...
+#   in `KEY`
+#
+#   Error loading config.toml: invalid type: string "V", expected a boolean
+#   in `KEY`
+#
+# Three properties of the observed output shape the pattern:
+# - The identical text is printed whether the value came from config.toml or from a `-c`
+#   override (probed both ways), so ownership cannot be read off the message; the caller
+#   attributes it. Even a `-c` parent-table assignment (`-c t={k=1}`) echoes the dotted
+#   CHILD path, so an operator's key can be an ancestor of the echoed one.
+# - The two lines are the ENTIRE stderr (a blank line follows; nothing precedes). The
+#   pattern is anchored to the whole blob — \A and \Z, not line anchors — because this
+#   recognizer runs ahead of the auth/drift/rate-limit substring matchers, and a
+#   config-shaped pair quoted ahead of a genuine diagnostic must not steal its
+#   classification. Trailing whitespace is the one tolerated trailer.
+# - The offending VALUE is consumed but never captured. It is free-form text the user
+#   typed into the wrong key — plausibly a secret — and no pattern-based redactor can
+#   recognize an arbitrary one, so it is kept out of the parse result entirely. The key
+#   and what codex EXPECTED are the actionable content. For the same reason the value
+#   span is NOT length-bounded (only the surfaced key/expected spans are): a parse that
+#   failed on an over-long value would fall through to the generic `nonzero_exit`
+#   branch, which quotes the head of stderr — i.e. the value — into the envelope. The
+#   value is confined to its line, so the bound it lacks costs nothing to matching time.
+INVALID_CONFIG_VALUE_UNKNOWN_VARIANT_PHRASE = "unknown variant "
+INVALID_CONFIG_VALUE_INVALID_TYPE_PHRASE = "invalid type: "
+INVALID_CONFIG_VALUE_KEY_LINE_PREFIX = "in `"
+# One allowed-variant list entry per enum value; codex's largest enum is far below this.
+INVALID_CONFIG_VALUE_MAX_VARIANTS = 64
+_INVALID_CONFIG_VALUE_PATTERN = re.compile(
+    rf"\A{re.escape(STRICT_CONFIG_ERROR_PREFIX)}: (?:"
+    # unknown variant `V`, expected one of `A`, `B`, ...
+    rf"{re.escape(INVALID_CONFIG_VALUE_UNKNOWN_VARIANT_PHRASE)}"
+    rf"`[^\n]*?`, expected one of "
+    rf"(?P<variants>`[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`"
+    rf"(?:, `[^`\n]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}}`)"
+    rf"{{0,{INVALID_CONFIG_VALUE_MAX_VARIANTS - 1}}})"
+    rf"|"
+    # invalid type: <actual>, expected <type>   (the actual span may itself contain
+    # ", expected " — serde prints the offending string verbatim — so the expected-type
+    # group excludes commas and the actual group is non-greedy within its bound)
+    rf"{re.escape(INVALID_CONFIG_VALUE_INVALID_TYPE_PHRASE)}"
+    rf"[^\n]*?, expected "
+    rf"(?P<expected_type>[^\n,]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})"
+    rf")[ \t\r]*\n"
+    rf"{re.escape(INVALID_CONFIG_VALUE_KEY_LINE_PREFIX)}"
+    rf"(?P<key>[A-Za-z0-9_.]{{1,{STRICT_CONFIG_KEY_MAX_CHARS}}})`[ \t\r\n]*\Z"
+)
+
+
+@dataclass(frozen=True)
+class InvalidConfigValue:
+    """A parsed invalid-config-VALUE rejection (#550).
+
+    `key` is the dotted config path codex echoed on the second line. `kind` names which
+    observed sub-grammar matched, and `expected` is what codex said it would accept: the
+    backtick-quoted allowed-variant list for "unknown_variant", or the type phrase
+    ("a boolean") for "invalid_type". The offending value is deliberately absent (see the
+    grammar note above). Like UnsupportedConfigSetting there is no `origin`: ownership is
+    decided by the caller."""
+
+    key: str
+    kind: Literal["unknown_variant", "invalid_type"]
+    expected: str
+
+
+def parse_invalid_config_value(text: str | None) -> InvalidConfigValue | None:
+    """Parse codex's invalid-config-value rejection out of STDERR, or None.
+
+    Pass `run.stderr` alone, for the same reason as the two sibling recognizers: the
+    anchored grammar must not be satisfiable by model-produced text on stdout. Returns
+    None for any text that is not exactly one of the two observed grammars, so an
+    unrelated failure keeps its ordinary classification."""
+    if not text or not text.startswith(STRICT_CONFIG_ERROR_PREFIX):
+        return None
+    m = _INVALID_CONFIG_VALUE_PATTERN.match(text)
+    if m is None:
+        return None
+    if m.group("variants") is not None:
+        return InvalidConfigValue(
+            key=m.group("key"), kind="unknown_variant", expected=m.group("variants")
+        )
+    return InvalidConfigValue(
+        key=m.group("key"), kind="invalid_type", expected=m.group("expected_type")
+    )
+
+
 # --- workspace-write write scope (issue #523) ---------------------------------------
 # RULE (write scope): every prose site that describes the propose tier's write
 # boundary — README.md, SECURITY.md, COMPATIBILITY.md, and
