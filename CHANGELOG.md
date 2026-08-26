@@ -138,9 +138,18 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - **A `CODEX_IN_CLAUDE_CODEX_BIN` override naming a regular file that lacks the execute bit is now
   rejected** with `binpath.BinaryNotFoundError`, the same as a missing path or a directory, instead
   of being silently accepted and failing confusingly (`PermissionError`) at spawn time. The
-  `BinaryNotFoundError` message text also changed for the missing-path and directory cases, from
-  "no file exists at that path" to "no executable file exists at that path", to describe the one
-  check that now covers all three rejection reasons.
+  `BinaryNotFoundError` message names the env var and the one check that covers all three
+  rejection reasons — and never the override's value: it is operator-controlled and unbounded,
+  and the text ships on the wire in `codex_status.readiness_detail`, so it is withheld rather
+  than bounded and sanitized (the `CODEX_IN_CLAUDE_EXTRA_ARGS` posture).
+- **A bad `CODEX_IN_CLAUDE_CODEX_BIN` override no longer fails a paid run as `internal_error`.**
+  `build_exec_command()` resolves the binary inside `CodexBackend.prepare()`, so the override's
+  `BinaryNotFoundError` escaped to the tool guard as a "retry" error for a misconfiguration no
+  retry clears. `codex.run_codex_exec` now resolves the binary first and returns the same
+  binary-missing run a failed spawn does, so every consult/review/delegate (sync and async)
+  classifies it as `codex_not_found`, zero spend. That error's message no longer claims PATH is
+  the only place checked ("run codex_status for the resolution detail"); human-readable prose
+  only, no `FINGERPRINT` bump.
 - **`codex.codex_version()` and `codex.login_status()` no longer raise `binpath.BinaryNotFoundError`
   for a bad override** — each now honors its own documented failure return (`None`, and
   `(None, None)` respectively) instead of letting the exception escape, matching the guard already

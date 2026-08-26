@@ -1542,7 +1542,7 @@ def _transfer_outcome_envelope(
         )
     elif status is appserver.TransferStatus.SPAWN_FAILED:
         code = "codex_not_found"
-        message = "codex CLI not found on PATH."
+        message = "codex CLI not found; run codex_status for the resolution detail."
     elif status is appserver.TransferStatus.TIMED_OUT:
         code = "timeout"
         temporary = True
@@ -1664,7 +1664,10 @@ async def codex_transfer(
     if codex.codex_version() is None:
         return serialize_error(
             ErrorResult(
-                error=make_error("codex_not_found", "codex CLI not found on PATH."),
+                error=make_error(
+                    "codex_not_found",
+                    "codex CLI not found; run codex_status for the resolution detail.",
+                ),
                 meta=_meta(cwd_guess, None),
             )
         )

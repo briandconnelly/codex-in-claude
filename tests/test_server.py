@@ -10049,3 +10049,35 @@ async def test_job_not_found_message_sanitizes_the_echoed_job_id(clean_env, tmp_
     assert res["error"]["code"] == "job_not_found"
     assert not _has_control(res["error"]["message"]), repr(res["error"]["message"])
     assert res["error"]["details"]["field"] == "job_id"
+
+
+def test_status_bad_override_readiness_detail_never_echoes_the_value(clean_env, tmp_path):
+    """`readiness_detail` ships on the wire, and the override is operator-controlled
+    and unbounded: the detail names the env var, never its value (Copilot, PR #539)."""
+    from codex_in_claude import binpath
+
+    marker = "SECRET-LOOKING-VALUE"
+    override = tmp_path / (marker + "\x1b[0m" + "A" * 600)
+    clean_env.setenv(binpath.ENV_VAR, str(override))
+    res = server.codex_status()
+    assert res["codex_found"] is False
+    assert binpath.ENV_VAR in res["readiness_detail"]
+    assert marker not in res["readiness_detail"]
+    assert "\x1b" not in res["readiness_detail"]
+    assert len(res["readiness_detail"]) < 300
+
+
+async def test_consult_bad_override_is_codex_not_found_not_internal_error(clean_env, tmp_path):
+    """A bad `CODEX_IN_CLAUDE_CODEX_BIN` override reached `binpath.codex_bin()` from
+    `build_exec_command()` inside `CodexBackend.prepare()`, so a paid run raised
+    `BinaryNotFoundError` and the tool guard reported it as `internal_error` -- a
+    "retry" repair for a misconfiguration no retry clears. It is the same fact as a
+    missing binary and must classify the same way: `codex_not_found`, zero spend
+    (Copilot, PR #539). No subprocess is mocked: the override fails before any spawn."""
+    from codex_in_claude import binpath
+
+    clean_env.setenv(binpath.ENV_VAR, str(tmp_path / "does-not-exist"))
+    res = await _run_consult_direct(tmp_path, "q")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "codex_not_found"
+    assert "does-not-exist" not in json.dumps(res)

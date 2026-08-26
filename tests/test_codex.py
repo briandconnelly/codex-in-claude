@@ -1975,3 +1975,27 @@ def test_invalid_config_value_is_classified_before_the_substring_matchers(signat
 def test_invalid_config_value_does_not_disturb_unrelated_failures(monkeypatch):
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
     assert codex.classify_failure(_run(stderr="some unrelated boom")).code == "nonzero_exit"
+
+
+async def test_run_codex_exec_maps_a_bad_override_to_binary_missing(clean_env, tmp_path):
+    """`build_exec_command()` runs inside `CodexBackend.prepare()`, so a bad
+    `CODEX_IN_CLAUDE_CODEX_BIN` override raised `BinaryNotFoundError` out of the run
+    instead of surfacing as the run-level fact it is. It now comes back as the same
+    `binary_missing` CommandRun `runtime.run_async` returns for a spawn that finds no
+    binary, so `classify_failure` yields `codex_not_found` (Copilot, PR #539). The
+    override fails before any spawn, so nothing is mocked."""
+    clean_env.setenv(binpath.ENV_VAR, str(tmp_path / "does-not-exist"))
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert result.run.binary_missing
+    assert result.run.exit_code == 127
+    assert result.last_message is None
+    err = codex.classify_failure(result.run, last_message=None, events="")
+    assert err.code == "codex_not_found"
+    assert "does-not-exist" not in err.message

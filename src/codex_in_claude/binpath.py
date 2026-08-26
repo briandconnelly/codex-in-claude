@@ -57,8 +57,15 @@ def codex_bin() -> str:
         # regular file lacking the execute bit (which failed just as
         # confusingly, as a `PermissionError` at spawn time).
         if not binresolve._is_executable_file(Path(override)):
+            # The message names the env var and NOTHING else. Its value is
+            # operator-controlled and unbounded, and this text ships on the wire
+            # (`codex_status.readiness_detail`; the `internal_error` envelope for
+            # any path that lets it escape), so the value is withheld rather than
+            # bounded and sanitized -- the same posture as CODEX_IN_CLAUDE_EXTRA_ARGS,
+            # whose raw tokens are never surfaced either.
             raise BinaryNotFoundError(
-                f"{ENV_VAR} is set to {override!r}, but no executable file exists at that path."
+                f"{ENV_VAR} is set, but it does not name an executable file on disk "
+                "(missing path, a directory, or no execute bit)."
             )
         _cache = override
         return _cache

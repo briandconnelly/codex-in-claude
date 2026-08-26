@@ -102,7 +102,7 @@ def test_directory_override_raises_binary_not_found(clean_env, tmp_path):
         binpath.codex_bin()
     message = str(exc_info.value)
     assert ENV_VAR in message
-    assert str(tmp_path) in message
+    assert str(tmp_path) not in message
 
 
 def test_non_executable_file_override_raises_binary_not_found(clean_env, tmp_path):
@@ -119,7 +119,7 @@ def test_non_executable_file_override_raises_binary_not_found(clean_env, tmp_pat
         binpath.codex_bin()
     message = str(exc_info.value)
     assert ENV_VAR in message
-    assert str(override) in message
+    assert str(override) not in message
 
 
 def test_non_executable_file_override_does_not_fall_through_to_resolver(
@@ -203,3 +203,22 @@ def test_reset_cache_forces_a_fresh_resolve(clean_env, monkeypatch):
     second = binpath.codex_bin()
     assert first == "/resolved/codex-v1"
     assert second == "/resolved/codex-v2"
+
+
+def test_bad_override_message_never_echoes_the_value(clean_env, tmp_path):
+    """The env var is operator-controlled and unbounded, and `BinaryNotFoundError`'s
+    text reaches the wire (`codex_status.readiness_detail`, and the `internal_error`
+    envelope for anything that lets it escape). The message names the env var so the
+    failure is actionable, and nothing else -- so there is no value to bound or
+    sanitize. Same posture as `CODEX_IN_CLAUDE_EXTRA_ARGS`, whose raw tokens are never
+    surfaced either."""
+    marker = "SECRET-LOOKING-VALUE"
+    override = tmp_path / (marker + "\x1b[0m" + "A" * 600)
+    clean_env.setenv(ENV_VAR, str(override))
+    with pytest.raises(binpath.BinaryNotFoundError) as exc_info:
+        binpath.codex_bin()
+    message = str(exc_info.value)
+    assert ENV_VAR in message
+    assert marker not in message
+    assert "\x1b" not in message
+    assert len(message) < 300
