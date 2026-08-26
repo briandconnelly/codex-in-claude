@@ -5,51 +5,55 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-26
+
+A compatibility and diagnosis release. Nothing on the agent-visible surface changed: the result
+`fingerprint` stays at `codex-in-claude/0.1/schema-84` and `RESULT_FORMAT` at `10`, and there is
+no breaking change.
+
+The tracked Codex version moves to `0.149`, verified end to end and A/B'd against `0.148.0`.
+Two more ways a user's own Codex config can refuse to start are now diagnosed instead of surfacing
+as a bare `nonzero_exit`: a setting `0.149` retired, and a value of the wrong variant or type.
+Each is attributed to whoever sent the key — the plugin's own pins only when this run actually
+emitted them. On WSL2, `codex` is resolved to the WSL-native install instead of a Windows-side
+shim that Windows-PATH interop can put first on `PATH`, and a new `CODEX_IN_CLAUDE_CODEX_BIN`
+override names a binary outright.
+
 ### Added
 
-- **`user_config_rejected` now covers an INVALID config value — the wrong enum variant or the
-  wrong TOML type** (#550). This is the third config-parse grammar: the key is recognized and
-  serde refuses its value, in a two-line message with the key on the second line. It matched
-  neither the `--strict-config` unknown-key recognizer nor the retired-setting one below, so a
-  plain typo in `config.toml` — plausibly more common than a retired setting — surfaced as a bare
-  `nonzero_exit`. Like the retired grammar it needs no `-c` pin and no `--strict-config`, and it
-  fires at the default `inherit` isolation. Captured verbatim from `codex-cli 0.149.1`; only the
-  two observed phrasings are encoded, and the recognizer is anchored to the whole of stderr so a
-  config-shaped pair quoted ahead of a genuine auth/drift/rate-limit diagnostic cannot steal the
-  classification. The offending value is deliberately never echoed — it is free text the user
-  typed into the wrong key, plausibly a secret no pattern-based redactor recognizes — while what
-  codex *expected* (the allowed variants, or the type) is surfaced as the actionable content.
-  No new error code, so no `FINGERPRINT` change.
-- **Config-value rejections are attributed to the plugin only for a key THIS run actually
-  sent** (#550, also correcting the unreleased #542 path). The workspace pins ride only
-  `workspace-write` runs and the effort key only when an effort was requested, so membership in
-  `PLUGIN_OWNED_CONFIG_KEYS` alone proved nothing about a given run: a user mistyping
-  `sandbox_workspace_write.network_access` in their own file on a read-only consult would have
-  been told the plugin drifted and sent after an update instead of their file. `classify_failure`
-  now takes the emitted key set (`plugin_config_keys_for`, pinned against the argv builder by a
-  test); a rejection naming an emitted key is `cli_contract_changed` — verified live that a `-c`
-  override outranks a bad file value entirely, so the refused value can only have been ours —
-  and anything else is the user's or operator's. Operator ownership also covers the dotted
-  children of a passthrough key, because a `-c t={k=v}` parent-table assignment is echoed by
-  codex as `t.k`.
-
-- **`user_config_rejected` now covers a config setting codex has RETIRED** (#542). `0.149` retired
-  the `untrusted` approval policy and refuses to start when the user's config still selects it.
-  That message is a different grammar from the `--strict-config` unknown-KEY one — the key still
-  exists and only its value is refused — and it matched no drift signature either, so the run
-  surfaced as a bare `nonzero_exit` with the actionable diagnosis lost. It needs no `-c` pin and no
-  `--strict-config`, and it reaches the default `inherit` isolation, so it is the failure a user
-  meets on their first run after upgrading. `codex-cli 0.148.0` accepted the identical config.
-  Attribution follows the strict-config discipline: the operator's passthrough when it owns the
-  key, the user's config otherwise. Unlike the strict grammar this message names no file, so when
-  an operator `--profile` is selected — which can reintroduce a setting the extra-args denylist
-  refuses on `-c` — the error discloses that the profile may be the source instead of asserting the
-  user's own config. The repair guidance is overridden rather than inherited, because the shared
-  prose calls the key unrecognized and points at a reported file and line, and neither applies
-  here. A retired value on a key the plugin ITSELF pins is `cli_contract_changed`, not the user's
-  config — the same three-owner attribution the strict path makes, because codex refusing one of
-  those values is a statement about this plugin's argv rather than about anything on the user's
-  disk. No new error code, so no `FINGERPRINT` change.
+- **`user_config_rejected` now covers two more config-parse failures** — a setting codex has
+  RETIRED (#542; `0.149` retired the `untrusted` approval policy and refuses to start when the
+  user's config still selects it) and an INVALID value, the wrong enum variant or the wrong TOML
+  type (#550; a plain typo in `config.toml`). Both are distinct grammars from the `--strict-config`
+  unknown-KEY one — the key exists and only its value is refused — and neither matched a drift
+  signature, so each surfaced as a bare `nonzero_exit` with the diagnosis lost. Neither needs a
+  `-c` pin or `--strict-config`, and both fire at the default `inherit` isolation, so they are the
+  failures a user meets on the first run after an upgrade or an edit. Captured verbatim from
+  `codex-cli 0.149.1`; each recognizer is anchored to the whole of stderr so a config-shaped pair
+  quoted ahead of a genuine auth/drift/rate-limit diagnostic cannot steal the classification. The
+  offending value is never echoed — it is free text the user typed into the wrong key, plausibly
+  a secret no pattern-based redactor recognizes — while what codex *expected* (the allowed
+  variants, or the type) is surfaced as the actionable content. Because these messages name no
+  file, an error under an operator `--profile` discloses that the profile may be the source rather
+  than asserting the user's own config, and the repair guidance is written for a refused value
+  rather than inherited from the unknown-key prose. No new error code, so no `FINGERPRINT` change.
+- **Config-value rejections are attributed to the plugin only for a key THIS run sent** (#550).
+  The workspace pins ride only `workspace-write` runs and the effort key only when an effort was
+  requested, so membership in `PLUGIN_OWNED_CONFIG_KEYS` alone proved nothing about a given run:
+  a user mistyping `sandbox_workspace_write.network_access` in their own file on a read-only
+  consult would have been told the plugin drifted. `classify_failure` now takes the emitted key
+  set (`plugin_config_keys_for`, pinned against the argv builder by a test); a rejection naming an
+  emitted key is `cli_contract_changed` — verified live that a `-c` override outranks a bad file
+  value entirely, so the refused value can only have been ours — an operator passthrough key (or a
+  dotted child of one, since a `-c t={k=v}` parent-table assignment is echoed by codex as `t.k`)
+  is `extra_args_rejected`, and anything else is `user_config_rejected`.
+- **`CODEX_IN_CLAUDE_CODEX_BIN` names the `codex` binary to invoke** (#538). A non-empty value is
+  used exactly as given, with no `PATH` re-resolution, and must be an executable file on disk: a
+  missing path, a directory, or a file without the execute bit is reported by `codex_status` as
+  `codex_found: false` with a `readiness_detail` naming the env var — never its value, which is
+  operator-controlled and unbounded — and by every paid run as `codex_not_found`, zero spend,
+  rather than as an `internal_error` inviting a retry. Documented in the README's Configuration
+  table and `COMPATIBILITY.md`.
 
 ### Changed
 
@@ -59,109 +63,51 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `ALWAYS_SEND` flags, `--model`, and all three sandbox values are present and unchanged.
   - Re-verified live, each with its own positive control: the `workspace-write` network-egress and
     writable-roots pins (both still outrank the config file *and* `--profile`); the read boundary on
-    both tiers, with the write negative control proving the sandbox was in force; `--ignore-rules`
-    (rules load by default and the flag drops them); `model_reasoning_effort` (still read and
-    applied); `--output-schema` conformance together with `--output-last-message` receiving exactly
-    the final `agent_message`; and the `--strict-config` rejection grammar, unchanged in both forms.
+    both tiers, with the write negative control proving the sandbox was in force; `--ignore-rules`;
+    `model_reasoning_effort`; `--output-schema` conformance together with `--output-last-message`
+    receiving exactly the final `agent_message`; and the `--strict-config` rejection grammar,
+    unchanged in both forms.
   - The implicit-context marker probe (`AGENTS.md` sources, both skills roots, all four variants)
-    produced a **presence matrix identical** to `0.148.0` across both binaries — notable because
-    `0.149` reworked skill selection and carried an upstream change titled "Enforce filesystem
-    permissions when loading `AGENTS.md`".
-  - `KNOWN_MODEL_SLUGS` gains `gpt-reserve`, refreshed from the `0.149.1`-written cache. A
-    contemporaneous A/B — both binaries pointed at separate cache-free scratch `$CODEX_HOME` copies
-    and run five seconds apart — had `0.148.0` fetch the identical set, so this is a **backend
-    catalog move, not a client change**. Its `visibility: "hide"` is deliberately not filtered
-    (#547).
+    produced a **presence matrix identical** to `0.148.0` — notable because `0.149` reworked skill
+    selection and carried an upstream change titled "Enforce filesystem permissions when loading
+    `AGENTS.md`".
+  - `KNOWN_MODEL_SLUGS` gains `gpt-reserve`. A contemporaneous cache-free A/B had `0.148.0` fetch
+    the identical set, so this is a backend catalog move, not a client change. Its
+    `visibility: "hide"` is deliberately not filtered (#547).
   - The `0.148.0` → `0.149.1` app-server schema diff leaves six of the seven consumed schemas
-    byte-identical after canonicalization. `GetAccountRateLimitsResponse` gains two `PlanType` enum
-    values (`edu_plus`, `edu_pro`), absorbed because `planType` is read as a bounded free-form
-    string rather than against an allowlist. Three unconsumed v2 notifications were added; nothing
-    was removed.
-  - New `0.149` surface is deliberately not adopted: the `agents` and `queue` subcommands and the
-    `exec --thread-source` flag are unused, and the retired `untrusted` approval value was never
-    sent. `remote_plugin`, `view_image`, and `recommended_plugins` all hold their recorded postures.
-- **The `remote_plugin` guarantee now says which half of it is actually verified** (#542, #548).
-  The mechanism half is re-verified and further pinned in the live integration suite: `--disable`
-  wins over `--enable` in **either** order and over `-c features.remote_plugin=true`, and an unknown
-  feature name still fails loud. The tool-surface half — proving no connector *tool* is exposed —
-  needs a machine where a connector is installed to serve as a positive control, and none is; it is
-  recorded as **not exercised** rather than as a pass, and `COMPATIBILITY.md` now tells the next
-  agent to check for that control first. Upstream `0.149.0`'s "Remove the workspace settings gate
-  for apps and plugins" was read at the source: it touches only the `app-server` and `chatgpt`
-  crates, so it does not reach the `codex exec` path this guarantee covers.
-
-- `collaborating-with-codex` skill: the spend step now describes only the live `codex_status`
-  quota read (no persisted snapshot, so no `is_stale`/`home_unverified` branch); scenario S4 is
-  retargeted at that model and S13 uses inputs `codex_status` can emit.
-- `collaborating-with-codex` skill: the readiness gate, `blocked` refusal, cap declaration, async
-  preference, and composition opt-in gate are now explicit Binding rules; the compound `Delegation`
-  and `Retry` rules are split; the untrusted-workspace rationale moved to Data exposure; the transfer
-  reference notes that a resumed thread runs under Codex's own `AGENTS.md` auto-loading and
-  skill discovery (name/description up front, body on selection), outside the plugin's flags.
+    byte-identical; `GetAccountRateLimitsResponse` gains two `PlanType` enum values (`edu_plus`,
+    `edu_pro`), absorbed because `planType` is read as a bounded free-form string.
+  - New `0.149` surface is deliberately not adopted: the `agents` and `queue` subcommands and
+    `exec --thread-source` are unused, and the retired `untrusted` approval value was never sent.
+    `remote_plugin`, `view_image`, and `recommended_plugins` all hold their recorded postures.
+- **The `remote_plugin` guarantee now says which half of it is verified** (#542, #548). The
+  mechanism half is re-verified and pinned in the live integration suite: `--disable` wins over
+  `--enable` in either order and over `-c features.remote_plugin=true`, and an unknown feature name
+  still fails loud. The tool-surface half — proving no connector *tool* is exposed — needs a machine
+  with a connector installed as a positive control, and none is; it is recorded as **not exercised**
+  rather than as a pass, and `COMPATIBILITY.md` tells the next agent to check for that control
+  first. Upstream `0.149.0`'s "Remove the workspace settings gate for apps and plugins" touches only
+  the `app-server` and `chatgpt` crates, so it does not reach the `codex exec` path this covers.
+- `collaborating-with-codex` skill: the spend step describes only the live `codex_status` quota
+  read; the readiness gate, `blocked` refusal, cap declaration, async preference, and composition
+  opt-in gate are now explicit Binding rules; the compound `Delegation` and `Retry` rules are
+  split; the untrusted-workspace rationale moved to Data exposure; and the transfer reference notes
+  that a resumed thread runs under Codex's own `AGENTS.md` auto-loading and skill discovery,
+  outside the plugin's flags.
 
 ### Fixed
 
-- **`codex` subprocess spawns now resolve the WSL2-native binary instead of a bare `"codex"`
-  lookup** (#538). Under WSL2 — this project's documented, supported way to run on Windows —
-  WSL's PATH interop forwards the Windows `PATH` into the WSL `PATH`, so a bare-name lookup could
-  resolve to a Windows-side npm-global `codex` shim instead of the WSL-native install, failing
-  confusingly instead of cleanly. Every spawn site now goes through `binpath.codex_bin()`, which
-  probes `$HOME/.local/bin/codex`, `/usr/local/bin/codex`, then the npm global bin dir (derived
-  from `npm prefix -g`, since `npm bin -g` was removed in npm 9+), before falling back to
-  `shutil.which("codex")` and finally the bare literal `"codex"` — resolved once per process and
-  cached. An explicit override via `CODEX_IN_CLAUDE_CODEX_BIN` still wins outright and is used
-  exactly as given. Internal only: no agent-visible surface changed.
-- **The three WSL2-workaround candidate probes above now only run when actually under WSL2**
-  (`binresolve._running_under_wsl2_interop()`, gated on `$WSL_DISTRO_NAME` or a `microsoft` marker
-  in `/proc/version`) — a reviewer reproduced the unconditional probe shadowing a newer Homebrew
-  `codex` on macOS with a stale one left behind in `~/.local/bin`. Outside WSL2, resolution now
-  goes straight to `shutil.which("codex")`.
-- **A `CODEX_IN_CLAUDE_CODEX_BIN` override that names a directory, not a file, is now rejected**
-  with `binpath.BinaryNotFoundError` instead of being silently accepted and failing confusingly at
-  spawn time.
-- **A bad `CODEX_IN_CLAUDE_CODEX_BIN` override no longer raises out of `codex_status()`** or any
-  `codex app-server` spawn site (`transfer_session()`, `read_rate_limits()`) or the `--help`
-  feature-detection probe — each now reports the failure as a typed/readiness fact (e.g.
-  `codex_status()` returns `codex_found: false` with a `readiness_detail` naming the env var)
-  instead of letting `binpath.BinaryNotFoundError` escape as a raw error.
-- **`codex_status()`'s generic "nothing found" `readiness_detail` no longer claims PATH is the
-  only place checked** — resolution also probes the WSL2 candidate directories and any
-  `CODEX_IN_CLAUDE_CODEX_BIN` override (see above), so the wording now reads "codex CLI not
-  found." when a bad override isn't the cause. `binresolve.py`'s remaining hardcoded `"codex"`
-  string literals were also replaced with the existing `cli_contract.CODEX_BIN` constant
-  (internal refactor, no behavior change). README's Configuration table and `COMPATIBILITY.md`
-  were updated to document the `CODEX_IN_CLAUDE_CODEX_BIN` override and the WSL2 PATH-interop
-  rationale for WSL2-native resolution.
-- **`binresolve._running_under_wsl2_interop()` no longer escapes on a `UnicodeDecodeError`** from
-  reading `/proc/version` — it now degrades to `False` alongside the `OSError` family it already
-  caught, matching the guard already used elsewhere for reading last-message files.
-- **A `CODEX_IN_CLAUDE_CODEX_BIN` override naming a regular file that lacks the execute bit is now
-  rejected** with `binpath.BinaryNotFoundError`, the same as a missing path or a directory, instead
-  of being silently accepted and failing confusingly (`PermissionError`) at spawn time. The
-  `BinaryNotFoundError` message names the env var and the one check that covers all three
-  rejection reasons — and never the override's value: it is operator-controlled and unbounded,
-  and the text ships on the wire in `codex_status.readiness_detail`, so it is withheld rather
-  than bounded and sanitized (the `CODEX_IN_CLAUDE_EXTRA_ARGS` posture).
-- **A bad `CODEX_IN_CLAUDE_CODEX_BIN` override no longer fails a paid run as `internal_error`.**
-  `build_exec_command()` resolves the binary inside `CodexBackend.prepare()`, so the override's
-  `BinaryNotFoundError` escaped to the tool guard as a "retry" error for a misconfiguration no
-  retry clears. `codex.run_codex_exec` now resolves the binary first and returns the same
-  binary-missing run a failed spawn does, so every consult/review/delegate (sync and async)
-  classifies it as `codex_not_found`, zero spend. That error's message no longer claims PATH is
-  the only place checked ("run codex_status for the resolution detail"); human-readable prose
-  only, no `FINGERPRINT` bump.
-- **`codex.codex_version()` and `codex.login_status()` no longer raise `binpath.BinaryNotFoundError`
-  for a bad override** — each now honors its own documented failure return (`None`, and
-  `(None, None)` respectively) instead of letting the exception escape, matching the guard already
-  applied to `preflight._probe_help()` / `appserver.transfer_session()` /
-  `appserver.read_rate_limits()`.
-- **`binpath.BinaryNotFoundError`'s docstring now names all three rejection cases** (nonexistent
-  path, directory, non-executable file) instead of only the original "does not exist on disk" case.
-  **`codex_status()`'s early `binpath.codex_bin()` probe now only runs when
-  `CODEX_IN_CLAUDE_CODEX_BIN` is actually set** — with no override, `codex_bin()` delegates straight
-  to `binresolve.resolve_codex_bin()` and can never raise, so the unconditional probe was a no-op
-  guard in the common case (internal simplification, no behavior change). Companion change from the
-  same round: README's Configuration table wording was also corrected.
+- **On WSL2, `codex` subprocesses resolve the WSL-native install instead of a Windows-side shim**
+  (#537, #538). WSL2 — this project's documented way to run on Windows — forwards the Windows
+  `PATH` into the WSL `PATH`, so the bare `"codex"` every spawn site used could resolve to a
+  Windows npm-global shim and fail confusingly (`codex_status` reported `codex_found: false` next
+  to a fully populated `flags_warning`). Every spawn site now goes through `binpath.codex_bin()`,
+  resolved once per process: under WSL2 (`$WSL_DISTRO_NAME`, or `microsoft` in `/proc/version`) it
+  probes `$HOME/.local/bin/codex`, `/usr/local/bin/codex`, then the npm global bin dir (from
+  `npm prefix -g`; `npm bin -g` was removed in npm 9+) ahead of `shutil.which("codex")`; on any
+  other host it goes straight to `shutil.which`, so a stale `~/.local/bin/codex` cannot shadow a
+  newer install there. The probe order lives in `binresolve.py`, and `codex_status`'s "not found"
+  detail no longer claims `PATH` is the only place checked. Thanks to @cbeaulieu-gt (#539).
 
 ## [0.19.0] - 2026-08-20
 
