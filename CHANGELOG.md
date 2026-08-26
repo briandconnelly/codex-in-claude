@@ -99,6 +99,70 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   reference notes that a resumed thread runs under Codex's own `AGENTS.md` auto-loading and
   skill discovery (name/description up front, body on selection), outside the plugin's flags.
 
+### Fixed
+
+- **`codex` subprocess spawns now resolve the WSL2-native binary instead of a bare `"codex"`
+  lookup** (#538). Under WSL2 — this project's documented, supported way to run on Windows —
+  WSL's PATH interop forwards the Windows `PATH` into the WSL `PATH`, so a bare-name lookup could
+  resolve to a Windows-side npm-global `codex` shim instead of the WSL-native install, failing
+  confusingly instead of cleanly. Every spawn site now goes through `binpath.codex_bin()`, which
+  probes `$HOME/.local/bin/codex`, `/usr/local/bin/codex`, then the npm global bin dir (derived
+  from `npm prefix -g`, since `npm bin -g` was removed in npm 9+), before falling back to
+  `shutil.which("codex")` and finally the bare literal `"codex"` — resolved once per process and
+  cached. An explicit override via `CODEX_IN_CLAUDE_CODEX_BIN` still wins outright and is used
+  exactly as given. Internal only: no agent-visible surface changed.
+- **The three WSL2-workaround candidate probes above now only run when actually under WSL2**
+  (`binresolve._running_under_wsl2_interop()`, gated on `$WSL_DISTRO_NAME` or a `microsoft` marker
+  in `/proc/version`) — a reviewer reproduced the unconditional probe shadowing a newer Homebrew
+  `codex` on macOS with a stale one left behind in `~/.local/bin`. Outside WSL2, resolution now
+  goes straight to `shutil.which("codex")`.
+- **A `CODEX_IN_CLAUDE_CODEX_BIN` override that names a directory, not a file, is now rejected**
+  with `binpath.BinaryNotFoundError` instead of being silently accepted and failing confusingly at
+  spawn time.
+- **A bad `CODEX_IN_CLAUDE_CODEX_BIN` override no longer raises out of `codex_status()`** or any
+  `codex app-server` spawn site (`transfer_session()`, `read_rate_limits()`) or the `--help`
+  feature-detection probe — each now reports the failure as a typed/readiness fact (e.g.
+  `codex_status()` returns `codex_found: false` with a `readiness_detail` naming the env var)
+  instead of letting `binpath.BinaryNotFoundError` escape as a raw error.
+- **`codex_status()`'s generic "nothing found" `readiness_detail` no longer claims PATH is the
+  only place checked** — resolution also probes the WSL2 candidate directories and any
+  `CODEX_IN_CLAUDE_CODEX_BIN` override (see above), so the wording now reads "codex CLI not
+  found." when a bad override isn't the cause. `binresolve.py`'s remaining hardcoded `"codex"`
+  string literals were also replaced with the existing `cli_contract.CODEX_BIN` constant
+  (internal refactor, no behavior change). README's Configuration table and `COMPATIBILITY.md`
+  were updated to document the `CODEX_IN_CLAUDE_CODEX_BIN` override and the WSL2 PATH-interop
+  rationale for WSL2-native resolution.
+- **`binresolve._running_under_wsl2_interop()` no longer escapes on a `UnicodeDecodeError`** from
+  reading `/proc/version` — it now degrades to `False` alongside the `OSError` family it already
+  caught, matching the guard already used elsewhere for reading last-message files.
+- **A `CODEX_IN_CLAUDE_CODEX_BIN` override naming a regular file that lacks the execute bit is now
+  rejected** with `binpath.BinaryNotFoundError`, the same as a missing path or a directory, instead
+  of being silently accepted and failing confusingly (`PermissionError`) at spawn time. The
+  `BinaryNotFoundError` message names the env var and the one check that covers all three
+  rejection reasons — and never the override's value: it is operator-controlled and unbounded,
+  and the text ships on the wire in `codex_status.readiness_detail`, so it is withheld rather
+  than bounded and sanitized (the `CODEX_IN_CLAUDE_EXTRA_ARGS` posture).
+- **A bad `CODEX_IN_CLAUDE_CODEX_BIN` override no longer fails a paid run as `internal_error`.**
+  `build_exec_command()` resolves the binary inside `CodexBackend.prepare()`, so the override's
+  `BinaryNotFoundError` escaped to the tool guard as a "retry" error for a misconfiguration no
+  retry clears. `codex.run_codex_exec` now resolves the binary first and returns the same
+  binary-missing run a failed spawn does, so every consult/review/delegate (sync and async)
+  classifies it as `codex_not_found`, zero spend. That error's message no longer claims PATH is
+  the only place checked ("run codex_status for the resolution detail"); human-readable prose
+  only, no `FINGERPRINT` bump.
+- **`codex.codex_version()` and `codex.login_status()` no longer raise `binpath.BinaryNotFoundError`
+  for a bad override** — each now honors its own documented failure return (`None`, and
+  `(None, None)` respectively) instead of letting the exception escape, matching the guard already
+  applied to `preflight._probe_help()` / `appserver.transfer_session()` /
+  `appserver.read_rate_limits()`.
+- **`binpath.BinaryNotFoundError`'s docstring now names all three rejection cases** (nonexistent
+  path, directory, non-executable file) instead of only the original "does not exist on disk" case.
+  **`codex_status()`'s early `binpath.codex_bin()` probe now only runs when
+  `CODEX_IN_CLAUDE_CODEX_BIN` is actually set** — with no override, `codex_bin()` delegates straight
+  to `binresolve.resolve_codex_bin()` and can never raise, so the unconditional probe was a no-op
+  guard in the common case (internal simplification, no behavior change). Companion change from the
+  same round: README's Configuration table wording was also corrected.
+
 ## [0.19.0] - 2026-08-20
 
 A sandbox-hardening and egress-disclosure release.

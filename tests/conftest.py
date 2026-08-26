@@ -89,6 +89,19 @@ def _reset_preflight_cache():
     preflight.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_binpath_cache():
+    """Each test starts with a clean `codex_bin()` resolution cache."""
+    try:
+        from codex_in_claude import binpath
+    except ImportError:
+        yield
+        return
+    binpath.reset_cache()
+    yield
+    binpath.reset_cache()
+
+
 @pytest.fixture
 def clean_env(monkeypatch):
     """Strip CODEX_IN_CLAUDE_* env so tests see built-in defaults."""

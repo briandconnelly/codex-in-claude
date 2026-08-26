@@ -10,7 +10,7 @@ import pytest
 from pontonier.core import redaction, worktree
 from pontonier.core.runtime import CommandRun
 
-from codex_in_claude import cli_contract, codex, config
+from codex_in_claude import binpath, cli_contract, codex, config
 from codex_in_claude.preflight import FlagSupport
 
 _ALL_FLAGS = FlagSupport(
@@ -20,7 +20,15 @@ _ALL_FLAGS = FlagSupport(
 _NO_MODEL = FlagSupport(supported=frozenset(cli_contract.ALWAYS_SEND_FLAGS), help_parsed=True)
 
 
-def test_build_exec_command_core(tmp_path):
+def test_build_exec_command_core(tmp_path, monkeypatch):
+    # This test is about the argv build, not binary resolution (that behavior is
+    # covered by tests/test_binresolve.py and tests/test_binpath.py) -- pin the
+    # resolved binary to a distinctive sentinel so the assertion below is both
+    # independent of whether this machine happens to have a real `codex` install
+    # AND actually verifies position 0 carries the *resolved* value (not a
+    # tautology against the bare literal).
+    resolved_bin = "/fake/resolved/codex"
+    monkeypatch.setattr(binpath, "codex_bin", lambda: resolved_bin)
     out = str(tmp_path / "last.txt")
     cmd, dropped = codex.build_exec_command(
         cwd="/repo",
@@ -30,7 +38,7 @@ def test_build_exec_command_core(tmp_path):
         model="gpt-5.4",
         flag_support=_ALL_FLAGS,
     )
-    assert cmd[0] == "codex"
+    assert cmd[0] == resolved_bin
     assert "exec" in cmd
     assert "--json" in cmd
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
@@ -518,6 +526,33 @@ def test_login_status_logged_out(monkeypatch):
     ok, detail = codex.login_status()
     assert ok is False
     assert "login" in detail
+
+
+def test_codex_version_returns_none_when_override_binary_missing(clean_env, tmp_path):
+    """A bad `CODEX_IN_CLAUDE_CODEX_BIN` override must not escape past this
+    function's documented "returns None on failure" contract as
+    `binpath.BinaryNotFoundError` -- the same bug already fixed for
+    `preflight._probe_help()` / `appserver.transfer_session()` /
+    `appserver.read_rate_limits()` in round 1 (commit 53c3b27)."""
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        result = codex.codex_version()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"codex_version() must return None, not raise {exc!r}")
+    assert result is None
+
+
+def test_login_status_returns_none_none_when_override_binary_missing(clean_env, tmp_path):
+    """Same escaping bug as `codex_version()` above, for `login_status()`'s
+    documented `(None, None)` failure return."""
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        result = codex.login_status()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(f"login_status() must return (None, None), not raise {exc!r}")
+    assert result == (None, None)
 
 
 def test_login_status_unknown_when_missing(monkeypatch):
@@ -1940,3 +1975,27 @@ def test_invalid_config_value_is_classified_before_the_substring_matchers(signat
 def test_invalid_config_value_does_not_disturb_unrelated_failures(monkeypatch):
     monkeypatch.delenv(config.EXTRA_ARGS_ENV, raising=False)
     assert codex.classify_failure(_run(stderr="some unrelated boom")).code == "nonzero_exit"
+
+
+async def test_run_codex_exec_maps_a_bad_override_to_binary_missing(clean_env, tmp_path):
+    """`build_exec_command()` runs inside `CodexBackend.prepare()`, so a bad
+    `CODEX_IN_CLAUDE_CODEX_BIN` override raised `BinaryNotFoundError` out of the run
+    instead of surfacing as the run-level fact it is. It now comes back as the same
+    `binary_missing` CommandRun `runtime.run_async` returns for a spawn that finds no
+    binary, so `classify_failure` yields `codex_not_found` (Copilot, PR #539). The
+    override fails before any spawn, so nothing is mocked."""
+    clean_env.setenv(binpath.ENV_VAR, str(tmp_path / "does-not-exist"))
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert result.run.binary_missing
+    assert result.run.exit_code == 127
+    assert result.last_message is None
+    err = codex.classify_failure(result.run, last_message=None, events="")
+    assert err.code == "codex_not_found"
+    assert "does-not-exist" not in err.message

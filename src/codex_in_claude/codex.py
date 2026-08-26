@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pontonier.backend.protocol import RunRequest
 from pontonier.core import redaction, runtime
 
-from codex_in_claude import cli_contract, config, normalize, preflight
+from codex_in_claude import binpath, cli_contract, config, normalize, preflight
 from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
 from codex_in_claude.schemas import ErrorDetail
@@ -102,7 +102,7 @@ def build_exec_command(
     and before the stdin ``-`` sentinel, so they can add config/profile/feature options
     without displacing the envelope-bearing flags."""
     fs = flag_support if flag_support is not None else preflight.flag_support()
-    tokens = [cli_contract.CODEX_BIN, *cli_contract.EXEC_SUBCOMMAND]
+    tokens = [binpath.codex_bin(), *cli_contract.EXEC_SUBCOMMAND]
     # Set wherever this function appends a real `-c` pair; read by the strict-config
     # decision below. Tracking the appends is what keeps a flag-shaped VALUE from being
     # mistaken for an override (see that comment).
@@ -243,6 +243,20 @@ async def run_codex_exec(
         access=sandbox,
         isolation=isolation,
     )
+    # Resolve the binary here, ahead of `prepare()` (whose `build_exec_command()` call
+    # then hits the cache). A bad CODEX_IN_CLAUDE_CODEX_BIN override otherwise raised
+    # `BinaryNotFoundError` out of the run -- an `internal_error` ("retry") at the tool
+    # guard, for a misconfiguration no retry clears. It is the same run-level fact as a
+    # spawn that finds no binary, so it is returned in that exact shape (the
+    # binary-missing CommandRun `runtime.run_async` returns) and classifies as
+    # `codex_not_found`, zero spend.
+    try:
+        binpath.codex_bin()
+    except binpath.BinaryNotFoundError:
+        return CodexExecResult(
+            run=runtime.CommandRun("", runtime.BINARY_NOT_FOUND, 127, 0, False),
+            last_message=None,
+        )
     async with BACKEND.prepare(request) as prepared:
         run = await runtime.run_async(
             list(prepared.argv),
@@ -274,8 +288,14 @@ def _read_last_message(path: str) -> str | None:
 
 def codex_version(timeout_seconds: int = 10) -> str | None:
     """Probe `codex --version`. Returns the trimmed version string, or None."""
+    try:
+        codex_path = binpath.codex_bin()
+    except binpath.BinaryNotFoundError:
+        # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
+        # other -- this function's contract is None on any failure, never a raise.
+        return None
     run = runtime.run_sync_capture(
-        [cli_contract.CODEX_BIN, *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
+        [codex_path, *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.exit_code != 0:
         return None
@@ -289,8 +309,15 @@ def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:
     (codex missing/timeout). detail is a NON-identifying phrase derived from the
     exit code and method keyword — never the raw output, which may name an account.
     """
+    try:
+        codex_path = binpath.codex_bin()
+    except binpath.BinaryNotFoundError:
+        # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
+        # other -- this function's contract is (None, None) on any failure,
+        # never a raise.
+        return None, None
     run = runtime.run_sync_capture(
-        [cli_contract.CODEX_BIN, *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
+        [codex_path, *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.timed_out:
         return None, None
@@ -689,7 +716,12 @@ def classify_failure(
     an empty set, attributes such a rejection to the user or operator instead (#550), so a
     caller that omits it can never blame the plugin for a key it did not send."""
     if run.binary_missing:
-        return make_error("codex_not_found", "The `codex` CLI was not found on PATH.")
+        # Not "on PATH": resolution also probes the WSL2 candidate directories and honors
+        # a CODEX_IN_CLAUDE_CODEX_BIN override (#538) -- codex_status reports which failed.
+        return make_error(
+            "codex_not_found",
+            "The `codex` CLI was not found; run codex_status for the resolution detail.",
+        )
     if run.timed_out:
         return make_error("timeout", "codex exceeded the timeout.")
     event_error = normalize.extract_error_message(events) if events else None

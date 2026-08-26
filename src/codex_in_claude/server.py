@@ -45,6 +45,7 @@ from pontonier.core.jobs import DiscardOutcome
 from codex_in_claude import (
     __version__,
     appserver,
+    binpath,
     cli_contract,
     codex,
     config,
@@ -1392,6 +1393,20 @@ def codex_status() -> dict:
     `is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different
     CODEX_HOME."""
     d = config.defaults()
+    # A bad CODEX_IN_CLAUDE_CODEX_BIN override (missing path, non-executable file,
+    # or a directory) is a readiness FACT, not a raised exception (#B1). Probe
+    # binpath.codex_bin() directly to capture that specific detail: codex.codex_version()
+    # itself now swallows BinaryNotFoundError so it never lets it escape as a raw MCP
+    # protocol error, which would otherwise hide the override's identity behind a
+    # generic "not found". Only worth probing when the override is actually set --
+    # with no override, codex_bin() delegates straight to binresolve.resolve_codex_bin()
+    # and can never raise, so the probe would be a no-op guard.
+    bad_override_detail: str | None = None
+    if os.environ.get(binpath.ENV_VAR):
+        try:
+            binpath.codex_bin()
+        except binpath.BinaryNotFoundError as exc:
+            bad_override_detail = str(exc)
     version = codex.codex_version()
     found = version is not None
     authenticated, auth_detail = codex.login_status() if found else (None, None)
@@ -1409,7 +1424,7 @@ def codex_status() -> dict:
 
     ready = bool(found and authenticated)
     if not found:
-        readiness_detail = "codex CLI not found on PATH."
+        readiness_detail = bad_override_detail or "codex CLI not found."
     elif authenticated is None:
         readiness_detail = "Could not determine codex auth status."
     elif not authenticated:
@@ -1495,6 +1510,10 @@ def _transfer_outcome_envelope(
         source = outcome.thread_id_source or appserver.ThreadIdSource.IMPORT_NOTIFICATION
         return TransferResult(
             thread_id=thread_id,
+            # Intentionally the bare literal, not cli_contract.CODEX_BIN /
+            # binpath.codex_bin() -- this is a copy-paste hint for the user's
+            # own shell, not a subprocess we spawn, so our WSL2/override
+            # resolution correctly does not apply here.
             resume_command=shlex.join(["codex", "resume", thread_id]),
             source_path=source_path,
             meta=TransferMeta(
@@ -1523,7 +1542,7 @@ def _transfer_outcome_envelope(
         )
     elif status is appserver.TransferStatus.SPAWN_FAILED:
         code = "codex_not_found"
-        message = "codex CLI not found on PATH."
+        message = "codex CLI not found; run codex_status for the resolution detail."
     elif status is appserver.TransferStatus.TIMED_OUT:
         code = "timeout"
         temporary = True
@@ -1645,7 +1664,10 @@ async def codex_transfer(
     if codex.codex_version() is None:
         return serialize_error(
             ErrorResult(
-                error=make_error("codex_not_found", "codex CLI not found on PATH."),
+                error=make_error(
+                    "codex_not_found",
+                    "codex CLI not found; run codex_status for the resolution detail.",
+                ),
                 meta=_meta(cwd_guess, None),
             )
         )

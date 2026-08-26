@@ -211,6 +211,21 @@ def test_status_not_found(monkeypatch, clean_env):
     assert res["ready"] is False
 
 
+def test_status_not_found_readiness_detail_does_not_claim_path_only(monkeypatch, clean_env):
+    """Resolution now also checks WSL2 candidate directories and any
+    CODEX_IN_CLAUDE_CODEX_BIN override, not just PATH (see binresolve.py) --
+    the generic "genuinely nothing found, no bad override involved" message
+    must not claim PATH is the only place that was checked (non-blocking
+    review finding, second round). Exact replacement wording is left to the
+    implementer; this only pins the stale claim's removal plus a sanity check
+    that the message still communicates "not found"."""
+    monkeypatch.setattr(server.codex, "codex_version", lambda: None)
+    res = server.codex_status()
+    assert res["codex_found"] is False
+    assert "on PATH" not in res["readiness_detail"]
+    assert "not found" in res["readiness_detail"].lower()
+
+
 def test_status_not_authenticated(monkeypatch, clean_env):
     monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.149.1")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, "run codex login"))
@@ -290,6 +305,40 @@ def test_status_all_control_version_is_found_but_has_no_displayable_version(monk
     assert res["codex_found"] is True
     assert res["codex_version"] is None
     assert res["version_warning"] is None
+
+
+# --- status: a bad CODEX_IN_CLAUDE_CODEX_BIN override is a readiness fact, not a
+# raised exception (B1) -----------------------------------------------------------
+# codex_status() calls codex.codex_version() -> binpath.codex_bin() unguarded. A
+# BinaryNotFoundError (override set to a path that doesn't exist, or -- after the
+# B4 fix -- one that is a directory) must not escape as a raw MCP protocol error;
+# it must be caught and reported the same way every other "codex isn't usable
+# right now" case already is: codex_found=False with a readiness_detail.
+#
+# DEPENDS ON THE PREFLIGHT FIX LANDING TOO: even once codex_status() itself
+# catches the error from codex_version(), the SAME override still crashes the
+# `preflight.flag_support(force=True)` call a few lines later in codex_status()
+# (preflight._probe_help() -> binpath.codex_bin(), same unguarded call, the
+# B4-adjacent fix covered by tests/test_preflight.py). This test cannot go
+# green from the B1 fix alone -- fix preflight._probe_help() first.
+
+
+def test_status_reports_bad_override_as_readiness_fact_not_raised_exception(clean_env, tmp_path):
+    from codex_in_claude import binpath
+
+    missing = tmp_path / "does-not-exist"
+    clean_env.setenv(binpath.ENV_VAR, str(missing))
+    try:
+        res = server.codex_status()
+    except binpath.BinaryNotFoundError as exc:
+        pytest.fail(
+            f"codex_status() must not raise for a bad {binpath.ENV_VAR} override, raised {exc!r}"
+        )
+    assert res["codex_found"] is False
+    assert res["ready"] is False
+    # Specific enough to act on -- names the env var, not a generic "not found"
+    # message that could equally describe a plain missing-on-PATH scenario.
+    assert binpath.ENV_VAR in res["readiness_detail"]
 
 
 def test_capability_summary_covers_all_task_families():
@@ -10000,3 +10049,35 @@ async def test_job_not_found_message_sanitizes_the_echoed_job_id(clean_env, tmp_
     assert res["error"]["code"] == "job_not_found"
     assert not _has_control(res["error"]["message"]), repr(res["error"]["message"])
     assert res["error"]["details"]["field"] == "job_id"
+
+
+def test_status_bad_override_readiness_detail_never_echoes_the_value(clean_env, tmp_path):
+    """`readiness_detail` ships on the wire, and the override is operator-controlled
+    and unbounded: the detail names the env var, never its value (Copilot, PR #539)."""
+    from codex_in_claude import binpath
+
+    marker = "SECRET-LOOKING-VALUE"
+    override = tmp_path / (marker + "\x1b[0m" + "A" * 600)
+    clean_env.setenv(binpath.ENV_VAR, str(override))
+    res = server.codex_status()
+    assert res["codex_found"] is False
+    assert binpath.ENV_VAR in res["readiness_detail"]
+    assert marker not in res["readiness_detail"]
+    assert "\x1b" not in res["readiness_detail"]
+    assert len(res["readiness_detail"]) < 300
+
+
+async def test_consult_bad_override_is_codex_not_found_not_internal_error(clean_env, tmp_path):
+    """A bad `CODEX_IN_CLAUDE_CODEX_BIN` override reached `binpath.codex_bin()` from
+    `build_exec_command()` inside `CodexBackend.prepare()`, so a paid run raised
+    `BinaryNotFoundError` and the tool guard reported it as `internal_error` -- a
+    "retry" repair for a misconfiguration no retry clears. It is the same fact as a
+    missing binary and must classify the same way: `codex_not_found`, zero spend
+    (Copilot, PR #539). No subprocess is mocked: the override fails before any spawn."""
+    from codex_in_claude import binpath
+
+    clean_env.setenv(binpath.ENV_VAR, str(tmp_path / "does-not-exist"))
+    res = await _run_consult_direct(tmp_path, "q")
+    assert res["ok"] is False
+    assert res["error"]["code"] == "codex_not_found"
+    assert "does-not-exist" not in json.dumps(res)

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 from pontonier.core import redaction, streamcap
 
-from codex_in_claude import __version__, cli_contract
+from codex_in_claude import __version__, binpath, cli_contract
 from codex_in_claude.schemas import RateLimitSnapshot, RateLimitWindowSnapshot
 
 # Claude Code writes session transcripts under ~/.claude/projects/<cwd-slug>/. We only
@@ -790,8 +790,11 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     caller request cooperative cancellation: when set, the loop stops within
     ``_POLL_SECONDS`` and the ``finally`` kills the process group. Never raises for a
     subprocess failure — every path returns a :class:`TransferOutcome`."""
-    argv = command or [cli_contract.CODEX_BIN, *cli_contract.APP_SERVER_SUBCOMMAND]
     try:
+        # binpath.codex_bin() resolves a CODEX_IN_CLAUDE_CODEX_BIN override eagerly and
+        # raises BinaryNotFoundError for a bad one -- folded into this try so that, like
+        # any other spawn failure, it comes back as SPAWN_FAILED rather than escaping.
+        argv = command or [binpath.codex_bin(), *cli_contract.APP_SERVER_SUBCOMMAND]
         # Binary pipes, not text=True: the readers own the bytes-to-text boundary so a
         # bounded per-line read can never race a TextIOWrapper holding decoded characters
         # in its own buffer. Nothing else may read these pipes.
@@ -802,7 +805,7 @@ def transfer_session(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-    except OSError:
+    except (OSError, binpath.BinaryNotFoundError):
         # No child was created, so there is no stderr. Leave stderr_tail None — never the
         # internal BINARY_NOT_FOUND sentinel, which a future envelope path could otherwise
         # surface to the agent as if it were child diagnostics (#275).
@@ -1189,8 +1192,11 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
     app-server; ``stop_event`` requests cooperative cancellation. Never raises for a
     subprocess failure — every path returns a :class:`RateLimitReadOutcome` (the #321
     contract: a failure is a typed fact, never a silent ``None``)."""
-    argv = command or [cli_contract.CODEX_BIN, *cli_contract.APP_SERVER_SUBCOMMAND]
     try:
+        # binpath.codex_bin() resolves a CODEX_IN_CLAUDE_CODEX_BIN override eagerly and
+        # raises BinaryNotFoundError for a bad one -- folded into this try so that, like
+        # any other spawn failure, it comes back as SPAWN_FAILED rather than escaping.
+        argv = command or [binpath.codex_bin(), *cli_contract.APP_SERVER_SUBCOMMAND]
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
@@ -1198,7 +1204,7 @@ def read_rate_limits(  # noqa: PLR0915 - a linear JSON-RPC state machine; splitt
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-    except OSError:
+    except (OSError, binpath.BinaryNotFoundError):
         return RateLimitReadOutcome(status=RateLimitReadStatus.SPAWN_FAILED)
 
     drain = _StderrDrain(proc.stderr)
