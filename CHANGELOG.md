@@ -36,17 +36,13 @@ override names a binary outright.
   variants, or the type) is surfaced as the actionable content. Because these messages name no
   file, an error under an operator `--profile` discloses that the profile may be the source rather
   than asserting the user's own config, and the repair guidance is written for a refused value
-  rather than inherited from the unknown-key prose. No new error code, so no `FINGERPRINT` change.
-- **Config-value rejections are attributed to the plugin only for a key THIS run sent** (#550).
-  The workspace pins ride only `workspace-write` runs and the effort key only when an effort was
-  requested, so membership in `PLUGIN_OWNED_CONFIG_KEYS` alone proved nothing about a given run:
-  a user mistyping `sandbox_workspace_write.network_access` in their own file on a read-only
-  consult would have been told the plugin drifted. `classify_failure` now takes the emitted key
-  set (`plugin_config_keys_for`, pinned against the argv builder by a test); a rejection naming an
-  emitted key is `cli_contract_changed` — verified live that a `-c` override outranks a bad file
-  value entirely, so the refused value can only have been ours — an operator passthrough key (or a
-  dotted child of one, since a `-c t={k=v}` parent-table assignment is echoed by codex as `t.k`)
-  is `extra_args_rejected`, and anything else is `user_config_rejected`.
+  rather than inherited from the unknown-key prose. Attribution follows the `--strict-config`
+  discipline, keyed on who sent the rejected key *on this run*: one of the plugin's own pins —
+  emitted only on `workspace-write` runs and effort-carrying runs, and verified live to outrank a
+  bad file value entirely, so the refused value can only have been ours — is `cli_contract_changed`;
+  an operator passthrough key, or a dotted child of one (codex echoes a `-c t={k=v}` parent-table
+  assignment as `t.k`), is `extra_args_rejected`; anything else is `user_config_rejected`. No new
+  error code, so no `FINGERPRINT` change.
 - **`CODEX_IN_CLAUDE_CODEX_BIN` names the `codex` binary to invoke** (#538). A non-empty value is
   used exactly as given, with no `PATH` re-resolution, and must be an executable file on disk: a
   missing path, a directory, or a file without the execute bit is reported by `codex_status` as
