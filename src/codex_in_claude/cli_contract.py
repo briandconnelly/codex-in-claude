@@ -7,7 +7,7 @@ an upstream breaking change is centralized, greppable, and testable. Revising it
 takes the lockstep procedure in docs/UPGRADING-CODEX.md, not an edit to this file
 alone. See COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.149.1`.
+Verified against `codex-cli 0.151.0`.
 """
 
 from __future__ import annotations
@@ -42,10 +42,16 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
 # [experimental] and the import method rides behind the `experimentalApi` capability),
 # so every wire assumption lives here; see COMPATIBILITY.md. Verified against
-# codex-cli 0.149.1 on 2026-08-25 via `codex app-server generate-json-schema --out <DIR>`
-# (the generator requires an --out directory instead of writing to stdout). The 0.148.0 -> 0.149.1
-# diff added three v2 messages we do NOT consume (`ProjectChangedNotification`,
-# `StrictReviewRequiredNotification`, `ThreadProjectUpdatedNotification`), removed none, and left
+# codex-cli 0.151.0 on 2026-08-29 via `codex app-server generate-json-schema --out <DIR>`
+# (the generator requires an --out directory instead of writing to stdout). The 0.149.1 -> 0.151.0
+# diff added ten v2 messages we do NOT consume (`McpServerEventStreamNotification`,
+# `ThreadItemsList{Params,Response}`, `ThreadRealtimeItem{Started,Completed}Notification`,
+# `ThreadRealtimeItemTranscriptDeltaNotification`, `ThreadRevert{Params,Response}`,
+# `ThreadTurnsList{Params,Response}`), removed none, and left ALL SEVEN consumed schemas
+# byte-identical after canonicalization.
+# The earlier 0.148.0 -> 0.149.1 diff added three v2 messages we do NOT consume
+# (`ProjectChangedNotification`, `StrictReviewRequiredNotification`,
+# `ThreadProjectUpdatedNotification`), removed none, and left
 # six of the seven consumed schemas byte-identical after canonicalization; the seventh,
 # `GetAccountRateLimitsResponse`, gained two `PlanType` enum values (`edu_plus`, `edu_pro`), which
 # are absorbed because `planType` is read as a bounded free-form string, not against an allowlist.
@@ -852,7 +858,10 @@ MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # `gpt-reserve` carries `visibility: "hide"`, which is deliberately NOT filtered: codex_models
 # copies the cache's slug set verbatim and lets `codex exec` be the real validator, so adding a
 # visibility filter would be a separate, deliberate policy change (#547).
-# Re-diff the slug set on every upgrade — this is the pass that catches it.
+# Re-diff the slug set on every upgrade — this is the pass that catches it. Re-verified
+# unchanged on 2026-08-29 against codex-cli 0.151.0's live cache: the same eight slugs, and the
+# reasoning-effort discovery fields still hold their pinned shape (`default_reasoning_level` a
+# string, `supported_reasoning_levels` a list of `{effort, ...}` objects; nothing degraded to None).
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
 # live account's available models. Keep in lockstep with SUPPORTED_VERSIONS when bumping
 # the CLI.
@@ -872,11 +881,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.149.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.151.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 149)})
+SUPPORTED_VERSIONS = frozenset({(0, 151)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

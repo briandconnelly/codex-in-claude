@@ -92,7 +92,7 @@ def test_build_exec_command_pins_network_access_exactly_on_workspace_write(
     # #518: at the default isolation (inherit) codex reads $CODEX_HOME/config.toml, where
     # `[sandbox_workspace_write] network_access = true` would silently void the advertised
     # no-network-egress guarantee. The pin closes that channel (and --profile — the `-c`
-    # override outranks both, verified live on 0.148.0 and re-verified on 0.149.1) for
+    # override outranks both, verified live on 0.148.0 and re-verified on 0.149.1 and 0.151.0) for
     # every workspace-write run.
     # The expected token is a LITERAL here on purpose: deriving it from the constant the
     # code reads would make this test unable to catch a wrong constant.
@@ -154,7 +154,7 @@ def test_build_exec_command_pins_writable_roots_exactly_on_workspace_write(
     # the workspace, voiding the advertised writes-stay-in-the-workspace boundary. The
     # pin restores codex's own default ([]) and closes the config-file and --profile
     # channels (the `-c` override outranks both, verified live on 0.148.0 and re-verified
-    # on 0.149.1) for every workspace-write run. The expected token is a LITERAL here on
+    # on 0.149.1 and 0.151.0) for every workspace-write run. The expected token is a LITERAL here on
     # purpose: deriving it
     # from the constant the code reads would make this test unable to catch a wrong
     # constant.
@@ -210,7 +210,7 @@ def test_writable_roots_pin_key_constant_matches_codex_config_key():
 
 def test_build_exec_command_add_dir_composes_with_writable_roots_pin(tmp_path):
     # #520: --add-dir grants ride the FLAG layer, which outranks the `-c` config-layer
-    # pin (verified live on 0.148.0 and re-verified on 0.149.1) — so a future add_dirs
+    # pin (verified live on 0.148.0 and re-verified on 0.149.1 and 0.151.0) — so a future add_dirs
     # caller widens the sandbox
     # DESPITE the pin. Both tokens coexisting in the argv is the documented behavior;
     # adopting add_dirs on a model-bearing path is a contract change needing its own
@@ -492,9 +492,9 @@ def test_codex_version(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,
         "run_sync_capture",
-        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.149.1\n", "", 0, 1, False),
+        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.151.0\n", "", 0, 1, False),
     )
-    assert codex.codex_version() == "codex-cli 0.149.1"
+    assert codex.codex_version() == "codex-cli 0.151.0"
 
 
 def test_codex_version_missing(monkeypatch):
@@ -1526,7 +1526,7 @@ def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operato
 
 
 def test_version_display_passes_an_ordinary_version_through():
-    assert codex.version_display("codex-cli 0.149.1") == "codex-cli 0.149.1"
+    assert codex.version_display("codex-cli 0.151.0") == "codex-cli 0.151.0"
 
 
 @pytest.mark.parametrize("value", [None, ""])
@@ -1610,7 +1610,7 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
     in this package branches on the marker — it is text for a reader, never a
     machine-readable `truncated` flag — so a spoofed suffix misleads a reader and nothing
     more. `StatusResult` describes it as advisory for that reason."""
-    spoofed = "codex-cli 0.149.1" + codex._ECHO_TRUNC_MARKER
+    spoofed = "codex-cli 0.151.0" + codex._ECHO_TRUNC_MARKER
     assert len(spoofed) <= codex._ECHO_MAX_CHARS
     assert codex.version_display(spoofed) == spoofed
 
@@ -1618,12 +1618,12 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
 def test_version_display_never_repairs_a_control_split_version_for_the_verdict():
     """The display copy is LOSSY and is not the identity.
 
-    Deleting the control character out of `0.<BEL>149.1` yields a plausible
-    `codex-cli 0.149.1` — but `version_supported` must keep parsing the RAW probe output,
+    Deleting the control character out of `0.<BEL>151.0` yields a plausible
+    `codex-cli 0.151.0` — but `version_supported` must keep parsing the RAW probe output,
     which does not parse at all. Pinning both halves keeps a future refactor from routing
     the verdict through this copy."""
-    raw = "codex-cli 0.\x07149.1"
-    assert codex.version_display(raw) == "codex-cli 0.149.1"
+    raw = "codex-cli 0.\x07151.0"
+    assert codex.version_display(raw) == "codex-cli 0.151.0"
     assert config.parse_version(raw) is None
     assert config.version_supported(raw) is None
 
@@ -1637,7 +1637,8 @@ def test_safe_echo_bounds_an_over_cap_span_with_the_explicit_marker():
 
 
 # --- retired config SETTING classification (codex 0.149, #542) --------------------
-# Captured verbatim from codex-cli 0.149.1 (2026-08-25). 0.148.0 accepted the same
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25); the same wording re-observed on
+# 0.151.0 (2026-08-29). 0.148.0 accepted the same
 # config, so a user upgrading hits this on their FIRST run at the default isolation.
 _RETIRED_SETTING_STDERR = (
     'Error: approval_policy = "untrusted" is no longer supported; remove this setting\n'
@@ -1790,7 +1791,8 @@ def test_retired_config_setting_profile_disclosure_is_a_readable_sentence(monkey
 
 
 # --- invalid config VALUE classification (codex 0.149, #550) -----------------------
-# Captured verbatim from codex-cli 0.149.1 (2026-08-25). The third config-parse grammar:
+# Captured verbatim from codex-cli 0.149.1 (2026-08-25); the same wording re-observed on
+# 0.151.0 (2026-08-29). The third config-parse grammar:
 # a recognized key whose value fails serde validation — a typo, plausibly more common
 # than the retired setting above, and hit at the default isolation with no pin.
 _INVALID_VARIANT_STDERR = (

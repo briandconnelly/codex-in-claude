@@ -5,6 +5,38 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tracked Codex version is now `0.151`.** `SUPPORTED_VERSIONS` tracks `(0, 151)`; a `0.149` or
+  `0.150` CLI still runs and now reports the advisory untracked-version warning in `codex_status`.
+  Verified end to end against `codex-cli 0.151.0` and A/B'd against a side-by-side `0.149.1`.
+  **No contract break and no agent-visible change:** the result `fingerprint` stays at
+  `codex-in-claude/0.1/schema-84` and `RESULT_FORMAT` at `10`.
+  - All 12 `ALWAYS_SEND` flags, the `--model` help-gated flag, and all three `--sandbox` values are
+    present. `codex --help`, `codex exec --help`, `codex review --help`, `codex exec review --help`,
+    and `codex app-server --help` are **byte-identical** between `0.149.1` and `0.151.0`; only the
+    feature-flag table moved.
+  - Both security pins re-verified live with positive controls, each against the config file **and**
+    an operator `--profile`: `sandbox_workspace_write.network_access=false` still blocks egress, and
+    `sandbox_workspace_write.writable_roots=[]` still blocks writes outside the workspace. Upstream's
+    `SandboxWorkspaceWrite` struct at `rust-v0.151.0` still carries exactly the four fields
+    `COMPATIBILITY.md` accounts for, so no new widening key arrived unpinned.
+  - `model_reasoning_effort` is still read and applied (the rejection still carries both
+    `[ReasoningEffortParam]` and `[reasoning.effort]`), and `codex exec` still has no dedicated
+    effort flag.
+  - The `--strict-config` grammars — the override form, the file form, and both invalid-value
+    sub-grammars — still parse, and `--ignore-user-config` still exempts the config file.
+  - The `0.149.1` → `0.151.0` app-server schema diff added ten v2 messages this plugin does not
+    consume, removed none, and left **all seven** consumed schemas byte-identical.
+  - `KNOWN_MODEL_SLUGS` is unchanged: the live `0.151.0` cache serves the same eight slugs, and the
+    reasoning-effort discovery fields still hold their pinned shape.
+  - The implicit-context presence matrix (`AGENTS.md` sources and both skills roots) is **identical**
+    to `0.149.1` across every variant, under the read-forbidding, assertion-backed probe. Note that
+    `0.151` adds a `skip_host_skill_discovery` feature flag — `under development`, default-off, and
+    inert here, but the flag to re-probe first when it stages.
+  - New `0.151` surface is deliberately not adopted; `remote_plugin`, `view_image`, and
+    `recommended_plugins` all hold their recorded stage and default.
+
 ## [0.20.0] - 2026-08-26
 
 A compatibility and diagnosis release. Nothing on the agent-visible surface changed: the result
