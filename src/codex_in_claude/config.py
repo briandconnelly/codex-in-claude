@@ -242,6 +242,32 @@ _DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_envir
 # the same documented operator-trust boundary that bounds every `-c` denial
 # (COMPATIBILITY.md). Values are (meta field, env var, per-call parameter, issue) used to
 # build the value-free refusal message.
+# Instruction-bearing config keys refused because they would place operator prose ABOVE this
+# server's framing (#555). Every framing string in `prompts` — including the untrusted-data
+# clause — rides the user turn on stdin; `developer_instructions` lands as the FIRST
+# developer-role message (verified with `codex debug prompt-input` on 0.151.0), and
+# `model_instructions_file` (with its deprecated `experimental_instructions_file` alias)
+# REPLACES the built-in instructions outright (documented; the prompt-input renderer does not
+# show base instructions, so that one is denied on the documented semantics). `instructions` is
+# documented "reserved for future use" — denied so a future meaning cannot fail open. Meta
+# records only that a valid passthrough was configured (`extra_args_configured`/`_count`/
+# `_valid`), never which keys, so a run under any of these would be indistinguishable from a
+# default run. Exact normalized keys, like _RESERVED_META_CONFIG_KEYS (a root would not fit:
+# `instructions` is also a legitimate nested segment, e.g. `mcp_servers.X.instructions`), with
+# the same conservative lookalike over-denial. A first-class, meta-reported per-call parameter
+# is tracked in #556; until it lands there is no replacement control to point at. NOTE: an
+# opaque `--profile`, and at the default `inherit` isolation the user's own `config.toml`, can
+# still set these — the documented operator-trust boundary (COMPATIBILITY.md).
+_DENIED_INSTRUCTION_CONFIG_KEYS = frozenset(
+    {
+        "developer_instructions",
+        "model_instructions_file",
+        "experimental_instructions_file",
+        "instructions",
+    }
+)
+_INSTRUCTION_KEYS_TRACKING_ISSUE = "#556"
+
 _RESERVED_META_CONFIG_KEYS: dict[str, tuple[str, str, str, str]] = {
     "model": ("meta.model", f"{ENV_PREFIX}MODEL", "model", "#310"),
     cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY: (
@@ -418,6 +444,16 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         "disables the remote_plugin connectors as a security guarantee "
                         "(#287); an operator "
                         "override cannot re-enable them"
+                    ),
+                )
+            if normalized in _DENIED_INSTRUCTION_CONFIG_KEYS:
+                return ExtraArgs(
+                    configured=True,
+                    error=(
+                        f"config key '{_safe_token(key.strip())}' is refused: it would inject "
+                        "or replace model instructions above this server's own framing, "
+                        "with no record of that in the result envelope; a first-class, "
+                        f"meta-reported parameter is tracked in {_INSTRUCTION_KEYS_TRACKING_ISSUE}"
                     ),
                 )
             reserved = _RESERVED_META_CONFIG_KEYS.get(normalized)

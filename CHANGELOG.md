@@ -7,6 +7,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **BREAKING (operator surface): the extra-args passthrough can no longer set the
+  instruction-bearing config keys** (#555). `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses
+  `-c developer_instructions=…`, `model_instructions_file`, its deprecated alias
+  `experimental_instructions_file`, and the documented-as-reserved `instructions` (plus the usual
+  case/quote lookalikes) at parse time with `extra_args_rejected`, before any spend. Every framing
+  string this server sends rides the user turn, and `developer_instructions` lands as the *first*
+  developer-role message (verified on codex-cli 0.151.0), so a passthrough value outranked the
+  server's own guardrails while `meta` recorded nothing beyond "a valid passthrough was
+  configured". No first-class replacement yet — a per-call, meta-reported parameter is tracked in
+  #556. `--profile` and, at `inherit` isolation, the user's `config.toml` remain the documented
+  operator-trust boundary. Not a `fingerprint` move: the denylist is not part of the discovered
+  surface (`schema-84` stands).
+
 - **Tracked Codex version is now `0.151`.** `SUPPORTED_VERSIONS` tracks `(0, 151)`; a `0.149` or
   `0.150` CLI still runs and now reports the advisory untracked-version warning in `codex_status`.
   Verified end to end against `codex-cli 0.151.0` and A/B'd against a side-by-side `0.149.1`.

@@ -748,3 +748,54 @@ def test_descriptors_keep_their_raw_identity_for_matching(attack, monkeypatch):
     ea = config.extra_args()
     assert ea.valid, ea.error
     assert f"ev{attack}il" in ea.descriptors
+
+
+# --- #555: instruction-bearing config keys are refused in the passthrough -------------
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "-c developer_instructions=BE_AGREEABLE",  # short flag (lands as the first developer turn)
+        "--config developer_instructions=BE_AGREEABLE",  # long config flag
+        "--config=developer_instructions=BE_AGREEABLE",  # attached long config flag
+        '-c " developer_instructions =BE_AGREEABLE"',  # whitespace around the key
+        "-c Developer_Instructions=BE_AGREEABLE",  # case lookalike (#310 treatment)
+        "-c '\"developer_instructions\"=BE_AGREEABLE'",  # escaped quotes survive shlex
+        "-c model_instructions_file=/tmp/BE_AGREEABLE.md",  # replaces the built-in instructions
+        "-c experimental_instructions_file=/tmp/BE_AGREEABLE.md",  # deprecated alias
+        "-c instructions=BE_AGREEABLE",  # documented "reserved for future use" — fail closed
+    ],
+)
+def test_extra_args_refuses_instruction_keys(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    # The refusal explains itself and points at the tracked first-class parameter.
+    assert "#556" in ea.error
+    assert "instructions" in ea.error
+    # The -c VALUE is never echoed in an error envelope.
+    assert "BE_AGREEABLE" not in ea.error
+
+
+def test_extra_args_instruction_denial_is_its_own_message(monkeypatch):
+    # Not the sandbox-root, remote_plugin, or meta-reserved text: no first-class control
+    # exists yet, so the message must not send the operator to an env var or parameter.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c developer_instructions=x")
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "sandbox" not in ea.error
+    assert "remote_plugin" not in ea.error
+    assert "CODEX_IN_CLAUDE_" not in ea.error
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "-c model_provider=azure",  # the passthrough's motivating use case (#231)
+        "-c model_instructions=x",  # prefix of a denied key, not the key: exact-match only
+        "-c developer_instructions_extra=x",  # suffix lookalike stays allowed
+        "-c mcp_servers.x.instructions=y",  # a nested `instructions` segment is a different key
+    ],
+)
+def test_extra_args_instruction_denial_is_exact(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    assert config.extra_args().valid is True
