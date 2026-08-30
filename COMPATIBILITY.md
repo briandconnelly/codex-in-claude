@@ -929,6 +929,23 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   `model_provider`/`model_providers.*` (this knob's motivating use case) and other `model_*`
   keys still pass through. An opaque `--profile` can still set either key — the operator-trust
   boundary below, restated, not closed.
+- **The instruction-bearing keys are refused outright** (#555): `developer_instructions`,
+  `model_instructions_file`, its deprecated alias `experimental_instructions_file`, the
+  documented-as-reserved `instructions`, and `model_catalog_json` (a catalog entry carries
+  `base_instructions` / `model_messages.instructions_template` for its slug, so an operator
+  catalog redefines the selected model's built-in instructions). Every framing string this server sends (`prompts.py`,
+  including the untrusted-data clause) rides the **user** turn on stdin; `-c developer_instructions`
+  lands as the *first* developer-role message (verified with `codex debug prompt-input` on 0.151.0),
+  and `model_instructions_file` replaces the built-in instructions (documented — the prompt-input
+  renderer does not show base instructions, so that key is denied on its documented semantics).
+  `meta` records only that a valid passthrough was configured, never which keys, so such a run is
+  indistinguishable from a default one. These are exact normalized keys with the same lookalike
+  over-denial as `model`; a nested `instructions` segment (`mcp_servers.<id>.instructions`) is a
+  different key and still passes. Other config indirections were not exhaustively audited — a
+  key that can shape instructions and is not listed here is the same boundary, not a promise.
+  No first-class replacement exists yet — a per-call, meta-reported
+  parameter is tracked in #556. An opaque `--profile`, and at the default `inherit` isolation the
+  user's own `config.toml`, can still set them: the operator-trust boundary below, restated.
 - **`remote_plugin` is wholly plugin-owned in the passthrough.** Both `--enable remote_plugin` and
   `--disable remote_plugin`, and any `-c features.remote_plugin=…` (either spelling, since
   `--enable X` == `-c features.X=true`), are refused — the server manages this feature as a documented
