@@ -454,9 +454,10 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{_safe_token(key.strip())}' is refused: it would inject, "
-                        "replace, or redefine model instructions above this server's framing, "
-                        "with no record of that in the result envelope; a first-class, "
+                        f"config key '{_safe_token(key.strip())}' is refused: it could inject, "
+                        "replace, or redefine model instructions above this server's framing "
+                        "(or is reserved for that), with no record of it in the result "
+                        "envelope; a first-class, "
                         f"meta-reported parameter is tracked in {_INSTRUCTION_KEYS_TRACKING_ISSUE}"
                     ),
                 )
