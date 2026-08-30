@@ -127,6 +127,10 @@ def _review_meta() -> Meta:
         roots_source="client",
         model="a-model",
         reasoning_effort="high",
+        # Producible on review too (#556); left null here it would list among
+        # review's omitted keys and hide a review-specific delivery regression
+        # (Copilot, #559; the #400 convention).
+        developer_instructions=DeveloperInstructions.of("focus"),
         command_exit_code=0,
         session_id="sess-1",
         usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
@@ -159,6 +163,7 @@ def _review_commit_truncated_meta() -> Meta:
         roots_source="not_negotiated",
         model="a-model",
         reasoning_effort="high",
+        developer_instructions=DeveloperInstructions.of("focus"),
         command_exit_code=0,
         session_id="sess-1",
         usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),

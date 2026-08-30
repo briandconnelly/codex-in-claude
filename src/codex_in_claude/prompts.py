@@ -151,7 +151,9 @@ _CALLER_CLOSING = (
 # first cut, which required a `[-=_*#]` fence and let `+++`/`~~~`/em-dash/unfenced
 # variants through):
 #   * at a line start, ANY run of non-word characters (any fence symbol, or none at
-#     all) followed by the marker phrase;
+#     all) followed by the marker phrase — where a bare CR and the Unicode
+#     line/paragraph separators count as line starts too, because they render as
+#     line breaks while re.MULTILINE's `^` recognizes only \n (Copilot, #559);
 #   * anywhere, a fence of 2-64 common separator characters followed by the phrase.
 # All three server-authored lines are covered (BEGIN, END, "caller text follows"),
 # case-insensitively, with space/hyphen/underscore separators. Cost is bounded by
@@ -163,7 +165,7 @@ _CALLER_CLOSING = (
 # strings it guards so the two shapes cannot drift apart. Still a pattern match, not a
 # proof: it makes forgery harder, not impossible.
 _MARKER_PATTERN = re.compile(
-    r"(?:^[^\w\r\n]*+|[-=_*#+~<>«»—–―│\u2500-\u257f]{2,64}+\s*+)"  # noqa: RUF001 — deliberate fence chars
+    r"(?:(?:^|[\r\u2028\u2029])[^\w\r\n]*+|[-=_*#+~<>«»—–―│\u2500-\u257f]{2,64}+\s*+)"  # noqa: RUF001 — deliberate fence chars
     r"(?:(?:BEGIN|END)[\s_-]*+CALLER[\s_-]*+SUPPLIED[\s_-]*+TEXT"
     r"|CALLER[\s_-]*+TEXT[\s_-]*+FOLLOWS)",
     re.IGNORECASE | re.MULTILINE,

@@ -869,3 +869,46 @@ def test_worker_meta_fingerprint_hashes_the_normalized_text(tmp_path):
     # Whitespace-only normalizes to absent, not to a fingerprint of whitespace.
     spec["developer_instructions"] = "   "
     assert w._meta_from_spec(spec).developer_instructions is None
+
+
+def test_worker_meta_survives_a_tampered_fingerprint_source(tmp_path):
+    # Copilot review of #559: DeveloperInstructions.of raises on an over-cap or
+    # surrogate value, and main()'s crash path calls _meta_from_spec AGAIN — so a
+    # tampered spec value took down the crash sink and left no result.json.
+    from codex_in_claude import _worker as w
+
+    base = {
+        "kind": "codex_consult",
+        "cwd": str(tmp_path),
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": "inherit",
+        "timeout_seconds": 60,
+    }
+    for bad in ("x" * 5000, "lone \ud800", 42, ["list"]):
+        meta = w._meta_from_spec({**base, "developer_instructions": bad})
+        assert meta.developer_instructions is None, bad
+
+
+def test_worker_crash_still_writes_result_with_tampered_instructions(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_consult",
+        question="q",
+        tier="consult",
+        sandbox="read-only",
+        cwd=str(tmp_path),
+        developer_instructions="x" * 5000,  # tampered: over the cap the server enforces
+    )
+
+    async def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestration, "run_consult", boom)
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out["ok"] is False
+    assert out["error"]["code"] == "internal_error"

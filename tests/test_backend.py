@@ -280,3 +280,33 @@ def test_classify_failure_owns_the_shared_dash_c_for_an_instruction_run(clean_en
     )
     err = BACKEND.classify_failure(outcome, _di_request("focus"))
     assert err.code == "cli_contract_changed"
+
+
+def test_validate_request_refuses_instructions_on_delegate_kind():
+    # Copilot review of #559: the MCP surface excludes the parameter from delegate,
+    # but the adapter is a shared boundary — a direct caller could otherwise stage a
+    # steered file-editing run.
+    request = RunRequest(
+        kind="delegate",
+        prompt="t",
+        cwd=".",
+        timeout_seconds=10,
+        instructions_append="be agreeable",
+    )
+    rejected = BACKEND.validate_request(request)
+    assert rejected is not None
+    assert rejected.code == "invalid_arguments"
+    assert "delegate" in rejected.detail
+
+
+async def test_prepare_fails_closed_on_delegate_instructions(clean_env):
+    request = RunRequest(
+        kind="delegate",
+        prompt="t",
+        cwd=".",
+        timeout_seconds=10,
+        instructions_append="be agreeable",
+    )
+    with pytest.raises(ValueError, match="delegate"):
+        async with BACKEND.prepare(request):
+            pass  # pragma: no cover

@@ -923,3 +923,11 @@ def test_developer_instructions_refuses_control_characters(text, fragment):
 
 def test_developer_instructions_allows_tab_newline_cr():
     assert config.developer_instructions_unsafe_reason("a\tb\nc\r\nd") is None
+
+
+def test_developer_instructions_refuses_c1_controls():
+    # NEL (U+0085) and friends render as line breaks in some contexts but are neither
+    # C0 nor DEL; refuse the whole C1 range so no control character reaches the
+    # developer turn (Copilot review of #559, alongside the CR line-start fix).
+    reason = config.developer_instructions_unsafe_reason("a\x85b")
+    assert reason is not None and "control" in reason.lower()

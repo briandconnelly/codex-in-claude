@@ -2814,8 +2814,9 @@ async def _prepare_review(
 ) -> tuple[Meta, str, dict, str | None] | dict:
     """Shared preparation for codex_review_changes / codex_review_changes_async.
 
-    No input_too_large pre-check: the diff is gathered in the worker, which enforces
-    max_bytes (and bounds extra_context)."""
+    Caller-authored text (extra_context + developer_instructions) IS bounded here,
+    pre-spend, against MAX_INPUT_BYTES (#556); the diff is still gathered in the
+    worker, which enforces max_bytes (and re-bounds extra_context on its own)."""
     d = defaults
     # See _prepare_consult: exact-None precedence for the effort override.
     effort = reasoning_effort if reasoning_effort is not None else d.reasoning_effort

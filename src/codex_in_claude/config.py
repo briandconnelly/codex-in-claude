@@ -312,8 +312,8 @@ def developer_instructions_unsafe_reason(text: str) -> str | None:
     after validation, unclassified."""
     if "\x00" in text:
         return "contains a NUL byte"
-    if any((ch <= "\x1f" and ch not in "\t\n\r") or ch == "\x7f" for ch in text):
-        return "contains a control character (C0 other than tab/newline/CR, or DEL)"
+    if any((ch <= "\x1f" and ch not in "\t\n\r") or "\x7f" <= ch <= "\x9f" for ch in text):
+        return "contains a control character (C0 other than tab/newline/CR, DEL, or C1)"
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:

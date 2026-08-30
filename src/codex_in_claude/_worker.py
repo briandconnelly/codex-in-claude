@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, cast
 
 from pontonier.core import redaction
 from pontonier.core.jobs import ActivityRecorder
+from pydantic import ValidationError
 
 from codex_in_claude import config, delegate, orchestration
 from codex_in_claude.errors import make_error, serialize_error
@@ -65,6 +66,29 @@ def _hold_job_lock(job_dir: Path) -> None:
         _held_locks.append(fd)  # kept open == lock held until this process exits
 
 
+def _developer_instructions_fingerprint(raw: object) -> DeveloperInstructions | None:
+    """The delivered meta's audit fingerprint, rebuilt from the persisted spec.
+
+    Normalize BEFORE hashing (Opus review of #556): the backend re-normalizes what it
+    sends, so a hand-edited padded spec value must not attest different bytes than the
+    run received; server-produced specs are already normalized, so this is identity
+    for them. NON-THROWING by contract (Copilot, #559): `DeveloperInstructions.of`
+    raises on an over-cap or surrogate value, and `main()`'s crash path calls
+    `_meta_from_spec` AGAIN to build the crash envelope — a tampered spec value must
+    degrade to an absent attestation (the run itself fails closed at the adapter and
+    that failure envelope tells the story), never take down the crash sink and leave
+    no result.json at all."""
+    if not isinstance(raw, str):
+        return None
+    text = config.normalize_developer_instructions(raw)
+    if text is None:
+        return None
+    try:
+        return DeveloperInstructions.of(text)
+    except (ValidationError, UnicodeEncodeError, ValueError):
+        return None
+
+
 def _meta_from_spec(spec: dict) -> Meta:
     cwd = spec["cwd"]
     source = spec.get("workspace_source")
@@ -86,14 +110,8 @@ def _meta_from_spec(spec: dict) -> Meta:
         # spec stores the NORMALIZED text (this worker needs it to build the run); the
         # delivered meta carries only {sha256, bytes}. Same .get() idiom: absent from
         # a pre-#556 spec and from any run without the parameter.
-        developer_instructions=(
-            # Normalize BEFORE hashing (Opus review): the backend re-normalizes what
-            # it sends, so a hand-edited padded spec value must not attest different
-            # bytes than the run received; server-produced specs are already
-            # normalized, so this is identity for them.
-            DeveloperInstructions.of(_di)
-            if (_di := config.normalize_developer_instructions(spec.get("developer_instructions")))
-            else None
+        developer_instructions=_developer_instructions_fingerprint(
+            spec.get("developer_instructions")
         ),
         # The roots state the ORIGINATING call saw (#393). It reaches a caller only via
         # this spec round-trip: a delivered success/crash envelope is built here, not

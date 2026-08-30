@@ -55,6 +55,19 @@ class CodexBackend:
         # adapter callers, on the SAME helpers, so the two cannot drift. The caller's
         # text is never echoed into the detail.
         raw = request.instructions_append
+        if raw is not None and request.kind not in ("consult", "review_changes"):
+            # The MCP surface excludes the parameter from delegate on purpose —
+            # delegate edits files, so a caller stance would widen what an untrusted
+            # workspace can steer — and the adapter is a shared boundary a direct
+            # caller can reach without that surface (Copilot, #559). Fail closed.
+            return ClassifiedFailure(
+                code="invalid_arguments",
+                detail=(
+                    f"instructions_append is not accepted for kind {request.kind!r}: "
+                    "only consult and review_changes carry a caller developer turn "
+                    "(delegate edits files)."
+                ),
+            )
         if raw is not None:
             text = config.normalize_developer_instructions(raw)
             if text is None:

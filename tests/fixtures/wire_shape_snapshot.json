@@ -100,6 +100,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -165,6 +169,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -306,6 +314,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -371,6 +383,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -448,7 +464,6 @@
     ],
     "review": [
       "commit",
-      "developer_instructions",
       "idempotency_replayed",
       "job_kind",
       "rate_limit",
@@ -457,7 +472,6 @@
     ],
     "review_commit_truncated": [
       "base",
-      "developer_instructions",
       "idempotency_replayed",
       "job_kind",
       "paths",
