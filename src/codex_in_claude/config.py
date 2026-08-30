@@ -304,10 +304,16 @@ def developer_instructions_unsafe_reason(text: str) -> str | None:
     A NUL is refused as instruction CONTENT policy, not an argv hazard: the TOML-string
     encoding in the builder would carry it as an escape and deliver a control character
     to the model's instruction layer (see the encoder note in codex.build_exec_command).
-    A lone surrogate is the real transport hazard: it cannot be UTF-8-encoded, so
-    Popen's argv encoding would raise after validation, unclassified."""
+    Other C0 controls (except tab/LF/CR) and DEL are refused for the same reason plus
+    a transport one: json.dumps does not escape U+007F, which TOML 1.0 forbids in a
+    basic string — codex 0.151.0 tolerates it, but a stricter upstream parser would
+    turn it into a config-load failure (Opus review). A lone surrogate is the hard
+    transport hazard: it cannot be UTF-8-encoded, so Popen's argv encoding would raise
+    after validation, unclassified."""
     if "\x00" in text:
         return "contains a NUL byte"
+    if any((ch <= "\x1f" and ch not in "\t\n\r") or ch == "\x7f" for ch in text):
+        return "contains a control character (C0 other than tab/newline/CR, or DEL)"
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:

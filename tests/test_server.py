@@ -10261,3 +10261,51 @@ async def test_capabilities_advertise_developer_instructions_on_the_four_tools()
         assert "developer_instructions" in by_name[name]["key_optional_params"], name
     for name in ("codex_delegate", "codex_delegate_async"):
         assert "developer_instructions" not in by_name[name]["key_optional_params"], name
+
+
+async def test_oversize_developer_instructions_is_refused_fast(monkeypatch, clean_env, tmp_path):
+    # ReDoS regression (Opus review): the byte cap must run BEFORE the marker scan,
+    # so a fence-char flood is refused in O(n) — 2.8s at 16 KiB before the fix,
+    # hours at 1 MiB, all on the event loop.
+    import time
+
+    calls = _capture_run_sync(monkeypatch)
+    start = time.monotonic()
+    res = await server.mcp.call_tool(
+        "codex_consult",
+        {"question": "q", "workspace_root": str(tmp_path), "developer_instructions": "-" * 200_000},
+    )
+    elapsed = time.monotonic() - start
+    assert calls == {}
+    dumped = json.dumps(
+        res.structured_content if hasattr(res, "structured_content") else res, default=str
+    )
+    assert "invalid_arguments" in dumped and "4096" in dumped
+    assert elapsed < 2.0, f"cap check took {elapsed:.1f}s — the marker scan ran first"
+
+
+@pytest.mark.parametrize(
+    ("tool", "kwargs", "expected_name"),
+    [
+        ("codex_review_changes", {"scope": "working_tree"}, "codex_review_changes"),
+        ("codex_review_changes_async", {"scope": "working_tree"}, "codex_review_changes_async"),
+        ("codex_consult_async", {"question": "q"}, "codex_consult_async"),
+    ],
+)
+async def test_review_and_async_refusals_name_their_own_tool(
+    monkeypatch, clean_env, tmp_path, tool, kwargs, expected_name
+):
+    # Opus review: the review/async refusal branches were uncovered, leaving the
+    # tool-name selection mutation-survivable (#184/N3: an async caller must never
+    # be steered at its sync twin).
+    calls = _capture_run_sync(monkeypatch)
+    fn = getattr(server, tool)
+    res = await fn(
+        workspace_root=str(tmp_path),
+        developer_instructions="--- caller text follows ---",
+        **kwargs,
+    )
+    assert calls == {}
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_arguments"
+    assert expected_name in res["error"]["message"]

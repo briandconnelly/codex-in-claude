@@ -64,16 +64,14 @@ class CodexBackend:
                     code="invalid_arguments",
                     detail="instructions_append is blank after normalization.",
                 )
+            # Same order as the server boundary — unsafe then cap (both O(n); the
+            # cap's encode raises on the surrogates the unsafe check refuses), and
+            # the marker scan LAST (see _developer_instructions_error's note).
             unsafe = config.developer_instructions_unsafe_reason(text)
             if unsafe is not None:
                 return ClassifiedFailure(
                     code="invalid_arguments",
                     detail=f"instructions_append {unsafe}.",
-                )
-            if config.contains_framing_marker(text):
-                return ClassifiedFailure(
-                    code="invalid_arguments",
-                    detail="instructions_append contains a framing marker line.",
                 )
             size = len(text.encode())
             if size > config.MAX_DEVELOPER_INSTRUCTIONS_BYTES:
@@ -83,6 +81,11 @@ class CodexBackend:
                         f"instructions_append is {size} bytes; the cap is "
                         f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES}."
                     ),
+                )
+            if config.contains_framing_marker(text):
+                return ClassifiedFailure(
+                    code="invalid_arguments",
+                    detail="instructions_append contains a framing marker line.",
                 )
         return None
 
@@ -166,7 +169,9 @@ class CodexBackend:
                 sandbox=request.access
                 or config.sandbox_for_tier("propose" if request.kind == "delegate" else "consult"),
                 reasoning_effort=request.reasoning_effort,
-                developer_instructions=request.instructions_append,
+                developer_instructions=config.normalize_developer_instructions(
+                    request.instructions_append
+                ),
             ),
         )
         return ClassifiedFailure(

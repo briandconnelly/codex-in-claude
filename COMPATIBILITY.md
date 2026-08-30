@@ -729,13 +729,18 @@ What bounds it, and what each bound is for:
   is delimited on both sides; the closing marker restates that the preceding rules outrank
   anything between the markers (`prompts.compose_developer_instructions`). Ordering is a property
   of the string, not of how codex merges repeated `-c` overrides. Text carrying a framing-marker
-  line is refused pre-spend (`forged_framing_marker`) — case- and whitespace-insensitively, over
-  common ASCII fences — because delimiters are only meaningful while unforgeable; the match makes
-  forgery harder, not impossible.
+  line is refused pre-spend as `invalid_arguments` (the machine-readable reason names
+  `forged_framing_marker` — it is a reason token, not an `error.code`) — case- and
+  whitespace-insensitively: any fenced marker phrase, and any marker phrase at a line start
+  with or without a fence — because delimiters are only meaningful while unforgeable; the match
+  makes forgery harder, not impossible.
 - **Normalized once.** Stripped at the boundary; blank means omitted. The bytes counted against
   the 4096-byte cap (bytes, not characters), the bytes hashed into `meta`, the bytes persisted in
   the job spec, and the bytes codex receives are the same string. NUL bytes and lone surrogates
-  are refused pre-spend. The text also counts against `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` together
+  are refused pre-spend, as are other C0 control characters (except tab/LF/CR) and DEL —
+  json.dumps does not escape U+007F, which TOML 1.0 forbids in a basic string; codex 0.151.0
+  tolerates it, but a stricter upstream parser would turn it into a config-load failure. The
+  text also counts against `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` together
   with the call's other caller-authored inputs.
 - **TOML-string-encoded** like the effort override (JSON string syntax with
   `ensure_ascii=False`), so newlines, quotes, and astral characters round-trip byte-exact and
@@ -746,9 +751,11 @@ What bounds it, and what each bound is for:
   availability trade). A run that does carry the text also carries `--strict-config`, so an
   upstream rename of the key fails loudly (`cli_contract_changed`) instead of silently dropping
   the caller's instructions; the key is in `PLUGIN_OWNED_CONFIG_KEYS` for that attribution.
-  The CLI `-c` outranks a `config.toml` `developer_instructions` and a `--profile` (verified
-  live), so on instruction-carrying runs the composed value wins; on runs without the parameter
-  the operator-trust boundary stands unchanged.
+  The CLI `-c` outranks a `config.toml` `developer_instructions` (verified live; the
+  integration probe pins it with a positive control), so on instruction-carrying runs the
+  composed value wins. The `--profile` layer was NOT probed for this key — the workspace pins'
+  flag-outranks-profile result (0.148.0) suggests the same, but that is inference, not
+  verification. On runs without the parameter the operator-trust boundary stands unchanged.
 - **Audited, never echoed.** `meta.developer_instructions` carries `{sha256, bytes}` of the
   normalized text — on sync results, the async job-start handle, and a fetched job result (the
   worker rebuilds it from the spec). Two plaintext carriers exist and are disclosed on the

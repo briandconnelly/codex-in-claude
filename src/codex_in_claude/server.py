@@ -1254,10 +1254,24 @@ def _developer_instructions_error(text: str | None, meta: Meta, tool_name: str) 
         return None
     reason: str | None = None
     repair: str | None = None
-    unsafe = config.developer_instructions_unsafe_reason(text)
-    if unsafe is not None:
+    # ORDER IS LOAD-BEARING (Opus review): the marker scan runs LAST, after two O(n)
+    # checks bound it. The unsafe check comes before the cap because the cap's own
+    # byte count (str.encode) raises on the lone surrogates the unsafe check refuses;
+    # the first cut ran the marker scan first, and its unbounded backtracking
+    # measured ~407s of event-loop CPU at the default input budget.
+    if (unsafe := config.developer_instructions_unsafe_reason(text)) is not None:
         reason = f"{unsafe}, which cannot be carried to codex."
-        repair = "Remove NUL bytes and unpaired surrogates from developer_instructions, then retry."
+        repair = (
+            "Remove NUL bytes, other control characters, and unpaired surrogates "
+            "from developer_instructions, then retry."
+        )
+    elif (size := len(text.encode("utf-8"))) > config.MAX_DEVELOPER_INSTRUCTIONS_BYTES:
+        reason = (
+            f"is {size} bytes; the cap is "
+            f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES} bytes (measured in bytes, "
+            "not characters)."
+        )
+        repair = "Shorten developer_instructions to a stance or focus directive, then retry."
     elif config.contains_framing_marker(text):
         reason = (
             "contains one of the server's caller-text framing marker lines "
@@ -1265,18 +1279,9 @@ def _developer_instructions_error(text: str | None, meta: Meta, tool_name: str) 
         )
         repair = (
             "Remove framing-marker lines — 'BEGIN/END caller-supplied text' or "
-            "'caller text follows' after a fence such as ---, ===, or *** — from "
+            "'caller text follows', fenced or at a line start — from "
             "developer_instructions, then retry."
         )
-    else:
-        size = len(text.encode("utf-8"))
-        if size > config.MAX_DEVELOPER_INSTRUCTIONS_BYTES:
-            reason = (
-                f"is {size} bytes; the cap is "
-                f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES} bytes (measured in bytes, "
-                "not characters)."
-            )
-            repair = "Shorten developer_instructions to a stance or focus directive, then retry."
     if reason is None:
         return None
     return serialize_error(
@@ -3120,7 +3125,8 @@ async def codex_consult(
     (absolute) for a repo-grounded question; omit it for pure Q&A. Returns a result
     envelope.
 
-    Data egress: this sends your `question` and `extra_context` to OpenAI via the
+    Data egress: this sends your `question`, `extra_context`, and
+    `developer_instructions` to OpenAI via the
     codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
     your MCP roots, or the server's cwd as a fallback) — that selects where it works,
     not what it can read.
@@ -3231,7 +3237,8 @@ async def codex_review_changes(
     findings — treat them as unvalidated claims you verify yourself before acting.
 
     Data egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is
-    secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted).
+    secret-redacted (best-effort), but your `extra_context` and
+    `developer_instructions` are sent raw (unredacted).
     Codex can read files outside the workspace — up to everything the OS user running it can
     read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
     workspace is a read boundary. Codex auto-loads the resolved workspace's
@@ -4024,7 +4031,8 @@ async def codex_consult_async(
     you never poll). Poll `codex_job_status`; read/consume the consult envelope with
     `codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.
 
-    Data egress: same as `codex_consult` — sends your `question` and `extra_context`
+    Data egress: same as `codex_consult` — sends your `question`, `extra_context`, and
+    `developer_instructions`
     (raw, unredacted) to OpenAI via the codex CLI. Its resolved working directory
     (`workspace_root`, your MCP roots, or the server cwd) selects where Codex works, not
     what it can read.
@@ -4107,7 +4115,8 @@ async def codex_review_changes_async(
     `workspace_root` (absolute).
 
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
-    your raw (unredacted) `extra_context` to OpenAI via the codex CLI.
+    your raw (unredacted) `extra_context` and `developer_instructions` to OpenAI via
+    the codex CLI.
     Codex can read files outside the workspace — up to everything the OS user running it can
     read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
     workspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a

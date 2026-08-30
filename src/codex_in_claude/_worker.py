@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, cast
 from pontonier.core import redaction
 from pontonier.core.jobs import ActivityRecorder
 
-from codex_in_claude import delegate, orchestration
+from codex_in_claude import config, delegate, orchestration
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
     DeveloperInstructions,
@@ -87,8 +87,12 @@ def _meta_from_spec(spec: dict) -> Meta:
         # delivered meta carries only {sha256, bytes}. Same .get() idiom: absent from
         # a pre-#556 spec and from any run without the parameter.
         developer_instructions=(
-            DeveloperInstructions.of(spec["developer_instructions"])
-            if spec.get("developer_instructions")
+            # Normalize BEFORE hashing (Opus review): the backend re-normalizes what
+            # it sends, so a hand-edited padded spec value must not attest different
+            # bytes than the run received; server-produced specs are already
+            # normalized, so this is identity for them.
+            DeveloperInstructions.of(_di)
+            if (_di := config.normalize_developer_instructions(spec.get("developer_instructions")))
             else None
         ),
         # The roots state the ORIGINATING call saw (#393). It reaches a caller only via

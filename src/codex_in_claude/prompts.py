@@ -145,17 +145,28 @@ _CALLER_CLOSING = (
 
 # Marker lines a caller must not be able to place in its own text: text carrying its
 # own END marker could stage a fake close, add lines that read as server-authored, and
-# reopen a section. Detection is deliberately loose (case- and whitespace-insensitive;
-# any fence of `-`, `=`, `_`, `*`, or `#`; a space, hyphen, or nothing between CALLER
-# and SUPPLIED) because a near-miss forgery reads the same to a model as an exact one,
-# and the cost of a false positive is one clear pre-spend error. All three
-# server-authored lines are covered: BEGIN, END, and the inner "caller text follows"
-# line. It is a pattern match over common ASCII fences, not a proof: it makes forgery
-# harder, not impossible. Kept NEXT TO the marker strings it guards so the two shapes
-# cannot drift apart.
+# reopen a section. Detection is deliberately loose — a near-miss forgery reads the
+# same to a model as an exact one, and the cost of a false positive is one clear
+# pre-spend error. Two alternatives cover the realistic renderings (Opus review of the
+# first cut, which required a `[-=_*#]` fence and let `+++`/`~~~`/em-dash/unfenced
+# variants through):
+#   * at a line start, ANY run of non-word characters (any fence symbol, or none at
+#     all) followed by the marker phrase;
+#   * anywhere, a fence of 2-64 common separator characters followed by the phrase.
+# All three server-authored lines are covered (BEGIN, END, "caller text follows"),
+# case-insensitively, with space/hyphen/underscore separators. Cost is bounded by
+# construction, and it matters: the byte cap runs BEFORE this scan at every boundary
+# (the first cut ran the scan first, and its unbounded backtracking was measured
+# quadratic — 407s of event-loop CPU at the 200 KB default input budget). The
+# possessive quantifiers (Python 3.11+) plus the {2,64} fence bound keep the scan
+# linear; tests pin a 200 KB fence flood under a second. Kept NEXT TO the marker
+# strings it guards so the two shapes cannot drift apart. Still a pattern match, not a
+# proof: it makes forgery harder, not impossible.
 _MARKER_PATTERN = re.compile(
-    r"[-=_*#]{2,}\s*(?:(?:BEGIN|END)\s+CALLER[\s-]*SUPPLIED\s+TEXT|CALLER\s+TEXT\s+FOLLOWS)",
-    re.IGNORECASE,
+    r"(?:^[^\w\r\n]*+|[-=_*#+~<>«»—–―│\u2500-\u257f]{2,64}+\s*+)"  # noqa: RUF001 — deliberate fence chars
+    r"(?:(?:BEGIN|END)[\s_-]*+CALLER[\s_-]*+SUPPLIED[\s_-]*+TEXT"
+    r"|CALLER[\s_-]*+TEXT[\s_-]*+FOLLOWS)",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 

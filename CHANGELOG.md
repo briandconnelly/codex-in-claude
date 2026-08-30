@@ -15,8 +15,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   message, ahead of its own developer messages (pinned by new zero-spend
   `codex debug prompt-input` integration probes, with a negative control and a
   config-file-precedence probe). Normalized once (stripped; blank = omitted); refused pre-spend
-  over 4096 bytes, on NUL/lone-surrogate content, or when the text carries a framing-marker line
-  (`forged_framing_marker`); counted against `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` with the call's
+  over 4096 bytes, on control characters (C0 except tab/LF/CR, DEL, NUL) or lone surrogates,
+  or when the text carries a framing-marker line (as `invalid_arguments` with a reason naming
+  `forged_framing_marker`); counted against `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` with the call's
   other caller-authored inputs. Emitted only when text is present, so the common run's argv is
   byte-identical and never arms `--strict-config`; an instruction-carrying run does arm it, and
   the key joins `PLUGIN_OWNED_CONFIG_KEYS` so an upstream rename fails loud. `meta` gains a
@@ -26,9 +27,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `codex_delegate`/`codex_delegate_async`. Ownership of a rejected bare `-c` in failure
   classification now derives from the run's emitted plugin key set, not the effort override
   alone. New `developer_instructions` parameter contract in `codex://params`;
-  `tools/list` and catalog byte budgets re-measured (+2,725 B). `fingerprint` `schema-84` →
+  `tools/list` and catalog byte budgets re-measured (+2,842 B). `fingerprint` `schema-84` →
   `schema-85`; persisted `RESULT_FORMAT` 10 → 11 (new `Meta` field; verified the serialized
-  snapshot view moved). Non-breaking (additive).
+  snapshot view moved). Non-breaking (additive). An independent adversarial review (Opus) of the first cut found and this entry's shape reflects: the byte cap now runs before the framing-marker scan, whose first-cut pattern backtracked quadratically (~407s of event-loop CPU at the 200KB default input budget) and missed `+++`/`~~~`/em-dash/unfenced forgeries — the scan is now linear by construction (possessive quantifiers + a bounded fence run) and phrase-at-line-start suffices; the shipping classification path now passes the run's developer-instructions key to strict-config attribution (a rejection of the plugin's own key was previously blamed on the user's config.toml); and the job worker's rebuilt fingerprint hashes the normalized text.
 - **pontonier 0.6.0 → 0.7.0**: the caller text crosses the backend adapter on the new
   first-class `RunRequest.instructions_append` field (pontonier#12) instead of riding
   `extra_args`, which the protocol reserves for operator descriptors;

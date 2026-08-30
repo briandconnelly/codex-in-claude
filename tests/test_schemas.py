@@ -870,7 +870,7 @@ def _wire_catalog_bytes() -> int:
 # Measured again 2026-08-30 (#556, `developer_instructions` on the four consult/review
 # tools — one compressed summary each; the untrusted/no-tools/plaintext-carrier facts are
 # first-read security disclosures that cannot wait for the codex://params fetch):
-# 94,147 -> 96,872 bytes (+2,725 B) — over cap; cap raised to the next 1,000 above the
+# 94,147 -> 96,989 bytes (+2,842 B) — over cap; cap raised to the next 1,000 above the
 # measured value.
 CATALOG_BYTE_CAP = 97_000
 

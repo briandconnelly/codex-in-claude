@@ -847,3 +847,25 @@ def test_worker_dispatch_without_key_passes_none(tmp_path, monkeypatch):
     assert _worker.main([str(jd)]) == 0
     out = json.loads((jd / "result.json").read_text())
     assert out.get("ok") is True, out
+
+
+def test_worker_meta_fingerprint_hashes_the_normalized_text(tmp_path):
+    # Opus review: a hand-edited spec of "  x  " must not attest sha256("  x  ")
+    # while the backend sends the normalized "x" — the fingerprint describes the
+    # bytes SENT.
+    from codex_in_claude import _worker as w
+    from codex_in_claude.schemas import DeveloperInstructions
+
+    spec = {
+        "kind": "codex_consult",
+        "cwd": str(tmp_path),
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": "inherit",
+        "timeout_seconds": 60,
+        "developer_instructions": "  focus  ",
+    }
+    assert w._meta_from_spec(spec).developer_instructions == DeveloperInstructions.of("focus")
+    # Whitespace-only normalizes to absent, not to a fingerprint of whitespace.
+    spec["developer_instructions"] = "   "
+    assert w._meta_from_spec(spec).developer_instructions is None

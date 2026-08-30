@@ -152,7 +152,14 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
             # The `-c` keys THIS run pinned, so a config-value rejection naming one is
             # the plugin's own argv and any other is the user's/operator's (#550).
             plugin_config_keys=codex.plugin_config_keys_for(
-                sandbox=meta.sandbox, reasoning_effort=meta.reasoning_effort
+                sandbox=meta.sandbox,
+                reasoning_effort=meta.reasoning_effort,
+                # Presence is the signal: meta carries the fingerprint iff THIS run
+                # sent the key, and the helper only tests `is not None`. Without this
+                # the shipping path never learned the run pinned it, and a
+                # strict-config rejection of the plugin's own key was blamed on the
+                # user's config.toml (Opus review of #556).
+                developer_instructions="sent" if meta.developer_instructions else None,
             ),
         )
         return serialize_error(ErrorResult(error=err, meta=meta))
