@@ -25,6 +25,13 @@ member's attempt may be visible to the other before that other member's attempt 
    the synthesis that independence rests on Codex having had no pointer to it, not on a read
    boundary.
 
+`developer_instructions` (on consult; delegate does not accept it) is part of the shared task
+framing, and a stance leaks more than a question does: "focus on whether the lock-free approach
+holds" tells Codex which approach Claude is taking, placed above the task framing itself. In this
+pattern, omit the parameter, or restrict it to neutral output-shape guidance fixed before either
+attempt begins. A stance that hints at Claude's approach forfeits independence the same way
+supplying the draft does — reclassify the call as ordinary critique.
+
 If only the sync tool is available, finalize Claude's attempt before making the call. The reverse
 order cannot be repaired by intent: once Codex's answer is in context, everything drafted afterward
 is conditioned on it, and "I did not condition on it" is neither enforceable nor observable.
