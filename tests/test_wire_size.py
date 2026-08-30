@@ -187,8 +187,8 @@ from codex_in_claude.server import mcp
 # says which values fail, not that the server refuses rather than silently repairs them.
 # Measured again 2026-08-30 (#556: `developer_instructions` advertised on codex_consult,
 # codex_consult_async, codex_review_changes, and codex_review_changes_async — one compressed
-# ~600-byte summary each, the codex://params resource carrying the full contract): 96,787
-# bytes (+2,657, +2.8%) — budget raised to the next 500 above the measured value. Spent
+# ~600-byte summary each, the codex://params resource carrying the full contract): 96,855
+# bytes (+2,725, +2.9%) — budget raised to the next 500 above the measured value. Spent
 # deliberately: a parameter that admits caller text into Codex's developer turn is a
 # first-read security disclosure (untrusted, no-tools, instructed-not-compelled, the two
 # plaintext carriers), and none of those facts can wait for the resource fetch.
@@ -204,7 +204,7 @@ TOOLS_LIST_BYTE_BUDGET = 97_500
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 96_787
+TOOLS_LIST_BYTE_TARGET = 96_855
 
 
 def _budget_failure_message(measured: int) -> str:

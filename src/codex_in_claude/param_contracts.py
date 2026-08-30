@@ -163,7 +163,7 @@ PARAMETER_CONTRACTS: dict[str, ParamContract] = {
             "this server's always-leading framing; omit for no developer override. "
             "UNTRUSTED — never build it from workspace content; grants no tools; Codex "
             "is instructed, not compelled, to keep verdicts its own. Rides the codex "
-            "command line and the background-job record on disk (no secrets); meta "
+            "command line and the background-job record on disk — never put secrets here; meta "
             "reports only {sha256, bytes}. Stripped; blank = omitted; max "
             f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES} bytes. Full contract: "
             "codex://params."

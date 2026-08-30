@@ -26,7 +26,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `codex_delegate`/`codex_delegate_async`. Ownership of a rejected bare `-c` in failure
   classification now derives from the run's emitted plugin key set, not the effort override
   alone. New `developer_instructions` parameter contract in `codex://params`;
-  `tools/list` and catalog byte budgets re-measured (+2,657 B). `fingerprint` `schema-84` →
+  `tools/list` and catalog byte budgets re-measured (+2,725 B). `fingerprint` `schema-84` →
   `schema-85`; persisted `RESULT_FORMAT` 10 → 11 (new `Meta` field; verified the serialized
   snapshot view moved). Non-breaking (additive).
 - **pontonier 0.6.0 → 0.7.0**: the caller text crosses the backend adapter on the new
