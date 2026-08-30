@@ -212,8 +212,8 @@ Facts to weigh before any active call:
   reference); the draft was persisted, at any time before the job finished, inside the resolved
   workspace, the seeded baseline, or a path passed to any Codex call for this job; Codex's answer
   entered context before Claude's attempt was finalized; or Codex's returned output contains
-  distinctive content of the draft. Judge these from your own tool calls and the returned output; the result contract exposes
-  no read audit, so they are the only observable evidence.
+  distinctive content of the draft. Judge these from your own tool calls and the returned output;
+  the result contract exposes no read audit, so they are the only observable evidence.
 - **Independence — disclosure:** When the draft was persisted anywhere on disk while the Codex job
   ran, state in the synthesis that independence rests on Codex having had no pointer to the draft,
   not on a read boundary.
