@@ -262,3 +262,23 @@ async def test_pair_blank_input_parity(
     assert asyncr["error"]["repair"]["tool"] == async_tool
     assert sync["error"]["message"].startswith(f"{sync_tool}:")
     assert asyncr["error"]["message"].startswith(f"{async_tool}:")
+
+
+async def test_consult_pair_developer_instructions_parity(capture_tail, clean_env, tmp_path):
+    # #556: the pair must build identical specs (and hence identical idempotency
+    # identities) for the same developer_instructions, normalized the same way.
+    kwargs = dict(workspace_root=str(tmp_path), developer_instructions="  focus on locking  ")
+    await server.codex_consult("q", timeout_seconds=60, **kwargs)
+    await server.codex_consult_async("q", **kwargs)
+    assert capture_tail["sync"]["spec"]["developer_instructions"] == "focus on locking"
+    _specs_equal_modulo_timeout(capture_tail["sync"]["spec"], capture_tail["async"]["spec"])
+
+
+async def test_review_pair_developer_instructions_parity(capture_tail, clean_env, tmp_path):
+    kwargs = dict(
+        scope="working_tree", workspace_root=str(tmp_path), developer_instructions="focus"
+    )
+    await server.codex_review_changes(timeout_seconds=60, **kwargs)
+    await server.codex_review_changes_async(**kwargs)
+    assert capture_tail["sync"]["spec"]["developer_instructions"] == "focus"
+    _specs_equal_modulo_timeout(capture_tail["sync"]["spec"], capture_tail["async"]["spec"])

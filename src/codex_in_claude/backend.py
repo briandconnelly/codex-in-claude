@@ -51,6 +51,55 @@ class CodexBackend:
                     code="invalid_reasoning_effort",
                     detail=f"the requested reasoning_effort {reason}.",
                 )
+        # Mirror the server's developer-instructions boundary (#556) for direct
+        # adapter callers, on the SAME helpers, so the two cannot drift. The caller's
+        # text is never echoed into the detail.
+        raw = request.instructions_append
+        if raw is not None and request.kind not in ("consult", "review_changes"):
+            # The MCP surface excludes the parameter from delegate on purpose —
+            # delegate edits files, so a caller stance would widen what an untrusted
+            # workspace can steer — and the adapter is a shared boundary a direct
+            # caller can reach without that surface (Copilot, #559). Fail closed.
+            return ClassifiedFailure(
+                code="invalid_arguments",
+                detail=(
+                    f"instructions_append is not accepted for kind {request.kind!r}: "
+                    "only consult and review_changes carry a caller developer turn "
+                    "(delegate edits files)."
+                ),
+            )
+        if raw is not None:
+            text = config.normalize_developer_instructions(raw)
+            if text is None:
+                # A caller that believed it sent instructions must not get — and pay
+                # for — a silent default run.
+                return ClassifiedFailure(
+                    code="invalid_arguments",
+                    detail="instructions_append is blank after normalization.",
+                )
+            # Same order as the server boundary — unsafe then cap (both O(n); the
+            # cap's encode raises on the surrogates the unsafe check refuses), and
+            # the marker scan LAST (see _developer_instructions_error's note).
+            unsafe = config.developer_instructions_unsafe_reason(text)
+            if unsafe is not None:
+                return ClassifiedFailure(
+                    code="invalid_arguments",
+                    detail=f"instructions_append {unsafe}.",
+                )
+            size = len(text.encode())
+            if size > config.MAX_DEVELOPER_INSTRUCTIONS_BYTES:
+                return ClassifiedFailure(
+                    code="invalid_arguments",
+                    detail=(
+                        f"instructions_append is {size} bytes; the cap is "
+                        f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES}."
+                    ),
+                )
+            if config.contains_framing_marker(text):
+                return ClassifiedFailure(
+                    code="invalid_arguments",
+                    detail="instructions_append contains a framing marker line.",
+                )
         return None
 
     @contextlib.asynccontextmanager
@@ -58,6 +107,12 @@ class CodexBackend:
         """Stage exactly what `codex.run_codex_exec` stages: a temp dir holding the
         --output-last-message target and the optional --output-schema file, argv
         from the shared builder, prompt over stdin."""
+        # Fail closed for a direct caller that skipped validate_request: a degraded
+        # or unframed run must never be staged. A ValueError here is deliberately NOT
+        # a ClassifiedFailure path — production refuses at the server boundary before
+        # a request exists, and the worker crash sink reports this as internal_error.
+        if (invalid := self.validate_request(request)) is not None:
+            raise ValueError(invalid.detail)
         with tempfile.TemporaryDirectory(prefix="codex-in-claude-") as tmp:
             last_msg_path = str(Path(tmp) / "last-message.txt")
             schema_path: str | None = None
@@ -78,6 +133,9 @@ class CodexBackend:
                 # repo-grounded and keep the check. Backend policy derived from
                 # `kind` — the protocol deliberately does not carry this flag.
                 skip_git_repo_check=request.kind == "consult",
+                developer_instructions=config.normalize_developer_instructions(
+                    request.instructions_append
+                ),
                 extra_args=config.extra_args().tokens,
                 flag_support=preflight.flag_support(),
             )
@@ -124,6 +182,9 @@ class CodexBackend:
                 sandbox=request.access
                 or config.sandbox_for_tier("propose" if request.kind == "delegate" else "consult"),
                 reasoning_effort=request.reasoning_effort,
+                developer_instructions=config.normalize_developer_instructions(
+                    request.instructions_append
+                ),
             ),
         )
         return ClassifiedFailure(

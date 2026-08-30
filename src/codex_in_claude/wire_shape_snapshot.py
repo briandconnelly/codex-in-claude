@@ -42,6 +42,7 @@ from codex_in_claude.schemas import (
     ContextSummary,
     Coverage,
     DelegateResult,
+    DeveloperInstructions,
     Meta,
     RawResponse,
     ReviewResult,
@@ -103,6 +104,9 @@ def _consult_meta() -> Meta:
         roots_source="client",
         model="a-model",
         reasoning_effort="high",
+        # A run prepared with the #556 parameter: the fingerprint (never the text)
+        # must survive slimming and replay (#400: populate every producible optional).
+        developer_instructions=DeveloperInstructions.of("focus on locking"),
         # 0 on purpose: a POPULATED FALSY optional. `slim_meta` keys on `is None`, never
         # falsiness, and this extends that guarantee from the unit test to the real
         # chokepoint. Do not "fix" it to a non-zero exit code.
@@ -123,6 +127,10 @@ def _review_meta() -> Meta:
         roots_source="client",
         model="a-model",
         reasoning_effort="high",
+        # Producible on review too (#556); left null here it would list among
+        # review's omitted keys and hide a review-specific delivery regression
+        # (Copilot, #559; the #400 convention).
+        developer_instructions=DeveloperInstructions.of("focus"),
         command_exit_code=0,
         session_id="sess-1",
         usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
@@ -155,6 +163,7 @@ def _review_commit_truncated_meta() -> Meta:
         roots_source="not_negotiated",
         model="a-model",
         reasoning_effort="high",
+        developer_instructions=DeveloperInstructions.of("focus"),
         command_exit_code=0,
         session_id="sess-1",
         usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),

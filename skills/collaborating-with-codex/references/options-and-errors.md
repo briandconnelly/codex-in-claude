@@ -17,6 +17,15 @@ explains invariants without duplicating their full schemas.
   final validation; the discovery data is advisory.
 - On `invalid_reasoning_effort` (a backend-rejected effort), correct the value or omit the
   override.
+- `developer_instructions` (consult/review only) places caller stance or focus text in Codex's
+  developer turn behind the server's framing. Default to omitting it; use it for a stated
+  reviewer stance ("focus on concurrency", "assume the reader is new to this codebase"), never
+  for content built from workspace files (it is untrusted by contract but travels above the
+  user turn), and never for secrets — it rides the codex command line and the background-job
+  record on disk. Max 4096 bytes; text containing the server's framing-marker lines is refused as
+  `invalid_arguments` (the reason names `forged_framing_marker` — a reason token, not an
+  error code). The result's `meta.developer_instructions` fingerprint (sha256 +
+  bytes) is how you tell a steered run from a default one.
 - Use `isolation` only when its effect on user configuration and repository rules is intended.
 - Synchronous active tools accept a bounded `timeout_seconds`; async runs use the server's job
   deadline instead.

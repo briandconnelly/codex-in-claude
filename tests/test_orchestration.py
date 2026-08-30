@@ -868,3 +868,57 @@ def test_stamp_meta_attributes_a_pinned_key_by_the_run_sandbox(sandbox, expected
     out = orchestration._stamp_meta(result, meta)
     assert out is not None
     assert out["error"]["code"] == expected_code
+
+
+# --- #556 (Opus review): classification must learn the run sent developer_instructions
+
+
+def _make_meta_with_di() -> Meta:
+    from codex_in_claude.schemas import DeveloperInstructions
+
+    meta = _make_meta()
+    meta.developer_instructions = DeveloperInstructions.of("focus")
+    return meta
+
+
+def test_stamp_meta_owns_a_developer_instructions_key_rejection():
+    # Shipping-path regression: _stamp_meta is the ONLY classifier consult/review
+    # reach in production, so IT must pass the run's emitted key set. A strict-config
+    # value rejection naming `developer_instructions` on a run that sent it is the
+    # plugin's own argv — fail-loud drift, never "your config.toml is wrong".
+    stderr = (
+        'Error loading config.toml: invalid type: string "x", expected a table\n'
+        "in `developer_instructions`\n"
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", stderr, 1, 12, False), last_message=None, events=""
+    )
+    out = orchestration._stamp_meta(result, _make_meta_with_di())
+    assert out is not None
+    assert out["error"]["code"] == "cli_contract_changed"
+
+
+def test_stamp_meta_without_the_fingerprint_keeps_user_attribution():
+    # The same rejection on a run that did NOT send the key is the user's own config.
+    stderr = (
+        'Error loading config.toml: invalid type: string "x", expected a table\n'
+        "in `developer_instructions`\n"
+    )
+    result = codex.CodexExecResult(
+        run=CommandRun("", stderr, 1, 12, False), last_message=None, events=""
+    )
+    out = orchestration._stamp_meta(result, _make_meta())
+    assert out is not None
+    assert out["error"]["code"] == "user_config_rejected"
+
+
+def test_stamp_meta_owns_bare_dash_c_for_an_instruction_run(monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=azure")
+    result = codex.CodexExecResult(
+        run=CommandRun("", "error: unexpected argument '-c' found", 2, 12, False),
+        last_message=None,
+        events="",
+    )
+    out = orchestration._stamp_meta(result, _make_meta_with_di())
+    assert out is not None
+    assert out["error"]["code"] == "cli_contract_changed"

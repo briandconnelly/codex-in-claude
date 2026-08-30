@@ -341,3 +341,86 @@ def test_strict_config_accepts_the_plugins_own_pinned_keys_live(tmp_path):
         pins += ["-c", f"{key}={value}"]
     run = _strict_probe(*pins, home=str(tmp_path))
     assert cli_contract.parse_strict_config_rejection(run.stderr) is None, run.stderr
+
+
+# --- #556: developer_instructions placement probes (zero-spend) -----------------------
+# `codex debug prompt-input` renders the composed input without a model call, so these
+# probes cost nothing and need no auth. They pin the TWO facts the feature rests on:
+# where codex places the key's value, and that our composed string survives the TOML
+# round-trip byte-exact.
+
+
+def _prompt_input(*extra: str, home: str) -> runtime.CommandRun:
+    return runtime.run_sync_capture(
+        [cli_contract.CODEX_BIN, "debug", "prompt-input", *extra, "hi"],
+        timeout_seconds=60,
+        env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
+        | {"CODEX_HOME": home},
+        stdin_text="",
+    )
+
+
+def test_developer_instructions_is_the_first_developer_item_live(tmp_path):
+    import json as _json
+
+    from codex_in_claude import codex, prompts
+
+    composed = prompts.compose_developer_instructions('probe 😀 "q" \\ line\ntwo')
+    cmd, _ = codex.build_exec_command(
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        developer_instructions='probe 😀 "q" \\ line\ntwo',
+        flag_support=None,
+    )
+    token = next(
+        t for t in cmd if t.startswith(f"{cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY}=")
+    )
+    run = _prompt_input("-c", token, home=str(tmp_path))
+    assert run.exit_code == 0, run.stderr
+    messages = _json.loads(run.stdout)
+    first = messages[0]
+    assert first["role"] == "developer"
+    # The composed value is the FIRST content item of the FIRST developer message —
+    # ahead of codex's own developer content — and survives byte-exact.
+    assert first["content"][0]["text"] == composed
+
+
+def test_without_the_key_the_first_item_is_not_ours_live(tmp_path):
+    # Negative control: the probe above is only evidence if an override-free render
+    # does NOT start with our framing.
+    import json as _json
+
+    from codex_in_claude import prompts
+
+    run = _prompt_input(home=str(tmp_path))
+    assert run.exit_code == 0, run.stderr
+    messages = _json.loads(run.stdout)
+    texts = [c.get("text", "") for m in messages for c in m.get("content", [])]
+    assert not any(t.startswith(prompts.DEVELOPER_INSTRUCTIONS_FRAMING) for t in texts)
+
+
+def test_cli_override_outranks_a_config_file_value_live(tmp_path):
+    # An operator's own `developer_instructions` in config.toml must not displace the
+    # composed value on a run that carries the `-c` (the pin-outranks-file behavior
+    # the workspace pins already rely on).
+    import json as _json
+
+    from codex_in_claude import prompts
+
+    (tmp_path / "config.toml").write_text(
+        'developer_instructions = "FILE_VALUE_MUST_LOSE"\n', encoding="utf-8"
+    )
+    composed = prompts.compose_developer_instructions("cli wins")
+    encoded = _json.dumps(composed, ensure_ascii=False)
+    run = _prompt_input(
+        "-c",
+        f"{cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY}={encoded}",
+        home=str(tmp_path),
+    )
+    assert run.exit_code == 0, run.stderr
+    first = _json.loads(run.stdout)[0]
+    assert first["role"] == "developer"
+    assert first["content"][0]["text"] == composed
+    assert "FILE_VALUE_MUST_LOSE" not in run.stdout

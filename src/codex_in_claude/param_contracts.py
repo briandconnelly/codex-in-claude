@@ -86,6 +86,34 @@ _EXTRA_CONTEXT_FULL = (
 )
 
 
+_DEVELOPER_INSTRUCTIONS_FULL = (
+    "Optional caller-supplied stance or focus text for Codex's developer turn, behind "
+    "this server's framing (on codex_consult, codex_consult_async, codex_review_changes, "
+    "codex_review_changes_async; deliberately NOT on codex_delegate/_async — delegate "
+    "edits files, so a caller stance there would widen what an untrusted workspace can "
+    "steer). Sent as ONE composed `-c developer_instructions` value: the server's framing "
+    "always leads, the text is delimited on both sides, and the closing marker outranks "
+    "anything between the markers. codex places the value as the FIRST developer-role "
+    "message, AHEAD of its own developer messages and AGENTS.md — the server cannot order "
+    "it after them. It grants no tools (tools ride argv/config, not the prompt); Codex is "
+    "INSTRUCTED not to let it determine a verdict — that guarantee is behavioral, not "
+    "mechanical. Normalized once (stripped; blank means omitted); refused pre-spend when "
+    f"over {config.MAX_DEVELOPER_INSTRUCTIONS_BYTES} bytes (bytes, not characters), when "
+    "it carries a NUL, another C0 control (tab/LF/CR excepted), DEL, or a lone "
+    "surrogate, or when it contains one of the server's framing marker lines — the "
+    "error code is invalid_arguments and its machine-readable reason names "
+    "forged_framing_marker — otherwise text could pose as server-authored. "
+    "It also counts against CODEX_IN_CLAUDE_MAX_INPUT_BYTES together with the call's "
+    "other caller-authored inputs. Two plaintext carriers exist and are the point of "
+    "meta's fingerprint: the composed value rides the codex COMMAND LINE (visible to "
+    "local process listings for the run) and the normalized text is persisted in the "
+    "background-job spec on disk (like question/extra_context) until the job record is "
+    "consumed or expires — never put secrets here. Result envelopes report only "
+    "meta.developer_instructions = {sha256, bytes}, never the text. The raw "
+    "`-c developer_instructions` spelling is refused in CODEX_IN_CLAUDE_EXTRA_ARGS "
+    "(#555), so the operator channel cannot contradict this parameter."
+)
+
 PARAMETER_CONTRACTS: dict[str, ParamContract] = {
     "idempotency_key": ParamContract(
         name="idempotency_key",
@@ -126,6 +154,23 @@ PARAMETER_CONTRACTS: dict[str, ParamContract] = {
             "bounds: codex://params."
         ),
         full=_EXTRA_CONTEXT_FULL,
+    ),
+    "developer_instructions": ParamContract(
+        name="developer_instructions",
+        # Kept inline (safety-critical): untrusted framing, no-tools/instructed-only,
+        # the two plaintext carriers, the byte cap. Moved to the resource: placement
+        # detail, refusal reasons, budget interaction, the delegate exclusion's why.
+        summary=(
+            "Optional caller stance/focus text for Codex's developer turn, placed BEHIND "
+            "this server's always-leading framing; omit for no developer override. "
+            "UNTRUSTED — never build it from workspace content; grants no tools; Codex "
+            "is instructed, not compelled, to keep verdicts its own. Rides the codex "
+            "command line and the background-job record on disk — never put secrets here; meta "
+            "reports only {sha256, bytes}. Stripped; blank = omitted; max "
+            f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES} bytes. Full contract: "
+            "codex://params."
+        ),
+        full=_DEVELOPER_INSTRUCTIONS_FULL,
     ),
 }
 

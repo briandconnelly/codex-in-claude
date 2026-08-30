@@ -8,6 +8,10 @@
           "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 16,
+            "sha256": "ff50f3a850bee2611f31acd0dc629a90f72e3a9e4f875ee681cbb446eca21e61"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -96,6 +100,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -161,6 +169,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -210,6 +222,10 @@
           "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 16,
+            "sha256": "ff50f3a850bee2611f31acd0dc629a90f72e3a9e4f875ee681cbb446eca21e61"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -298,6 +314,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -363,6 +383,10 @@
             "lines_removed": 3
           },
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 5,
+            "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -423,6 +447,7 @@
       "command_exit_code",
       "commit",
       "context_summary",
+      "developer_instructions",
       "idempotency_replayed",
       "job_kind",
       "model",

@@ -88,6 +88,7 @@ from codex_in_claude.schemas import (
     DelegateDryRunResult,
     DelegateResult,
     Detail,
+    DeveloperInstructions,
     DryRunResult,
     ErrorCode,
     ErrorDetail,
@@ -449,16 +450,22 @@ def _enum_for_property(prop_schema: dict | None, *, element: bool = False) -> li
     return None
 
 
-def _combined_input_detail(extra_context: str | None) -> ErrorDetail:
-    """§6 details for a consult combined-size (question + extra_context) failure.
+def _combined_input_detail(
+    extra_context: str | None, developer_instructions: str | None = None
+) -> ErrorDetail:
+    """§6 details for a consult combined-size failure.
 
-    The byte limit is on the two inputs *together*, so name every input that actually
-    contributed: `field="question"` when it was sent alone, `fields=["question",
-    "extra_context"]` when extra_context added to it. This avoids blaming extra_context
-    for an oversized `question` (#174/F2)."""
+    The byte limit is on the caller-authored inputs *together*, so name every input
+    that actually contributed — this avoids blaming extra_context (or the #556
+    developer_instructions text) for an oversized `question` (#174/F2)."""
+    fields = ["question"]
     if extra_context:
-        return ErrorDetail(fields=["question", "extra_context"])
-    return ErrorDetail(field="question")
+        fields.append("extra_context")
+    if developer_instructions:
+        fields.append("developer_instructions")
+    if len(fields) == 1:
+        return ErrorDetail(field="question")
+    return ErrorDetail(fields=fields)
 
 
 def _blank_input_error(value: str, field: str, tool_name: str, meta: Meta) -> dict | None:
@@ -806,6 +813,14 @@ ReasoningEffortParam = Annotated[
         # Compressed inline (#333); full rejection/bounds semantics at codex://params.
         description=param_contracts.PARAMETER_CONTRACTS["reasoning_effort"].summary,
     ),
+]
+# No Field(max_length): FastMCP validates BEFORE the handler normalizes, so a schema
+# bound would refuse whitespace-padded text that strips under the cap and would report
+# a generic Pydantic reason instead of the byte-measured one (#556 plan review). The
+# byte cap is enforced once, pre-spend, on the normalized value in _prepare_*.
+DeveloperInstructionsParam = Annotated[
+    str | None,
+    Field(description=param_contracts.PARAMETER_CONTRACTS["developer_instructions"].summary),
 ]
 TimeoutSecondsParam = Annotated[
     int | None,
@@ -1221,6 +1236,65 @@ def _reasoning_effort_shape_error(
                     "surrogate characters), or omit the override. The value never "
                     "reached codex (zero spend)."
                 ),
+            ),
+            meta=meta,
+        )
+    )
+
+
+def _developer_instructions_error(text: str | None, meta: Meta, tool_name: str) -> dict | None:
+    """Refuse unusable developer_instructions BEFORE any spend, or return None.
+
+    `text` is already normalized (config.normalize_developer_instructions), so None
+    means the caller sent nothing (or blank, which means the same). The checks and
+    their order mirror backend.CodexBackend.validate_request on the same config
+    helpers, so the two boundaries cannot drift. The caller's text is never echoed —
+    every `reason` below is value-free (the #529 discipline)."""
+    if text is None:
+        return None
+    reason: str | None = None
+    repair: str | None = None
+    # ORDER IS LOAD-BEARING (Opus review): the marker scan runs LAST, after two O(n)
+    # checks bound it. The unsafe check comes before the cap because the cap's own
+    # byte count (str.encode) raises on the lone surrogates the unsafe check refuses;
+    # the first cut ran the marker scan first, and its unbounded backtracking
+    # measured ~407s of event-loop CPU at the default input budget.
+    if (unsafe := config.developer_instructions_unsafe_reason(text)) is not None:
+        reason = f"{unsafe}, which cannot be carried to codex."
+        repair = (
+            "Remove NUL bytes, other control characters, and unpaired surrogates "
+            "from developer_instructions, then retry."
+        )
+    elif (size := len(text.encode("utf-8"))) > config.MAX_DEVELOPER_INSTRUCTIONS_BYTES:
+        reason = (
+            f"is {size} bytes; the cap is "
+            f"{config.MAX_DEVELOPER_INSTRUCTIONS_BYTES} bytes (measured in bytes, "
+            "not characters)."
+        )
+        repair = "Shorten developer_instructions to a stance or focus directive, then retry."
+    elif config.contains_framing_marker(text):
+        reason = (
+            "contains one of the server's caller-text framing marker lines "
+            "(forged_framing_marker), which would let the text pose as server-authored."
+        )
+        repair = (
+            "Remove framing-marker lines — 'BEGIN/END caller-supplied text' or "
+            "'caller text follows', fenced or at a line start — from "
+            "developer_instructions, then retry."
+        )
+    if reason is None:
+        return None
+    return serialize_error(
+        ErrorResult(
+            error=make_error(
+                "invalid_arguments",
+                f"{tool_name}: 1 invalid argument(s): developer_instructions — {reason}",
+                repair_tool=tool_name,
+                # Runtime rule, not a schema constraint: pointing at the inputSchema
+                # would send the caller somewhere the answer is not (the
+                # _blank_input_error precedent).
+                repair_alternative=repair,
+                invalid_arguments=[InvalidArgument(field="developer_instructions", reason=reason)],
             ),
             meta=meta,
         )
@@ -2015,6 +2089,7 @@ def codex_capabilities(
                 key_optional_params=[
                     "workspace_root",
                     "extra_context",
+                    "developer_instructions",
                     "model",
                     "reasoning_effort",
                     "isolation",
@@ -2023,7 +2098,8 @@ def codex_capabilities(
                 ],
                 returns="A result envelope with summary, optional findings, and meta. "
                 "detail='summary' (default) omits raw_response.text; detail='full' includes it. "
-                "Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex "
+                "Egress: sends question+extra_context+developer_instructions (raw, "
+                "unredacted) to OpenAI; Codex "
                 "always runs with a resolved working dir (workspace_root, your MCP roots, "
                 "or the server cwd), which selects where it works, not what it can read. "
                 f"{cli_contract.READ_SCOPE_FACT} "
@@ -2044,6 +2120,7 @@ def codex_capabilities(
                 key_optional_params=[
                     "workspace_root",
                     "extra_context",
+                    "developer_instructions",
                     "model",
                     "reasoning_effort",
                     "isolation",
@@ -2051,7 +2128,8 @@ def codex_capabilities(
                 ],
                 returns="A job handle (job_id, status, deadline, ttl). Poll with "
                 "codex_job_status; read the consult envelope with codex_job_result. "
-                "Egress: same as codex_consult — sends question+extra_context (raw) to "
+                "Egress: same as codex_consult — sends "
+                "question+extra_context+developer_instructions (raw) to "
                 "OpenAI. Its resolved working dir (workspace_root, your MCP roots, or the "
                 "server cwd) selects where Codex works, not what it can read. "
                 f"{cli_contract.READ_SCOPE_FACT} "
@@ -2072,6 +2150,7 @@ def codex_capabilities(
                     "paths",
                     "workspace_root",
                     "extra_context",
+                    "developer_instructions",
                     "model",
                     "reasoning_effort",
                     "isolation",
@@ -2103,6 +2182,7 @@ def codex_capabilities(
                     "paths",
                     "workspace_root",
                     "extra_context",
+                    "developer_instructions",
                     "model",
                     "reasoning_effort",
                     "isolation",
@@ -2579,6 +2659,7 @@ async def _prepare_consult(
     extra_context: str | None,
     model: str | None,
     reasoning_effort: str | None,
+    developer_instructions: str | None = None,
     isolation: str | None,
     timeout_seconds: int,
     ctx: Context | None,
@@ -2655,16 +2736,23 @@ async def _prepare_consult(
     if effort_err is not None:
         return effort_err
 
+    # Normalized ONCE here (#556): the cap below, the meta fingerprint, the persisted
+    # spec, and the bytes codex receives all describe the same stripped string.
+    developer_instructions = config.normalize_developer_instructions(developer_instructions)
+    di_err = _developer_instructions_error(developer_instructions, meta, tool_name)
+    if di_err is not None:
+        return di_err
+
     limit = config.max_input_bytes()
-    combined = (question or "") + (extra_context or "")
+    combined = (question or "") + (extra_context or "") + (developer_instructions or "")
     combined_bytes = len(combined.encode("utf-8"))
     if combined_bytes > limit:
         return serialize_error(
             ErrorResult(
                 error=make_error(
                     "input_too_large",
-                    f"question + extra_context exceeds {limit} bytes.",
-                    details=_combined_input_detail(extra_context),
+                    f"question + extra_context + developer_instructions exceeds {limit} bytes.",
+                    details=_combined_input_detail(extra_context, developer_instructions),
                     limit_bytes=limit,
                     actual_bytes=combined_bytes,
                 ),
@@ -2696,6 +2784,12 @@ async def _prepare_consult(
     # (and their live dedup entries) survive the upgrade.
     if effort is not None:
         spec["reasoning_effort"] = effort
+    # Written only when set, same reason (#556): an absent key keeps a no-instruction
+    # spec hashing like the pre-#556 shape. The meta fingerprint attests what will be
+    # sent; the delivered job result's copy is rebuilt by the worker from the spec.
+    if developer_instructions is not None:
+        spec["developer_instructions"] = developer_instructions
+        meta.developer_instructions = DeveloperInstructions.of(developer_instructions)
     return meta, cwd, spec, detail_v
 
 
@@ -2710,6 +2804,7 @@ async def _prepare_review(
     extra_context: str | None,
     model: str | None,
     reasoning_effort: str | None,
+    developer_instructions: str | None = None,
     isolation: str | None,
     timeout_seconds: int,
     ctx: Context | None,
@@ -2719,8 +2814,9 @@ async def _prepare_review(
 ) -> tuple[Meta, str, dict, str | None] | dict:
     """Shared preparation for codex_review_changes / codex_review_changes_async.
 
-    No input_too_large pre-check: the diff is gathered in the worker, which enforces
-    max_bytes (and bounds extra_context)."""
+    Caller-authored text (extra_context + developer_instructions) IS bounded here,
+    pre-spend, against MAX_INPUT_BYTES (#556); the diff is still gathered in the
+    worker, which enforces max_bytes (and re-bounds extra_context on its own)."""
     d = defaults
     # See _prepare_consult: exact-None precedence for the effort override.
     effort = reasoning_effort if reasoning_effort is not None else d.reasoning_effort
@@ -2788,6 +2884,44 @@ async def _prepare_review(
     effort_err = _reasoning_effort_shape_error(effort, meta, from_config=reasoning_effort is None)
     if effort_err is not None:
         return effort_err
+    # See _prepare_consult: normalized once, refused pre-spend (#556).
+    developer_instructions = config.normalize_developer_instructions(developer_instructions)
+    di_err = _developer_instructions_error(
+        developer_instructions,
+        meta,
+        "codex_review_changes" if include_detail else "codex_review_changes_async",
+    )
+    if di_err is not None:
+        return di_err
+    # The caller-authored review inputs share the operator budget (#556 plan review):
+    # extra_context alone is re-checked worker-side against the same limit, but the
+    # SUM must be bounded here, pre-spend and pre-job — the gathered diff has its own
+    # separate bound in gather_diff.
+    limit = config.max_input_bytes()
+    combined_bytes = len(((extra_context or "") + (developer_instructions or "")).encode("utf-8"))
+    if combined_bytes > limit:
+        fields = [
+            name
+            for name, value in (
+                ("extra_context", extra_context),
+                ("developer_instructions", developer_instructions),
+            )
+            if value
+        ]
+        return serialize_error(
+            ErrorResult(
+                error=make_error(
+                    "input_too_large",
+                    f"extra_context + developer_instructions exceeds {limit} bytes.",
+                    details=ErrorDetail(fields=fields)
+                    if len(fields) > 1
+                    else ErrorDetail(field=fields[0]),
+                    limit_bytes=limit,
+                    actual_bytes=combined_bytes,
+                ),
+                meta=meta,
+            )
+        )
 
     spec = {
         "kind": "codex_review_changes",
@@ -2815,6 +2949,10 @@ async def _prepare_review(
     # worker specs (which lack the key) keep replaying; the worker reads the default.
     if untracked != "explicit_only":
         spec["untracked"] = untracked
+    # See _prepare_consult (#556): written only when set; meta attests the send.
+    if developer_instructions is not None:
+        spec["developer_instructions"] = developer_instructions
+        meta.developer_instructions = DeveloperInstructions.of(developer_instructions)
     return meta, cwd, spec, detail_v
 
 
@@ -2969,6 +3107,7 @@ async def codex_consult(
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
     reasoning_effort: ReasoningEffortParam = None,
+    developer_instructions: DeveloperInstructionsParam = None,
     isolation: IsolationParam = None,
     timeout_seconds: TimeoutSecondsParam = None,
     detail: DetailParam = "summary",
@@ -2987,7 +3126,8 @@ async def codex_consult(
     (absolute) for a repo-grounded question; omit it for pure Q&A. Returns a result
     envelope.
 
-    Data egress: this sends your `question` and `extra_context` to OpenAI via the
+    Data egress: this sends your `question`, `extra_context`, and
+    `developer_instructions` to OpenAI via the
     codex CLI. Codex always runs with a resolved working directory (`workspace_root`,
     your MCP roots, or the server's cwd as a fallback) — that selects where it works,
     not what it can read.
@@ -3025,6 +3165,7 @@ async def codex_consult(
         extra_context=extra_context,
         model=model,
         reasoning_effort=reasoning_effort,
+        developer_instructions=developer_instructions,
         isolation=isolation,
         timeout_seconds=timeout,
         ctx=ctx,
@@ -3069,6 +3210,7 @@ async def codex_review_changes(
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
     reasoning_effort: ReasoningEffortParam = None,
+    developer_instructions: DeveloperInstructionsParam = None,
     isolation: IsolationParam = None,
     timeout_seconds: TimeoutSecondsParam = None,
     detail: DetailParam = "summary",
@@ -3096,7 +3238,8 @@ async def codex_review_changes(
     findings — treat them as unvalidated claims you verify yourself before acting.
 
     Data egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is
-    secret-redacted (best-effort), but your `extra_context` is sent raw (unredacted).
+    secret-redacted (best-effort), but your `extra_context` and
+    `developer_instructions` are sent raw (unredacted).
     Codex can read files outside the workspace — up to everything the OS user running it can
     read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
     workspace is a read boundary. Codex auto-loads the resolved workspace's
@@ -3135,6 +3278,7 @@ async def codex_review_changes(
         extra_context=extra_context,
         model=model,
         reasoning_effort=reasoning_effort,
+        developer_instructions=developer_instructions,
         isolation=isolation,
         timeout_seconds=timeout,
         ctx=ctx,
@@ -3869,6 +4013,7 @@ async def codex_consult_async(
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
     reasoning_effort: ReasoningEffortParam = None,
+    developer_instructions: DeveloperInstructionsParam = None,
     isolation: IsolationParam = None,
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
@@ -3887,7 +4032,8 @@ async def codex_consult_async(
     you never poll). Poll `codex_job_status`; read/consume the consult envelope with
     `codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.
 
-    Data egress: same as `codex_consult` — sends your `question` and `extra_context`
+    Data egress: same as `codex_consult` — sends your `question`, `extra_context`, and
+    `developer_instructions`
     (raw, unredacted) to OpenAI via the codex CLI. Its resolved working directory
     (`workspace_root`, your MCP roots, or the server cwd) selects where Codex works, not
     what it can read.
@@ -3910,6 +4056,7 @@ async def codex_consult_async(
         extra_context=extra_context,
         model=model,
         reasoning_effort=reasoning_effort,
+        developer_instructions=developer_instructions,
         isolation=isolation,
         timeout_seconds=deadline,
         ctx=ctx,
@@ -3948,6 +4095,7 @@ async def codex_review_changes_async(
     extra_context: ExtraContextParam = None,
     model: ModelParam = None,
     reasoning_effort: ReasoningEffortParam = None,
+    developer_instructions: DeveloperInstructionsParam = None,
     isolation: IsolationParam = None,
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict:
@@ -3968,7 +4116,8 @@ async def codex_review_changes_async(
     `workspace_root` (absolute).
 
     Data egress: same as `codex_review_changes` — sends the secret-redacted diff plus
-    your raw (unredacted) `extra_context` to OpenAI via the codex CLI.
+    your raw (unredacted) `extra_context` and `developer_instructions` to OpenAI via
+    the codex CLI.
     Codex can read files outside the workspace — up to everything the OS user running it can
     read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of
     workspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a
@@ -3991,6 +4140,7 @@ async def codex_review_changes_async(
         extra_context=extra_context,
         model=model,
         reasoning_effort=reasoning_effort,
+        developer_instructions=developer_instructions,
         isolation=isolation,
         timeout_seconds=deadline,
         ctx=ctx,

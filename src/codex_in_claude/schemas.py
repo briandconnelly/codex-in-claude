@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
 from typing import Annotated, Any, Literal
 from uuid import uuid4
@@ -68,7 +69,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-84"
+FINGERPRINT = "codex-in-claude/0.1/schema-85"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -127,7 +128,13 @@ FINGERPRINT = "codex-in-claude/0.1/schema-84"
 # SAMPLE and not an enumeration of codes, this change would otherwise have moved only the
 # `schemas` view; result_format_snapshot.py therefore now renders a second error envelope
 # using this code, so the sample reflects the persisted-byte consequence.
-RESULT_FORMAT: int = 10
+# #556 bumped 10->11: Meta gained `developer_instructions` — new field, extra="forbid",
+# and dump_success retains nulls, so every persisted success envelope's replay gains a
+# key an older reader's closed schema rejects: the F8 roots_source case exactly.
+# Verified at the fixture regen (not assumed): the `serialized` view's success entries
+# each gain the key, and the review_success representative carries it POPULATED per the
+# null-fixtures convention (#400).
+RESULT_FORMAT: int = 11
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -629,6 +636,51 @@ class Workspace(BaseModel):
     workspace_warning: str | None = None  # set when cwd was resolved from server cwd
 
 
+# Meta.developer_instructions: the audit half of the #556 parameter. Registered in
+# _KEPT_DESCRIPTIONS below so the semantics survive schema-noise stripping.
+_DEVELOPER_INSTRUCTIONS_META_DESC = (
+    "Fingerprint {sha256, bytes} of the caller's developer_instructions text after "
+    "normalization — the text itself is never echoed here. Present on envelopes that "
+    "describe a Codex run prepared with the parameter: sync results, the async "
+    "job-start handle, and a fetched background-job result's meta (the originating "
+    "run's value). Null/absent on a run without the parameter; an envelope that "
+    "describes no run (argument errors, an empty-diff pass) may omit it either way. "
+    "It attests what this server SENT, not what the model did with it."
+)
+
+
+class DeveloperInstructions(BaseModel):
+    """Fingerprint of caller-supplied developer_instructions text — never the text.
+
+    Echoed so a reader of a result knows the run carried a non-default developer turn
+    and can tell two runs apart WITHOUT the text being replayed into the envelope.
+    Present on every envelope that reports a run prepared with the parameter: sync
+    results, the async job-start handle, and the meta of a fetched background-job
+    result. For a background job the WORKER rebuilds it from the persisted job spec,
+    which stores the normalized text itself — like it stores `question` and
+    `extra_context` — so "fingerprint, not text" is a claim about THIS envelope and
+    the meta, not about the on-disk job record (the tool description disclosed that
+    before any spend). Absent/null means the run carried no caller text — unless the
+    envelope describes no run at all (argument errors, an empty-diff pass), which may
+    omit it either way because nothing was sent for it to attest.
+
+    Validation is strict so a tampered or hand-written job spec cannot be replayed as
+    an audit fingerprint: lax mode would coerce "7", 7.0, or True into a byte count
+    and hide a corrupt record behind a valid-looking value."""
+
+    model_config = ConfigDict(extra="forbid")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$", strict=True)
+    # le mirrors config.MAX_DEVELOPER_INSTRUCTIONS_BYTES (no config import here, by
+    # layering; tests pin the two literals together). ge=1: blank text normalizes to
+    # absent and never fingerprints.
+    bytes: int = Field(ge=1, le=4096, strict=True)
+
+    @classmethod
+    def of(cls, text: str) -> DeveloperInstructions:
+        raw = text.encode()
+        return cls(sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+
+
 class Meta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     cwd: str
@@ -728,6 +780,10 @@ class Meta(BaseModel):
             "resolution, or absent/null when no default is set — the same cases meta.model "
             "documents."
         ),
+    )
+    developer_instructions: DeveloperInstructions | None = Field(
+        default=None,
+        description=_DEVELOPER_INSTRUCTIONS_META_DESC,
     )
     scope: str | None = None  # review scope: working_tree|branch|commit
     base: str | None = None
@@ -1713,6 +1769,7 @@ _OPAQUE_RESOLVED_DEFAULTS = {"type": "object", "description": _RESOLVED_DEFAULTS
 _KEPT_DESCRIPTIONS = frozenset(
     {
         _ERROR_POINTER_DESC,
+        _DEVELOPER_INSTRUCTIONS_META_DESC,
         _RESULT_META_POINTER_DESC,
         _TOOL_DETAILS_POINTER_DESC,
         _RATE_LIMIT_POINTER_DESC,

@@ -13,6 +13,9 @@ from pontonier.core import redaction, worktree
 from pontonier.core.jobs import JobStore
 
 from codex_in_claude import cli_contract
+from codex_in_claude.prompts import (
+    contains_framing_marker as contains_framing_marker,  # noqa: PLC0414 — re-export
+)
 
 # This bridge's pinned worktree knobs. The values predate the pontonier extraction
 # and are git-visible (temp-dir names a job runner constrains cleanup to; baseline
@@ -270,7 +273,53 @@ _DENIED_INSTRUCTION_CONFIG_KEYS = frozenset(
         "model_catalog_json",
     }
 )
-_INSTRUCTION_KEYS_TRACKING_ISSUE = "#556"
+# --- Caller developer instructions bounds (#556) --------------------------------------
+# The boundary half of the parameter: prompts.py owns the framing/markers/composition;
+# these bounds are enforced once in the server's _prepare_* (on the normalized string)
+# and mirrored in backend.CodexBackend.validate_request for direct adapter callers.
+
+# Small on purpose: the text crosses from the untrusted request tier into the model's
+# developer turn, so it is for a stance or focus directive, not for smuggling a payload
+# past the input caps. Bytes, not characters.
+MAX_DEVELOPER_INSTRUCTIONS_BYTES = 4096
+
+
+def normalize_developer_instructions(text: str | None) -> str | None:
+    """The one place caller developer-instruction text is canonicalized.
+
+    Callers normalize BEFORE validating, hashing, persisting, or sending, so the bytes
+    counted against the cap, the bytes hashed into meta, the bytes in the job spec, and
+    the bytes that reach codex are the same string. Blank normalizes to None: it sends
+    no developer override at all, so recording a fingerprint for it would attest a
+    non-default run for a default one."""
+    if text is None:
+        return None
+    stripped = text.strip()
+    return stripped or None
+
+
+def developer_instructions_unsafe_reason(text: str) -> str | None:
+    """Why `text` cannot be carried at all, or None when it can.
+
+    A NUL is refused as instruction CONTENT policy, not an argv hazard: the TOML-string
+    encoding in the builder would carry it as an escape and deliver a control character
+    to the model's instruction layer (see the encoder note in codex.build_exec_command).
+    Other C0 controls (except tab/LF/CR) and DEL are refused for the same reason plus
+    a transport one: json.dumps does not escape U+007F, which TOML 1.0 forbids in a
+    basic string — codex 0.151.0 tolerates it, but a stricter upstream parser would
+    turn it into a config-load failure (Opus review). A lone surrogate is the hard
+    transport hazard: it cannot be UTF-8-encoded, so Popen's argv encoding would raise
+    after validation, unclassified."""
+    if "\x00" in text:
+        return "contains a NUL byte"
+    if any((ch <= "\x1f" and ch not in "\t\n\r") or "\x7f" <= ch <= "\x9f" for ch in text):
+        return "contains a control character (C0 other than tab/newline/CR, DEL, or C1)"
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "is not valid UTF-8 (lone surrogate)"
+    return None
+
 
 _RESERVED_META_CONFIG_KEYS: dict[str, tuple[str, str, str, str]] = {
     "model": ("meta.model", f"{ENV_PREFIX}MODEL", "model", "#310"),
@@ -387,6 +436,34 @@ def _normalize_config_key(key: str) -> str:
     return ".".join(segments)
 
 
+def _instruction_key_denial(normalized: str, key: str) -> ExtraArgs:
+    """The refusal for an instruction-bearing `-c` key (#555), split by disposition:
+    `developer_instructions` HAS a first-class home (#556) — the per-call parameter,
+    which frames the text and records {sha256, bytes} in meta (deliberately no env
+    var: the value is per-call caller data, not operator state) — while the file- and
+    catalog-shaped keys replace instructions wholesale and get no control on purpose."""
+    if normalized == "developer_instructions":
+        return ExtraArgs(
+            configured=True,
+            error=(
+                f"config key '{_safe_token(key.strip())}' is refused: a raw "
+                "override would place operator prose above this server's "
+                "framing with no record in the result envelope; use the "
+                "developer_instructions parameter on codex_consult / "
+                "codex_review_changes (and their _async twins) instead (#556)"
+            ),
+        )
+    return ExtraArgs(
+        configured=True,
+        error=(
+            f"config key '{_safe_token(key.strip())}' is refused: it could "
+            "replace or redefine model instructions wholesale (or is "
+            "reserved for that), and no first-class control exists for it "
+            "on purpose (#555; rationale in COMPATIBILITY.md)"
+        ),
+    )
+
+
 def _parse_extra_args(raw: str) -> ExtraArgs:
     """Tokenize + allowlist-validate a non-blank CODEX_IN_CLAUDE_EXTRA_ARGS value."""
     try:
@@ -451,16 +528,7 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                     ),
                 )
             if normalized in _DENIED_INSTRUCTION_CONFIG_KEYS:
-                return ExtraArgs(
-                    configured=True,
-                    error=(
-                        f"config key '{_safe_token(key.strip())}' is refused: it could inject, "
-                        "replace, or redefine model instructions above this server's framing "
-                        "(or is reserved for that), with no record of it in the result "
-                        "envelope; a first-class, "
-                        f"meta-reported parameter is tracked in {_INSTRUCTION_KEYS_TRACKING_ISSUE}"
-                    ),
-                )
+                return _instruction_key_denial(normalized, key)
             reserved = _RESERVED_META_CONFIG_KEYS.get(normalized)
             if reserved is not None:
                 meta_field, env_var, param, issue = reserved

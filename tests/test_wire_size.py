@@ -185,7 +185,15 @@ from codex_in_claude.server import mcp
 # half was already cut from four sentences to one clause; what remains states the disposition
 # (rejected, not stripped), which is the fact a caller cannot infer from the regex — a regex
 # says which values fail, not that the server refuses rather than silently repairs them.
-TOOLS_LIST_BYTE_BUDGET = 95_000
+# Measured again 2026-08-30 (#556: `developer_instructions` advertised on codex_consult,
+# codex_consult_async, codex_review_changes, and codex_review_changes_async — one compressed
+# ~600-byte summary each, the codex://params resource carrying the full contract, and
+# the four docstrings' egress enumerations naming the parameter): 96,972
+# bytes (+2,842, +3.0%) — budget raised to the next 500 above the measured value. Spent
+# deliberately: a parameter that admits caller text into Codex's developer turn is a
+# first-read security disclosure (untrusted, no-tools, instructed-not-compelled, the two
+# plaintext carriers), and none of those facts can wait for the resource fetch.
+TOOLS_LIST_BYTE_BUDGET = 97_500
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
 # The budget assertion below is the only hard failure; this exists purely so the assertion's
@@ -197,7 +205,7 @@ TOOLS_LIST_BYTE_BUDGET = 95_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 94_130
+TOOLS_LIST_BYTE_TARGET = 96_972
 
 
 def _budget_failure_message(measured: int) -> str:

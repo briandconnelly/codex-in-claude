@@ -711,6 +711,67 @@ positive demonstration of exactly the egress path #472 describes.)
 - **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
   `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
 
+
+## Caller developer instructions (`developer_instructions`, #556)
+
+`codex_consult`, `codex_consult_async`, `codex_review_changes`, and `codex_review_changes_async`
+accept an optional `developer_instructions` parameter — caller stance/focus text for Codex's
+developer turn. `codex exec` has no flag for developer-turn text, so the channel is the
+`developer_instructions` config key (`cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY`), which
+lands as the **first developer-role message**, ahead of Codex's own developer messages and
+`AGENTS.md` (verified zero-spend with `codex debug prompt-input` on 0.151.0; the
+`tests/test_integration.py` probes pin it against the installed CLI, with a negative control).
+Deliberately *not* `model_instructions_file` — that key **replaces** the built-in instructions.
+
+What bounds it, and what each bound is for:
+
+- **One composed value.** The server's framing leads and cannot be displaced; the caller's text
+  is delimited on both sides; the closing marker restates that the preceding rules outrank
+  anything between the markers (`prompts.compose_developer_instructions`). Ordering is a property
+  of the string, not of how codex merges repeated `-c` overrides. Text carrying a framing-marker
+  line is refused pre-spend as `invalid_arguments` (the machine-readable reason names
+  `forged_framing_marker` — it is a reason token, not an `error.code`) — case- and
+  whitespace-insensitively: any fenced marker phrase, and any marker phrase at a line start
+  with or without a fence — because delimiters are only meaningful while unforgeable; the match
+  makes forgery harder, not impossible.
+- **Normalized once.** Stripped at the boundary; blank means omitted. The bytes counted against
+  the 4096-byte cap (bytes, not characters), the bytes hashed into `meta`, the bytes persisted in
+  the job spec, and the bytes codex receives are the same string. NUL bytes and lone surrogates
+  are refused pre-spend, as are other C0 control characters (except tab/LF/CR) and DEL —
+  json.dumps does not escape U+007F, which TOML 1.0 forbids in a basic string; codex 0.151.0
+  tolerates it, but a stricter upstream parser would turn it into a config-load failure. The
+  text also counts against `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` together
+  with the call's other caller-authored inputs.
+- **TOML-string-encoded** like the effort override (JSON string syntax with
+  `ensure_ascii=False`), so newlines, quotes, and astral characters round-trip byte-exact and
+  codex's TOML-value fallback never retypes the payload.
+- **Emitted only when text was supplied.** The common run stays byte-identical to the pre-#556
+  argv: no framing-only developer turn, and no `--strict-config` arming (which at `inherit`
+  isolation would hard-fail on unknown keys anywhere in the user's own `config.toml` — the #524
+  availability trade). A run that does carry the text also carries `--strict-config`, so an
+  upstream rename of the key fails loudly (`cli_contract_changed`) instead of silently dropping
+  the caller's instructions; the key is in `PLUGIN_OWNED_CONFIG_KEYS` for that attribution.
+  The CLI `-c` outranks a `config.toml` `developer_instructions` (verified live; the
+  integration probe pins it with a positive control), so on instruction-carrying runs the
+  composed value wins. The `--profile` layer was NOT probed for this key — the workspace pins'
+  flag-outranks-profile result (0.148.0) suggests the same, but that is inference, not
+  verification. On runs without the parameter the operator-trust boundary stands unchanged.
+- **Audited, never echoed.** `meta.developer_instructions` carries `{sha256, bytes}` of the
+  normalized text — on sync results, the async job-start handle, and a fetched job result (the
+  worker rebuilds it from the spec). Two plaintext carriers exist and are disclosed on the
+  parameter itself: the composed value rides the codex **command line** (visible to local process
+  listings for the run's duration), and the normalized text is persisted in the background-job
+  `spec.json` — like `question` and `extra_context` — until the record is consumed or expires.
+- **Two guarantees of different strengths.** Codex cannot gain a tool from the text (tools ride
+  argv/config, not the prompt — mechanical); Codex is *instructed* not to let the text determine
+  a verdict (behavioral). The tool description says "instructed", not "cannot".
+- **The user-turn framing is unchanged.** Every per-tool rule still rides the user turn on stdin
+  exactly as before; the developer turn is additive and binds only the caller text.
+- **The raw key stays refused in the passthrough** (#555, above), so the operator channel and
+  this parameter cannot disagree, and `codex_delegate`/`codex_delegate_async` do not accept the
+  parameter (delegate edits files; a caller stance there would widen what an untrusted workspace
+  can steer).
+
 ## Reasoning-effort control (`model_reasoning_effort`, #309)
 
 `codex exec` 0.151.0 has no dedicated reasoning-effort flag (verified against
@@ -943,9 +1004,12 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   over-denial as `model`; a nested `instructions` segment (`mcp_servers.<id>.instructions`) is a
   different key and still passes. Other config indirections were not exhaustively audited — a
   key that can shape instructions and is not listed here is the same boundary, not a promise.
-  No first-class replacement exists yet — a per-call, meta-reported
-  parameter is tracked in #556. An opaque `--profile`, and at the default `inherit` isolation the
-  user's own `config.toml`, can still set them: the operator-trust boundary below, restated.
+  For `developer_instructions` the first-class replacement is the per-call, meta-reported
+  parameter on consult/review (#556, below); the file- and catalog-shaped keys have no
+  first-class control on purpose. An opaque `--profile`, and at the default `inherit` isolation
+  the user's own `config.toml`, can still set them: the operator-trust boundary below, restated
+  (with one carve-out: a run that *carries* the parameter outranks a `config.toml`
+  `developer_instructions`, verified live — see the section below).
 - **`remote_plugin` is wholly plugin-owned in the passthrough.** Both `--enable remote_plugin` and
   `--disable remote_plugin`, and any `-c features.remote_plugin=…` (either spelling, since
   `--enable X` == `-c features.X=true`), are refused — the server manages this feature as a documented

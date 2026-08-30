@@ -24,10 +24,12 @@ from typing import TYPE_CHECKING, cast
 
 from pontonier.core import redaction
 from pontonier.core.jobs import ActivityRecorder
+from pydantic import ValidationError
 
-from codex_in_claude import delegate, orchestration
+from codex_in_claude import config, delegate, orchestration
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
+    DeveloperInstructions,
     ErrorResult,
     Meta,
     RootsSource,
@@ -64,6 +66,29 @@ def _hold_job_lock(job_dir: Path) -> None:
         _held_locks.append(fd)  # kept open == lock held until this process exits
 
 
+def _developer_instructions_fingerprint(raw: object) -> DeveloperInstructions | None:
+    """The delivered meta's audit fingerprint, rebuilt from the persisted spec.
+
+    Normalize BEFORE hashing (Opus review of #556): the backend re-normalizes what it
+    sends, so a hand-edited padded spec value must not attest different bytes than the
+    run received; server-produced specs are already normalized, so this is identity
+    for them. NON-THROWING by contract (Copilot, #559): `DeveloperInstructions.of`
+    raises on an over-cap or surrogate value, and `main()`'s crash path calls
+    `_meta_from_spec` AGAIN to build the crash envelope — a tampered spec value must
+    degrade to an absent attestation (the run itself fails closed at the adapter and
+    that failure envelope tells the story), never take down the crash sink and leave
+    no result.json at all."""
+    if not isinstance(raw, str):
+        return None
+    text = config.normalize_developer_instructions(raw)
+    if text is None:
+        return None
+    try:
+        return DeveloperInstructions.of(text)
+    except (ValidationError, UnicodeEncodeError, ValueError):
+        return None
+
+
 def _meta_from_spec(spec: dict) -> Meta:
     cwd = spec["cwd"]
     source = spec.get("workspace_source")
@@ -81,6 +106,13 @@ def _meta_from_spec(spec: dict) -> Meta:
         # (the key is written only when an effort was set, preserving idempotency
         # hashes); .get() reads both as None.
         reasoning_effort=spec.get("reasoning_effort"),
+        # The audit fingerprint for the caller's developer instructions (#556). The
+        # spec stores the NORMALIZED text (this worker needs it to build the run); the
+        # delivered meta carries only {sha256, bytes}. Same .get() idiom: absent from
+        # a pre-#556 spec and from any run without the parameter.
+        developer_instructions=_developer_instructions_fingerprint(
+            spec.get("developer_instructions")
+        ),
         # The roots state the ORIGINATING call saw (#393). It reaches a caller only via
         # this spec round-trip: a delivered success/crash envelope is built here, not
         # from the meta the handler prepared. Absent from a pre-#393 spec; .get() reads
@@ -241,6 +273,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
                 reasoning_effort=spec.get("reasoning_effort"),
+                developer_instructions=spec.get("developer_instructions"),
                 extra_context=spec.get("extra_context", ""),
                 on_event=on_event,
             )
@@ -259,6 +292,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
                 reasoning_effort=spec.get("reasoning_effort"),
+                developer_instructions=spec.get("developer_instructions"),
                 git_timeout=spec["git_timeout"],
                 max_bytes=spec["max_bytes"],
                 extra_context=spec.get("extra_context", ""),

@@ -1820,26 +1820,36 @@ def test_plugin_config_keys_for_mirrors_build_exec_command():
     a hand-maintained mirror that drifted would misattribute silently."""
     for sandbox in cli_contract.VALID_SANDBOXES:
         for effort in (None, "high", ""):
-            cmd, _ = codex.build_exec_command(
-                cwd="/w",
-                sandbox=sandbox,
-                isolation="inherit",
-                output_last_message_path="/x",
-                reasoning_effort=effort,
-                flag_support=_ALL_FLAGS,
-            )
-            emitted = {cmd[i + 1].split("=", 1)[0] for i, tok in enumerate(cmd[:-1]) if tok == "-c"}
-            assert (
-                codex.plugin_config_keys_for(sandbox=sandbox, reasoning_effort=effort) == emitted
-            ), (sandbox, effort)
+            for di in (None, "focus"):
+                cmd, _ = codex.build_exec_command(
+                    cwd="/w",
+                    sandbox=sandbox,
+                    isolation="inherit",
+                    output_last_message_path="/x",
+                    reasoning_effort=effort,
+                    developer_instructions=di,
+                    flag_support=_ALL_FLAGS,
+                )
+                emitted = {
+                    cmd[i + 1].split("=", 1)[0] for i, tok in enumerate(cmd[:-1]) if tok == "-c"
+                }
+                assert (
+                    codex.plugin_config_keys_for(
+                        sandbox=sandbox, reasoning_effort=effort, developer_instructions=di
+                    )
+                    == emitted
+                ), (sandbox, effort, di)
     # Every emitted key is a plugin-owned one, and each plugin-owned key is emitted by
     # SOME run shape — otherwise the set below and the pins have drifted apart.
     union: set[str] = set()
     for sandbox in cli_contract.VALID_SANDBOXES:
         for effort in (None, "high"):
-            keys = codex.plugin_config_keys_for(sandbox=sandbox, reasoning_effort=effort)
-            assert keys <= cli_contract.PLUGIN_OWNED_CONFIG_KEYS
-            union |= keys
+            for di in (None, "focus"):
+                keys = codex.plugin_config_keys_for(
+                    sandbox=sandbox, reasoning_effort=effort, developer_instructions=di
+                )
+                assert keys <= cli_contract.PLUGIN_OWNED_CONFIG_KEYS
+                union |= keys
     assert union == cli_contract.PLUGIN_OWNED_CONFIG_KEYS
 
 
@@ -2001,3 +2011,112 @@ async def test_run_codex_exec_maps_a_bad_override_to_binary_missing(clean_env, t
     err = codex.classify_failure(result.run, last_message=None, events="")
     assert err.code == "codex_not_found"
     assert "does-not-exist" not in err.message
+
+
+# --- #556: caller developer instructions ride one composed -c override ----------------
+
+_DI_KEY = cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY
+
+
+def _build(tmp_path, **kw):
+    return codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        flag_support=_ALL_FLAGS,
+        **kw,
+    )
+
+
+def test_build_exec_command_composes_developer_instructions_once(tmp_path):
+    from codex_in_claude import prompts
+
+    cmd, dropped = _build(tmp_path, developer_instructions="Focus on locking.")
+    tokens = [t for t in cmd if t.startswith(f"{_DI_KEY}=")]
+    assert len(tokens) == 1
+    assert cmd[cmd.index(tokens[0]) - 1] == "-c"
+    # The right-hand side is valid TOML decoding to the composed value: framing first,
+    # the caller's exact text between the markers (encode once, compose once).
+    decoded = tomllib.loads(f"v = {tokens[0].partition('=')[2]}")["v"]
+    assert decoded == prompts.compose_developer_instructions("Focus on locking.")
+    assert decoded.startswith(prompts.DEVELOPER_INSTRUCTIONS_FRAMING)
+    assert "Focus on locking." in decoded
+    # A plugin `-c` rode, so the strict-config guard must arm (silent upstream rename
+    # of the key would otherwise drop the caller's instructions without a trace).
+    assert cli_contract.STRICT_CONFIG_FLAG in cmd
+    assert dropped == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'line1\nline2 with "quotes" and back\\slash',
+        "astral 😀 and café",
+    ],
+)
+def test_build_exec_command_developer_instructions_toml_round_trip(tmp_path, text):
+    from codex_in_claude import prompts
+
+    cmd, _ = _build(tmp_path, developer_instructions=text)
+    token = next(t for t in cmd if t.startswith(f"{_DI_KEY}="))
+    decoded = tomllib.loads(f"v = {token.partition('=')[2]}")["v"]
+    assert decoded == prompts.compose_developer_instructions(text)
+
+
+def test_build_exec_command_omits_developer_instructions_when_none(tmp_path):
+    # The common run sends NO developer override: no framing-only turn, no `-c`, no
+    # strict-config arming — byte-identical to the pre-#556 argv.
+    cmd, _ = _build(tmp_path, developer_instructions=None)
+    assert not any(_DI_KEY in tok for tok in cmd)
+    assert cli_contract.STRICT_CONFIG_FLAG not in cmd
+
+
+def test_build_exec_command_developer_instructions_ordering(tmp_path, monkeypatch):
+    # After the effort pair, before the operator passthrough and the stdin sentinel.
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=azure")
+    cmd, _ = codex.build_exec_command(
+        cwd="/repo",
+        sandbox="read-only",
+        isolation="inherit",
+        output_last_message_path=str(tmp_path / "l"),
+        reasoning_effort="high",
+        developer_instructions="x",
+        extra_args=config.extra_args().tokens,
+        flag_support=_ALL_FLAGS,
+    )
+    effort_at = cmd.index(f'{_EFFORT_KEY}="high"')
+    di_at = next(i for i, t in enumerate(cmd) if t.startswith(f"{_DI_KEY}="))
+    operator_at = cmd.index("model_provider=azure")
+    assert effort_at < di_at < operator_at < len(cmd) - 1
+    assert cmd[-1] == "-"
+
+
+def test_plugin_config_keys_for_includes_developer_instructions_iff_sent():
+    with_di = codex.plugin_config_keys_for(
+        sandbox="read-only", reasoning_effort=None, developer_instructions="x"
+    )
+    without = codex.plugin_config_keys_for(
+        sandbox="read-only", reasoning_effort=None, developer_instructions=None
+    )
+    assert cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY in with_di
+    assert cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY not in without
+
+
+def test_classify_shared_dash_c_stays_contract_changed_for_any_plugin_owned_key():
+    # Codex-review regression (#556 plan): ownership of the shared `-c` token derives
+    # from the RUN-SPECIFIC emitted key set, not from the effort parameter alone — a
+    # developer-instructions run (no effort) also emits a bare `-c` pair, so a
+    # rejection naming only that shared token must stay fail-loud.
+    err = codex.classify_failure(
+        CommandRun("", "error: unexpected argument '-c' found", 2, 1, False),
+        extra_args=config.ExtraArgs(
+            tokens=("-c", "model_provider=azure"),
+            descriptors=("-c", "model_provider"),
+            option_count=1,
+            configured=True,
+        ),
+        reasoning_effort=None,
+        plugin_config_keys=frozenset({cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY}),
+    )
+    assert err.code == "cli_contract_changed"

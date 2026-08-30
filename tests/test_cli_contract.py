@@ -400,7 +400,7 @@ def test_strict_config_flag_is_guarantee_bearing():
     assert cli_contract.STRICT_CONFIG_FLAG not in cli_contract.HELP_GATED_FLAGS
 
 
-def test_plugin_owned_config_keys_are_exactly_the_pinned_three():
+def test_plugin_owned_config_keys_are_exactly_the_pinned_four():
     # The set the override-form classifier matches against to prove a rejected key is
     # OURS. Literal values, so a typo'd constant fails here instead of silently
     # reclassifying a genuine drift as an operator problem.
@@ -408,6 +408,7 @@ def test_plugin_owned_config_keys_are_exactly_the_pinned_three():
         "model_reasoning_effort",
         "sandbox_workspace_write.network_access",
         "sandbox_workspace_write.writable_roots",
+        "developer_instructions",
     }
     assert set(cli_contract.PLUGIN_OWNED_CONFIG_KEYS) == expected
     # Every one is a key the builder actually emits.
@@ -415,6 +416,7 @@ def test_plugin_owned_config_keys_are_exactly_the_pinned_three():
     assert cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY in keys
     assert cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY in keys
     assert cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY in keys
+    assert cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY in keys
 
 
 def test_strict_config_recognizer_tolerates_carriage_returns():

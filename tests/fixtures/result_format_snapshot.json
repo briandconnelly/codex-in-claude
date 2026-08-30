@@ -1,5 +1,5 @@
 {
-  "result_format": 10,
+  "result_format": 11,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -23,6 +23,28 @@
             }
           },
           "title": "ContextSummary",
+          "type": "object"
+        },
+        "DeveloperInstructions": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 4096,
+              "minimum": 1,
+              "title": "Bytes",
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha256",
+            "bytes"
+          ],
+          "title": "DeveloperInstructions",
           "type": "object"
         },
         "Finding": {
@@ -162,6 +184,17 @@
             "cwd": {
               "title": "Cwd",
               "type": "string"
+            },
+            "developer_instructions": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeveloperInstructions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "elapsed_ms": {
               "title": "Elapsed Ms",
@@ -819,6 +852,28 @@
           "title": "ContextSummary",
           "type": "object"
         },
+        "DeveloperInstructions": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 4096,
+              "minimum": 1,
+              "title": "Bytes",
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha256",
+            "bytes"
+          ],
+          "title": "DeveloperInstructions",
+          "type": "object"
+        },
         "Finding": {
           "additionalProperties": false,
           "properties": {
@@ -956,6 +1011,17 @@
             "cwd": {
               "title": "Cwd",
               "type": "string"
+            },
+            "developer_instructions": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeveloperInstructions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "elapsed_ms": {
               "title": "Elapsed Ms",
@@ -1625,6 +1691,28 @@
           "title": "ContextSummary",
           "type": "object"
         },
+        "DeveloperInstructions": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 4096,
+              "minimum": 1,
+              "title": "Bytes",
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha256",
+            "bytes"
+          ],
+          "title": "DeveloperInstructions",
+          "type": "object"
+        },
         "ErrorDetail": {
           "additionalProperties": false,
           "properties": {
@@ -1986,6 +2074,17 @@
             "cwd": {
               "title": "Cwd",
               "type": "string"
+            },
+            "developer_instructions": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeveloperInstructions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "elapsed_ms": {
               "title": "Elapsed Ms",
@@ -2711,6 +2810,28 @@
           "title": "Coverage",
           "type": "object"
         },
+        "DeveloperInstructions": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 4096,
+              "minimum": 1,
+              "title": "Bytes",
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha256",
+            "bytes"
+          ],
+          "title": "DeveloperInstructions",
+          "type": "object"
+        },
         "Finding": {
           "additionalProperties": false,
           "properties": {
@@ -2848,6 +2969,17 @@
             "cwd": {
               "title": "Cwd",
               "type": "string"
+            },
+            "developer_instructions": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeveloperInstructions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "elapsed_ms": {
               "title": "Elapsed Ms",
@@ -3554,6 +3686,7 @@
         "compat_warnings": [],
         "context_summary": null,
         "cwd": "/repo",
+        "developer_instructions": null,
         "elapsed_ms": 1,
         "fingerprint": "<fingerprint>",
         "idempotency_replayed": null,
@@ -3602,6 +3735,7 @@
         "compat_warnings": [],
         "context_summary": null,
         "cwd": "/repo",
+        "developer_instructions": null,
         "elapsed_ms": 1,
         "fingerprint": "<fingerprint>",
         "idempotency_replayed": null,
@@ -3724,6 +3858,10 @@
         "compat_warnings": [],
         "context_summary": null,
         "cwd": "/repo",
+        "developer_instructions": {
+          "bytes": 5,
+          "sha256": "c51faa148557a08cbf790156578b7a82b41f22dd01227f7dde057e34c18a365f"
+        },
         "elapsed_ms": 1,
         "fingerprint": "<fingerprint>",
         "idempotency_replayed": null,
