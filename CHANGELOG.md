@@ -5,49 +5,43 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
-### Changed
-
-- **The bundled skill now teaches when and how to use `developer_instructions`** (#560): a
-  content-routing rule (stance/persona/emphasis in `developer_instructions`; data and facts in
-  `extra_context`; the ask in `question`/scope), refusal recovery for `forged_framing_marker` and
-  the two byte limits, a dry-run caveat (previews validate none of it), an independence hazard
-  (a stance hinting at Claude's approach forfeits the two-member pattern), framing stability
-  across review–revise passes with the `meta.developer_instructions` fingerprint as the
-  equality check, a Data-exposure bullet for the argv/job-record carriers, and three new
-  SKILL.md binding rules (routing, exposure, independence) plus a stance-leak
-  reclassification trigger. Skill prose and a new S15 behavioral scenario
-  only — no wire text, no `fingerprint` move.
+## [0.21.0] - 2026-08-30
 
 ### Added
 
 - **`developer_instructions` on `codex_consult`, `codex_consult_async`, `codex_review_changes`,
-  and `codex_review_changes_async`** (#556; the Codex analogue of claude-in-codex#130): optional
-  caller stance/focus text composed into ONE `-c developer_instructions` value — this server's
-  framing always leads, the caller text is delimited on both sides, and the closing marker
-  outranks anything between the markers. codex places the value as the first developer-role
-  message, ahead of its own developer messages (pinned by new zero-spend
-  `codex debug prompt-input` integration probes, with a negative control and a
-  config-file-precedence probe). Normalized once (stripped; blank = omitted); refused pre-spend
-  over 4096 bytes, on control characters (C0 except tab/LF/CR, DEL, NUL) or lone surrogates,
-  or when the text carries a framing-marker line (as `invalid_arguments` with a reason naming
-  `forged_framing_marker`); counted against `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` with the call's
-  other caller-authored inputs. Emitted only when text is present, so the common run's argv is
-  byte-identical and never arms `--strict-config`; an instruction-carrying run does arm it, and
-  the key joins `PLUGIN_OWNED_CONFIG_KEYS` so an upstream rename fails loud. `meta` gains a
-  `developer_instructions` `{sha256, bytes}` fingerprint (sync results, the async launch handle,
-  and fetched job results — the job spec persists the normalized text, like `question`, and the
-  worker rebuilds the fingerprint from it); the text itself is never echoed. Deliberately NOT on
-  `codex_delegate`/`codex_delegate_async`. Ownership of a rejected bare `-c` in failure
-  classification now derives from the run's emitted plugin key set, not the effort override
-  alone. New `developer_instructions` parameter contract in `codex://params`;
-  `tools/list` and catalog byte budgets re-measured (+2,842 B). `fingerprint` `schema-84` →
-  `schema-85`; persisted `RESULT_FORMAT` 10 → 11 (new `Meta` field; verified the serialized
-  snapshot view moved). Non-breaking (additive). An independent adversarial review (Opus) of the first cut found and this entry's shape reflects: the byte cap now runs before the framing-marker scan, whose first-cut pattern backtracked quadratically (~407s of event-loop CPU at the 200KB default input budget) and missed `+++`/`~~~`/em-dash/unfenced forgeries — the scan is now linear by construction (possessive quantifiers + a bounded fence run) and phrase-at-line-start suffices; the shipping classification path now passes the run's developer-instructions key to strict-config attribution (a rejection of the plugin's own key was previously blamed on the user's config.toml); and the job worker's rebuilt fingerprint hashes the normalized text.
-- **pontonier 0.6.0 → 0.7.0**: the caller text crosses the backend adapter on the new
-  first-class `RunRequest.instructions_append` field (pontonier#12) instead of riding
-  `extra_args`, which the protocol reserves for operator descriptors;
-  `CodexBackend.validate_request` mirrors the server boundary on the same helpers and
-  `prepare()` fails closed for direct adapter callers. Closes the seam half of #558.
+  and `codex_review_changes_async`** (#556): optional caller stance/focus text placed in Codex's
+  developer turn, composed into ONE `-c developer_instructions` value — this server's framing
+  always leads, the caller text is delimited on both sides, and the closing marker outranks
+  anything between the markers. codex places the value as the first developer-role message,
+  ahead of its own developer messages (pinned by zero-spend `codex debug prompt-input`
+  integration probes with a negative control and a config-file-precedence probe). Normalized
+  once (stripped; blank = omitted); refused pre-spend over 4096 bytes, on control characters
+  (C0 except tab/LF/CR, DEL, NUL) or lone surrogates, or when the text carries a framing-marker
+  line (`invalid_arguments` with a reason naming `forged_framing_marker`; the byte cap runs
+  before the marker scan, which is linear by construction); counted against
+  `CODEX_IN_CLAUDE_MAX_INPUT_BYTES` with the call's other caller-authored inputs. Emitted only
+  when text is present, so the common run's argv is byte-identical and never arms
+  `--strict-config`; an instruction-carrying run does arm it, the key joins
+  `PLUGIN_OWNED_CONFIG_KEYS` so an upstream rename fails loud, and strict-config failure
+  attribution accounts for the run's emitted plugin key set. `meta` gains a
+  `developer_instructions` `{sha256, bytes}` fingerprint on sync results, the async launch
+  handle, and fetched job results (the job spec persists the normalized text, like `question`);
+  the text itself is never echoed. Deliberately NOT on `codex_delegate`/`codex_delegate_async`.
+  New `developer_instructions` parameter contract in `codex://params`; `tools/list` and catalog
+  byte budgets re-measured (+2,842 B). `fingerprint` `schema-84` → `schema-85`; persisted
+  `RESULT_FORMAT` 10 → 11 (new `Meta` field). Non-breaking (additive).
+- **The bundled skill teaches when and how to use `developer_instructions`** (#560): a
+  content-routing rule (stance/persona/emphasis in `developer_instructions`; the target via the
+  review scope or a consult's `question`; facts and quoted artifacts in `extra_context`; data
+  never in the developer turn), refusal recovery for `forged_framing_marker` and the two byte
+  limits, a dry-run caveat (`codex_dry_run` takes no `developer_instructions`), an independence
+  hazard (a stance hinting at Claude's approach forfeits the two-member pattern), framing
+  stability across review–revise passes with the `meta.developer_instructions` fingerprint as
+  the equality check, a Data-exposure bullet for the argv/job-record carriers, three new
+  SKILL.md binding rules (routing, exposure, independence) plus a stance-leak reclassification
+  trigger, and a new S15 behavioral scenario with recorded treatment runs. Skill prose only —
+  no wire text.
 
 ### Changed
 
@@ -56,44 +50,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `-c developer_instructions=…`, `model_instructions_file`, its deprecated alias
   `experimental_instructions_file`, the documented-as-reserved `instructions`, and
   `model_catalog_json` (a catalog entry can redefine a model's `base_instructions`) — plus the
-  usual case/quote lookalikes — at parse time with `extra_args_rejected`, before any spend. Every framing
-  string this server sends rides the user turn, and `developer_instructions` lands as the *first*
-  developer-role message (verified on codex-cli 0.151.0), so a passthrough value outranked the
-  server's own guardrails while `meta` recorded nothing beyond "a valid passthrough was
-  configured". The per-call, meta-reported `developer_instructions` parameter (#556, above) is
-  the first-class replacement for that one key. `--profile` and, at `inherit` isolation, the user's `config.toml` remain the documented
-  operator-trust boundary. Not a `fingerprint` move: the denylist is not part of the discovered
-  surface (`schema-84` stands).
-
-- **Tracked Codex version is now `0.151`.** `SUPPORTED_VERSIONS` tracks `(0, 151)`; a `0.149` or
-  `0.150` CLI still runs and now reports the advisory untracked-version warning in `codex_status`.
-  Verified end to end against `codex-cli 0.151.0` and A/B'd against a side-by-side `0.149.1`.
-  **No contract break and no agent-visible change:** the result `fingerprint` stays at
-  `codex-in-claude/0.1/schema-84` and `RESULT_FORMAT` at `10`.
-  - All 12 `ALWAYS_SEND` flags, the `--model` help-gated flag, and all three `--sandbox` values are
-    present. `codex --help`, `codex exec --help`, `codex review --help`, `codex exec review --help`,
-    and `codex app-server --help` are **byte-identical** between `0.149.1` and `0.151.0`; only the
-    feature-flag table moved.
-  - Both security pins re-verified live with positive controls, each against the config file **and**
-    an operator `--profile`: `sandbox_workspace_write.network_access=false` still blocks egress, and
-    `sandbox_workspace_write.writable_roots=[]` still blocks writes outside the workspace. Upstream's
-    `SandboxWorkspaceWrite` struct at `rust-v0.151.0` still carries exactly the four fields
-    `COMPATIBILITY.md` accounts for, so no new widening key arrived unpinned.
-  - `model_reasoning_effort` is still read and applied (the rejection still carries both
-    `[ReasoningEffortParam]` and `[reasoning.effort]`), and `codex exec` still has no dedicated
-    effort flag.
-  - The `--strict-config` grammars — the override form, the file form, and both invalid-value
-    sub-grammars — still parse, and `--ignore-user-config` still exempts the config file.
-  - The `0.149.1` → `0.151.0` app-server schema diff added ten v2 messages this plugin does not
-    consume, removed none, and left **all seven** consumed schemas byte-identical.
-  - `KNOWN_MODEL_SLUGS` is unchanged: the live `0.151.0` cache serves the same eight slugs, and the
-    reasoning-effort discovery fields still hold their pinned shape.
-  - The implicit-context presence matrix (`AGENTS.md` sources and both skills roots) is **identical**
-    to `0.149.1` across every variant, under the read-forbidding, assertion-backed probe. Note that
-    `0.151` adds a `skip_host_skill_discovery` feature flag — `under development`, default-off, and
-    inert here, but the flag to re-probe first when it stages.
-  - New `0.151` surface is deliberately not adopted; `remote_plugin`, `view_image`, and
-    `recommended_plugins` all hold their recorded stage and default.
+  usual case/quote lookalikes — at parse time with `extra_args_rejected`, before any spend.
+  Every framing string this server sends rides the user turn while `developer_instructions`
+  lands as the *first* developer-role message (verified on codex-cli 0.151.0), so a passthrough
+  value outranked the server's own guardrails with no `meta` record. The per-call,
+  meta-reported `developer_instructions` parameter (above) is the first-class replacement.
+  `--profile` and, at `inherit` isolation, the user's `config.toml` remain the documented
+  operator-trust boundary. Not itself a `fingerprint` move: the denylist is not part of the
+  discovered surface.
+- **pontonier 0.6.0 → 0.7.0**: the caller text crosses the backend adapter on the new
+  first-class `RunRequest.instructions_append` field (pontonier#12) instead of riding
+  `extra_args`, which the protocol reserves for operator descriptors;
+  `CodexBackend.validate_request` mirrors the server boundary and `prepare()` fails closed for
+  direct adapter callers (#558).
+- **Tracked Codex version is now `0.151`.** `SUPPORTED_VERSIONS` tracks `(0, 151)`; a `0.149`
+  or `0.150` CLI still runs and reports the advisory untracked-version warning in
+  `codex_status`. Verified end to end against `codex-cli 0.151.0` and A/B'd against a
+  side-by-side `0.149.1`: all tracked flags and sandbox values present (the five relevant help
+  screens are byte-identical to `0.149.1`); both security pins re-verified live with positive
+  controls against the config file and an operator `--profile`; the `--strict-config` grammars
+  still parse; the app-server schema diff left all seven consumed schemas byte-identical;
+  `KNOWN_MODEL_SLUGS` unchanged; the implicit-context presence matrix identical under the
+  read-forbidding probe (note: `0.151` adds a default-off `skip_host_skill_discovery` feature
+  flag — the flag to re-probe first when it stages). New `0.151` surface is deliberately not
+  adopted. No contract break and no agent-visible change.
 
 ## [0.20.0] - 2026-08-26
 
