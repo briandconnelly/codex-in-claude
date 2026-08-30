@@ -8,6 +8,10 @@
           "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 16,
+            "sha256": "ff50f3a850bee2611f31acd0dc629a90f72e3a9e4f875ee681cbb446eca21e61"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -210,6 +214,10 @@
           "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
+          "developer_instructions": {
+            "bytes": 16,
+            "sha256": "ff50f3a850bee2611f31acd0dc629a90f72e3a9e4f875ee681cbb446eca21e61"
+          },
           "elapsed_ms": 1,
           "fingerprint": "<fingerprint>",
           "isolation": "inherit",
@@ -423,6 +431,7 @@
       "command_exit_code",
       "commit",
       "context_summary",
+      "developer_instructions",
       "idempotency_replayed",
       "job_kind",
       "model",
@@ -439,6 +448,7 @@
     ],
     "review": [
       "commit",
+      "developer_instructions",
       "idempotency_replayed",
       "job_kind",
       "rate_limit",
@@ -447,6 +457,7 @@
     ],
     "review_commit_truncated": [
       "base",
+      "developer_instructions",
       "idempotency_replayed",
       "job_kind",
       "paths",

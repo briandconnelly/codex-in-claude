@@ -867,7 +867,12 @@ def _wire_catalog_bytes() -> int:
 # rejected rather than stripped; see tests/test_wire_size.py for why the pattern half cannot
 # be compacted away): 92,616 -> 94,147 bytes (+1,531 B) — over cap; cap raised to the next
 # 1,000 above the measured value.
-CATALOG_BYTE_CAP = 95_000
+# Measured again 2026-08-30 (#556, `developer_instructions` on the four consult/review
+# tools — one compressed summary each; the untrusted/no-tools/plaintext-carrier facts are
+# first-read security disclosures that cannot wait for the codex://params fetch):
+# 94,147 -> 96,804 bytes (+2,657 B) — over cap; cap raised to the next 1,000 above the
+# measured value.
+CATALOG_BYTE_CAP = 97_000
 
 
 def test_wire_catalog_under_cap():
@@ -1026,7 +1031,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-84"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-85"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
@@ -1263,6 +1268,7 @@ def _fully_populated_meta() -> Meta:
         roots_source="client",
         model="a-model",
         reasoning_effort="high",
+        developer_instructions=s.DeveloperInstructions.of("focus"),
         scope="branch",
         base="main",
         commit="0" * 40,
@@ -1324,3 +1330,55 @@ class TestSlimMetaPopulatedOptionals:
         meta = _fully_populated_meta().model_dump(mode="json")
         out = s.slim_meta(TestSlimMeta._envelope(meta={**meta, "a_null_probe": None}))
         assert "a_null_probe" not in out["meta"]
+
+
+# --- #556: meta.developer_instructions fingerprint ------------------------------------
+
+
+def test_developer_instructions_of_hashes_the_exact_bytes():
+    import hashlib
+
+    fp = s.DeveloperInstructions.of("focus 😀")
+    raw = "focus 😀".encode()
+    assert fp.sha256 == hashlib.sha256(raw).hexdigest()
+    assert fp.bytes == len(raw)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"sha256": "7", "bytes": 1},  # not a digest
+        {"sha256": "A" * 64, "bytes": 1},  # uppercase hex rejected by the pattern
+        {"sha256": "a" * 64, "bytes": 0},  # zero bytes: blank text never fingerprints
+        {"sha256": "a" * 64, "bytes": 4097},  # over the cap: unpersistable by this server
+        {"sha256": "a" * 64, "bytes": "7"},  # strict int: no coercion from a tampered spec
+        {"sha256": 7, "bytes": 1},  # strict str
+    ],
+)
+def test_developer_instructions_rejects_tampered_records(bad):
+    with pytest.raises(ValidationError):
+        s.DeveloperInstructions.model_validate(bad)
+
+
+def test_developer_instructions_cap_matches_config():
+    # The le= bound is a literal here (no config import in schemas); pin the mirror.
+    from codex_in_claude import config
+
+    assert (
+        s.DeveloperInstructions.model_fields["bytes"].metadata[-1].le
+        == config.MAX_DEVELOPER_INSTRUCTIONS_BYTES
+    )
+
+
+def test_meta_accepts_and_defaults_developer_instructions():
+    meta = Meta(
+        cwd="/r",
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=1,
+        elapsed_ms=0,
+    )
+    assert meta.developer_instructions is None
+    meta.developer_instructions = s.DeveloperInstructions.of("x")
+    assert meta.developer_instructions.bytes == 1

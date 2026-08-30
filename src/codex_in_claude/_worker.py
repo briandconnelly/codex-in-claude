@@ -28,6 +28,7 @@ from pontonier.core.jobs import ActivityRecorder
 from codex_in_claude import delegate, orchestration
 from codex_in_claude.errors import make_error, serialize_error
 from codex_in_claude.schemas import (
+    DeveloperInstructions,
     ErrorResult,
     Meta,
     RootsSource,
@@ -81,6 +82,15 @@ def _meta_from_spec(spec: dict) -> Meta:
         # (the key is written only when an effort was set, preserving idempotency
         # hashes); .get() reads both as None.
         reasoning_effort=spec.get("reasoning_effort"),
+        # The audit fingerprint for the caller's developer instructions (#556). The
+        # spec stores the NORMALIZED text (this worker needs it to build the run); the
+        # delivered meta carries only {sha256, bytes}. Same .get() idiom: absent from
+        # a pre-#556 spec and from any run without the parameter.
+        developer_instructions=(
+            DeveloperInstructions.of(spec["developer_instructions"])
+            if spec.get("developer_instructions")
+            else None
+        ),
         # The roots state the ORIGINATING call saw (#393). It reaches a caller only via
         # this spec round-trip: a delivered success/crash envelope is built here, not
         # from the meta the handler prepared. Absent from a pre-#393 spec; .get() reads
@@ -241,6 +251,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
                 reasoning_effort=spec.get("reasoning_effort"),
+                developer_instructions=spec.get("developer_instructions"),
                 extra_context=spec.get("extra_context", ""),
                 on_event=on_event,
             )
@@ -259,6 +270,7 @@ async def _run(job_dir: Path, spec: dict, meta: Meta) -> dict:
                 timeout_seconds=spec["timeout_seconds"],
                 model=spec.get("model"),
                 reasoning_effort=spec.get("reasoning_effort"),
+                developer_instructions=spec.get("developer_instructions"),
                 git_timeout=spec["git_timeout"],
                 max_bytes=spec["max_bytes"],
                 extra_context=spec.get("extra_context", ""),

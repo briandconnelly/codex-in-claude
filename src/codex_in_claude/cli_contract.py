@@ -524,6 +524,20 @@ WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY = "sandbox_workspace_write.network_acc
 # docs/UPGRADING-CODEX.md remains mandatory on every supported-version change.
 WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY = "sandbox_workspace_write.writable_roots"
 
+# --- Caller developer instructions channel (#556) ---------------------------------
+# `codex exec` has no flag for developer-turn text; the channel is this config key,
+# which lands as the FIRST developer-role message, AHEAD of codex's own developer
+# messages and AGENTS.md (verified zero-spend via `codex debug prompt-input`,
+# codex-cli 0.151.0, 2026-08-30 — content kind `generic.developer_instructions`).
+# Deliberately NOT `model_instructions_file`: that key REPLACES the built-in
+# instructions rather than adding a turn. The builder emits the key only when a
+# caller supplied text, composed behind the server's framing and TOML-string-encoded
+# (see codex.build_exec_command); the run then also carries STRICT_CONFIG_FLAG, so an
+# upstream rename of this key fails loudly instead of silently dropping the caller's
+# instructions. The same raw key is refused in the operator passthrough
+# (config._DENIED_INSTRUCTION_CONFIG_KEYS), so the two channels cannot disagree.
+DEVELOPER_INSTRUCTIONS_CONFIG_KEY = "developer_instructions"
+
 # --- Strict-config rejection grammar (issue #524) ----------------------------------
 # Every config KEY this plugin itself pins through `-c`. Under STRICT_CONFIG_FLAG a
 # rejection naming one of these is PROOF the key drifted upstream: codex echoes back the
@@ -535,6 +549,7 @@ PLUGIN_OWNED_CONFIG_KEYS = frozenset(
         MODEL_REASONING_EFFORT_CONFIG_KEY,
         WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY,
         WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY,
+        DEVELOPER_INSTRUCTIONS_CONFIG_KEY,
     }
 )
 

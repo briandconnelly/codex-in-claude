@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pontonier.backend.protocol import RunRequest
 from pontonier.core import redaction, runtime
 
-from codex_in_claude import binpath, cli_contract, config, normalize, preflight
+from codex_in_claude import binpath, cli_contract, config, normalize, preflight, prompts
 from codex_in_claude.config import isolation_flags
 from codex_in_claude.errors import make_error
 from codex_in_claude.schemas import ErrorDetail
@@ -82,6 +82,7 @@ def build_exec_command(
     output_last_message_path: str,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    developer_instructions: str | None = None,
     output_schema_path: str | None = None,
     add_dirs: tuple[str, ...] = (),
     skip_git_repo_check: bool = False,
@@ -168,6 +169,23 @@ def build_exec_command(
             f"{json.dumps(reasoning_effort, ensure_ascii=False)}",
         ]
         plugin_config_override = True
+    # Caller developer instructions (#556): one `-c` pair carrying ONE composed string —
+    # the server's framing leads, the caller's normalized text is delimited inside it
+    # (prompts.compose_developer_instructions), so ordering is a property of the value.
+    # Emitted only when text was supplied: the common run stays byte-identical to the
+    # pre-#556 argv (no framing-only developer turn, no strict-config arming — see the
+    # guard below and the availability note on its comment). Same TOML-string encoding
+    # as the effort override above, same reasons.
+    if developer_instructions is not None:
+        tokens += [
+            "-c",
+            f"{cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY}="
+            + json.dumps(
+                prompts.compose_developer_instructions(developer_instructions),
+                ensure_ascii=False,
+            ),
+        ]
+        plugin_config_override = True
     # Guard every `-c` KEY this argv carries (#524). `--strict-config` turns codex's
     # silent tolerance of an unknown key into a zero-spend startup failure, which is what
     # converts a silent upstream rename of a guarantee-bearing pin above
@@ -212,6 +230,7 @@ async def run_codex_exec(
     timeout_seconds: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    developer_instructions: str | None = None,
     output_schema: dict | None = None,
     on_event: Callable[[str], None] | None = None,
 ) -> CodexExecResult:
@@ -242,6 +261,10 @@ async def run_codex_exec(
         reasoning_effort=reasoning_effort,
         access=sandbox,
         isolation=isolation,
+        # Normalized caller text or None (#556), on the first-class pontonier 0.7.0
+        # field: the adapter folds it into the builder's composed `-c` value. NOT an
+        # extra_args descriptor — that channel is operator-owned by the protocol.
+        instructions_append=developer_instructions,
     )
     # Resolve the binary here, ahead of `prepare()` (whose `build_exec_command()` call
     # then hits the cache). A bad CODEX_IN_CLAUDE_CODEX_BIN override otherwise raised
@@ -454,7 +477,12 @@ def version_display(version: str | None) -> str | None:
     return _safe_echo(version) or None
 
 
-def plugin_config_keys_for(*, sandbox: str, reasoning_effort: str | None) -> frozenset[str]:
+def plugin_config_keys_for(
+    *,
+    sandbox: str,
+    reasoning_effort: str | None,
+    developer_instructions: str | None = None,
+) -> frozenset[str]:
     """The `-c` config KEYS `build_exec_command` emits for a run of this shape.
 
     Failure attribution turns on which pinned keys THIS run actually sent (#550): the
@@ -468,6 +496,8 @@ def plugin_config_keys_for(*, sandbox: str, reasoning_effort: str | None) -> fro
         keys.add(cli_contract.WORKSPACE_WRITE_WRITABLE_ROOTS_CONFIG_KEY)
     if reasoning_effort is not None:
         keys.add(cli_contract.MODEL_REASONING_EFFORT_CONFIG_KEY)
+    if developer_instructions is not None:
+        keys.add(cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY)
     return frozenset(keys)
 
 
@@ -784,7 +814,12 @@ def classify_failure(
         # and the documented fail-loud `-c` guarantee must win. Operator attribution
         # requires a descriptor the plugin does not also send (a config key, profile/
         # feature name, or another flag).
-        plugin_owns_dash_c = reasoning_effort is not None
+        # Ownership derives from the RUN-SPECIFIC emitted key set, not the effort
+        # parameter alone: a developer-instructions run and the workspace-write pins
+        # also emit bare `-c` pairs (#556 review). `reasoning_effort is not None` is
+        # kept for direct callers that pass no key set (its key is a member whenever
+        # the builder saw it).
+        plugin_owns_dash_c = reasoning_effort is not None or bool(plugin_config_keys)
         if matched is not None and not (plugin_owns_dash_c and set(matched) <= {"-c"}):
             return _extra_args_rejected_error(matched)
         return contract_changed_error()

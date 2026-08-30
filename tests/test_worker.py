@@ -743,3 +743,107 @@ def test_worker_guard_normalizes_with_spec_meta_when_meta_missing(tmp_path, monk
     assert out["ok"] is False
     assert out["error"]["code"] == "internal_error"
     assert out["meta"]["cwd"] == str(tmp_path)
+
+
+# --- #556: the job spec carries the text; the delivered meta carries the fingerprint --
+
+
+def test_worker_meta_rebuilds_developer_instructions_fingerprint(tmp_path):
+    from codex_in_claude import _worker as w
+    from codex_in_claude.schemas import DeveloperInstructions
+
+    spec = {
+        "kind": "codex_consult",
+        "cwd": str(tmp_path),
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": "inherit",
+        "timeout_seconds": 60,
+        "developer_instructions": "focus",
+    }
+    meta = w._meta_from_spec(spec)
+    assert meta.developer_instructions == DeveloperInstructions.of("focus")
+    # A legacy (pre-#556) or no-instruction spec reads as None — same .get() idiom as
+    # reasoning_effort.
+    del spec["developer_instructions"]
+    assert w._meta_from_spec(spec).developer_instructions is None
+
+
+def test_worker_dispatches_consult_with_developer_instructions(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_consult",
+        question="why?",
+        tier="consult",
+        sandbox="read-only",
+        cwd=str(tmp_path),
+        developer_instructions="focus on locking",
+    )
+
+    async def fake_run_consult(question, cwd, meta, **kw):
+        assert kw["developer_instructions"] == "focus on locking"
+        # The fingerprint the caller will read is rebuilt HERE, not at launch.
+        assert meta.developer_instructions is not None
+        return {"ok": True, "tool": "codex_consult", "summary": question}
+
+    monkeypatch.setattr(orchestration, "run_consult", fake_run_consult)
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out.get("ok") is True, out
+    # The crash sink also exits 0, so the written result is the real assertion: an
+    # unforwarded kwarg would surface here as an internal_error envelope.
+    out = json.loads((jd / "result.json").read_text())
+    assert out.get("ok") is True, out
+
+
+def test_worker_dispatches_review_with_developer_instructions(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_review_changes",
+        tier="consult",
+        sandbox="read-only",
+        cwd=str(tmp_path),
+        scope="working_tree",
+        git_timeout=5,
+        max_bytes=1000,
+        developer_instructions="focus",
+    )
+
+    async def fake_run_review(cwd, meta, **kw):
+        assert kw["developer_instructions"] == "focus"
+        return {"ok": True, "tool": "codex_review_changes", "summary": "s"}
+
+    monkeypatch.setattr(orchestration, "run_review", fake_run_review)
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out.get("ok") is True, out
+
+
+def test_worker_dispatch_without_key_passes_none(tmp_path, monkeypatch):
+    from codex_in_claude import orchestration
+
+    jd = tmp_path / "job"
+    _write_spec(
+        jd,
+        kind="codex_consult",
+        question="q",
+        tier="consult",
+        sandbox="read-only",
+        cwd=str(tmp_path),
+    )
+
+    async def fake_run_consult(question, cwd, meta, **kw):
+        assert kw["developer_instructions"] is None
+        assert meta.developer_instructions is None
+        return {"ok": True, "tool": "codex_consult", "summary": question}
+
+    monkeypatch.setattr(orchestration, "run_consult", fake_run_consult)
+    assert _worker.main([str(jd)]) == 0
+    out = json.loads((jd / "result.json").read_text())
+    assert out.get("ok") is True, out

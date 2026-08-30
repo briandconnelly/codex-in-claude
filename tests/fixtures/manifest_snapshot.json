@@ -109,6 +109,7 @@
         "key_optional_params": [
           "workspace_root",
           "extra_context",
+          "developer_instructions",
           "model",
           "reasoning_effort",
           "isolation",
@@ -119,7 +120,7 @@
         "required_params": [
           "question"
         ],
-        "returns": "A result envelope with summary, optional findings, and meta. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends question+extra_context (raw, unredacted) to OpenAI; Codex always runs with a resolved working dir (workspace_root, your MCP roots, or the server cwd), which selects where it works, not what it can read. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it. Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
+        "returns": "A result envelope with summary, optional findings, and meta. detail='summary' (default) omits raw_response.text; detail='full' includes it. Egress: sends question+extra_context+developer_instructions (raw, unredacted) to OpenAI; Codex always runs with a resolved working dir (workspace_root, your MCP roots, or the server cwd), which selects where it works, not what it can read. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it. Recorded as a terminal job (meta.job_id) recoverable via codex_job_result after a dropped connection.",
         "stability": null,
         "use_when": "You want a read-only second opinion or answer from Codex (a different model) on a question, design, or an ad-hoc diff you paste inline; use codex_review_changes when the diff comes from git. Prefer codex_consult_async for a high-reasoning-effort or broad repo-grounded consult that can exceed the synchronous deadline."
       },
@@ -169,6 +170,7 @@
         "key_optional_params": [
           "workspace_root",
           "extra_context",
+          "developer_instructions",
           "model",
           "reasoning_effort",
           "isolation",
@@ -178,7 +180,7 @@
         "required_params": [
           "question"
         ],
-        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read the consult envelope with codex_job_result. Egress: same as codex_consult — sends question+extra_context (raw) to OpenAI. Its resolved working dir (workspace_root, your MCP roots, or the server cwd) selects where Codex works, not what it can read. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it.",
+        "returns": "A job handle (job_id, status, deadline, ttl). Poll with codex_job_status; read the consult envelope with codex_job_result. Egress: same as codex_consult — sends question+extra_context+developer_instructions (raw) to OpenAI. Its resolved working dir (workspace_root, your MCP roots, or the server cwd) selects where Codex works, not what it can read. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it.",
         "stability": "experimental",
         "use_when": "You want a read-only second opinion from Codex for a high-reasoning-effort or broad repo-grounded consult that can exceed the synchronous deadline, so you want a job_id immediately instead of blocking; async counterpart to codex_consult."
       },
@@ -220,6 +222,7 @@
           "paths",
           "workspace_root",
           "extra_context",
+          "developer_instructions",
           "model",
           "reasoning_effort",
           "isolation",
@@ -287,6 +290,7 @@
           "paths",
           "workspace_root",
           "extra_context",
+          "developer_instructions",
           "model",
           "reasoning_effort",
           "isolation",
@@ -913,7 +917,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-84",
+            "default": "codex-in-claude/0.1/schema-85",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1067,7 +1071,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 22494
+          "size_bytes": 24691
         }
       },
       "mimeType": "application/schema+json",
@@ -1093,6 +1097,29 @@
               }
             },
             "title": "ContextSummary",
+            "type": "object"
+          },
+          "DeveloperInstructions": {
+            "additionalProperties": false,
+            "description": "Fingerprint of caller-supplied developer_instructions text — never the text.\n\nEchoed so a reader of a result knows the run carried a non-default developer turn\nand can tell two runs apart WITHOUT the text being replayed into the envelope.\nPresent on every envelope that reports a run prepared with the parameter: sync\nresults, the async job-start handle, and the meta of a fetched background-job\nresult. For a background job the WORKER rebuilds it from the persisted job spec,\nwhich stores the normalized text itself — like it stores `question` and\n`extra_context` — so \"fingerprint, not text\" is a claim about THIS envelope and\nthe meta, not about the on-disk job record (the tool description disclosed that\nbefore any spend). Absent/null means the run carried no caller text — unless the\nenvelope describes no run at all (argument errors, an empty-diff pass), which may\nomit it either way because nothing was sent for it to attest.\n\nValidation is strict so a tampered or hand-written job spec cannot be replayed as\nan audit fingerprint: lax mode would coerce \"7\", 7.0, or True into a byte count\nand hide a corrupt record behind a valid-looking value.",
+            "properties": {
+              "bytes": {
+                "maximum": 4096,
+                "minimum": 1,
+                "title": "Bytes",
+                "type": "integer"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "title": "Sha256",
+                "type": "string"
+              }
+            },
+            "required": [
+              "bytes",
+              "sha256"
+            ],
+            "title": "DeveloperInstructions",
             "type": "object"
           },
           "ErrorDetail": {
@@ -1477,12 +1504,24 @@
                 "title": "Cwd",
                 "type": "string"
               },
+              "developer_instructions": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DeveloperInstructions"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Fingerprint {sha256, bytes} of the caller's developer_instructions text after normalization — the text itself is never echoed here. Present on envelopes that describe a Codex run prepared with the parameter: sync results, the async job-start handle, and a fetched background-job result's meta (the originating run's value). Null/absent on a run without the parameter; an envelope that describes no run (argument errors, an empty-diff pass) may omit it either way. It attests what this server SENT, not what the model did with it."
+              },
               "elapsed_ms": {
                 "title": "Elapsed Ms",
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-84",
+                "default": "codex-in-claude/0.1/schema-85",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2136,13 +2175,17 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 3809
+          "size_bytes": 6177
         }
       },
       "mimeType": "application/json",
       "text": {
         "description": "Full semantics for parameters whose tools/list description is a compressed summary (issue #333). Each entry's `summary` is what ships inline on the wire; `full` is the authoritative contract.",
         "params": {
+          "developer_instructions": {
+            "full": "Optional caller-supplied stance or focus text for Codex's developer turn, behind this server's framing (on codex_consult, codex_consult_async, codex_review_changes, codex_review_changes_async; deliberately NOT on codex_delegate/_async — delegate edits files, so a caller stance there would widen what an untrusted workspace can steer). Sent as ONE composed `-c developer_instructions` value: the server's framing always leads, the text is delimited on both sides, and the closing marker outranks anything between the markers. codex places the value as the FIRST developer-role message, AHEAD of its own developer messages and AGENTS.md — the server cannot order it after them. It grants no tools (tools ride argv/config, not the prompt); Codex is INSTRUCTED not to let it determine a verdict — that guarantee is behavioral, not mechanical. Normalized once (stripped; blank means omitted); refused pre-spend when over 4096 bytes (bytes, not characters), when it carries a NUL or lone surrogate, or when it contains one of the server's framing marker lines (forged_framing_marker) — otherwise text could pose as server-authored. It also counts against CODEX_IN_CLAUDE_MAX_INPUT_BYTES together with the call's other caller-authored inputs. Two plaintext carriers exist and are the point of meta's fingerprint: the composed value rides the codex COMMAND LINE (visible to local process listings for the run) and the normalized text is persisted in the background-job spec on disk (like question/extra_context) until the job record is consumed or expires — never put secrets here. Result envelopes report only meta.developer_instructions = {sha256, bytes}, never the text. The raw `-c developer_instructions` spelling is refused in CODEX_IN_CLAUDE_EXTRA_ARGS (#555), so the operator channel cannot contradict this parameter.",
+            "summary": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk (no secrets); meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+          },
           "extra_context": {
             "full": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex's reads are not bounded by the workspace you point it at (codex_capabilities carries the full read-scope fact), and redaction does not cover this field. It is bounded like the gathered diff and counts against the same input budget, so an oversized value fails as input_too_large before any spend.",
             "summary": "Optional author intent/background context, added as clearly-labeled UNTRUSTED prompt data. Redaction does NOT cover it — no live secrets. Full caveats and bounds: codex://params."
@@ -2178,7 +2221,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 22494
+          "size_bytes": 24691
         }
       },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
@@ -2203,7 +2246,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 3809
+          "size_bytes": 6177
         }
       },
       "description": "Full semantics for parameters whose tools/list description is a compressed summary\n(#333). MCP inlines each parameter description into every tool's inputSchema, so the\nlengthy lifecycle/validation prose is shipped once here instead of repeated on the\nwire; the inline summary keeps the first-call selection, safety, and spend-critical\nfacts and points here for the complete lifecycle and recovery semantics.",
@@ -2215,7 +2258,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 15928
+          "size_bytes": 18125
         }
       },
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
@@ -2241,7 +2284,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 15928
+          "size_bytes": 18125
         }
       },
       "mimeType": "application/schema+json",
@@ -2267,6 +2310,29 @@
               }
             },
             "title": "ContextSummary",
+            "type": "object"
+          },
+          "DeveloperInstructions": {
+            "additionalProperties": false,
+            "description": "Fingerprint of caller-supplied developer_instructions text — never the text.\n\nEchoed so a reader of a result knows the run carried a non-default developer turn\nand can tell two runs apart WITHOUT the text being replayed into the envelope.\nPresent on every envelope that reports a run prepared with the parameter: sync\nresults, the async job-start handle, and the meta of a fetched background-job\nresult. For a background job the WORKER rebuilds it from the persisted job spec,\nwhich stores the normalized text itself — like it stores `question` and\n`extra_context` — so \"fingerprint, not text\" is a claim about THIS envelope and\nthe meta, not about the on-disk job record (the tool description disclosed that\nbefore any spend). Absent/null means the run carried no caller text — unless the\nenvelope describes no run at all (argument errors, an empty-diff pass), which may\nomit it either way because nothing was sent for it to attest.\n\nValidation is strict so a tampered or hand-written job spec cannot be replayed as\nan audit fingerprint: lax mode would coerce \"7\", 7.0, or True into a byte count\nand hide a corrupt record behind a valid-looking value.",
+            "properties": {
+              "bytes": {
+                "maximum": 4096,
+                "minimum": 1,
+                "title": "Bytes",
+                "type": "integer"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "title": "Sha256",
+                "type": "string"
+              }
+            },
+            "required": [
+              "bytes",
+              "sha256"
+            ],
+            "title": "DeveloperInstructions",
             "type": "object"
           },
           "RateLimit": {
@@ -2601,12 +2667,24 @@
             "title": "Cwd",
             "type": "string"
           },
+          "developer_instructions": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DeveloperInstructions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Fingerprint {sha256, bytes} of the caller's developer_instructions text after normalization — the text itself is never echoed here. Present on envelopes that describe a Codex run prepared with the parameter: sync results, the async job-start handle, and a fetched background-job result's meta (the originating run's value). Null/absent on a run without the parameter; an envelope that describes no run (argument errors, an empty-diff pass) may omit it either way. It attests what this server SENT, not what the model did with it."
+          },
           "elapsed_ms": {
             "title": "Elapsed Ms",
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-84",
+            "default": "codex-in-claude/0.1/schema-85",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3290,7 +3368,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-84",
+            "default": "codex-in-claude/0.1/schema-85",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3624,6 +3702,18 @@
             ],
             "type": "string"
           },
+          "developer_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk (no secrets); meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+          },
           "extra_context": {
             "anyOf": [
               {
@@ -3927,6 +4017,18 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "developer_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk (no secrets); meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+          },
           "extra_context": {
             "anyOf": [
               {
@@ -6692,6 +6794,18 @@
             ],
             "type": "string"
           },
+          "developer_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk (no secrets); meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+          },
           "extra_context": {
             "anyOf": [
               {
@@ -7161,6 +7275,18 @@
             ],
             "default": null,
             "description": "Commit SHA or ref to review for scope='commit'. Control characters are rejected, not stripped."
+          },
+          "developer_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk (no secrets); meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
           },
           "extra_context": {
             "anyOf": [

@@ -494,6 +494,7 @@ async def run_consult(
     timeout_seconds: int,
     model: str | None,
     reasoning_effort: str | None = None,
+    developer_instructions: str | None = None,
     extra_context: str = "",
     on_event: Callable[[str], None] | None = None,
 ) -> dict:
@@ -510,6 +511,7 @@ async def run_consult(
         timeout_seconds=timeout_seconds,
         model=model,
         reasoning_effort=reasoning_effort,
+        developer_instructions=developer_instructions,
         output_schema=CONSULT_OUTPUT_SCHEMA,
         on_event=on_event,
     )
@@ -538,6 +540,7 @@ async def run_review(
     timeout_seconds: int,
     model: str | None,
     reasoning_effort: str | None = None,
+    developer_instructions: str | None = None,
     git_timeout: int,
     max_bytes: int,
     extra_context: str = "",
@@ -632,6 +635,7 @@ async def run_review(
         timeout_seconds=timeout_seconds,
         model=model,
         reasoning_effort=reasoning_effort,
+        developer_instructions=developer_instructions,
         output_schema=FINDINGS_OUTPUT_SCHEMA,
         on_event=on_event,
     )

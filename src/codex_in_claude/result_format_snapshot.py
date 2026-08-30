@@ -32,6 +32,7 @@ from codex_in_claude.schemas import (
     ConsultResult,
     Coverage,
     DelegateResult,
+    DeveloperInstructions,
     ErrorResult,
     Meta,
     RedactionSummary,
@@ -81,6 +82,15 @@ def _representative_meta() -> Meta:
     return meta
 
 
+def _review_representative_meta() -> Meta:
+    """The review entry's meta additionally carries the #556 fingerprint POPULATED
+    (the null-fixtures convention, #400): its future deletion must move the
+    `serialized` view, not hide behind a null."""
+    meta = _representative_meta()
+    meta.developer_instructions = DeveloperInstructions.of("focus")
+    return meta
+
+
 def build_snapshot() -> dict:
     """The deterministic snapshot dict the guard test compares to the fixture."""
     serialized = {
@@ -105,7 +115,7 @@ def build_snapshot() -> dict:
                         inline_masks=2,
                     ),
                 ),
-                meta=_representative_meta(),
+                meta=_review_representative_meta(),
             )
         ),
         "delegate_success": dump_success(DelegateResult(summary="s", meta=_representative_meta())),

@@ -42,6 +42,7 @@ from codex_in_claude.schemas import (
     ContextSummary,
     Coverage,
     DelegateResult,
+    DeveloperInstructions,
     Meta,
     RawResponse,
     ReviewResult,
@@ -103,6 +104,9 @@ def _consult_meta() -> Meta:
         roots_source="client",
         model="a-model",
         reasoning_effort="high",
+        # A run prepared with the #556 parameter: the fingerprint (never the text)
+        # must survive slimming and replay (#400: populate every producible optional).
+        developer_instructions=DeveloperInstructions.of("focus on locking"),
         # 0 on purpose: a POPULATED FALSY optional. `slim_meta` keys on `is None`, never
         # falsiness, and this extends that guarantee from the unit test to the real
         # chokepoint. Do not "fix" it to a non-zero exit code.

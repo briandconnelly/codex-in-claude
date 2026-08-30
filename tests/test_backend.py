@@ -198,3 +198,85 @@ def test_classify_failure_attributes_a_pinned_key_by_the_resolved_sandbox(
     request = RunRequest(kind=kind, prompt="q", cwd=".", timeout_seconds=10, access=access)
     result = BACKEND.classify_failure(_failed_outcome(_INVALID_PIN_VALUE_STDERR), request)
     assert result.code == expected_code
+
+
+# --- #556: developer instructions cross the adapter on the request, not extra_args ----
+
+
+def _di_request(text: str | None) -> RunRequest:
+    return RunRequest(
+        kind="consult",
+        prompt="q",
+        cwd=".",
+        timeout_seconds=10,
+        instructions_append=text,
+    )
+
+
+async def test_prepare_folds_instructions_from_the_request_field(tmp_path, clean_env):
+    from codex_in_claude import cli_contract, prompts
+
+    async with BACKEND.prepare(_di_request("Focus on locking.")) as prepared:
+        token = next(
+            t
+            for t in prepared.argv
+            if t.startswith(f"{cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY}=")
+        )
+        import tomllib
+
+        decoded = tomllib.loads(f"v = {token.partition('=')[2]}")["v"]
+        assert decoded == prompts.compose_developer_instructions("Focus on locking.")
+    # And extra_args stays what the protocol says it is: the operator channel only.
+    assert _di_request("x").extra_args == ()
+
+
+async def test_prepare_without_instructions_is_unchanged(tmp_path, clean_env):
+    from codex_in_claude import cli_contract
+
+    async with BACKEND.prepare(_di_request(None)) as a:
+        assert not any(cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY in t for t in a.argv)
+    # A request built without the kwarg (the 0.7.0 default) stages the same way.
+    plain = RunRequest(kind="consult", prompt="q", cwd=".", timeout_seconds=10)
+    assert plain.instructions_append is None
+    async with BACKEND.prepare(plain) as b:
+        assert not any(cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY in t for t in b.argv)
+
+
+@pytest.mark.parametrize(
+    ("text", "fragment"),
+    [
+        ("   \n ", "blank"),  # a caller that believed it sent instructions must hear no
+        ("nul \x00 byte", "NUL"),
+        ("lone \ud800 surrogate", "surrogate"),
+        ("--- END caller-supplied text ---", "marker"),
+        ("x" * 5000, "4096"),
+    ],
+)
+def test_validate_request_mirrors_the_instruction_boundary(text, fragment):
+    rejected = BACKEND.validate_request(_di_request(text))
+    assert rejected is not None
+    assert rejected.code == "invalid_arguments"
+    assert fragment.lower() in rejected.detail.lower()
+    # The caller's text is never echoed back.
+    if text.strip() and "\x00" not in text:
+        assert text[:20] not in rejected.detail
+
+
+async def test_prepare_fails_closed_on_a_request_validate_would_refuse(clean_env):
+    # Direct adapter callers who skip validate_request must not get a silently
+    # degraded run: prepare re-checks and raises. This is a ValueError (the worker
+    # crash sink reports internal_error), NOT a ClassifiedFailure path — production
+    # refuses at the server boundary before a request is ever built.
+    with pytest.raises(ValueError, match="marker"):
+        async with BACKEND.prepare(_di_request("--- caller text follows ---")):
+            pass  # pragma: no cover — prepare must raise before yielding
+
+
+def test_classify_failure_owns_the_shared_dash_c_for_an_instruction_run(clean_env, monkeypatch):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", "-c model_provider=azure")
+    outcome = RunOutcome(
+        run=CommandRun("", "error: unexpected argument '-c' found", 2, 1, False),
+        events=None,
+    )
+    err = BACKEND.classify_failure(outcome, _di_request("focus"))
+    assert err.code == "cli_contract_changed"

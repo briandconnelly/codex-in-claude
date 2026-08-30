@@ -60,6 +60,7 @@ _ALIAS_FOR = {
     "idempotency_key": "IdempotencyKeyParam",
     "reasoning_effort": "ReasoningEffortParam",
     "extra_context": "ExtraContextParam",
+    "developer_instructions": "DeveloperInstructionsParam",
 }
 
 
