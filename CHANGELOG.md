@@ -10,8 +10,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 - **BREAKING (operator surface): the extra-args passthrough can no longer set the
   instruction-bearing config keys** (#555). `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses
   `-c developer_instructions=…`, `model_instructions_file`, its deprecated alias
-  `experimental_instructions_file`, and the documented-as-reserved `instructions` (plus the usual
-  case/quote lookalikes) at parse time with `extra_args_rejected`, before any spend. Every framing
+  `experimental_instructions_file`, the documented-as-reserved `instructions`, and
+  `model_catalog_json` (a catalog entry can redefine a model's `base_instructions`) — plus the
+  usual case/quote lookalikes — at parse time with `extra_args_rejected`, before any spend. Every framing
   string this server sends rides the user turn, and `developer_instructions` lands as the *first*
   developer-role message (verified on codex-cli 0.151.0), so a passthrough value outranked the
   server's own guardrails while `meta` recorded nothing beyond "a valid passthrough was

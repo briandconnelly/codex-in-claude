@@ -249,7 +249,10 @@ _DENIED_CONFIG_KEY_ROOTS = frozenset({"sandbox", "approval_policy", "shell_envir
 # `model_instructions_file` (with its deprecated `experimental_instructions_file` alias)
 # REPLACES the built-in instructions outright (documented; the prompt-input renderer does not
 # show base instructions, so that one is denied on the documented semantics). `instructions` is
-# documented "reserved for future use" — denied so a future meaning cannot fail open. Meta
+# documented "reserved for future use" — denied so a future meaning cannot fail open.
+# `model_catalog_json` is an indirection to the same place (Codex review of #555): a catalog
+# entry carries `base_instructions` / `model_messages.instructions_template` for its slug, so an
+# operator catalog can redefine the selected model's built-in instructions. Meta
 # records only that a valid passthrough was configured (`extra_args_configured`/`_count`/
 # `_valid`), never which keys, so a run under any of these would be indistinguishable from a
 # default run. Exact normalized keys, like _RESERVED_META_CONFIG_KEYS (a root would not fit:
@@ -264,6 +267,7 @@ _DENIED_INSTRUCTION_CONFIG_KEYS = frozenset(
         "model_instructions_file",
         "experimental_instructions_file",
         "instructions",
+        "model_catalog_json",
     }
 )
 _INSTRUCTION_KEYS_TRACKING_ISSUE = "#556"
@@ -450,8 +454,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                 return ExtraArgs(
                     configured=True,
                     error=(
-                        f"config key '{_safe_token(key.strip())}' is refused: it would inject "
-                        "or replace model instructions above this server's own framing, "
+                        f"config key '{_safe_token(key.strip())}' is refused: it would inject, "
+                        "replace, or redefine model instructions above this server's framing, "
                         "with no record of that in the result envelope; a first-class, "
                         f"meta-reported parameter is tracked in {_INSTRUCTION_KEYS_TRACKING_ISSUE}"
                     ),

@@ -763,6 +763,8 @@ def test_descriptors_keep_their_raw_identity_for_matching(attack, monkeypatch):
         "-c model_instructions_file=/tmp/BE_AGREEABLE.md",  # replaces the built-in instructions
         "-c experimental_instructions_file=/tmp/BE_AGREEABLE.md",  # deprecated alias
         "-c instructions=BE_AGREEABLE",  # documented "reserved for future use" — fail closed
+        # A catalog entry carries `base_instructions` for its slug (Codex review of #555).
+        "-c model_catalog_json=/tmp/BE_AGREEABLE.json",
     ],
 )
 def test_extra_args_refuses_instruction_keys(monkeypatch, raw):
@@ -794,6 +796,7 @@ def test_extra_args_instruction_denial_is_its_own_message(monkeypatch):
         "-c model_instructions=x",  # prefix of a denied key, not the key: exact-match only
         "-c developer_instructions_extra=x",  # suffix lookalike stays allowed
         "-c mcp_servers.x.instructions=y",  # a nested `instructions` segment is a different key
+        "-c model_catalog_json_extra=x",  # suffix lookalike of the catalog key stays allowed
     ],
 )
 def test_extra_args_instruction_denial_is_exact(monkeypatch, raw):
