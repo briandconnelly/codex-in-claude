@@ -1235,6 +1235,35 @@ def test_binding_rules_split_the_compound_delegation_and_retry_rules():
         assert label in rules, f"{label} is missing from the Binding rules section"
 
 
+def test_binding_rules_carry_the_developer_instructions_rules():
+    """#560: the disclosure and the decision rule must move together (#512's lesson).
+
+    The routing and exposure obligations for `developer_instructions` are stated in the
+    options-and-errors reference and the Data exposure section; without a binding rule an
+    agent following only the rules list could still stuff quoted data or secrets into the
+    higher-priority developer turn. Labels pinned exactly, like the promoted rules above;
+    the content assertions pin the safety-critical halves so a reword cannot hollow the
+    rules out while keeping the labels.
+    """
+    rules = _binding_rules_section()
+    for label in (
+        "- **Developer instructions — routing:**",
+        "- **Developer instructions — exposure:**",
+    ):
+        assert label in rules, f"{label} is missing from the Binding rules section"
+    routing = rules.split("- **Developer instructions — routing:**", 1)[1].split("\n- **", 1)[0]
+    assert "`extra_context`" in routing and "workspace" in routing, (
+        "the routing rule dropped the data-exclusion obligation (data goes in "
+        "extra_context; never build the value from workspace content)"
+    )
+    exposure = rules.split("- **Developer instructions — exposure:**", 1)[1].split("\n- **", 1)[0]
+    for needle in ("command line", "job record", "secrets"):
+        assert needle in exposure, (
+            f"the exposure rule dropped {needle!r} — it must name both plaintext carriers "
+            "(argv + the on-disk job record) and the never-put-secrets obligation"
+        )
+
+
 def test_privacy_group_stays_contiguous_after_the_promotion():
     """The promoted bullets sit ABOVE the first Privacy bullet and the split bullets BELOW
     the last one, so `_privacy_rule_text()`'s contiguous slice is untouched. It also fails

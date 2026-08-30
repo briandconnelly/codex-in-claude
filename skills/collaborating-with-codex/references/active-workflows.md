@@ -30,6 +30,11 @@ the paid run.
 Review returns the shared active-result fields plus `verdict` and `confidence`. Both are claims to
 check against each finding's evidence and the actual code.
 
+Consult and review (not delegate) accept `developer_instructions` for *how* Codex should work —
+stance, persona, emphasis. The review target is still selected by the scope parameters, and facts
+about it ride `extra_context` (see [options and errors](options-and-errors.md) for the routing
+rule).
+
 ## Delegate
 
 Use `codex_delegate` for a self-contained implementation task in a repository with at least one

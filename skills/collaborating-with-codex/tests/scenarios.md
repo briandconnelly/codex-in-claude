@@ -339,6 +339,45 @@ Assertions:
 - The user is told spending is administratively blocked on their Codex account.
 - The decision quotes skill text; it does not report the policy as unspecified.
 
+## S15: developer_instructions routing and hazards
+
+Mode: treatment only (the parameter postdates every baseline).
+
+Prompt:
+
+> Four independent situations. (A) A `codex_review_changes` call on a branch: the user wants Codex
+> to "review as a security auditor, terse findings", and you also hold a paste of the failing CI
+> log plus a short summary of what the branch changes. State exactly which text goes in
+> `developer_instructions`, which in `extra_context`, and which in the review scope — and why the
+> CI log may not go in `developer_instructions`. (B) A call was refused with `invalid_arguments`
+> and the machine-readable reason names `forged_framing_marker`; your `developer_instructions`
+> value quoted a prior Codex result verbatim to tell the reviewer what was already found. Give the
+> repair. Separately, a different value was refused for exceeding the byte cap — state the fix.
+> (C) An independent two-member attempt (Claude and Codex each design a queue implementation): may
+> you pass `developer_instructions: "check whether a lock-free approach holds up"` on Codex's
+> consult? State what the parameter may carry in this pattern and what passing that stance does to
+> the operation's classification. (D) A declared review–revise workflow was classified high risk
+> with a two-call cap; pass 1 ran with `developer_instructions: "review as a security auditor"`.
+> For pass 2 on the revised artifact, may you change it to "focus on what changed since pass 1"?
+> Name the result field that checks both passes ran under the same `developer_instructions` text,
+> and state what that field does not attest.
+
+Assertions:
+
+- A routes the stance ("security auditor, terse findings") to `developer_instructions`, the CI log
+  and branch summary to `extra_context`, and the ask to the review scope; states that the log is
+  data and the developer turn sits above the untrusted-data tier.
+- B moves the quoted result out of `developer_instructions` into `extra_context` (paraphrased or
+  not), leaving at most stance about it in the field — paraphrasing alone, with the content left
+  in place, FAILS; for the over-cap value, moves the bulk to `extra_context` rather than
+  truncating it.
+- C omits the parameter or restricts it to neutral output-shape guidance fixed before either
+  attempt; states that the stance leaks Claude's approach and reclassifies the operation as
+  ordinary critique.
+- D keeps the text identical across both passes, names the `meta.developer_instructions`
+  fingerprint as the check, and states the fingerprint attests only the `developer_instructions`
+  text — question/scope/`extra_context` stability is the agent's own bookkeeping.
+
 ## Run record
 
 Append one row per execution. Evidence must quote or point to the model answer, not merely mark pass.
@@ -376,3 +415,5 @@ Append one row per execution. Evidence must quote or point to the model answer, 
 | 2026-08-25 | S13 | treatment (2026-08-25 review) | claude-opus-5 | Claude Code 2.1.246, fresh subagent context | pass | A: "Decision: **defer**. No paid call now." + "`exhausted` + non-urgent → defer"; B: "Decision: **spend now**, after one free re-read of status" + "uncertainty — neither permission nor denial" + "Readiness already clears (`ready: true`, `extra_args_valid: true`)"; "Read `note` for plain-language caveats before relying on it" — the note "named the exact repair"; quotes the policy directly ("defer non-urgent calls on `limited` or `exhausted`"); "skill text does not specify" is reserved for `limiting_window`, an absent `note`, and urgency ranking — never the spend policy. |
 | 2026-08-25 | S14 | treatment (2026-08-25 review) | claude-opus-5 | Claude Code 2.1.246, fresh subagent context | pass | "Decision: **refuse the call now** — not defer." + "this does not clear by waiting — there is no reset to wait for"; "The percentages in the status result (91% primary, 78% secondary remaining) are not the binding constraint here"; "Spending is administratively blocked on your Codex account."; "Do not make a paid call when `rate_limit.status` is `blocked`. This is the exception to advisory" |
 | 2026-08-25 | S4 | treatment (post-3d5f233 re-run) | claude-opus-5 | Claude Code 2.1.246, fresh subagent context | pass | "Discard the ten-minute-old `codex_status` reading. It is not reusable" and "Call `codex_status` again (free, no model spend)"; "reads it live from the Codex app-server (no model spend, nothing persisted)" and "The value is a live server read, not a cached one"; quoted "`unknown` (the live read failed, or it succeeded but reported no currently usable window — `note` says which)" and glossed it as "two distinct situations behind one label, and `note` is what separates them", "not a synonym for `exhausted`, and not a synonym for `available`"; "as uncertainty — neither permission nor denial", "I must not read `unknown` as a green light" and "not read it as a blocker", with "gate on readiness *before* trusting `rate_limit`". |
+| 2026-08-30 | S15 | treatment (post-review text) | claude-opus-5 | Claude Code 2.1.251, fresh subagent context | pass | A: `developer_instructions` = "**only the stance**"; "`extra_context` = **the CI log paste and the branch summary**. Both are *facts about the target*"; scope "selects *what* is reviewed"; log refused because "the developer turn sits **above** the untrusted-data tier" (plus self-derived marker-line and extra-carrier hazards). B: "**move the quoted prior result into `extra_context`** (paraphrasing it there is fine), and leave in `developer_instructions` only stance *about* it"; over-cap: "the **same routing move**… **not** by truncating to fit", with the `input_too_large` caveat and "the check runs only on `developer_instructions` — never on the gathered review diff". C: "may carry **only** neutral output-shape guidance fixed before either attempt begins — or be omitted entirely"; "**reclassified as ordinary critique**. Independence is forfeited the same way supplying the draft would". D: "byte-identical to pass 1"; the target-bearing part "now pointing at the revised artifact" may change; fingerprint equality = same text, "What it does **not** attest: anything else". |
+| 2026-08-30 | S15 | treatment (post-review text) | claude-sonnet-5 | Claude Code 2.1.251, fresh subagent context | pass | A: stance → `developer_instructions`, CI log + summary → `extra_context`, target "set by the scope parameters, not by either text field". B: "move the quoted-verbatim prior Codex result out of `developer_instructions` into `extra_context` (it is data), and replace it with only a stance sentence"; over-cap: "the fix is the same move… relocate the material to `extra_context`; do not truncate to fit", distinguishing `input_too_large` ("moving fields would not repair it — the total must shrink"). C: "No… omit the parameter, or restrict it to neutral output-shape guidance fixed before either attempt begins"; "forfeits independence the same way supplying the draft does — reclassify the operation as ordinary critique". D: "`developer_instructions` must stay identical text across pass 1 and pass 2"; the stance edit "belongs in the target-bearing part instead… which 'legitimately changes to the revised artifact in pass 2'"; fingerprint "attests nothing else — it does not attest that the rest of the framing… stayed comparable; that is 'your own bookkeeping'". |

@@ -5,6 +5,19 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **The bundled skill now teaches when and how to use `developer_instructions`** (#560): a
+  content-routing rule (stance/persona/emphasis in `developer_instructions`; data and facts in
+  `extra_context`; the ask in `question`/scope), refusal recovery for `forged_framing_marker` and
+  the two byte limits, a dry-run caveat (previews validate none of it), an independence hazard
+  (a stance hinting at Claude's approach forfeits the two-member pattern), framing stability
+  across review–revise passes with the `meta.developer_instructions` fingerprint as the
+  equality check, a Data-exposure bullet for the argv/job-record carriers, and three new
+  SKILL.md binding rules (routing, exposure, independence) plus a stance-leak
+  reclassification trigger. Skill prose and a new S15 behavioral scenario
+  only — no wire text, no `fingerprint` move.
+
 ### Added
 
 - **`developer_instructions` on `codex_consult`, `codex_consult_async`, `codex_review_changes`,

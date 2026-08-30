@@ -26,6 +26,26 @@ explains invariants without duplicating their full schemas.
   `invalid_arguments` (the reason names `forged_framing_marker` — a reason token, not an
   error code). The result's `meta.developer_instructions` fingerprint (sha256 +
   bytes) is how you tell a steered run from a default one.
+  - Route content by role, not by how authoritative it sounds. *How to work* — stance,
+    persona, emphasis — is what `developer_instructions` is for. *What to review* is selected
+    by the review scope (`scope`/`base`/`commit`/`paths`) or stated in a consult's `question`;
+    *facts about the target* — background, rationale, quoted artifacts — belong in
+    `extra_context`. Anything Codex must treat as data — quoted code, logs, diffs, prior Codex
+    results — never goes in `developer_instructions`: the developer turn sits above the
+    untrusted-data tier, and task content stuffed there because it "sounds authoritative" is
+    the predictable failure mode.
+  - A `forged_framing_marker` refusal usually fires on *quoted* material pasted into the
+    field — a prior Codex result, or a diff whose text carries the marker lines (quoting this
+    feature's own implementation does; the check runs only on `developer_instructions`, never
+    on the gathered review diff). The repair is the routing rule: move the material to
+    `extra_context`, where it is data — paraphrase it there if useful — and keep only stance
+    about it in `developer_instructions` ("prior findings are covered; do not re-report
+    them"). A value over the field's own byte cap is almost always content masquerading as
+    stance: the same move applies, rather than truncating to fit. That repairs
+    only the field cap — on `input_too_large` the *combined* caller-authored input broke the
+    budget, and moving text between fields cannot repair it; shrink the total instead.
+  - `codex_dry_run` takes no `developer_instructions`, so a preview validates none of it —
+    the byte cap, the marker refusal, and the fingerprint all happen on the paid call.
 - Use `isolation` only when its effect on user configuration and repository rules is intended.
 - Synchronous active tools accept a bounded `timeout_seconds`; async runs use the server's job
   deadline instead.
