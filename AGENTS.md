@@ -153,19 +153,31 @@ Architectural decisions that affect the agent-visible surface are recorded in `d
     tuple itself and are disclosed to clients on `fingerprint_covers`, which is why an ordinary
     release moves no fingerprint (see Release coordination).
   - **Breaking?** Flag it breaking (commit `!`/`BREAKING CHANGE:` footer + the `breaking-change` PR
-    label) only when the change is *backward-incompatible* for a client: removing or renaming a
+    label) only when the change is *backward-incompatible* on a **documented** interface — one a
+    client calls, or one an operator configures. For a client: removing or renaming a
     field/tool/resource/prompt, retyping a field, adding a required input, narrowing an accepted
     value set or enum, changing an output field's meaning under a closed schema, or weakening a
-    documented guarantee (an annotation or a promised semantic). Backward-compatible additions and
+    documented guarantee (an annotation or a promised semantic). For an operator: narrowing what a
+    documented environment variable accepts, as #555 did to `CODEX_IN_CLAUDE_EXTRA_ARGS`. The
+    interface must be one this repo documents and supports — an undocumented implementation detail
+    an operator happens to depend on is not covered. Backward-compatible additions and
     wording-only rewords are not breaking.
-  - Every breaking change is also a `FINGERPRINT` bump; not every bump is breaking (so #198, a
-    wording-only reword, correctly bumped `FINGERPRINT` with no `!`, and #193's `!` was over-flagging
-    — the safe direction). Quick reference:
+  - Every breaking change **to something `FINGERPRINT_COVERS` covers** is also a `FINGERPRINT`
+    bump; not every bump is breaking (so #198, a wording-only reword, correctly bumped
+    `FINGERPRINT` with no `!`, and #193's `!` was over-flagging — the safe direction). A break
+    *outside* that coverage does not **by itself** move the fingerprint: #555 narrowed what
+    `CODEX_IN_CLAUDE_EXTRA_ARGS` accepts and is flagged breaking, yet correctly moved no
+    fingerprint, because the denylist is not part of the discovered surface.
+    "By itself" is load-bearing: a release carrying such a break alongside covered changes still
+    bumps for those (0.12.0 is the precedent). Judge coverage by `FINGERPRINT_COVERS`, not by
+    whether an agent can see the text — the table's repair-prose row is No/No even though agents
+    read that prose. Quick reference:
 
     | Change | Bumps `FINGERPRINT` | Breaking |
     |---|---|---|
     | Add a backward-compatible tool, param, resource, prompt, field, error code, or enum value | Yes | No |
-    | Remove/rename/retype a field/tool/resource/prompt, add a required input, or narrow a value set | Yes | Yes |
+    | Remove/rename/retype a field/tool/resource/prompt, add a required input, or narrow a value set, on the discovered surface | Yes | Yes |
+    | Narrow what a documented operator environment variable accepts (`CODEX_IN_CLAUDE_EXTRA_ARGS`) | No, by itself | Yes (#555) |
     | Reword a description/instruction, no guarantee change | Yes | No |
     | Reword text that weakens a documented guarantee | Yes | Yes |
     | Change a `_REPAIR_BY_CODE` machine field (`next_step`'s `RepairStep`, `repair.tool`, `temporary`) | Yes | Per the rules above |
