@@ -144,16 +144,22 @@ class _FakeSession:
     client_params = _FakeParams()
 
 
+class _FakeListRootsResult:
+    def __init__(self, roots):
+        self.roots = roots
+
+
 class _FakeCtx:
     def __init__(self, uris, raise_exc=False):
         self._uris = uris
         self._raise = raise_exc
         self.session = _FakeSession()
+        self.session.list_roots = self._list_roots
 
-    async def list_roots(self):
+    async def _list_roots(self):
         if self._raise:
             raise RuntimeError("client has no roots")
-        return [_FakeRoot(u) for u in self._uris]
+        return _FakeListRootsResult([_FakeRoot(u) for u in self._uris])
 
 
 async def test_roots_from_ctx_file_uris():

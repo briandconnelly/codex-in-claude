@@ -5,11 +5,19 @@ from __future__ import annotations
 import os
 import subprocess
 
+import fastmcp
 import pytest
 from pontonier.core import gitdiff
 from pontonier.core.runtime import CommandRun
 
 from codex_in_claude import preflight
+
+# fastmcp 4 bridges deprecated camelCase reads on SDK v2 objects (`.inputSchema` for
+# `.input_schema`, ...) behind a warning, and removes the bridge in FastMCP 5. Run the
+# suite with the bridge OFF so any camelCase read that sneaks back in fails today as a
+# hard AttributeError instead of on the next major upgrade (#570; the upgrade guide's
+# own recommendation for CI).
+fastmcp.settings.mcp_camelcase_compat = False
 
 # Git environment variables that redirect where git reads/writes its object store,
 # index, and repo config. If pytest is invoked with any of these exported (e.g. by a

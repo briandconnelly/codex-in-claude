@@ -25,8 +25,13 @@ classifiers = [
 dependencies = [
     "anyio>=4",
     "pontonier==0.7.0",
-    # <4: fastmcp 4.0.0 (mcp 2.1.1) is incompatible with this package (#572); the port is #570.
-    "fastmcp>=3.4,<4",
+    # Minor-line caps: fastmcp documents that breaking changes may land in minor releases, and
+    # the uncapped floor already broke every published version once (#572). Widening either cap
+    # is a deliberate upgrade PR, not a resolver decision.
+    "fastmcp>=4.0,<4.1",
+    # Imported directly (MCPError, mcp.types) — declared explicitly rather than ridden as
+    # fastmcp's transitive dependency, so its own major/minor moves cannot break installs.
+    "mcp>=2.1,<2.2",
     "pydantic>=2",
 ]
 
@@ -98,6 +103,12 @@ pythonpath = ["."]
 addopts = "--cov=codex_in_claude --cov-report=term-missing --strict-markers --strict-config -m 'not integration'"
 markers = [
     "integration: live tests requiring the codex CLI; opt in with `pytest -m integration --no-cov`",
+]
+filterwarnings = [
+    # Mirrors the module-level filter in server.py (the deliberate legacy roots probe —
+    # SEP-2577, ADR 0004, #571): pytest re-arms warning filters per test, so the module-level
+    # ignore alone does not keep the suite's output clean.
+    "ignore:The roots capability is deprecated:mcp.shared.exceptions.MCPDeprecationWarning",
 ]
 
 [tool.coverage.run]

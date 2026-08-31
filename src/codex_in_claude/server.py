@@ -17,6 +17,7 @@ import signal
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
 from urllib.parse import unquote, urlparse
@@ -28,8 +29,9 @@ from fastmcp.exceptions import DisabledError, NotFoundError, ResourceError
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
-from mcp import McpError
-from mcp.types import INTERNAL_ERROR, ErrorData
+from mcp import MCPError
+from mcp.shared.exceptions import MCPDeprecationWarning
+from mcp.types import INTERNAL_ERROR
 from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
@@ -121,6 +123,18 @@ from codex_in_claude.schemas import (
     apply_detail,
     slim_meta,
     workspace_warning_for,
+)
+
+# The one MCP-deprecated call this server still makes on purpose: the legacy roots probe in
+# `_roots_from_ctx` (see the workaround comment there — SEP-2577, ADR 0004, #571). Without
+# this filter every roots-advertising legacy session writes the SDK's deprecation warning to
+# stderr on every probe. Scoped to exactly that message so any OTHER deprecated SDK surface
+# this package starts touching still warns loudly. A per-call `warnings.catch_warnings()`
+# would mutate process-global filter state across an `await`, racing concurrent requests.
+# (pytest re-arms warning filters per test, so the test suite mirrors this ignore in
+# pyproject's filterwarnings; production stderr is governed by this line alone.)
+warnings.filterwarnings(
+    "ignore", message=r"The roots capability is deprecated", category=MCPDeprecationWarning
 )
 
 # #427: the canonical skills-discovery sentence pair lives in cli_contract.py, beside the
@@ -274,13 +288,16 @@ mcp = FastMCP(name="codex-in-claude", instructions=CAPABILITY_SUMMARY, version=_
 # seam fails loudly.
 #
 # #424 (audit): FastMCP's LowLevelServer.get_capabilities also unconditionally
-# advertises the io.modelcontextprotocol/ui extension (MCP Apps) — it lands in
-# ServerCapabilities.model_extra since that model is extra="allow". This server has
-# no UI/Apps implementation, so filter that one entry out of the extensions mapping
-# (leaving any other, legitimately-implemented extension a future FastMCP version
-# adds untouched) and only null the whole key when nothing is left. Guarded by
-# test_initialize_does_not_advertise_the_ui_extension, so a FastMCP upgrade that
-# changes this seam fails loudly.
+# advertises the io.modelcontextprotocol/ui extension (MCP Apps) — under mcp 2,
+# `extensions` is a declared field on ServerCapabilities (no longer model_extra).
+# This server has no UI/Apps implementation, so filter that one entry out of the
+# extensions mapping (leaving any other, legitimately-implemented extension a future
+# FastMCP version adds untouched) and only null the whole key when nothing is left.
+# The seam feeds BOTH protocol eras fastmcp 4 serves — the legacy initialize
+# handshake and the modern server/discover — and is guarded on both by
+# test_initialize_does_not_advertise_the_ui_extension (legacy) and
+# test_discover_does_not_advertise_prompts_or_the_ui_extension (modern), so a
+# FastMCP upgrade that changes this seam fails loudly.
 # spec-stable wire id (MCP extension identifiers are part of the wire protocol, not
 # a fastmcp implementation detail) — deliberately a literal, not imported from
 # fastmcp.apps, so a fastmcp internal refactor can't break this module at import time.
@@ -292,7 +309,7 @@ _orig_get_capabilities = _lowlevel_server.get_capabilities
 
 def _get_capabilities_without_prompts_or_extensions(*args: Any, **kwargs: Any) -> Any:
     caps = _orig_get_capabilities(*args, **kwargs)
-    extensions = (caps.model_extra or {}).get("extensions")
+    extensions = caps.extensions
     filtered_extensions = (
         {ext_id: value for ext_id, value in extensions.items() if ext_id != _UI_EXTENSION_ID}
         if isinstance(extensions, dict)
@@ -669,9 +686,13 @@ class _ArgumentValidationMiddleware(Middleware):
 mcp.add_middleware(_ArgumentValidationMiddleware())
 
 # Resource-read error envelope (#181/F9) ------------------------------------- #
-# MCP numeric error code for "resource not found". The MCP spec / SDK use -32002 for it
-# (see fastmcp.server.mixins.mcp_operations), but the SDK exposes no named constant, so
-# we name it here. Read failures reuse the JSON-RPC standard INTERNAL_ERROR (-32603).
+# MCP numeric error code for "resource not found", as documented on this server's
+# `resource_error_carrier`. -32002 is the 2025-11-25-era value; MCP 2026-07-28
+# renumbers it to -32602 (SEP-2164) and fastmcp 4's own core followed on every era,
+# so this constant is an acknowledged divergence held deliberately at the documented
+# value until #571 migrates the era contract (pinned per-era by
+# test_unknown_resource_read_code_is_pinned_on_both_eras). Read failures reuse the
+# JSON-RPC standard INTERNAL_ERROR (-32603).
 _MCP_RESOURCE_NOT_FOUND = -32002
 
 
@@ -684,16 +705,16 @@ class _ResourceErrorMiddleware(Middleware):
     resource read is the one surface that bypassed the unified contract (audit F9, #181).
 
     We intercept at the ``on_read_resource`` seam (mirroring ``_ArgumentValidationMiddleware``
-    at the tool seam) and re-raise an ``McpError`` whose ``error.data`` is the serialized
+    at the tool seam) and re-raise an ``MCPError`` whose ``error.data`` is the serialized
     ``ErrorInfo`` shape. The mcp SDK's request handler does ``response = err.error`` for an
-    ``McpError``, so the ``data`` we attach survives verbatim to the client.
+    ``MCPError``, so the ``data`` we attach survives verbatim to the client.
 
     Exception routing is deliberate and ordered (per a cross-model design review):
     - ``NotFoundError``/``DisabledError`` (unknown or disabled URI) → ``resource_not_found``
       with MCP numeric -32002. FastMCP maps both to "resource not found" itself, so we match.
     - ``ResourceError`` (a resource function raised; the core wraps arbitrary handler
       exceptions into this) → ``internal_error`` with -32603.
-    - Any ``McpError`` an inner layer already raised is re-raised untouched — never
+    - Any ``MCPError`` an inner layer already raised is re-raised untouched — never
       reclassified — so a deliberate protocol error keeps its own code/data.
     - Nothing else is caught: an unexpected ``Exception`` keeps FastMCP's existing handling,
       and cancellation (a ``BaseException``) propagates. The client-visible message is
@@ -720,7 +741,7 @@ class _ResourceErrorMiddleware(Middleware):
     @staticmethod
     def _envelope_error(
         code: ErrorCode, mcp_code: int, message: str, resource_uri: str | None
-    ) -> McpError:
+    ) -> MCPError:
         info = make_error(code, message)
         # The requested URI is client-supplied. It is echoed only after FastMCP has already
         # parsed it as a URI, and the human-readable `message` stays generic (no URI, no
@@ -728,7 +749,7 @@ class _ResourceErrorMiddleware(Middleware):
         info.resource_uri = resource_uri
         info.request_id = uuid4().hex
         data = serialize_error_info(info)
-        return McpError(ErrorData(code=mcp_code, message=message, data=data))
+        return MCPError(code=mcp_code, message=message, data=data)
 
 
 mcp.add_middleware(_ResourceErrorMiddleware())
@@ -1009,7 +1030,12 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
     degraded to an empty list and a silent fallback to the server's own cwd, on a call that
     spends money. Roots stay advisory either way: `workspace_root` is the durable path, and
     the MCP 2026-07-28 spec (final, not an RC) deprecates roots in favor of tool-argument
-    scoping — see ADR 0004 for the migration plan."""
+    scoping — see ADR 0004 for the migration plan.
+
+    On a modern (2026-07-28) connection the protocol has no back-channel for this request,
+    so the probe below raises every turn and this reports `probe_failed`: roots resolve on
+    legacy connections only. Today's production client (Claude Code) negotiates legacy;
+    the modern-era roots posture is #571's decision."""
     if ctx is None:
         return [], "not_negotiated"
     try:
@@ -1024,7 +1050,12 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
     if params is None or getattr(params.capabilities, "roots", None) is None:
         return [], "not_negotiated"
     try:
-        roots = await ctx.list_roots()
+        # Workaround for the fastmcp 4 port (#570): `Context.list_roots()` is removed, and
+        # the SDK session method is the sanctioned legacy path until roots leave the spec
+        # (deprecated by SEP-2577, removable 2027-07-28 at the earliest — ADR 0004; the
+        # migration decision is #571). The `ty: ignore` here and the module-level warning
+        # filter beside the imports both annotate that same deliberate choice.
+        roots = (await ctx.session.list_roots()).roots  # ty: ignore[deprecated]
     except Exception:
         return [], "probe_failed"
     paths: list[str] = []

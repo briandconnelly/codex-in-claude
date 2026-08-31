@@ -99,7 +99,12 @@ def _envelope_block(content: Any) -> dict[str, Any]:
 
 async def build_manifest() -> dict[str, Any]:
     """Assemble the normalized, canonical agent-visible surface manifest."""
-    async with Client(mcp) as client:
+    # mode="legacy": fastmcp 4's default (`mode="auto"`) negotiates the modern
+    # (server/discover) era, where `initialize_result` is None and the capture below
+    # would lose the initialize section this snapshot guards. Pinning the handshake era
+    # keeps today's snapshot semantics; whether the guarded surface should become the
+    # modern `DiscoverResult` is #571's decision (#570).
+    async with Client(mcp, mode="legacy") as client:
         tools = [_canonicalize(_dump(t)) for t in await client.list_tools()]
         resources = [_canonicalize(_dump(r)) for r in await client.list_resources()]
         templates = [_canonicalize(_dump(t)) for t in await client.list_resource_templates()]
