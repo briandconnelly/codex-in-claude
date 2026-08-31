@@ -5,6 +5,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-31
+
+An install-repair and hardening release. The headline is the dependency cap: fastmcp 4.0.0
+published and every earlier release's uncapped `fastmcp>=3.4` floor now resolves it and fails at
+import, so fresh installs — including the `.mcp.json` plugin path — are broken until this release
+supersedes them. Alongside the cap, the three free diagnostics gain the same envelope guarantees
+as the paid tools, and the `developer_instructions` docs stop overstating what the parameter and
+its fingerprint prove. The result `fingerprint` moves `schema-85` → `schema-87` (both hops
+additive or wording-only); nothing is breaking. The fastmcp 4 port itself lands separately
+(#570).
+
 ### Fixed
 
 - **Fresh installs no longer resolve the incompatible fastmcp 4** (#572): every released version
