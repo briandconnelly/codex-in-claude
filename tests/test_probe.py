@@ -158,16 +158,24 @@ def test_non_oserror_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
         probe.run_probe(["codex", "--version"], timeout_seconds=10)
 
 
-def test_elapsed_ms_is_recorded_on_a_converted_failure(
+def test_converted_failure_keeps_the_command_run_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A converted failure keeps the CommandRun shape callers branch on."""
+    """A converted failure is a CommandRun callers can branch on, with no timing claim.
+
+    `elapsed_ms` is pinned at exactly 0, matching `run_probe`'s documented policy: a spawn
+    that never happened has no meaningful duration. An earlier version of this test asserted
+    `>= 0` against that hardcoded constant while its name promised timing coverage -- a
+    tautology dressed as a test (found in review).
+    """
     (tmp_path / "codex").mkdir()
     monkeypatch.setenv("PATH", str(tmp_path))
     run = probe.run_probe(["codex", "--version"], timeout_seconds=10)
     assert isinstance(run, runtime.CommandRun)
-    assert run.elapsed_ms >= 0
+    assert run.elapsed_ms == 0
     assert run.stdout == ""
+    assert run.exit_code == 127
+    assert not run.timed_out
 
 
 def test_forwards_optional_arguments(tmp_path: Path) -> None:
@@ -211,6 +219,12 @@ def test_no_module_calls_run_sync_capture_directly() -> None:
         (errno.ELOOP, "symlink loop"),
         (errno.ENAMETOOLONG, "path too long"),
         (errno.EPERM, "exec denied by policy"),
+        # E2BIG is a real exec failure (argument list too long) that is deliberately NOT in
+        # _SPAWN_ERRNOS. Without it every case here would sit inside that set, and an
+        # implementation requiring BOTH a matching filename AND membership -- i.e. exactly the
+        # list-dependence this predicate exists to remove -- would pass the whole file. Verified:
+        # reverting to errno-AND-filename passes 23/23 without this case, and fails with it.
+        (errno.E2BIG, "argument list too long"),
     ],
 )
 def test_every_exec_failure_naming_the_binary_is_converted(
@@ -221,7 +235,9 @@ def test_every_exec_failure_naming_the_binary_is_converted(
     The first version of this shim keyed only on an enumerated errno set and omitted
     ETXTBSY, so an exec against an executable open for writing escaped a probe documented
     never to raise (found in review). Keying on the filename first removes the dependence
-    on that list being complete; these cases pin the behaviour.
+    on that list being complete, and the E2BIG case below is what actually PROVES it: every
+    other errno here is inside _SPAWN_ERRNOS, so without one from outside the set this test
+    would pass against the very implementation it is meant to rule out.
     """
 
     def _raise(*_a: object, **_k: object) -> None:
