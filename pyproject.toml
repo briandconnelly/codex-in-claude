@@ -25,7 +25,8 @@ classifiers = [
 dependencies = [
     "anyio>=4",
     "pontonier==0.7.0",
-    "fastmcp>=3.4",
+    # <4: fastmcp 4.0.0 (mcp 2.1.1) is incompatible with this package (#572); the port is #570.
+    "fastmcp>=3.4,<4",
     "pydantic>=2",
 ]
 
