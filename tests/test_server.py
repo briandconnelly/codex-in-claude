@@ -2733,7 +2733,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-86"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-87"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6664,7 +6664,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-86")
+    assert result["fingerprint"].endswith("schema-87")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

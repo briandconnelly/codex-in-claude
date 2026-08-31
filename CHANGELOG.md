@@ -5,6 +5,33 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The three free diagnostics can no longer fail as a raw MCP protocol error** (#541):
+  `codex_status`, `codex_capabilities` and `codex_models` are synchronous, so the `_guard`
+  decorator — which wraps async tools — never covered them, and anything they raised escaped the
+  handler instead of returning the documented envelope. That was worst for `codex_status`, whose
+  entire job is to answer "is codex usable right now?": the tool an agent reaches for *because*
+  something is already wrong was the one least able to report it. All three are now guarded and
+  advertise `internal_error` in their per-tool `error_codes`; their output schemas already carried
+  a success|error union, so no schema shape changed. The result `fingerprint` moves `schema-86` ->
+  `schema-87`. Adding an error code is backward-compatible, so this is not breaking.
+- **A `codex` on `PATH` that cannot be executed is a readiness fact, not a crash** (#541):
+  `binpath.codex_bin()` deliberately falls back to the bare literal `"codex"` when resolution finds
+  nothing, and `subprocess` then does its own `PATH` lookup *without* the `is_file()` + `X_OK`
+  predicate `binresolve` applies to its own candidates. An executable directory named `codex` (or a
+  file with the execute bit set that the kernel cannot exec) therefore raised `PermissionError` /
+  `OSError(ENOEXEC)` straight out of the probes. Those spawn failures are now classified the way a
+  missing binary already was, so `codex_status` reports `codex_found: false` instead of raising.
+- **The three free tools now report their own pinned posture on an invalid-argument error**
+  (#541): `README` documents that every shipped tool pins its own tier and sandbox and ignores
+  `CODEX_IN_CLAUDE_TIER_DEFAULT` / `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`. Because the three unguarded
+  tools had no entry in the posture map, their `invalid_arguments` envelope fell back to
+  `config.defaults()` and reported whatever an operator had configured — an operator running
+  `TIER_DEFAULT=propose` saw `codex_capabilities` claim `propose`/`workspace-write`. Guarding them
+  registers their real posture and restores the documented promise. `meta` values are not part of
+  the discovered surface, so this moves no fingerprint of its own.
+
 ### Changed
 
 - **`developer_instructions` now documents that compliance is best-effort** (#563): the only
