@@ -5426,6 +5426,25 @@ async def test_unknown_resource_read_carries_error_envelope(clean_env):
     assert "ok" not in env and "meta" not in env
 
 
+async def test_unknown_resource_read_code_is_pinned_on_both_eras(clean_env):
+    """The middleware's numeric resource-not-found code is `-32002` on BOTH protocol
+    eras fastmcp 4 serves. On the modern (2026-07-28) era that value violates SEP-2164
+    (which renumbers it to `-32602`, and fastmcp 4's own core followed) — an
+    acknowledged gap of the fastmcp 4 port (#570), owned by #571 alongside the
+    documented `resource_error_carrier`. Pinned per-era here so the renumbering lands
+    as a deliberate, loud change — and so the default-mode envelope test above keeps
+    its meaning even if fastmcp's default era moves."""
+    from fastmcp import Client
+    from mcp import MCPError
+
+    for mode, expected_era in (("legacy", "2025-11-25"), ("auto", "2026-07-28")):
+        async with Client(server.mcp, mode=mode) as client:
+            assert client.protocol_version == expected_era
+            with pytest.raises(MCPError) as excinfo:
+                await client.read_resource("codex://does-not-exist")
+        assert excinfo.value.error.code == -32002, mode
+
+
 async def test_known_resource_read_is_unaffected(clean_env):
     """The interception must not perturb a successful read."""
     from fastmcp import Client

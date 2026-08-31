@@ -686,9 +686,13 @@ class _ArgumentValidationMiddleware(Middleware):
 mcp.add_middleware(_ArgumentValidationMiddleware())
 
 # Resource-read error envelope (#181/F9) ------------------------------------- #
-# MCP numeric error code for "resource not found". The MCP spec / SDK use -32002 for it
-# (see fastmcp.server.mixins.mcp_operations), but the SDK exposes no named constant, so
-# we name it here. Read failures reuse the JSON-RPC standard INTERNAL_ERROR (-32603).
+# MCP numeric error code for "resource not found", as documented on this server's
+# `resource_error_carrier`. -32002 is the 2025-11-25-era value; MCP 2026-07-28
+# renumbers it to -32602 (SEP-2164) and fastmcp 4's own core followed on every era,
+# so this constant is an acknowledged divergence held deliberately at the documented
+# value until #571 migrates the era contract (pinned per-era by
+# test_unknown_resource_read_code_is_pinned_on_both_eras). Read failures reuse the
+# JSON-RPC standard INTERNAL_ERROR (-32603).
 _MCP_RESOURCE_NOT_FOUND = -32002
 
 
