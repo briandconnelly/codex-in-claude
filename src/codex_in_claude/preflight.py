@@ -16,9 +16,7 @@ import re
 import time
 from dataclasses import dataclass
 
-from pontonier.core import runtime
-
-from codex_in_claude import binpath, cli_contract
+from codex_in_claude import binpath, cli_contract, probe
 
 _LONG_FLAG_RE = re.compile(r"--[a-z][a-z0-9-]+")
 
@@ -42,7 +40,7 @@ def _probe_help() -> str:
         # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
         # other -- this function's contract is "" on any failure, never a raise.
         return ""
-    run = runtime.run_sync_capture([codex_path, *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10)
+    run = probe.run_probe([codex_path, *cli_contract.EXEC_HELP_ARGS], timeout_seconds=10)
     if run.binary_missing:
         return ""
     return f"{run.stdout}\n{run.stderr}"

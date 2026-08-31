@@ -28,10 +28,10 @@ Run Codex non-interactively
 def _patch_help(monkeypatch, text: str | None):
     def fake(cmd, timeout_seconds):
         if text is None:
-            return CommandRun("", preflight.runtime.BINARY_NOT_FOUND, 127, 1, False)
+            return CommandRun("", preflight.probe.runtime.BINARY_NOT_FOUND, 127, 1, False)
         return CommandRun(text, "", 0, 1, False)
 
-    monkeypatch.setattr(preflight.runtime, "run_sync_capture", fake)
+    monkeypatch.setattr(preflight.probe.runtime, "run_sync_capture", fake)
 
 
 def test_flag_support_parses(monkeypatch):
@@ -121,7 +121,7 @@ def test_cache_reused(monkeypatch):
     # through to the npm-probe candidate, which shares this same `runtime.run_sync_capture`
     # seam and would otherwise inflate the call count this test is asserting on.
     monkeypatch.setattr(preflight.binpath, "codex_bin", lambda: "codex")
-    monkeypatch.setattr(preflight.runtime, "run_sync_capture", fake)
+    monkeypatch.setattr(preflight.probe.runtime, "run_sync_capture", fake)
     preflight.reset_cache()
     preflight.flag_support()
     preflight.flag_support()

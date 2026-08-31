@@ -518,6 +518,7 @@
       {
         "cost": "free",
         "error_codes": [
+          "internal_error",
           "invalid_arguments"
         ],
         "key_optional_params": [],
@@ -619,6 +620,7 @@
       {
         "cost": "free",
         "error_codes": [
+          "internal_error",
           "invalid_arguments"
         ],
         "key_optional_params": [],
@@ -631,6 +633,7 @@
       {
         "cost": "free",
         "error_codes": [
+          "internal_error",
           "invalid_arguments"
         ],
         "key_optional_params": [],
@@ -917,7 +920,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-86",
+            "default": "codex-in-claude/0.1/schema-87",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1521,7 +1524,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-86",
+                "default": "codex-in-claude/0.1/schema-87",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2684,7 +2687,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-86",
+            "default": "codex-in-claude/0.1/schema-87",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3368,7 +3371,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-86",
+            "default": "codex-in-claude/0.1/schema-87",
             "title": "Fingerprint",
             "type": "string"
           },

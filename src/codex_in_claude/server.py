@@ -366,10 +366,14 @@ _MAX_ARG_REASON_LEN = 300  # bound on the validator message
 # the envelope or carry a secret supplied as the key name itself.
 _MAX_ARG_FIELD_LEN = 128
 
-# Each guarded tool's fixed (tier, sandbox) posture, recorded by `_guard` so an
-# argument-validation error can report the called tool's real posture in `meta` — not
-# the server defaults — matching every other error path (#136). Free/unguarded tools
-# fall back to the defaults (consult/read-only), which is their posture anyway.
+# Each guarded tool's fixed (tier, sandbox) posture, recorded by `_guard`/`_guard_sync` so
+# an argument-validation error can report the called tool's real posture in `meta` — not
+# the server defaults — matching every other error path (#136). Every registered tool is
+# guarded, so every one has an entry: the old note that an absent tool "falls back to the
+# defaults (consult/read-only), which is their posture anyway" was wrong on its own terms,
+# since those defaults are operator-set (CODEX_IN_CLAUDE_TIER_DEFAULT /
+# CODEX_IN_CLAUDE_SANDBOX_DEFAULT) and an operator who moved them made the three free tools
+# report propose/workspace-write on an invalid-argument error (#541).
 _TOOL_POSTURE: dict[str, tuple[str, str]] = {}
 
 
@@ -1363,6 +1367,34 @@ def _internal_error_result(
     )
 
 
+# Stamped on every guarded wrapper so a test can assert completeness over the callables
+# FastMCP ACTUALLY registered (`FunctionTool.fn`). Reading `_TOOL_POSTURE` instead would not
+# prove it: the posture is recorded BEFORE the wrapper is built, so a tool whose decorators
+# were stacked in the wrong order could populate the map while the registry still held the
+# unguarded function (#541).
+GUARD_MARKER = "_codex_in_claude_guarded"
+
+
+def _record_guard_failure(
+    name: str, exc: Exception, *, tier: str, sandbox: str, start: float
+) -> dict:
+    """Log an escaping tool exception and build its `internal_error` envelope.
+
+    Shared by the async and sync guards so the two cannot drift: timing, traceback
+    logging and envelope construction are stated once, and only the invocation
+    mechanics differ between them (#541).
+    """
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    obs.get_logger("codex_in_claude.server").error(
+        "tool %s raised %s after %dms",
+        name,
+        type(exc).__name__,
+        elapsed_ms,
+        exc_info=True,
+    )
+    return _internal_error_result(name, exc, tier=tier, sandbox=sandbox, elapsed_ms=elapsed_ms)
+
+
 def _guard(
     *, tier: str = "consult", sandbox: str = "read-only"
 ) -> Callable[[Callable[..., Awaitable[dict]]], Callable[..., Awaitable[dict]]]:
@@ -1382,18 +1414,45 @@ def _guard(
             try:
                 return await fn(*args, **kwargs)
             except Exception as exc:
-                elapsed_ms = int((time.monotonic() - start) * 1000)
-                obs.get_logger("codex_in_claude.server").error(
-                    "tool %s raised %s after %dms",
-                    name,
-                    type(exc).__name__,
-                    elapsed_ms,
-                    exc_info=True,
-                )
-                return _internal_error_result(
-                    name, exc, tier=tier, sandbox=sandbox, elapsed_ms=elapsed_ms
-                )
+                return _record_guard_failure(name, exc, tier=tier, sandbox=sandbox, start=start)
 
+        setattr(wrapper, GUARD_MARKER, True)
+        return wrapper
+
+    return decorator
+
+
+def _guard_sync(
+    *, tier: str = "consult", sandbox: str = "read-only"
+) -> Callable[[Callable[..., dict]], Callable[..., dict]]:
+    """`_guard` for the plain-`def` tools.
+
+    The free diagnostics (`codex_status`, `codex_capabilities`, `codex_models`) are
+    synchronous, so the async guard could not wrap them and anything they raised reached
+    the client as a raw MCP protocol error rather than the documented envelope. That was
+    worst for `codex_status`: the tool an agent calls BECAUSE something is already wrong
+    was the one least able to report it (#541).
+
+    Registering them here also puts them in `_TOOL_POSTURE`, which is a fix in its own
+    right: without an entry, an argument-validation envelope fell back to
+    `config.defaults()` and reported whatever CODEX_IN_CLAUDE_TIER_DEFAULT /
+    CODEX_IN_CLAUDE_SANDBOX_DEFAULT were set to, contradicting README's promise that every
+    shipped tool pins its own tier and sandbox and ignores those variables.
+    """
+
+    def decorator(fn: Callable[..., dict]) -> Callable[..., dict]:
+        name = getattr(fn, "__name__", "tool")
+        _TOOL_POSTURE[name] = (tier, sandbox)
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> dict:
+            start = time.monotonic()
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                return _record_guard_failure(name, exc, tier=tier, sandbox=sandbox, start=start)
+
+        setattr(wrapper, GUARD_MARKER, True)
         return wrapper
 
     return decorator
@@ -1446,6 +1505,7 @@ VERSION_WARNING = (
     title="Check Codex readiness (free)",
     meta=_tool_meta("codex_status"),
 )
+@_guard_sync(tier="consult", sandbox="read-only")
 def codex_status() -> dict:
     """Check that the `codex` CLI is installed, authenticated, and a supported
     version, and report the resolved defaults. Free — no model call. Run it before
@@ -1928,9 +1988,13 @@ _TOOL_ERROR_CODES: dict[str, list[ErrorCode]] = {
         _RUNTIME_ERRORS,
         _IDEMPOTENCY_ERRORS,
     ),
-    "codex_models": [],
-    "codex_status": [],
-    "codex_capabilities": [],
+    # The three free diagnostics advertised no codes at all while they were unguarded --
+    # an exception inside them escaped as a raw protocol error, so there was no envelope
+    # to advertise. They are guarded now (#541), so they can return internal_error like
+    # every other tool, and the contract has to say so.
+    "codex_models": ["internal_error"],
+    "codex_status": ["internal_error"],
+    "codex_capabilities": ["internal_error"],
     "codex_transfer": _err_codes(
         _WORKSPACE_ERRORS,
         (
@@ -2033,6 +2097,7 @@ def _normalize_tool_details(entry: dict) -> dict:
     title="List server capabilities (free)",
     meta=_tool_meta("codex_capabilities"),
 )
+@_guard_sync(tier="consult", sandbox="read-only")
 def codex_capabilities(
     include_schemas: IncludeSchemasParam = None,
     detail: CapabilitiesDetailParam = "summary",
@@ -2529,6 +2594,7 @@ def _static_triage(payload: dict) -> dict[str, dict]:
     title="List Codex models (free)",
     meta=_tool_meta("codex_models"),
 )
+@_guard_sync(tier="consult", sandbox="read-only")
 def codex_models() -> dict:
     """List Codex model slugs you can pass as `model`, with each model's advertised
     reasoning-effort set for `reasoning_effort`. Free — no model call.
