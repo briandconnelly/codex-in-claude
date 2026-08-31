@@ -376,7 +376,9 @@ Assertions:
   ordinary critique.
 - D keeps the text identical across both passes, names the `meta.developer_instructions`
   fingerprint as the check, and states the fingerprint attests only the `developer_instructions`
-  text — question/scope/`extra_context` stability is the agent's own bookkeeping.
+  text — question/scope/`extra_context` stability is the agent's own bookkeeping. It attests the
+  SEND, never Codex's compliance: equal fingerprints do not mean both passes were steered alike,
+  only that both carried the same text (#563).
 
 ## Run record
 

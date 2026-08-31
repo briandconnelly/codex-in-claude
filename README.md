@@ -126,7 +126,10 @@ brevity; see [`docs/REFERENCE.md`](docs/REFERENCE.md) for the complete shape.
   stance/focus text placed in Codex's *developer* turn behind this server's always-leading framing
   (max 4096 bytes; stripped, blank = omitted; refused pre-spend if it carries the server's framing
   markers). It grants no tools and Codex is instructed — not compelled — to keep verdicts its own;
-  the text rides the codex command line and the background-job record on disk, so never put
+  compliance with the rest of the text is best-effort for the same reason, and may be silent, so
+  `meta`'s fingerprint attests the request the server accepted and staged, not what the model did
+  with it.
+  The text rides the codex command line and the background-job record on disk, so never put
   secrets in it, and result `meta` reports only its `{sha256, bytes}`. Deliberately **not** on
   `codex_delegate`: delegate edits files, so a caller stance there would widen what an untrusted
   workspace can steer. Full contract: the `codex://params` resource.

@@ -142,3 +142,144 @@ class TestAuditTwoCompaction:
         assert re.search(r"\bspend\b", summary, re.IGNORECASE) or re.search(
             r"\bunpaid\b", summary, re.IGNORECASE
         )
+
+
+class TestDeveloperInstructionsCompliance:
+    """#563: the compliance limit must be stated generally, not only for verdicts.
+
+    Before this, the only "instructed, not compelled" statement anywhere on the surface was
+    scoped to VERDICTS, so a caller read it as "verdicts are protected, the rest applies".
+    A first attempt whose stance the model discarded in full is then indistinguishable, to
+    that caller, from a parameter that does nothing.
+
+    The presence assertions alone would pass a confident INVERSION — text that keeps the
+    vocabulary while promising compliance — so each one is paired with a guard against the
+    opposite claim. (A marker-word guard catching omission but not inversion is a failure
+    mode this repo has shipped before.)
+    """
+
+    #: Claims the surface must never make: the model is not compelled by this text, so no
+    #: wording may promise that it follows, obeys, or is bound by the caller's stance.
+    FORBIDDEN = (
+        r"\bcompelled to (?:follow|honou?r|obey|comply)\b",
+        r"\bguarantees? (?:that )?(?:codex|the model) (?:will )?(?:follow|honou?rs?|obey|comply)",
+        r"\b(?:codex|the model) (?:will|must) (?:always )?"
+        r"(?:follow|honou?r|obey|comply)",
+        r"\balways (?:followed|honou?red|obeyed)\b",
+        # Named in this class's docstring, so the blocklist must actually carry them
+        # (a Codex review caught the guard promising more than it checked).
+        r"\b(?:codex|the model) is bound by\b",
+        r"\b(?:required|obliged) to comply\b",
+        r"\breliably (?:applied|followed|honou?red|obeyed)\b",
+    )
+
+    #: Every shape the blocklist claims to reject, asserted against it directly — a
+    #: blocklist nobody probes is a guard that cannot be shown to fire.
+    INVERSION_SAMPLES = (
+        "compliance is best-effort, but Codex will follow it in practice",
+        "best-effort and reliably applied in practice",
+        "the model is bound by the caller text",
+        "the caller text is best-effort; Codex is required to comply",
+        "this server guarantees that Codex will honor the stance",
+        "the stance is always followed",
+        "Codex is compelled to comply with the text",
+    )
+
+    def test_the_blocklist_rejects_every_inversion_it_claims_to(self):
+        """A negative guard needs a positive control: each sample must trip some pattern."""
+        for sample in self.INVERSION_SAMPLES:
+            with pytest.raises(AssertionError):
+                self._forbid_inversions(sample, "sample")
+
+    def test_the_blocklist_accepts_the_shipping_text(self):
+        """...and must not fire on the wording actually shipped (no false positive)."""
+        c = param_contracts.PARAMETER_CONTRACTS["developer_instructions"]
+        self._forbid_inversions(c.summary, "inline summary")
+        self._forbid_inversions(c.full, "full contract")
+
+    def _forbid_inversions(self, text: str, where: str) -> None:
+        for pattern in self.FORBIDDEN:
+            assert not re.search(pattern, text, re.IGNORECASE), (
+                f"{where} promises compliance ({pattern!r}) — the caller text is "
+                "best-effort; only the SEND is guaranteed"
+            )
+
+    #: Pinned literally, NOT derived from the source — a guard that reads its expectation
+    #: from the text it guards cannot fail when that text is wrong. The blocklist above
+    #: catches the inversions it enumerates; this catches the ones it does not (a reword to
+    #: "best-effort and reliably applied in practice" keeps every marker word, states the
+    #: opposite, and passes every other assertion here). Brittle BY DESIGN, like
+    #: EXPECTED_MANIFEST_HASH: any reword fails, and the author re-reads #563 before
+    #: repinning.
+    CANONICAL_SUMMARY_CLAIM = "compliance with the rest is best-effort and may be silent"
+    CANONICAL_FULL_CLAIM = "compliance with the caller-supplied text is BEST-EFFORT"
+
+    def test_canonical_compliance_claims_are_pinned(self):
+        """Any reword of the load-bearing claim must be acknowledged, not slipped through."""
+        c = param_contracts.PARAMETER_CONTRACTS["developer_instructions"]
+        for claim, text, where in (
+            (self.CANONICAL_SUMMARY_CLAIM, c.summary, "inline summary"),
+            (self.CANONICAL_FULL_CLAIM, c.full, "full contract"),
+        ):
+            assert claim in text, (
+                f"the {where}'s compliance claim was reworded away from {claim!r}. This "
+                "pin is deliberate: re-read #563, confirm the new wording still says "
+                "compliance is best-effort (and does not promise it), then repin here."
+            )
+
+    def test_summary_carries_the_best_effort_limit(self):
+        """The compressed inline summary is the primary read path (tools/list).
+
+        A caller who never fetches codex://params sees only this, so the limit cannot
+        live exclusively in the full contract.
+        """
+        summary = param_contracts.PARAMETER_CONTRACTS["developer_instructions"].summary
+        assert re.search(r"\bbest[- ]effort\b", summary, re.IGNORECASE), (
+            "the inline summary dropped the best-effort compliance limit (#563)"
+        )
+        self._forbid_inversions(summary, "the inline summary")
+
+    def test_summary_limit_is_not_scoped_to_verdicts_alone(self):
+        """The pre-#563 defect exactly: a verdict-only carve-out reads as a promise
+        about everything else. The limit must reach past the verdict sentence."""
+        summary = param_contracts.PARAMETER_CONTRACTS["developer_instructions"].summary
+        after_verdicts = re.split(r"\bverdicts?\b", summary, flags=re.IGNORECASE)[-1]
+        assert re.search(r"\bbest[- ]effort\b", after_verdicts, re.IGNORECASE), (
+            "the compliance limit appears only before/inside the verdict clause — a "
+            "reader takes it as scoped to verdicts, which is the #563 defect"
+        )
+
+    def test_full_contract_separates_the_send_from_the_effect(self):
+        """meta's fingerprint attests what the server SENT, never what the model did —
+        the distinction schemas.py already draws for the meta field (#564)."""
+        full = param_contracts.PARAMETER_CONTRACTS["developer_instructions"].full
+        assert re.search(r"\bbest[- ]effort\b", full, re.IGNORECASE), (
+            "the full contract dropped the best-effort compliance limit (#563)"
+        )
+        assert re.search(r"\bstaged\b|\baccepted\b", full, re.IGNORECASE) and re.search(
+            r"what the model did with it", full, re.IGNORECASE
+        ), (
+            "the full contract must separate the attested REQUEST (accepted/staged) from "
+            "what the model did with it — it cannot claim a proven send, because the "
+            "fingerprint is assigned at prepare time and an async handle returns before "
+            "the worker reaches codex (server.py `_start_job`)"
+        )
+        self._forbid_inversions(full, "the full contract")
+
+    def test_full_contract_does_not_claim_silence_is_absolute(self):
+        """The server's own framing (prompts.py `_CALLER_FRAMING`) instructs Codex to say
+        so when the caller text conflicts with the rules above it, and detail="full"
+        returns the raw model text. So non-compliance MAY be silent — it is not
+        guaranteed to be. An absolute would contradict the prompt this server sends."""
+        full = param_contracts.PARAMETER_CONTRACTS["developer_instructions"].full
+        assert not re.search(
+            r"non-?compliance is (?:always )?silent|silently and always|never reported",
+            full,
+            re.IGNORECASE,
+        ), (
+            "the full contract states silence as an absolute; _CALLER_FRAMING instructs "
+            "Codex to disclose a conflict, so silence is possible, not guaranteed"
+        )
+        assert re.search(r"\bmay\b[^.]{0,80}\bsilent", full, re.IGNORECASE), (
+            "the full contract must say non-compliance MAY be silent"
+        )

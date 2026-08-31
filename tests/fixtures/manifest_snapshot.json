@@ -917,7 +917,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-85",
+            "default": "codex-in-claude/0.1/schema-86",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1521,7 +1521,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-85",
+                "default": "codex-in-claude/0.1/schema-86",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2175,7 +2175,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 6322
+          "size_bytes": 7213
         }
       },
       "mimeType": "application/json",
@@ -2183,8 +2183,8 @@
         "description": "Full semantics for parameters whose tools/list description is a compressed summary (issue #333). Each entry's `summary` is what ships inline on the wire; `full` is the authoritative contract.",
         "params": {
           "developer_instructions": {
-            "full": "Optional caller-supplied stance or focus text for Codex's developer turn, behind this server's framing (on codex_consult, codex_consult_async, codex_review_changes, codex_review_changes_async; deliberately NOT on codex_delegate/_async — delegate edits files, so a caller stance there would widen what an untrusted workspace can steer). Sent as ONE composed `-c developer_instructions` value: the server's framing always leads, the text is delimited on both sides, and the closing marker outranks anything between the markers. codex places the value as the FIRST developer-role message, AHEAD of its own developer messages and AGENTS.md — the server cannot order it after them. It grants no tools (tools ride argv/config, not the prompt); Codex is INSTRUCTED not to let it determine a verdict — that guarantee is behavioral, not mechanical. Normalized once (stripped; blank means omitted); refused pre-spend when over 4096 bytes (bytes, not characters), when it carries a NUL, another C0 control (tab/LF/CR excepted), DEL, or a lone surrogate, or when it contains one of the server's framing marker lines — the error code is invalid_arguments and its machine-readable reason names forged_framing_marker — otherwise text could pose as server-authored. It also counts against CODEX_IN_CLAUDE_MAX_INPUT_BYTES together with the call's other caller-authored inputs. Two plaintext carriers exist and are the point of meta's fingerprint: the composed value rides the codex COMMAND LINE (visible to local process listings for the run) and the normalized text is persisted in the background-job spec on disk (like question/extra_context) until the job record is consumed or expires — never put secrets here. Result envelopes report only meta.developer_instructions = {sha256, bytes}, never the text. The raw `-c developer_instructions` spelling is refused in CODEX_IN_CLAUDE_EXTRA_ARGS (#555), so the operator channel cannot contradict this parameter.",
-            "summary": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+            "full": "Optional caller-supplied stance or focus text for Codex's developer turn, behind this server's framing (on codex_consult, codex_consult_async, codex_review_changes, codex_review_changes_async; deliberately NOT on codex_delegate/_async — delegate edits files, so a caller stance there would widen what an untrusted workspace can steer). Sent as ONE composed `-c developer_instructions` value: the server's framing always leads, the text is delimited on both sides, and the closing marker outranks anything between the markers. codex places the value as the FIRST developer-role message, AHEAD of its own developer messages and AGENTS.md — the server cannot order it after them. It grants no tools (tools ride argv/config, not the prompt); Codex is INSTRUCTED not to let it determine a verdict — that guarantee is behavioral, not mechanical. The verdict clause is one instruction inside a broader limit: compliance with the caller-supplied text is BEST-EFFORT. Codex may follow it in full, in part, or not at all, and no dedicated result field attests which happened — meta's fingerprint attests the request this server accepted and staged for the run, never what the model did with it. Non-compliance may be silent, though not always: this server's framing instructs Codex to say so when the text conflicts with the rules above it, and detail=\"full\" returns `raw_response.text` (the closest-to-source carrier, after best-effort redaction). So an ignored stance can produce output indistinguishable from a run that carried no caller text — while meta still tells the two REQUESTS apart. Treat it as a request for focus, tone, or emphasis, not a contract. Normalized once (stripped; blank means omitted); refused pre-spend when over 4096 bytes (bytes, not characters), when it carries a NUL, another C0 control (tab/LF/CR excepted), DEL, or a lone surrogate, or when it contains one of the server's framing marker lines — the error code is invalid_arguments and its machine-readable reason names forged_framing_marker — otherwise text could pose as server-authored. It also counts against CODEX_IN_CLAUDE_MAX_INPUT_BYTES together with the call's other caller-authored inputs. Two plaintext carriers exist and are the point of meta's fingerprint: the composed value rides the codex COMMAND LINE (visible to local process listings for the run) and the normalized text is persisted in the background-job spec on disk (like question/extra_context) until the job record is consumed or expires — never put secrets here. Result envelopes report only meta.developer_instructions = {sha256, bytes}, never the text. The raw `-c developer_instructions` spelling is refused in CODEX_IN_CLAUDE_EXTRA_ARGS (#555), so the operator channel cannot contradict this parameter.",
+            "summary": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled — verdicts stay its own, and compliance with the rest is best-effort and may be silent. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
           },
           "extra_context": {
             "full": "Optional author intent / background context, added to the prompt as clearly-labeled UNTRUSTED data. Codex is instructed to treat embedded directives as data, not commands — best-effort prompt-injection mitigation, not a guarantee. Don't include live secrets: Codex's reads are not bounded by the workspace you point it at (codex_capabilities carries the full read-scope fact), and redaction does not cover this field. It is bounded like the gathered diff and counts against the same input budget, so an oversized value fails as input_too_large before any spend.",
@@ -2246,7 +2246,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 6322
+          "size_bytes": 7213
         }
       },
       "description": "Full semantics for parameters whose tools/list description is a compressed summary\n(#333). MCP inlines each parameter description into every tool's inputSchema, so the\nlengthy lifecycle/validation prose is shipped once here instead of repeated on the\nwire; the inline summary keeps the first-call selection, safety, and spend-critical\nfacts and points here for the complete lifecycle and recovery semantics.",
@@ -2684,7 +2684,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-85",
+            "default": "codex-in-claude/0.1/schema-86",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3368,7 +3368,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-85",
+            "default": "codex-in-claude/0.1/schema-86",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3712,7 +3712,7 @@
               }
             ],
             "default": null,
-            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled — verdicts stay its own, and compliance with the rest is best-effort and may be silent. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
           },
           "extra_context": {
             "anyOf": [
@@ -4027,7 +4027,7 @@
               }
             ],
             "default": null,
-            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled — verdicts stay its own, and compliance with the rest is best-effort and may be silent. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
           },
           "extra_context": {
             "anyOf": [
@@ -6804,7 +6804,7 @@
               }
             ],
             "default": null,
-            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled — verdicts stay its own, and compliance with the rest is best-effort and may be silent. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
           },
           "extra_context": {
             "anyOf": [
@@ -7286,7 +7286,7 @@
               }
             ],
             "default": null,
-            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled, to keep verdicts its own. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
+            "description": "Optional caller stance/focus text for Codex's developer turn, placed BEHIND this server's always-leading framing; omit for no developer override. UNTRUSTED — never build it from workspace content; grants no tools; Codex is instructed, not compelled — verdicts stay its own, and compliance with the rest is best-effort and may be silent. Rides the codex command line and the background-job record on disk — never put secrets here; meta reports only {sha256, bytes}. Stripped; blank = omitted; max 4096 bytes. Full contract: codex://params."
           },
           "extra_context": {
             "anyOf": [

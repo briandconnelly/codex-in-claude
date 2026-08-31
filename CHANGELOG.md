@@ -5,6 +5,29 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **`developer_instructions` now documents that compliance is best-effort** (#563): the only
+  "instructed, not compelled" statement on the surface was scoped to *verdicts*, which reads as a
+  promise that everything else applies. It does not — Codex may honor the caller text in full, in
+  part, or not at all, and no result field attests which happened — `meta`'s fingerprint attests
+  the request the server accepted and staged, never what the model did with it. Non-compliance may be silent,
+  though the server's framing does instruct Codex to disclose a conflict with the rules above it,
+  and `detail="full"` returns the raw model text. Stated once in the parameter contract (inline
+  summary and `codex://params` full text), and echoed in `README.md`, `COMPATIBILITY.md`, and the
+  bundled skill. The result `fingerprint` moves `schema-85` -> `schema-86`; documenting an
+  existing limit weakens no guarantee, so this is not breaking.
+- **The bundled skill no longer overstates what the fingerprint proves** (#564): the
+  options-and-errors reference called it "how you tell a steered run from a default one". It
+  separates a steered *request* — it attests what the server SENT, not what the model did — and
+  its absence means only that the per-call parameter was omitted, not that the run was otherwise
+  unsteered. The same reference now also states what validation does and does not cost: a value
+  the server REFUSES costs nothing — unsafe text, the byte cap, framing markers, and the combined
+  input budget are all rejected pre-spend — while a value it ACCEPTS goes straight into the paid
+  run, so there is no free positive check. Because the checks stop at the first failure in
+  unsafe -> byte cap -> marker order, a value that is both over-cap and marker-bearing reports
+  only the cap.
+
 ## [0.21.0] - 2026-08-30
 
 A caller-steering release. Consult and review gain an optional `developer_instructions`

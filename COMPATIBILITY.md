@@ -764,7 +764,11 @@ What bounds it, and what each bound is for:
   `spec.json` — like `question` and `extra_context` — until the record is consumed or expires.
 - **Two guarantees of different strengths.** Codex cannot gain a tool from the text (tools ride
   argv/config, not the prompt — mechanical); Codex is *instructed* not to let the text determine
-  a verdict (behavioral). The tool description says "instructed", not "cannot".
+  a verdict (behavioral). The tool description says "instructed", not "cannot". The verdict
+  instruction is one case of the broader behavioral limit: compliance with the caller text as a
+  whole is best-effort — the model may honor it in full, in part, or not at all, and no result
+  field attests which happened. Non-compliance may be silent, though the framing does instruct
+  Codex to say so when the text conflicts with the rules above it (#563).
 - **The user-turn framing is unchanged.** Every per-tool rule still rides the user turn on stdin
   exactly as before; the developer turn is additive and binds only the caller text.
 - **The raw key stays refused in the passthrough** (#555, above), so the operator channel and

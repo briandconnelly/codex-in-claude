@@ -193,6 +193,11 @@ from codex_in_claude.server import mcp
 # deliberately: a parameter that admits caller text into Codex's developer turn is a
 # first-read security disclosure (untrusted, no-tools, instructed-not-compelled, the two
 # plaintext carriers), and none of those facts can wait for the resource fetch.
+# Measured again 2026-08-30 (#563, the developer_instructions compliance limit reaching the
+# compressed summary on the four consult/review tools — a tools/list-only reader is exactly
+# the first-time caller the issue describes, so the limit cannot live only in the
+# codex://params full contract): 96,972 -> 97,236 bytes (+264, +0.3%) — still within budget,
+# no change.
 TOOLS_LIST_BYTE_BUDGET = 97_500
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
@@ -205,7 +210,7 @@ TOOLS_LIST_BYTE_BUDGET = 97_500
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 96_972
+TOOLS_LIST_BYTE_TARGET = 97_236
 
 
 def _budget_failure_message(measured: int) -> str:

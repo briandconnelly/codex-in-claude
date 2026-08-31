@@ -872,7 +872,12 @@ def _wire_catalog_bytes() -> int:
 # first-read security disclosures that cannot wait for the codex://params fetch):
 # 94,147 -> 96,989 bytes (+2,842 B) — over cap; cap raised to the next 1,000 above the
 # measured value.
-CATALOG_BYTE_CAP = 97_000
+# Measured again 2026-08-30 (#563, the developer_instructions compliance limit — the
+# verdict-only carve-out generalized to "compliance with the caller text is best-effort
+# and may be silent" in the compressed summary, which ships on the four consult/review
+# tools, so every summary byte costs four here): 96,989 -> 97,253 bytes (+264 B) — over
+# cap; cap raised to the next 1,000 above the measured value.
+CATALOG_BYTE_CAP = 98_000
 
 
 def test_wire_catalog_under_cap():
@@ -1031,7 +1036,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-85"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-86"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():
