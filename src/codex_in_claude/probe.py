@@ -30,33 +30,58 @@ from typing import Any
 
 from pontonier.core import runtime
 
-# Errnos a failed *spawn* produces. ENOENT/ENOTDIR are already upstream's own two cases
-# and are listed for completeness, not because they can reach the conversion below.
-#   EACCES  the path is a directory, or a file without the execute bit
-#   EISDIR  a directory named directly
-#   ENOEXEC the execute bit is set on something the kernel cannot exec
-#   EPERM   an exec denied by policy
+# Errnos an `execve` can fail with, used ONLY when the exception carries no filename to
+# reason about (see `_is_spawn_failure`). Enumerating exec errnos by hand is exactly the
+# kind of list that goes stale -- ETXTBSY was missing from the first version of it -- which
+# is why it is the fallback rule here rather than the primary one.
+#   EACCES        a directory, or a file without the execute bit
+#   EISDIR        a directory named directly
+#   ENOEXEC       the execute bit is set on something the kernel cannot exec
+#   ENOENT        no such path (upstream's own case)
+#   ENOTDIR       a path component is not a directory (upstream's own case)
+#   EPERM         exec denied by policy
+#   ETXTBSY       the executable is open for writing (Linux/WSL, e.g. mid-install)
+#   ELOOP         too many symlinks resolving the path
+#   ENAMETOOLONG  the path exceeds the system limit
 _SPAWN_ERRNOS = frozenset(
-    {errno.EACCES, errno.EISDIR, errno.ENOEXEC, errno.ENOENT, errno.ENOTDIR, errno.EPERM}
+    {
+        errno.EACCES,
+        errno.EISDIR,
+        errno.ENOEXEC,
+        errno.ENOENT,
+        errno.ENOTDIR,
+        errno.EPERM,
+        errno.ETXTBSY,
+        errno.ELOOP,
+        errno.ENAMETOOLONG,
+    }
 )
 
 
 def _is_spawn_failure(exc: OSError, cmd: list[str]) -> bool:
     """Whether `exc` is evidence that the SPAWN failed, rather than a later I/O error.
 
-    Deliberately conservative. A pipe/communicate `OSError` reported as `binary_missing`
-    would hand the agent a repair step ("install codex") that cannot fix the real fault,
-    so conversion requires an errno a spawn actually produces AND a filename that does
-    not contradict `cmd[0]`. CPython does not always populate `filename` on the exec-phase
-    error; an absent one is treated as non-contradicting, which is the safe direction --
-    the alternative is a raw crash out of a probe documented never to raise.
+    Deliberately conservative: a pipe/communicate `OSError` reported as `binary_missing`
+    would hand the agent a repair step ("install codex") that cannot fix the real fault.
+
+    Two rules, in order. A filename identifies what the error is ABOUT, so an error naming
+    `cmd[0]` is a spawn failure whatever its errno, and one naming a different path is not
+    ours to reclassify. Only when there is no filename does the errno decide, against the
+    enumerated exec set -- the weaker rule, kept second because a hand-written errno list
+    goes stale (it first shipped without ETXTBSY, and an exec against an executable open
+    for writing therefore escaped).
     """
-    if exc.errno not in _SPAWN_ERRNOS:
-        return False
-    if exc.filename is None:
-        return True
     target = cmd[0] if cmd else ""
-    return os.fspath(exc.filename) == target
+    if exc.filename is not None:
+        # CPython names the EXECUTABLE on an exec-phase failure (subprocess passes argv[0]
+        # through as err_filename), while a later pipe/communicate error does not. So an
+        # OSError naming the binary we asked to spawn is about that binary whatever its
+        # errno -- which is the rule that matters, because it needs no correct guess about
+        # which errnos an exec can produce.
+        return os.fspath(exc.filename) == target
+    # Nothing names the target, so fall back to the enumerated exec errnos above. A
+    # communicate-phase failure (EIO, EPIPE) is absent from that set and propagates.
+    return exc.errno in _SPAWN_ERRNOS
 
 
 def run_probe(

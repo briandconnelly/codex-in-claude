@@ -202,3 +202,92 @@ def test_no_module_calls_run_sync_capture_directly() -> None:
         f"{sorted(offenders)} call runtime.run_sync_capture directly; route them through "
         "probe.run_probe so a spawn-phase OSError stays a CommandRun fact (#541)."
     )
+
+
+@pytest.mark.parametrize(
+    ("code", "label"),
+    [
+        (errno.ETXTBSY, "executable open for writing"),
+        (errno.ELOOP, "symlink loop"),
+        (errno.ENAMETOOLONG, "path too long"),
+        (errno.EPERM, "exec denied by policy"),
+    ],
+)
+def test_every_exec_failure_naming_the_binary_is_converted(
+    code: int, label: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OSError naming argv[0] is a spawn failure whatever its errno.
+
+    The first version of this shim keyed only on an enumerated errno set and omitted
+    ETXTBSY, so an exec against an executable open for writing escaped a probe documented
+    never to raise (found in review). Keying on the filename first removes the dependence
+    on that list being complete; these cases pin the behaviour.
+    """
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise OSError(code, label, "codex")
+
+    monkeypatch.setattr(runtime, "run_sync_capture", _raise)
+    run = probe.run_probe(["codex", "--version"], timeout_seconds=10)
+    assert run.binary_missing
+
+
+def test_communicate_phase_error_naming_no_file_still_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The filename-first rule must not have widened conversion to every OSError.
+
+    Positive control for the narrowing: EIO with no filename is the shape a pipe read
+    failure takes, and it must still reach the caller rather than be reported as a
+    missing binary.
+    """
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(runtime, "run_sync_capture", _raise)
+    with pytest.raises(OSError, match="Input/output error"):
+        probe.run_probe(["codex", "--version"], timeout_seconds=10)
+
+
+def test_exec_errno_with_no_filename_is_converted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fallback rule: no filename, but an errno only an exec produces."""
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise OSError(errno.ETXTBSY, "Text file busy")
+
+    monkeypatch.setattr(runtime, "run_sync_capture", _raise)
+    assert probe.run_probe(["codex", "--version"], timeout_seconds=10).binary_missing
+
+
+@pytest.mark.parametrize("name", ["codex_version", "login_status"])
+def test_probe_callers_keep_their_documented_no_raise_contract(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`codex_version`/`login_status` document a return value on ANY failure, never a raise.
+
+    Asserted against the errno that broke that promise before this shim existed, and
+    against ETXTBSY, which broke it again after the first version of the predicate.
+    """
+    from codex_in_claude import codex
+
+    for code in (errno.EACCES, errno.ETXTBSY, errno.ENOEXEC):
+
+        def _raise(cmd: list[str], *_a: object, __code: int = code, **_k: object) -> None:
+            raise OSError(__code, os.strerror(__code), cmd[0])
+
+        monkeypatch.setattr(runtime, "run_sync_capture", _raise)
+        assert getattr(codex, name)() in (None, (None, None))
+
+
+def test_probe_help_keeps_its_documented_no_raise_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`preflight._probe_help` documents "" on any failure, never a raise."""
+    from codex_in_claude import preflight
+
+    def _raise(cmd: list[str], *_a: object, **_k: object) -> None:
+        raise OSError(errno.ETXTBSY, "Text file busy", cmd[0])
+
+    monkeypatch.setattr(runtime, "run_sync_capture", _raise)
+    assert preflight._probe_help() == ""

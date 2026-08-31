@@ -15,6 +15,7 @@ MCP client still saw a success.
 
 from __future__ import annotations
 
+import functools
 import json
 
 import pytest
@@ -98,13 +99,16 @@ async def test_every_registered_tool_carries_the_guard_marker() -> None:
     before it builds the wrapper, so a future tool whose decorators are stacked in the
     wrong order could register the UNGUARDED function while the posture map looked
     correct. Reading `FunctionTool.fn` back off the registry closes that gap.
+
+    The marker is checked by IDENTITY, not truthiness -- see
+    `test_guard_marker_is_not_inherited_through_functools_wraps` for why.
     """
     names = [t.name for t in await server.mcp.list_tools()]
     assert names, "no tools registered — the completeness check would be vacuous"
     unguarded = []
     for name in names:
         registered = (await server.mcp.get_tool(name)).fn
-        if not getattr(registered, server.GUARD_MARKER, False):
+        if getattr(registered, server.GUARD_MARKER, None) is not registered:
             unguarded.append(name)
     unguarded.sort()
     assert unguarded == [], (
@@ -124,9 +128,9 @@ async def test_guard_marker_is_absent_from_an_unguarded_function() -> None:
     def _bare() -> dict:
         return {}
 
-    assert not getattr(_bare, server.GUARD_MARKER, False)
+    assert getattr(_bare, server.GUARD_MARKER, None) is not _bare
     registered = (await server.mcp.get_tool("codex_status")).fn
-    assert getattr(registered, server.GUARD_MARKER, False)
+    assert getattr(registered, server.GUARD_MARKER, None) is registered
 
 
 @pytest.mark.parametrize("tool", SYNC_TOOLS)
@@ -192,3 +196,35 @@ async def test_status_reports_a_readiness_fact_when_codex_is_an_executable_direc
     Draft202012Validator(schemas.STATUS_SCHEMA).validate(sc)
     # Nothing about the failure leaks the probed path into the envelope.
     assert str(tmp_path) not in json.dumps(sc)
+
+
+async def test_guard_marker_is_not_inherited_through_functools_wraps() -> None:
+    """A wrapper built with `functools.wraps` around a guarded tool is NOT guarded.
+
+    `functools.wraps` copies the wrapped function's `__dict__`, so a boolean marker would
+    be inherited by a later decorator that does not itself guard anything -- leaving the
+    registered callable able to raise while the completeness test passed (found in review).
+    Making the marker's value the wrapper itself defeats that: the copy points at the
+    ORIGINAL wrapper, so an identity check rejects it.
+    """
+
+    @server._guard_sync(tier="consult", sandbox="read-only")
+    def _guarded() -> dict:
+        return {}
+
+    @functools.wraps(_guarded)
+    def _passthrough_that_guards_nothing() -> dict:
+        raise RuntimeError("escapes")
+
+    # The copied attribute is present and truthy -- which is exactly why truthiness is
+    # not a sufficient check.
+    assert getattr(_passthrough_that_guards_nothing, server.GUARD_MARKER, None) is not None
+    # ...but it points at the guarded wrapper, not at this one.
+    assert (
+        getattr(_passthrough_that_guards_nothing, server.GUARD_MARKER, None)
+        is not _passthrough_that_guards_nothing
+    )
+    # And the callable really does let the exception out, so the identity check is
+    # rejecting something genuinely unguarded rather than being merely pedantic.
+    with pytest.raises(RuntimeError, match="escapes"):
+        _passthrough_that_guards_nothing()

@@ -1372,6 +1372,12 @@ def _internal_error_result(
 # prove it: the posture is recorded BEFORE the wrapper is built, so a tool whose decorators
 # were stacked in the wrong order could populate the map while the registry still held the
 # unguarded function (#541).
+#
+# The marker's VALUE is the wrapper itself, and the check is `getattr(fn, MARKER) is fn`.
+# A boolean would not survive review: `functools.wraps` copies the wrapped function's
+# `__dict__`, so a later decorator wrapping a guarded tool inherits a truthy marker while
+# leaving the registered callable genuinely unguarded. Self-identity cannot be inherited
+# that way -- a copy points at the ORIGINAL wrapper, not at itself.
 GUARD_MARKER = "_codex_in_claude_guarded"
 
 
@@ -1416,7 +1422,7 @@ def _guard(
             except Exception as exc:
                 return _record_guard_failure(name, exc, tier=tier, sandbox=sandbox, start=start)
 
-        setattr(wrapper, GUARD_MARKER, True)
+        setattr(wrapper, GUARD_MARKER, wrapper)
         return wrapper
 
     return decorator
@@ -1452,7 +1458,7 @@ def _guard_sync(
             except Exception as exc:
                 return _record_guard_failure(name, exc, tier=tier, sandbox=sandbox, start=start)
 
-        setattr(wrapper, GUARD_MARKER, True)
+        setattr(wrapper, GUARD_MARKER, wrapper)
         return wrapper
 
     return decorator
