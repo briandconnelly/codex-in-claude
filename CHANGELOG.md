@@ -7,6 +7,13 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Fixed
 
+- **Fresh installs no longer resolve the incompatible fastmcp 4** (#572): every released version
+  declares `fastmcp>=3.4` with no upper bound, so once fastmcp 4.0.0 (on mcp 2.1.1) published, a
+  fresh install resolved it and failed at import (`cannot import name 'McpError' from 'mcp'`) —
+  including the `.mcp.json` plugin path. The floor is now capped at `<4`. Already-published
+  versions cannot be repaired, only superseded by releasing this cap. The fastmcp 4 port itself is
+  #570.
+
 - **The three free diagnostics can no longer fail as a raw MCP protocol error** (#541):
   `codex_status`, `codex_capabilities` and `codex_models` are synchronous, so the `_guard`
   decorator — which wraps async tools — never covered them, and anything they raised escaped the

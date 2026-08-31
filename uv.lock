@@ -261,7 +261,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4" },
-    { name = "fastmcp", specifier = ">=3.4" },
+    { name = "fastmcp", specifier = ">=3.4,<4" },
     { name = "pontonier", specifier = "==0.7.0" },
     { name = "pydantic", specifier = ">=2" },
 ]
