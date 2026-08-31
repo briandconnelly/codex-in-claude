@@ -10,7 +10,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "04e92501d371e38c83df85d1b39532232ecb6d1feb3cf2af00f0b895a4a03000"
+EXPECTED_MANIFEST_HASH = "a1afe429395a86fe7c95e7d6a96cf9e1c3ebfbd18ba44166df09673c89531772"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -166,7 +166,7 @@ async def test_manifest_drops_exactly_the_declared_server_info_fields():
     """Same widening guard for the initialize response: `serverInfo.version` is popped
     inline, so only equality against the live serverInfo catches a second pop (#337)."""
     m = await manifest.build_manifest()
-    async with Client(server.mcp) as client:
+    async with Client(server.mcp, mode="legacy") as client:
         live_info = manifest._dump(client.initialize_result).get("serverInfo", {})
     dropped = set(live_info) - set(m["initialize"]["serverInfo"])
     assert dropped == {"version"}

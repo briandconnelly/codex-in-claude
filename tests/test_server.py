@@ -407,34 +407,39 @@ def test_capabilities_names_annotations_reading():
 def test_protocol_revision_matches_installed_sdk_target():
     """Dependency-drift guard (#423 Codex review, Medium): `protocol_revision` is a
     declared TARGET, not the per-session negotiated `initialize.protocolVersion` — the
-    installed SDK's `initialize` handler
-    (`mcp/server/session.py::ServerSession._received_request`) echoes back the client's
-    requested version unchanged whenever it is one of `SUPPORTED_PROTOCOL_VERSIONS`
-    (`mcp/shared/version.py`), and falls back to `types.LATEST_PROTOCOL_VERSION`
-    (`mcp/types.py`) only when the request names something unsupported. So a
-    2025-06-18 client gets `2025-06-18` back on the wire while this field still
-    reports the target.
+    installed SDK's `initialize` handler echoes back the client's requested version
+    unchanged whenever it is one of `SUPPORTED_PROTOCOL_VERSIONS` (`mcp.types.version`),
+    and falls back to `types.LATEST_PROTOCOL_VERSION` only when the request names
+    something unsupported. So a 2025-06-18 client gets `2025-06-18` back on the wire
+    while this field still reports the target.
 
-    That target has to track the installed SDK's own default/fallback revision
-    (`mcp.types.LATEST_PROTOCOL_VERSION`) or the two silently drift apart on a
-    fastmcp/mcp upgrade that moves the SDK's preferred revision without this literal
-    moving. Both assertions below use that constant, plus `SUPPORTED_PROTOCOL_VERSIONS`
-    for the weaker sanity check, so a future SDK upgrade trips this test loudly instead
-    of staling the declared value."""
+    Workaround pin for the fastmcp 4 port (#570): this guard used to assert
+    `declared == LATEST_PROTOCOL_VERSION` so an SDK upgrade could never silently stale
+    the declared value. mcp 2 moved its own target to `2026-07-28`, but this server's
+    wire shapes are still written against `2025-11-25` — declaring `2026-07-28` before
+    the migration (era-correct error numerics, cache hints, the discover-era manifest)
+    would claim conformance the server does not yet have. #571 owns closing that gap
+    and restoring the strict equality below. Until then the gap is pinned EXPLICITLY on
+    both sides — the declared value and the SDK target — so the next SDK move (or the
+    #571 migration itself) still trips this test loudly instead of drifting."""
     import mcp.types as mcp_types
-    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+    from mcp.types.version import SUPPORTED_PROTOCOL_VERSIONS
 
     declared = server.codex_capabilities()["protocol_revision"]
     assert declared in SUPPORTED_PROTOCOL_VERSIONS, (
         f"{declared!r} is not one of the installed SDK's SUPPORTED_PROTOCOL_VERSIONS "
-        f"{SUPPORTED_PROTOCOL_VERSIONS} (mcp/shared/version.py)"
+        f"{SUPPORTED_PROTOCOL_VERSIONS} (mcp.types.version)"
     )
-    assert declared == mcp_types.LATEST_PROTOCOL_VERSION, (
-        f"protocol_revision ({declared!r}) no longer matches the installed SDK's own "
-        f"default/fallback revision (mcp.types.LATEST_PROTOCOL_VERSION == "
-        f"{mcp_types.LATEST_PROTOCOL_VERSION!r}) — a dependency upgrade moved the "
-        "SDK's target; update protocol_revision (and ADR 0004) deliberately rather "
-        "than leaving the declared value stale."
+    assert declared == "2025-11-25", (
+        f"protocol_revision moved to {declared!r} — if this is the #571 migration, "
+        "restore the strict `declared == mcp_types.LATEST_PROTOCOL_VERSION` assertion "
+        "this workaround replaced (and retire the pin below)."
+    )
+    assert mcp_types.LATEST_PROTOCOL_VERSION == "2026-07-28", (
+        f"the installed SDK's target moved again (LATEST_PROTOCOL_VERSION == "
+        f"{mcp_types.LATEST_PROTOCOL_VERSION!r}, this pin expects '2026-07-28') — "
+        "re-judge the declared protocol_revision (and ADR 0004 / #571) deliberately "
+        "rather than leaving the declared value stale."
     )
 
 
@@ -2733,7 +2738,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-87"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-88"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2781,7 +2786,7 @@ def test_server_advertises_tools_list_changed():
     """The server declares the tools `listChanged` capability so clients know the
     contract even though the static tool list never changes mid-session (#71)."""
     opts = server.mcp._mcp_server.create_initialization_options()
-    assert opts.capabilities.tools.listChanged is True
+    assert opts.capabilities.tools.list_changed is True
 
 
 async def test_sync_active_tools_document_progress_and_job_recovery():
@@ -3838,12 +3843,12 @@ async def test_job_lifecycle_annotations_split_read_from_mutation(tool_name, rea
     when readOnlyHint is false (audit F4)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
-    assert ann.readOnlyHint is read_only
-    assert ann.idempotentHint is idempotent
+    assert ann.read_only_hint is read_only
+    assert ann.idempotent_hint is idempotent
     # Every job tool is local (closed-world), so it's non-destructive; read-only
     # tools omit destructiveHint (audit F4), mutating tools state it explicitly.
-    assert ann.openWorldHint is False
-    assert ann.destructiveHint is (False if not read_only else None)
+    assert ann.open_world_hint is False
+    assert ann.destructive_hint is (False if not read_only else None)
 
 
 async def test_job_cancel_is_idempotent_but_not_read_only():
@@ -3853,10 +3858,10 @@ async def test_job_cancel_is_idempotent_but_not_read_only():
     effect. The earlier idempotentHint:false deterred that safe retry (#141)."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools["codex_job_cancel"].annotations
-    assert ann.readOnlyHint is False
-    assert ann.idempotentHint is True
-    assert ann.openWorldHint is False
-    assert ann.destructiveHint is False
+    assert ann.read_only_hint is False
+    assert ann.idempotent_hint is True
+    assert ann.open_world_hint is False
+    assert ann.destructive_hint is False
 
 
 @pytest.mark.parametrize(
@@ -3872,10 +3877,10 @@ async def test_async_launchers_are_not_read_only(tool_name):
     additive."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
-    assert ann.readOnlyHint is False
-    assert ann.idempotentHint is False
-    assert ann.openWorldHint is True
-    assert ann.destructiveHint is (tool_name == "codex_delegate_async")
+    assert ann.read_only_hint is False
+    assert ann.idempotent_hint is False
+    assert ann.open_world_hint is True
+    assert ann.destructive_hint is (tool_name == "codex_delegate_async")
 
 
 @pytest.mark.parametrize(
@@ -3889,7 +3894,7 @@ async def test_sync_active_tools_are_not_read_only(tool_name):
     CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
-    assert ann.readOnlyHint is False
+    assert ann.read_only_hint is False
 
 
 @pytest.mark.parametrize(
@@ -3902,7 +3907,7 @@ async def test_dry_run_tools_are_read_only(tool_name):
     CapabilitiesResult.annotations_reading (#426) states on the agent-visible payload."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
-    assert ann.readOnlyHint is True
+    assert ann.read_only_hint is True
 
 
 def test_job_status_model_surfaces_cleanup_warnings():
@@ -4946,22 +4951,28 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
     class _Params:
         capabilities = _Caps()
 
+    class _ListRootsResult:
+        def __init__(self, rs):
+            self.roots = rs
+
     class _Session:
         client_params = _Params()
 
+        async def list_roots(self):
+            return _ListRootsResult(
+                [
+                    _Root(f"file://{tmp_path}"),  # valid absolute (empty authority) -> kept
+                    _Root(f"file://localhost{tmp_path}"),  # localhost authority -> kept
+                    _Root("file:relative/path"),  # relative -> dropped
+                    _Root("file://"),  # empty path -> dropped
+                    _Root("file://example.com/tmp/repo"),  # remote host -> dropped
+                    _Root("file://C:/repo"),  # drive-letter authority -> dropped
+                    _Root("https://example.com"),  # non-file scheme -> dropped
+                ]
+            )
+
     class _Ctx:
         session = _Session()
-
-        async def list_roots(self):
-            return [
-                _Root(f"file://{tmp_path}"),  # valid absolute (empty authority) -> kept
-                _Root(f"file://localhost{tmp_path}"),  # localhost authority -> kept
-                _Root("file:relative/path"),  # relative -> dropped
-                _Root("file://"),  # empty path -> dropped
-                _Root("file://example.com/tmp/repo"),  # remote host -> dropped
-                _Root("file://C:/repo"),  # drive-letter authority -> dropped
-                _Root("https://example.com"),  # non-file scheme -> dropped
-            ]
 
     paths, source = await server._roots_from_ctx(_Ctx())
     assert paths == [str(tmp_path), str(tmp_path)]
@@ -5046,7 +5057,7 @@ async def test_initialize_does_not_advertise_prompts(clean_env):
     static catalog misleads clients (audit F5)."""
     from fastmcp import Client
 
-    async with Client(server.mcp) as client:
+    async with Client(server.mcp, mode="legacy") as client:
         caps = client.initialize_result.capabilities
     assert caps.prompts is None
     assert caps.tools is not None  # the override must not clobber siblings
@@ -5066,7 +5077,7 @@ async def test_initialize_does_not_advertise_the_ui_extension(clean_env):
     UI/Apps code. Advertising it is a false capability claim (#424)."""
     from fastmcp import Client
 
-    async with Client(server.mcp) as client:
+    async with Client(server.mcp, mode="legacy") as client:
         caps = client.initialize_result.capabilities
     assert caps.model_extra is None or "extensions" not in caps.model_extra
     assert caps.tools is not None  # the override must not clobber siblings
@@ -5077,10 +5088,15 @@ async def test_initialize_does_not_advertise_the_ui_extension(clean_env):
     assert "extensions" not in wire
 
 
-async def test_initialize_ui_extension_filter_preserves_other_extensions(clean_env):
+async def test_ui_extension_filter_preserves_other_extensions(clean_env):
     """The seam must filter only the ui extension out of the extensions mapping, not
     null the whole key — a future FastMCP version may legitimately add a different
-    extension, and this server must not silently suppress that one too (#424 review)."""
+    extension, and this server must not silently suppress that one too (#424 review).
+
+    This used to assert over the legacy `initialize` response, but mcp 2 strips
+    `extensions` from that response entirely, so a preserved extension is only
+    observable on the modern (`server/discover`) era — which a default fastmcp 4
+    client negotiates. `client.server_capabilities` is the era-neutral accessor."""
     from fastmcp import Client
 
     sentinel_id = "io.example/sentinel"
@@ -5095,10 +5111,31 @@ async def test_initialize_ui_extension_filter_preserves_other_extensions(clean_e
     clean_env.setattr(server, "_orig_get_capabilities", fake_orig_get_capabilities)
 
     async with Client(server.mcp) as client:
-        caps = client.initialize_result.capabilities
+        caps = client.server_capabilities
 
     wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
     assert wire["extensions"] == {sentinel_id: {"foo": "bar"}}
+
+
+async def test_discover_does_not_advertise_prompts_or_the_ui_extension(clean_env):
+    """The modern (`server/discover`) era is real served surface under fastmcp 4 — a
+    default client negotiates it — and the F5/#424 filter seam feeds it too. Assert
+    the same two suppressions the legacy tests above pin, on the capabilities the
+    modern negotiation actually returned."""
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        assert client.protocol_version == "2026-07-28", (
+            "expected the default client to negotiate the modern era — if this moved, "
+            "re-judge which era these guards exercise"
+        )
+        caps = client.server_capabilities
+    assert caps.prompts is None
+    assert caps.tools is not None  # the override must not clobber siblings
+    assert caps.resources is not None
+    wire = caps.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert "prompts" not in wire
+    assert "extensions" not in wire
 
 
 # --- advertised error codes must be MCP-reachable (#92) -----------------------
@@ -5130,7 +5167,7 @@ async def test_advertised_error_codes_exclude_schema_gated(clean_env):
     caps = {t["name"]: t for t in server.codex_capabilities()["tool_details"]}
     covered: set[str] = set()
     for tool in tools:
-        props = (tool.inputSchema or {}).get("properties", {})
+        props = (tool.input_schema or {}).get("properties", {})
         advertised = set(caps.get(tool.name, {}).get("error_codes", []))
         for param, gated_code in _ENUM_PARAM_TO_GATED_CODE.items():
             if _is_enum_param(props.get(param)):
@@ -5220,7 +5257,7 @@ async def test_input_schemas_describe_ambiguous_params(clean_env):
         tools = await client.list_tools()
     seen: set[str] = set()
     for tool in tools:
-        props = (tool.inputSchema or {}).get("properties", {})
+        props = (tool.input_schema or {}).get("properties", {})
         for param, must_contain in _DESCRIBED_PARAMS.items():
             if param in props:
                 seen.add(param)
@@ -5239,7 +5276,7 @@ async def test_timeout_seconds_description_matches_clamp_behavior(clean_env):
     async with Client(server.mcp) as client:
         tools = await client.list_tools()
     consult = next(t for t in tools if t.name == "codex_consult")
-    spec = consult.inputSchema["properties"]["timeout_seconds"]
+    spec = consult.input_schema["properties"]["timeout_seconds"]
     desc = spec["description"]
     assert "10" in desc and "600" in desc
     # No numeric schema constraint — behavior is clamp, not reject.
@@ -5254,7 +5291,7 @@ async def test_delegate_dry_run_param_descriptions_do_not_claim_a_run(clean_env)
     async with Client(server.mcp) as client:
         tools = await client.list_tools()
     dry = next(t for t in tools if t.name == "codex_delegate_dry_run")
-    props = dry.inputSchema["properties"]
+    props = dry.input_schema["properties"]
     task_desc = props["task"]["description"].lower()
     assert "does not call codex" in task_desc and "return a diff" in task_desc
     assert "does not call codex" in props["model"]["description"].lower()
@@ -5367,9 +5404,9 @@ async def test_unknown_resource_read_carries_error_envelope(clean_env):
     carries the §6 ErrorInfo envelope (code/message/temporary/retry_after_ms/repair) so
     the resource surface matches the unified contract every tool already honors."""
     from fastmcp import Client
-    from mcp import McpError
+    from mcp import MCPError
 
-    with pytest.raises(McpError) as excinfo:
+    with pytest.raises(MCPError) as excinfo:
         async with Client(server.mcp) as client:
             await client.read_resource("codex://does-not-exist")
 
@@ -5403,14 +5440,14 @@ async def test_resource_error_middleware_maps_read_failure_to_internal_error():
     handler exceptions into it) maps to internal_error with MCP numeric -32603 — the
     branch our static resources can't exercise end-to-end, driven directly here."""
     from fastmcp.exceptions import ResourceError
-    from mcp import McpError
+    from mcp import MCPError
 
     mw = server._ResourceErrorMiddleware()
 
     async def call_next(_ctx):
         raise ResourceError("boom (would leak internal detail)")
 
-    with pytest.raises(McpError) as excinfo:
+    with pytest.raises(MCPError) as excinfo:
         await mw.on_read_resource(object(), call_next)
     err = excinfo.value.error
     assert err.code == -32603
@@ -5419,19 +5456,18 @@ async def test_resource_error_middleware_maps_read_failure_to_internal_error():
 
 
 async def test_resource_error_middleware_does_not_reclassify_mcp_error():
-    """An McpError raised by an inner layer keeps its own code/data — the middleware
+    """An MCPError raised by an inner layer keeps its own code/data — the middleware
     only wraps FastMCP's NotFoundError/DisabledError/ResourceError, never a protocol
     error that already carries the contract."""
-    from mcp import McpError
-    from mcp.types import ErrorData
+    from mcp import MCPError
 
     mw = server._ResourceErrorMiddleware()
-    original = McpError(ErrorData(code=-32000, message="deliberate", data={"x": 1}))
+    original = MCPError(code=-32000, message="deliberate", data={"x": 1})
 
     async def call_next(_ctx):
         raise original
 
-    with pytest.raises(McpError) as excinfo:
+    with pytest.raises(MCPError) as excinfo:
         await mw.on_read_resource(object(), call_next)
     assert excinfo.value.error.code == -32000
     assert excinfo.value.error.data == {"x": 1}
@@ -5452,9 +5488,9 @@ class TestResourceErrorCorrelation:
 
     async def test_not_found_carries_the_requested_uri_and_a_request_id(self):
         from fastmcp import Client
-        from mcp import McpError
+        from mcp import MCPError
 
-        with pytest.raises(McpError) as excinfo:
+        with pytest.raises(MCPError) as excinfo:
             async with Client(server.mcp) as client:
                 await client.read_resource("codex://does-not-exist")
         data = excinfo.value.error.data
@@ -5464,9 +5500,9 @@ class TestResourceErrorCorrelation:
     async def test_envelope_fields_are_unchanged(self):
         # The addition must not disturb the existing §6 contract.
         from fastmcp import Client
-        from mcp import McpError
+        from mcp import MCPError
 
-        with pytest.raises(McpError) as excinfo:
+        with pytest.raises(MCPError) as excinfo:
             async with Client(server.mcp) as client:
                 await client.read_resource("codex://does-not-exist")
         data = excinfo.value.error.data
@@ -5652,9 +5688,9 @@ async def test_read_only_tools_omit_meaningless_hints(clean_env):
         tools = await client.list_tools()
     for tool in tools:
         ann = tool.annotations
-        if ann is not None and ann.readOnlyHint is True:
-            assert ann.destructiveHint is None, tool.name
-            assert ann.idempotentHint is None, tool.name
+        if ann is not None and ann.read_only_hint is True:
+            assert ann.destructive_hint is None, tool.name
+            assert ann.idempotent_hint is None, tool.name
 
 
 # --- F3: sync active calls run through the detached worker (#169) -------------
@@ -6664,7 +6700,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-87")
+    assert result["fingerprint"].endswith("schema-88")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -8010,7 +8046,7 @@ class TestCapabilitiesContractsDetail:
         # A mode a client cannot discover from tools/list is a mode that does not exist.
         async with Client(server.mcp) as c:
             tool = next(t for t in await c.list_tools() if t.name == "codex_capabilities")
-        assert "contracts" in tool.inputSchema["properties"]["detail"]["enum"]
+        assert "contracts" in tool.input_schema["properties"]["detail"]["enum"]
 
     @pytest.mark.anyio
     async def test_capabilities_detail_description_explains_the_contracts_mode(self):
@@ -8020,7 +8056,7 @@ class TestCapabilitiesContractsDetail:
         # to pick the mode: its name, and the field it removes.
         async with Client(server.mcp) as c:
             tool = next(t for t in await c.list_tools() if t.name == "codex_capabilities")
-        desc = tool.inputSchema["properties"]["detail"]["description"]
+        desc = tool.input_schema["properties"]["detail"]["description"]
         assert "contracts" in desc
         assert "tool_details" in desc
         # The tool's own description must not contradict the enum it advertises.
@@ -8036,11 +8072,11 @@ class TestCapabilitiesContractsDetail:
         others = [
             n
             for n, t in tools.items()
-            if n != "codex_capabilities" and "detail" in t.inputSchema.get("properties", {})
+            if n != "codex_capabilities" and "detail" in t.input_schema.get("properties", {})
         ]
         assert others, "no other detail-taking tool found — this guard would be vacuous"
         for name in others:
-            enum = tools[name].inputSchema["properties"]["detail"]["enum"]
+            enum = tools[name].input_schema["properties"]["detail"]["enum"]
             assert "contracts" not in enum, f"{name} wrongly accepts detail=contracts"
 
     @pytest.mark.anyio
@@ -8484,16 +8520,20 @@ def _ctx_double(*, roots_advertised: bool, roots=(), list_roots_raises=None):
     class _Params:
         capabilities = _Caps()
 
+    class _ListRootsResult:
+        def __init__(self, rs):
+            self.roots = rs
+
     class _Session:
         client_params = _Params()
-
-    class _Ctx:
-        session = _Session()
 
         async def list_roots(self):
             if list_roots_raises is not None:
                 raise list_roots_raises
-            return [_Root(u) for u in roots]
+            return _ListRootsResult([_Root(u) for u in roots])
+
+    class _Ctx:
+        session = _Session()
 
     return _Ctx()
 
@@ -8534,6 +8574,34 @@ class TestRootsCapabilityGating:
         paths, source = await server._roots_from_ctx(ctx)
         assert paths == []
         assert source == "client"
+
+
+async def test_roots_resolve_live_over_the_mcp_boundary(clean_env, monkeypatch, tmp_path):
+    """Regression for the fastmcp 4 port (#570). Every other test of `_roots_from_ctx`
+    drives it through hand-built ctx doubles, so when fastmcp 4 removed
+    `Context.list_roots()` the shipping path died while the whole suite stayed green —
+    only `ty` saw it. This one drives the REAL server through a real in-process client
+    that advertises a root, and asserts the resolved workspace actually came from it,
+    so a fastmcp/mcp upgrade that breaks the live probe fails here loudly.
+
+    Pinned to the legacy handshake era on purpose: the modern (2026-07-28) protocol has
+    no back-channel for the roots request, so roots resolve on legacy connections only
+    (see `_roots_from_ctx`; the modern-era posture is #571's decision — if this test
+    starts failing because that era gate moved, re-judge it there)."""
+    import os
+
+    from fastmcp import Client
+
+    _init_repo(tmp_path)
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    async with Client(server.mcp, roots=[tmp_path.as_uri()], mode="legacy") as client:
+        result = await client.call_tool("codex_dry_run", {}, raise_on_error=False)
+    payload = result.structured_content
+    assert payload.get("ok") is True, payload
+    carrier = payload.get("meta") or payload
+    assert carrier["roots_source"] == "client"
+    assert carrier["workspace_source"] == "roots"
+    assert os.path.realpath(carrier["cwd"]) == os.path.realpath(str(tmp_path))
 
 
 TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"
@@ -9765,10 +9833,10 @@ async def test_delegate_tools_declare_destructive_writes(tool_name):
     read-only and the job record they create is additive."""
     tools = {t.name: t for t in await server.mcp.list_tools()}
     ann = tools[tool_name].annotations
-    assert ann.readOnlyHint is False
-    assert ann.destructiveHint is True
-    assert ann.idempotentHint is False
-    assert ann.openWorldHint is True
+    assert ann.read_only_hint is False
+    assert ann.destructive_hint is True
+    assert ann.idempotent_hint is False
+    assert ann.open_world_hint is True
 
 
 async def test_worktree_error_message_strips_control_characters(monkeypatch, clean_env, tmp_path):

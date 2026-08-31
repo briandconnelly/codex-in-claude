@@ -5,6 +5,29 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Changed
+
+- **Ported to fastmcp 4.0.0 / mcp 2.1.1** (#570): dependency caps move to `fastmcp>=4.0,<4.1`
+  plus an explicitly declared `mcp>=2.1,<2.2` (imported directly; previously ridden as a
+  transitive dependency — the class of gap that caused #572). The mechanical surface: the SDK's
+  `McpError` -> `MCPError` rename and keyword constructor in the resource-error middleware; the
+  #424 UI-extension filter reads the now-declared `ServerCapabilities.extensions` field instead
+  of `model_extra` (and is tested on BOTH protocol eras fastmcp 4 serves); the roots probe moves
+  from the removed `Context.list_roots()` to the SDK session (legacy-era only — a modern
+  2026-07-28 connection has no back-channel, reports `roots_source: "probe_failed"`, and falls
+  back exactly as a root-less client always did), now guarded by a live-path regression test
+  driving the real server through a real client, since the doubles-only coverage is how the dead
+  path stayed green; the manifest capture pins `Client(mode="legacy")` because fastmcp 4's
+  default negotiates the modern era where `initialize_result` is `None`. The legacy `initialize`
+  capture loses its empty `capabilities.experimental` map (an mcp-2 serialization change, not a
+  capability change), so the result `fingerprint` moves `schema-87` -> `schema-88`; nothing is
+  breaking. `protocol_revision` deliberately stays `2025-11-25` — the SDK's own target moved to
+  `2026-07-28`, but declaring it before the era migration (error renumbering, cache hints, the
+  discover-era manifest) would overstate conformance; the drift guard now pins that gap
+  explicitly on both sides, and #571 owns closing it. Tests drop every camelCase SDK-field read
+  and run with fastmcp's compat bridge OFF, so a camelCase read fails today instead of on the
+  FastMCP 5 upgrade.
+
 ## [0.22.0] - 2026-08-31
 
 An install-repair and hardening release. The headline is the dependency cap: fastmcp 4.0.0
