@@ -166,13 +166,12 @@ Architectural decisions that affect the agent-visible surface are recorded in `d
     bump; not every bump is breaking (so #198, a wording-only reword, correctly bumped
     `FINGERPRINT` with no `!`, and #193's `!` was over-flagging — the safe direction). A break
     *outside* that coverage does not **by itself** move the fingerprint: #555 narrowed what
-    `CODEX_IN_CLAUDE_EXTRA_ARGS` accepts and is flagged breaking,
-    yet correctly moved no fingerprint, because the denylist is not part of the discovered surface.
+    `CODEX_IN_CLAUDE_EXTRA_ARGS` accepts and is flagged breaking, yet correctly moved no
+    fingerprint, because the denylist is not part of the discovered surface.
     "By itself" is load-bearing: a release carrying such a break alongside covered changes still
-    bumps for those (0.12.0 narrowed the same passthrough three ways *and* moved `schema-40` →
-    `schema-44`, on the strength of what shipped with it). Judge coverage by `FINGERPRINT_COVERS`,
-    not by whether an agent can see the text — the table's repair-prose row is No/No even though
-    agents read that prose. Quick reference:
+    bumps for those (0.12.0 is the precedent). Judge coverage by `FINGERPRINT_COVERS`, not by
+    whether an agent can see the text — the table's repair-prose row is No/No even though agents
+    read that prose. Quick reference:
 
     | Change | Bumps `FINGERPRINT` | Breaking |
     |---|---|---|

@@ -1300,3 +1300,120 @@ def test_privacy_group_stays_contiguous_after_the_promotion():
         if line.startswith("- ") and not line.startswith("- **Privacy")
     ]
     assert stray == [], f"non-Privacy bullets inside the Privacy group: {stray}"
+
+
+# ---------------------------------------------------------------------------
+# #565: the breaking-change / FINGERPRINT maxim and its two neighbours
+#
+# AGENTS.md said "Every breaking change is also a `FINGERPRINT` bump" with no
+# carve-out, while 0.21.0 shipped #555 — flagged breaking, deliberately no
+# fingerprint move, because the extra-args denylist is not a discovered surface.
+# The defect was not one sentence: the "Breaking?" definition scoped breaking to
+# clients only, and the quick-reference table said narrowing a value set always
+# bumps. Any ONE of the three reverting alone puts the section back in
+# contradiction, so the guard checks all three together rather than pinning a
+# phrase.
+# ---------------------------------------------------------------------------
+
+_VERSIONING_HEADING = "## Versioning"
+
+
+def _versioning_section() -> str:
+    """AGENTS.md's `## Versioning` section, bounded at the next level-two heading.
+
+    Bounded for the same reason `_binding_rules_section()` is: an unbounded slice would
+    let a statement that migrated into a later section satisfy a "present here" check.
+    """
+    text = (_REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    parts = text.split(_VERSIONING_HEADING, 1)
+    assert len(parts) == 2, "AGENTS.md's Versioning section is gone or renamed"
+    body = parts[1]
+    nxt = body.find("\n## ")
+    return body if nxt == -1 else body[:nxt]
+
+
+def _states_the_scoped_maxim(section: str) -> bool:
+    """Does the maxim scope itself to what FINGERPRINT_COVERS covers, and carve out the
+    operator surface with the `by itself` qualifier?
+
+    Both halves are required. "Every breaking change is also a bump" scoped to the covered
+    surface is only half the correction: without `by itself`, a mixed change that breaks the
+    operator surface AND moves a covered category reads as exempt from the bump.
+    """
+    maxim = re.search(r"- Every breaking change[^\n]*(?:\n {4}[^\n]*)*", section)
+    if maxim is None:
+        return False
+    text = maxim.group(0)
+    return "FINGERPRINT_COVERS" in text and "by itself" in text
+
+
+def test_versioning_maxim_is_scoped_to_the_covered_surface():
+    assert _states_the_scoped_maxim(_versioning_section()), (
+        "the breaking/FINGERPRINT maxim lost its FINGERPRINT_COVERS scope or its "
+        "'by itself' carve-out — #555 (breaking, no fingerprint move) makes the "
+        "unscoped form false"
+    )
+
+
+def test_maxim_matcher_rejects_the_pre_565_wording():
+    """Guard the guard: the wording #565 replaces must FAIL this matcher, and each
+    half-correction must fail it too."""
+    pre_565 = (
+        "## Versioning\n"
+        "  - Every breaking change is also a `FINGERPRINT` bump; not every bump is\n"
+        "    breaking (so #198, a wording-only reword, correctly bumped it).\n"
+    )
+    assert _states_the_scoped_maxim(pre_565) is False
+
+    scope_only = (
+        "## Versioning\n"
+        "  - Every breaking change **to something `FINGERPRINT_COVERS` covers** is also a\n"
+        "    `FINGERPRINT` bump; not every bump is breaking.\n"
+    )
+    assert _states_the_scoped_maxim(scope_only) is False, (
+        "scoping without 'by itself' still exempts a mixed operator+covered change"
+    )
+
+    carve_out_only = (
+        "## Versioning\n"
+        "  - Every breaking change is also a `FINGERPRINT` bump, though an operator break\n"
+        "    does not by itself move it.\n"
+    )
+    assert _states_the_scoped_maxim(carve_out_only) is False
+
+
+def test_breaking_definition_covers_the_operator_audience():
+    """The definition one bullet above the maxim must admit an operator break, or it says
+    #555 should never have been flagged — the contradiction #565 was filed about."""
+    section = _versioning_section()
+    definition = re.search(r"- \*\*Breaking\?\*\*[^\n]*(?:\n {4}[^\n]*)*", section)
+    assert definition is not None, "the **Breaking?** bullet is gone or renamed"
+    text = definition.group(0)
+    assert re.search(r"\boperator\b", text, re.IGNORECASE), (
+        "the Breaking? definition dropped the operator audience, so it once again "
+        "classifies #555's `!` as unjustified"
+    )
+    assert re.search(r"\bdocument(?:ed|s)\b", text, re.IGNORECASE), (
+        "the operator audience lost its documented/supported-interface boundary, which "
+        "keeps an undocumented detail an operator depends on from becoming breaking"
+    )
+
+
+def test_quick_reference_table_carries_the_operator_row():
+    """The table is what a hurried reader consults INSTEAD of the prose, so the carve-out
+    has to survive there too — a bare 'No' would lose the mixed-change case."""
+    section = _versioning_section()
+    rows = [ln for ln in section.splitlines() if ln.strip().startswith("|")]
+    operator_rows = [r for r in rows if "CODEX_IN_CLAUDE_EXTRA_ARGS" in r]
+    assert operator_rows, "the quick-reference table lost its operator-surface row (#555)"
+    for row in operator_rows:
+        cells = [c.strip() for c in row.strip().strip("|").split("|")]
+        assert len(cells) == 3, f"unexpected row shape: {row!r}"
+        fingerprint_cell, breaking_cell = cells[1], cells[2]
+        assert "by itself" in fingerprint_cell.lower(), (
+            "the operator row's FINGERPRINT cell states a bare verdict; it must carry the "
+            "'by itself' qualifier, or a mixed operator+covered change reads as exempt"
+        )
+        assert breaking_cell.lower().startswith("yes"), (
+            "the operator row must stay marked breaking — that is the #555 precedent"
+        )
