@@ -24,8 +24,13 @@ explains invariants without duplicating their full schemas.
   user turn), and never for secrets — it rides the codex command line and the background-job
   record on disk. Max 4096 bytes; text containing the server's framing-marker lines is refused as
   `invalid_arguments` (the reason names `forged_framing_marker` — a reason token, not an
-  error code). The result's `meta.developer_instructions` fingerprint (sha256 +
-  bytes) is how you tell a steered run from a default one.
+  error code). On an envelope describing a prepared run, a present
+  `meta.developer_instructions` fingerprint (sha256 + bytes) shows the server accepted your
+  normalized text and staged it for that run; it does not show that Codex followed it — nor, on
+  an async handle, that the worker reached Codex at all. Absence means only that this per-call
+  parameter was omitted, not that the run was otherwise unsteered, since an operator
+  `config.toml` remains an instruction source. Compliance is best-effort and may be silent, so a
+  discarded stance can read exactly like a run that carried none.
   - Route content by role, not by how authoritative it sounds. *How to work* — stance,
     persona, emphasis — is what `developer_instructions` is for. *What to review* is selected
     by the review scope (`scope`/`base`/`commit`/`paths`) or stated in a consult's `question`;
@@ -44,8 +49,14 @@ explains invariants without duplicating their full schemas.
     stance: the same move applies, rather than truncating to fit. That repairs
     only the field cap — on `input_too_large` the *combined* caller-authored input broke the
     budget, and moving text between fields cannot repair it; shrink the total instead.
-  - `codex_dry_run` takes no `developer_instructions`, so a preview validates none of it —
-    the byte cap, the marker refusal, and the fingerprint all happen on the paid call.
+  - `codex_dry_run` takes no `developer_instructions`, so a preview cannot check it. There is no
+    free positive check either: submit the intended active tool, and a value the server REFUSES
+    costs nothing — unsafe text, the field byte cap, framing markers, and the combined input
+    budget are all rejected pre-spend, before any model call — while a value it ACCEPTS goes
+    straight on into the paid run. So iterating on a malformed value is free, but confirming a
+    good one is not. Field validation stops at the first failure in unsafe -> byte cap -> marker
+    order, so a value that is both over-cap and marker-bearing reports only the cap — clearing
+    both can take two free round trips.
 - Use `isolation` only when its effect on user configuration and repository rules is intended.
 - Synchronous active tools accept a bounded `timeout_seconds`; async runs use the server's job
   deadline instead.
