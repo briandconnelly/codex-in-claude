@@ -31,6 +31,13 @@ to probe what an operator config channel can and cannot do against a plugin flag
 `--codex-home` points codex at a scratch `$CODEX_HOME` (no credentials needed: the sink
 answers before any authenticated call) so such a probe never touches the real one.
 
+**A scratch home is blind to the plugin-tool family.** `request_plugin_install`,
+`list_available_plugins_to_install` and the `*_mcp_resource*` trio appear only in a real,
+logged-in `$CODEX_HOME` — a credential-free scratch home never shows them in EITHER feature
+state, verified still absent with a local marketplace configured and a plugin installed. So a
+`remote_plugin` probe cannot use `--codex-home`, and its absence there proves nothing (#591).
+Never copy or symlink credentials into a scratch home to work around this.
+
 Exit status: 0 on a captured request, 1 on failure (nothing captured). A non-zero exit means
 the probe did not run — never read it as "no tools".
 

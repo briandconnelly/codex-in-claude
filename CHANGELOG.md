@@ -32,6 +32,37 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The `remote_plugin` guarantee no longer carves out an operator `--profile` -- because that
+  carve-out was false** (#591). The server instructions said third-party connectors "aren't exposed
+  to the Codex run -- barring a custom operator-supplied Codex profile", and `COMPATIBILITY.md`,
+  `docs/UPGRADING-CODEX.md` and the `cli_contract.py`/`config.py` comments carried the same claim.
+  Nothing had measured it; it was an analogy to the general `--profile` operator-trust boundary.
+  Measured on 0.152.0 it is wrong in the safe direction: the plugin's `--disable remote_plugin` is a
+  *runtime* override and runtime flags load above profiles, so a profile setting
+  `remote_plugin = true` loses in either argv order -- the same precedence #587 established for
+  `sleep_tool`, so neither plugin-owned feature has a profile escape hatch. The summary now says the
+  feature is forced off "with a runtime override an operator-supplied Codex profile cannot
+  supersede", scoped to connectors supplied *through that feature* rather than to every connector
+  route (the installed-connector tool-surface A/B is still recorded as unexercised).
+  The measurement needed a new instrument, since `codex features list` is blind to profiles at every
+  argv position and 0.152.0 rejects the legacy `profile = "X"` config key outright: the effective
+  value is read off the model-facing tool catalog (`scripts/capture_wire_tools.py`, zero spend),
+  where `list_available_plugins_to_install` tracks the effective value. That marker is documented as
+  a **calibrated proxy, not an oracle** -- it agreed with `codex features list` on all six argv
+  shapes both instruments can see, it carries a scope guard (the plugin tool family appears only in
+  a logged-in `$CODEX_HOME`, so a run without it is INVALID rather than a "feature on" reading), and
+  it has a low-rate flake in both directions that the guard does *not* catch, so every arm is read as
+  a majority of three. Both profiles in the matrix carry an unrelated sentinel
+  (`view_image = false`) so each profile row proves in the same capture that that exact profile was
+  applied -- without it the rows that matter would pass vacuously.
+  `tests/test_integration.py::test_plugin_disable_outranks_profile_for_remote_plugin_live` pins the
+  whole matrix and skips when the environment is blind, but fails when the calibration stops
+  toggling. `COMPATIBILITY.md`'s profile boundary is now stated as a precedence rule rather than a
+  numeric exception list, which had already gone stale (`writable_roots` was pinned and
+  profile-outranking but uncounted). The `fingerprint` moves `schema-90` -> `schema-91` (the
+  server-instructions sentence is discovered surface). Not breaking: it *strengthens* a documented
+  guarantee and narrows nothing -- a profile still sets anything this bridge does not pin.
+
 - **`--disable sleep_tool` is sent on every model-bearing run, and `sleep_tool` is plugin-owned
   in `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#587): the second entry of a new
   `cli_contract.MODEL_RUN_DISABLED_FEATURES` inventory, next to `remote_plugin`, from which both

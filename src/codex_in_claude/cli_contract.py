@@ -230,9 +230,11 @@ VALID_SANDBOXES = (SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, SANDBOX_DANGER_FU
 # on EVERY model-bearing `codex exec` call, unconditionally, via the plugin-owned
 # `--disable remote_plugin` (verified `== -c features.remote_plugin=false`; it wins over
 # `--enable`/`-c ...=true` regardless of order, and an unknown feature name fails loud as
-# `Error: Unknown feature flag`, giving us ALWAYS_SEND fail-closed drift). The guarantee is
-# bounded by the documented `--profile` operator-trust boundary (an opaque profile this
-# server cannot inspect); see COMPATIBILITY.md.
+# `Error: Unknown feature flag`, giving us ALWAYS_SEND fail-closed drift). A `--profile` does
+# NOT escape it: the disable is a runtime override and outranks a profile that sets the feature
+# true, in either argv order (verified 0.152.0 with positive controls in both directions — #591,
+# correcting the earlier claim that an opaque profile could re-enable it). The general
+# `--profile` operator-trust boundary still stands for everything else; see COMPATIBILITY.md.
 DISABLE_FEATURE_FLAG = "--disable"  # `--disable <FEATURE>`; == `-c features.<FEATURE>=false`
 REMOTE_PLUGIN_FEATURE = "remote_plugin"
 

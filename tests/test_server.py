@@ -341,6 +341,22 @@ def test_status_reports_bad_override_as_readiness_fact_not_raised_exception(clea
     assert binpath.ENV_VAR in res["readiness_detail"]
 
 
+def test_capability_summary_states_no_profile_escape_for_remote_plugin():
+    """The remote_plugin disclosure must not re-grow the false profile carve-out (#591).
+
+    Through 0.152.0 the summary said connectors aren't exposed "barring a custom
+    operator-supplied Codex profile". #591 measured that and it is false — the plugin's
+    `--disable` is a runtime override a profile cannot supersede — so the carve-out is gone and
+    must not come back. The claim is also deliberately SCOPED to connectors supplied through
+    that feature: `remote_plugin` is not the only route a connector could reach a run, and
+    COMPATIBILITY.md still records the installed-connector tool-surface A/B as unexercised."""
+    summary = server.CAPABILITY_SUMMARY
+    assert "barring a custom operator-supplied Codex profile" not in summary
+    assert "cannot supersede" in summary
+    # Scoped, not an absolute claim about every connector mechanism.
+    assert "supplied through that feature" in summary
+
+
 def test_capability_summary_covers_all_task_families():
     """First-read instructions name every task family + prereqs + negative scope (issue #7)."""
     summary = server.CAPABILITY_SUMMARY
@@ -2730,7 +2746,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-90"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-91"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6806,7 +6822,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-90")
+    assert result["fingerprint"].endswith("schema-91")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

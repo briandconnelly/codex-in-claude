@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -206,6 +207,94 @@ def test_plugin_disable_outranks_profile_and_config_file_live(tmp_path):
     assert "clock" in _wire_tool_names("--profile", "sleepy", script_opts=via_profile)
     assert "clock" not in _wire_tool_names("--profile", "sleepy", *disable, script_opts=via_profile)
     assert "clock" not in _wire_tool_names(*disable, "--profile", "sleepy", script_opts=via_profile)
+
+
+_PLUGIN_TOOL_FAMILY_MARKER = "request_plugin_install"
+_REMOTE_PLUGIN_OFF_MARKER = "list_available_plugins_to_install"
+_PROFILE_SENTINEL_TOOL = "view_image"  # the profiles set features.view_image=false
+
+
+def _capture_remote_plugin(*extra: str) -> tuple[bool, bool]:
+    """`(effective remote_plugin, profile sentinel applied)` read off the tool catalog (#591).
+
+    `codex features list` is authoritative but blind to profiles (`codex --profile X features
+    list` is refused, `features list --profile X` is an unknown argument, and 0.152.0 rejects
+    the legacy `profile = "X"` config key), so a profile's effect has to be read elsewhere.
+    `_REMOTE_PLUGIN_OFF_MARKER` is a CALIBRATED PROXY, not a definition — the explicit-flag
+    rows in the test below re-calibrate it on every run rather than assuming it.
+
+    Skips when the plugin tool family is absent: it appears only in a logged-in `$CODEX_HOME`,
+    and without it an absent off-marker is a blind probe rather than a `true` reading. Never
+    copy credentials into a scratch home to make this portable (COMPATIBILITY.md).
+
+    Read as a MAJORITY OF THREE captures because the marker carries a low-rate flake in BOTH
+    directions that the scope guard does not catch (~2 bad readings in ~90 captures while #591
+    was measured). One capture per arm is therefore not trustworthy on its own; a lone flake
+    cannot outvote two agreeing captures, and a three-way disagreement fails loudly."""
+    # `--inherit-config` is load-bearing: without it the script sends `--ignore-user-config`,
+    # which drops `config.toml` AND every `--profile`, so a profile row would silently read as
+    # the upstream default and the control below would fail open.
+    readings: list[tuple[bool, bool]] = []
+    for _ in range(3):
+        names = _wire_tool_names(*extra, script_opts=("--inherit-config",))
+        if _PLUGIN_TOOL_FAMILY_MARKER not in names:
+            pytest.skip(f"no plugin tool family in this $CODEX_HOME; readout is blind: {names}")
+        readings.append(
+            (_REMOTE_PLUGIN_OFF_MARKER not in names, _PROFILE_SENTINEL_TOOL not in names)
+        )
+    winner, count = Counter(readings).most_common(1)[0]
+    assert count >= 2, f"no majority across three captures of {extra}: {readings}"
+    return winner
+
+
+def test_plugin_disable_outranks_profile_for_remote_plugin_live():
+    """`--disable remote_plugin` beats an opaque `--profile` (#591).
+
+    COMPATIBILITY.md claimed the opposite through 0.152.0 — that a profile could re-enable the
+    connectors — by analogy rather than measurement. It cannot: the plugin's `--disable` is a
+    runtime override and runtime flags load above profiles, the same precedence #587 pinned for
+    `sleep_tool`.
+
+    Both profiles carry an UNRELATED sentinel (`view_image = false`) so each profile row proves
+    in the SAME capture that that exact profile file was applied. Without it a profile whose
+    value merely agrees with the default cannot be told apart from one that was ignored, and
+    the two rows that matter most would pass vacuously.
+
+    The profile files must live in the REAL `$CODEX_HOME` (`--profile` resolves only there, and
+    a credential-free scratch home cannot see the readout at all), so they use an unmistakable
+    prefix, refuse to clobber, and are removed in a `finally`. Zero spend: the sink answers
+    before any model call."""
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    off_profile, on_profile = "pytest591off", "pytest591on"
+    off_file = codex_home / f"{off_profile}.config.toml"
+    on_file = codex_home / f"{on_profile}.config.toml"
+    for path in (off_file, on_file):
+        assert not path.exists(), f"refusing to clobber an existing {path}"
+    disable = (cli_contract.DISABLE_FEATURE_FLAG, cli_contract.REMOTE_PLUGIN_FEATURE)
+    enable = ("--enable", cli_contract.REMOTE_PLUGIN_FEATURE)
+    sentinel = "view_image = false\n"
+    try:
+        off_file.write_text(f"[features]\nremote_plugin = false\n{sentinel}", encoding="utf-8")
+        on_file.write_text(f"[features]\nremote_plugin = true\n{sentinel}", encoding="utf-8")
+        # Calibration: the marker must still track the EXPLICIT controls. These are assertions,
+        # not skips — a marker that stopped toggling here is contract drift, not a missing
+        # environment, and would make every row below meaningless.
+        assert _capture_remote_plugin() == (True, False)
+        assert _capture_remote_plugin(*disable) == (False, False)
+        assert _capture_remote_plugin(*enable) == (True, False)
+        # Positive control: the profile channel genuinely moves the value away from the default.
+        assert _capture_remote_plugin("--profile", off_profile) == (False, True)
+        # The claim under test: a profile asking for `true` loses to the plugin's disable, in
+        # either argv order — and the sentinel proves that profile was live in those very runs.
+        assert _capture_remote_plugin("--profile", on_profile) == (True, True)
+        assert _capture_remote_plugin("--profile", on_profile, *disable) == (False, True)
+        assert _capture_remote_plugin(*disable, "--profile", on_profile) == (False, True)
+        # The converse: a runtime flag overrides a profile value that IS taking effect.
+        assert _capture_remote_plugin("--profile", off_profile, *enable) == (True, True)
+        assert _capture_remote_plugin(*enable, "--profile", off_profile) == (True, True)
+    finally:
+        off_file.unlink(missing_ok=True)
+        on_file.unlink(missing_ok=True)
 
 
 def test_status_live():
