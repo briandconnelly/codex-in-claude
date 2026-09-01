@@ -81,7 +81,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-89"
+FINGERPRINT = "codex-in-claude/0.1/schema-90"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -146,7 +146,16 @@ FINGERPRINT = "codex-in-claude/0.1/schema-89"
 # Verified at the fixture regen (not assumed): the `serialized` view's success entries
 # each gain the key, and the review_success representative carries it POPULATED per the
 # null-fixtures convention (#400).
-RESULT_FORMAT: int = 11
+# #519 bumped 11->12: Meta gained `codex_version` — new field, extra="forbid", and
+# dump_success retains nulls, so every persisted success envelope's replay gains a key an
+# older reader's closed schema rejects: the F8 roots_source / #556 developer_instructions
+# case exactly. Verified at the fixture regen (not assumed): the `serialized` view's
+# success entries each gain the key, and the review_success representative carries it
+# POPULATED per the null-fixtures convention (#400). A run-derived ERROR representative
+# carries it populated too — unlike #185's middleware-only fields, a launched run that
+# exits nonzero persists this key through the same _stamp_meta hook, so the error side of
+# the `serialized` view must show that a stored failure can carry it.
+RESULT_FORMAT: int = 12
 
 
 # The release that produced this envelope. Beside `fingerprint` on every result surface:
@@ -800,6 +809,28 @@ class Meta(BaseModel):
     developer_instructions: DeveloperInstructions | None = Field(
         default=None,
         description=_DEVELOPER_INSTRUCTIONS_META_DESC,
+    )
+    codex_version: str | None = Field(
+        default=None,
+        description=(
+            "Display copy of `codex --version` observed for the Codex run this envelope "
+            "describes: probed immediately before the run's exec, on the same executable "
+            "token, working directory, and environment it was about to spawn. Same "
+            "sanitized, bounded projection as codex_status's field of this name — control "
+            "characters removed, secret-looking values redacted, clipped with a trailing "
+            "`…[truncated]` — but a different question: that one reports the install at "
+            "STATUS time, this one what the selected executable reported next to THIS run. "
+            "Do not parse it. BEST-EFFORT OBSERVATION, NOT ATTESTATION: it comes from a "
+            "second process, so a binary replaced, a symlink or shim retargeted, or a file "
+            "rewritten between the probe and the exec would go unreported; the "
+            "`codex exec --json` stream carries no version of its own. A retrieved "
+            "background-job result carries the ORIGINATING run's value. NULL OR ABSENT "
+            "whenever it was not recorded — no Codex run was launched (argument-validation "
+            "and codex_job_* lifecycle errors, dry-run previews, async job-start handles), "
+            "the version probe itself failed, the spawn found no binary, the run failed "
+            "before the value was captured, or the payload was stored by a build predating "
+            "this field. Absence is never evidence that no run happened."
+        ),
     )
     scope: str | None = None  # review scope: working_tree|branch|commit
     base: str | None = None

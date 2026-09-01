@@ -42,6 +42,11 @@ class CodexExecResult:
     last_message: str | None
     events: str = ""
     dropped_flags: list[str] = field(default_factory=list)
+    # The DISPLAY copy of `codex --version` observed immediately before this run's exec,
+    # from the same argv token/cwd/env it was about to spawn (#519). None when the probe
+    # could not run or the spawn found no binary. Best-effort observation, never
+    # attestation -- see `probe_version_for_run`.
+    codex_version: str | None = None
 
 
 def _gate_optional(tokens: list[str], fs: FlagSupport) -> tuple[list[str], list[str]]:
@@ -288,6 +293,12 @@ async def run_codex_exec(
             last_message=None,
         )
     async with BACKEND.prepare(request) as prepared:
+        # Observe the version BEFORE the exec, on the same token/cwd/env this run is
+        # about to spawn (#519). Deliberately uncached: every run -- sync included --
+        # executes in a fresh detached worker, so a process cache would save nothing on
+        # the paid path while widening the window in which the stamped version is not the
+        # one that served the run.
+        version = probe_version_for_run(prepared.argv[0], cwd=prepared.cwd, env=prepared.env)
         run = await runtime.run_async(
             list(prepared.argv),
             cwd=prepared.cwd,
@@ -305,6 +316,10 @@ async def run_codex_exec(
         last_message=last_message,
         events=run.stdout,
         dropped_flags=list(prepared.dropped_flags),
+        # Withheld when the spawn found no binary: the probe answering is not evidence
+        # the exec did, and naming a version for a run that never launched would be a
+        # fabricated attestation.
+        codex_version=None if run.binary_missing else version,
     )
 
 
@@ -330,6 +345,41 @@ def codex_version(timeout_seconds: int = 10) -> str | None:
     if run.binary_missing or run.exit_code != 0:
         return None
     return run.stdout.strip() or None
+
+
+def probe_version_for_run(
+    argv0: str,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    timeout_seconds: int = 10,
+) -> str | None:
+    """The DISPLAY copy of `codex --version` for the executable a run is about to spawn.
+
+    Takes `argv0` rather than re-resolving through `binpath`: the caller has already
+    decided which token it will spawn, and interrogating a separately resolved one could
+    name a different binary than the one that serves the run.
+
+    BEST-EFFORT, NOT ATTESTATION, and the field built from it says so. This is a second
+    process: between it and the exec, the path can be replaced, a symlink or npm shim
+    retargeted, or the file rewritten in place. Probing immediately before the spawn
+    shrinks that window; nothing available from the CLI closes it, because the
+    `codex exec --json` stream carries no version, model, or binary field at all
+    (re-verified at codex-cli 0.151.0 -- see #519).
+
+    Returns the sanitized, bounded copy `version_display` produces, or None on any
+    probe failure. A failed probe must never fail the run: the paid answer still ships,
+    honestly unstamped.
+    """
+    run = runtime.run_sync_capture(
+        [argv0, *cli_contract.VERSION_ARGS],
+        timeout_seconds=timeout_seconds,
+        cwd=cwd,
+        env=env,
+    )
+    if run.binary_missing or run.exit_code != 0:
+        return None
+    return version_display(run.stdout.strip() or None)
 
 
 def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:

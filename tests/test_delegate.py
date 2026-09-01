@@ -36,12 +36,14 @@ def _make_exec_result(
     exit_code: int = 0,
     last_message: str = "ok",
     dropped_flags: list[str] | None = None,
+    codex_version: str | None = None,
 ) -> codex.CodexExecResult:
     return codex.CodexExecResult(
         run=CommandRun(events, "", exit_code, 12, exit_code == -9),
         last_message=last_message,
         events=events,
         dropped_flags=dropped_flags or [],
+        codex_version=codex_version,
     )
 
 
@@ -651,3 +653,24 @@ def test_run_delegate_attributes_a_config_value_rejection_by_its_own_pins(
     )
     assert out["ok"] is False
     assert out["error"]["code"] == expected_code
+
+
+# --- #519: delegate's own stamp hook -------------------------------------------------
+# A separate hook from orchestration's, so it needs its own coverage: the two have
+# drifted before, and a stamp added to only one would leave delegate envelopes silent.
+
+
+def test_apply_run_meta_records_the_observed_codex_version():
+    from codex_in_claude import delegate
+
+    meta = _make_meta()
+    delegate._apply_run_meta(meta, _make_exec_result(codex_version="codex-cli 0.151.0"))
+    assert meta.codex_version == "codex-cli 0.151.0"
+
+
+def test_apply_run_meta_leaves_the_version_absent_when_the_probe_gave_nothing():
+    from codex_in_claude import delegate
+
+    meta = _make_meta()
+    delegate._apply_run_meta(meta, _make_exec_result(codex_version=None))
+    assert meta.codex_version is None

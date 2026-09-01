@@ -2730,7 +2730,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-89"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-90"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -6806,7 +6806,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-89")
+    assert result["fingerprint"].endswith("schema-90")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -10510,3 +10510,61 @@ async def test_review_and_async_refusals_name_their_own_tool(
     assert res["ok"] is False
     assert res["error"]["code"] == "invalid_arguments"
     assert expected_name in res["error"]["message"]
+
+
+# --- #519: no-run envelopes must not claim a codex build ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("codex_consult", {"definitely_not_a_param": 1}),
+        ("codex_job_status", {"definitely_not_a_param": 1}),
+        ("codex_job_status", {"job_id": "0" * 32}),
+    ],
+)
+async def test_no_run_envelopes_do_not_claim_a_codex_version(clean_env, tool, args):
+    """Argument validation and job-lifecycle calls launch no Codex, so `codex_version`
+    must be absent — never the server's own installed version, which would read as an
+    attestation for a run that never happened.
+
+    `_base_meta` builds these envelopes and is deliberately NOT a stamp site: probing
+    `codex --version` there would also spawn a subprocess on every rejected argument.
+    """
+    res = await server.mcp.call_tool(tool, args)
+    sc = res.structured_content
+    assert sc["ok"] is False
+    assert sc["meta"].get("codex_version") is None
+
+
+# --- #519: replay preserves the ORIGINATING run's codex build -------------------------
+# Same asymmetry as server_version above: this is provenance about the run that produced
+# the stored payload, so a later fetch must never re-stamp it with whatever codex the
+# REPLAYING server happens to have installed. Getting this wrong would be worse than
+# omitting the field: it would confidently name the wrong binary.
+
+
+async def test_replayed_success_preserves_the_originating_codex_version(
+    monkeypatch, clean_env, tmp_path
+):
+    stored = _done_envelope()
+    stored["meta"]["codex_version"] = "codex-cli 0.140.0"  # an older run's observation
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert res["meta"]["codex_version"] == "codex-cli 0.140.0"
+
+
+async def test_replayed_result_without_a_codex_version_stays_unattributed(
+    monkeypatch, clean_env, tmp_path
+):
+    """A payload stored before this field existed must replay with NO version, not with
+    the replaying server's installed one."""
+    stored = _done_envelope()
+    stored["meta"].pop("codex_version", None)
+    store = _FakeStore(record=_ok_record("done"), result_json=stored)
+    monkeypatch.setattr(server.config, "job_store", lambda: store)
+    res = await server.codex_job_result("job-abc", workspace_root=str(tmp_path))
+    assert res["ok"] is True
+    assert "codex_version" not in res["meta"]

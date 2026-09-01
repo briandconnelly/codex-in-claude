@@ -88,6 +88,24 @@ def _review_representative_meta() -> Meta:
     `serialized` view, not hide behind a null."""
     meta = _representative_meta()
     meta.developer_instructions = DeveloperInstructions.of("focus")
+    # #519, same convention: a FIXED literal, because the real value comes from a live
+    # `codex --version` probe and would churn this fixture on every codex upgrade.
+    meta.codex_version = "codex-cli 0.0.0"
+    return meta
+
+
+def _launched_run_failure_meta() -> Meta:
+    """A meta for a run that LAUNCHED and then failed.
+
+    `serialize_error` excludes nulls, so populating `codex_version` only on the success
+    side would leave the `serialized` view silent about the failure side — yet a nonzero
+    run is stamped by the very same `_stamp_meta` hook and persists the key. Without this
+    the fixture could stay byte-identical while a regression dropped the stamp from every
+    stored failure, which is the envelope where "which codex served this?" matters most.
+    """
+    meta = _representative_meta()
+    meta.codex_version = "codex-cli 0.0.0"
+    meta.command_exit_code = 1
     return meta
 
 
@@ -130,7 +148,9 @@ def build_snapshot() -> dict:
         # reject those bytes. Keeping one non-`internal_error` code here makes the
         # persisted-byte consequence of an ErrorCode change visible in this view.
         "error_user_config_rejected": serialize_error(
-            ErrorResult(error=make_error("user_config_rejected", "m"), meta=_representative_meta())
+            ErrorResult(
+                error=make_error("user_config_rejected", "m"), meta=_launched_run_failure_meta()
+            )
         ),
     }
     return {

@@ -912,3 +912,25 @@ def test_worker_crash_still_writes_result_with_tampered_instructions(tmp_path, m
     out = json.loads((jd / "result.json").read_text())
     assert out["ok"] is False
     assert out["error"]["code"] == "internal_error"
+
+
+# --- #519: the crash sink cannot attest a codex build ---------------------------------
+
+
+def test_meta_from_spec_carries_no_codex_version(tmp_path):
+    """The crash sink rebuilds meta from the SPEC, which holds no process observation, so
+    a worker that dies after launching Codex delivers an envelope with no version.
+
+    Pinned deliberately rather than treated as an oversight: the spec is written at spawn,
+    before any probe, so there is nothing truthful to put here. `Meta.codex_version`
+    documents that absence never proves no run happened, and this is one of the cases it
+    is documenting."""
+    spec = {
+        "kind": "codex_consult",
+        "cwd": str(tmp_path),
+        "tier": "consult",
+        "sandbox": "read-only",
+        "isolation": "inherit",
+        "timeout_seconds": 60,
+    }
+    assert _worker._meta_from_spec(spec).codex_version is None

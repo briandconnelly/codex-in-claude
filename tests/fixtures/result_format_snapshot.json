@@ -1,5 +1,5 @@
 {
-  "result_format": 11,
+  "result_format": 12,
   "schemas": {
     "ConsultResult": {
       "$defs": {
@@ -138,6 +138,18 @@
               ],
               "default": null,
               "title": "Base"
+            },
+            "codex_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Codex Version"
             },
             "command_exit_code": {
               "anyOf": [
@@ -965,6 +977,18 @@
               ],
               "default": null,
               "title": "Base"
+            },
+            "codex_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Codex Version"
             },
             "command_exit_code": {
               "anyOf": [
@@ -2029,6 +2053,18 @@
               "default": null,
               "title": "Base"
             },
+            "codex_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Codex Version"
+            },
             "command_exit_code": {
               "anyOf": [
                 {
@@ -2924,6 +2960,18 @@
               "default": null,
               "title": "Base"
             },
+            "codex_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Codex Version"
+            },
             "command_exit_code": {
               "anyOf": [
                 {
@@ -3681,6 +3729,7 @@
       "findings": [],
       "meta": {
         "base": null,
+        "codex_version": null,
         "command_exit_code": null,
         "commit": null,
         "compat_warnings": [],
@@ -3730,6 +3779,7 @@
       "findings": [],
       "meta": {
         "base": null,
+        "codex_version": null,
         "command_exit_code": null,
         "commit": null,
         "compat_warnings": [],
@@ -3813,6 +3863,8 @@
         "temporary": false
       },
       "meta": {
+        "codex_version": "codex-cli 0.0.0",
+        "command_exit_code": 1,
         "compat_warnings": [],
         "cwd": "/repo",
         "elapsed_ms": 1,
@@ -3853,6 +3905,7 @@
       "findings": [],
       "meta": {
         "base": null,
+        "codex_version": "codex-cli 0.0.0",
         "command_exit_code": null,
         "commit": null,
         "compat_warnings": [],

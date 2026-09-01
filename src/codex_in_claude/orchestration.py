@@ -133,6 +133,10 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     meta.elapsed_ms = result.run.elapsed_ms
     meta.command_exit_code = result.run.exit_code
     meta.compat_warnings = result.dropped_flags
+    # The codex build observed next to this run (#519). Set on success AND on a failed
+    # run: "which codex served this?" is exactly the question a failure raises. None
+    # when the probe failed or nothing launched — see Meta.codex_version.
+    meta.codex_version = result.codex_version
     codex.reconcile_dropped_model(result, meta)
     # `run.capture_failed` (pontonier 0.8.0) is deliberately NOT read here (#579): on an
     # exit-0 run the answer is the last-message file, so a dead capture thread costs at

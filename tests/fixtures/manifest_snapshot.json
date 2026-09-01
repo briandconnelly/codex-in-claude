@@ -922,7 +922,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-89",
+            "default": "codex-in-claude/0.1/schema-90",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1100,7 +1100,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 24832
+          "size_bytes": 26240
         }
       },
       "mimeType": "application/schema+json",
@@ -1487,6 +1487,19 @@
                 "default": null,
                 "title": "Base"
               },
+              "codex_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Display copy of `codex --version` observed for the Codex run this envelope describes: probed immediately before the run's exec, on the same executable token, working directory, and environment it was about to spawn. Same sanitized, bounded projection as codex_status's field of this name — control characters removed, secret-looking values redacted, clipped with a trailing `…[truncated]` — but a different question: that one reports the install at STATUS time, this one what the selected executable reported next to THIS run. Do not parse it. BEST-EFFORT OBSERVATION, NOT ATTESTATION: it comes from a second process, so a binary replaced, a symlink or shim retargeted, or a file rewritten between the probe and the exec would go unreported; the `codex exec --json` stream carries no version of its own. A retrieved background-job result carries the ORIGINATING run's value. NULL OR ABSENT whenever it was not recorded — no Codex run was launched (argument-validation and codex_job_* lifecycle errors, dry-run previews, async job-start handles), the version probe itself failed, the spawn found no binary, the run failed before the value was captured, or the payload was stored by a build predating this field. Absence is never evidence that no run happened.",
+                "title": "Codex Version"
+              },
               "command_exit_code": {
                 "anyOf": [
                   {
@@ -1550,7 +1563,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-89",
+                "default": "codex-in-claude/0.1/schema-90",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2301,7 +2314,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 24832
+          "size_bytes": 26240
         }
       },
       "description": "The canonical full error envelope (ErrorResult). The per-tool outputSchemas carry\nonly a compact opaque error branch; this is the discoverable full shape.",
@@ -2338,7 +2351,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 18266
+          "size_bytes": 19674
         }
       },
       "description": "The canonical full result-metadata schema (Meta). Every success envelope carries an\nopaque `meta` pointer instead of inlining this per tool; this is the full shape (F1).",
@@ -2364,7 +2377,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 18266
+          "size_bytes": 19674
         }
       },
       "mimeType": "application/schema+json",
@@ -2701,6 +2714,19 @@
             "default": null,
             "title": "Base"
           },
+          "codex_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Display copy of `codex --version` observed for the Codex run this envelope describes: probed immediately before the run's exec, on the same executable token, working directory, and environment it was about to spawn. Same sanitized, bounded projection as codex_status's field of this name — control characters removed, secret-looking values redacted, clipped with a trailing `…[truncated]` — but a different question: that one reports the install at STATUS time, this one what the selected executable reported next to THIS run. Do not parse it. BEST-EFFORT OBSERVATION, NOT ATTESTATION: it comes from a second process, so a binary replaced, a symlink or shim retargeted, or a file rewritten between the probe and the exec would go unreported; the `codex exec --json` stream carries no version of its own. A retrieved background-job result carries the ORIGINATING run's value. NULL OR ABSENT whenever it was not recorded — no Codex run was launched (argument-validation and codex_job_* lifecycle errors, dry-run previews, async job-start handles), the version probe itself failed, the spawn found no binary, the run failed before the value was captured, or the payload was stored by a build predating this field. Absence is never evidence that no run happened.",
+            "title": "Codex Version"
+          },
           "command_exit_code": {
             "anyOf": [
               {
@@ -2764,7 +2790,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-89",
+            "default": "codex-in-claude/0.1/schema-90",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3448,7 +3474,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-89",
+            "default": "codex-in-claude/0.1/schema-90",
             "title": "Fingerprint",
             "type": "string"
           },
