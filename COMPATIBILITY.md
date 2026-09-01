@@ -1178,10 +1178,14 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   `--disable some_other`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
-  **operator-trust boundary** — only enable this knob with profiles you control. One key is
-  excepted: `sandbox_workspace_write.network_access` is pinned by a plugin-owned `-c` override
-  that outranks profiles (verified 0.148.0, re-verified 0.149.1, 0.151.0 and 0.152.0; see Sandbox modes above), so a profile cannot
-  re-grant network egress to a `workspace-write` run.
+  **operator-trust boundary** — only enable this knob with profiles you control. Two keys are
+  excepted, because a plugin-owned runtime override outranks profiles:
+  `sandbox_workspace_write.network_access` is pinned by a `-c` override (verified 0.148.0,
+  re-verified 0.149.1, 0.151.0 and 0.152.0; see Sandbox modes above), so a profile cannot
+  re-grant network egress to a `workspace-write` run; and `features.sleep_tool` is pinned by
+  `--disable sleep_tool` (verified 0.152.0 against a profile and the `config.toml` table, with
+  positive controls; see "Sleep tool" above). Whether `features.remote_plugin` belongs on this
+  list too is #591 — the section above still describes a profile as able to re-enable it.
 
 ## Version policy
 

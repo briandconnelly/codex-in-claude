@@ -16,8 +16,14 @@ Usage (from the repo root):
     uv run python scripts/capture_wire_tools.py --bin /path/to/old/codex
     uv run python scripts/capture_wire_tools.py -- -c 'features.sleep_tool.mode="always_on"'
     uv run python scripts/capture_wire_tools.py --json          # full tool definitions
-    uv run python scripts/capture_wire_tools.py --codex-home /scratch/home --inherit-config \
-        -- --profile sleepy                                     # config-file / profile channels
+    # config-file / profile channels: a scratch $CODEX_HOME (no config.toml needed) holding a
+    # profile file, then the plugin's disable against it — `clock` present, then absent
+    mkdir -p /tmp/ch && printf '[features]\nsleep_tool = { mode = "always_on" }\n' \\
+        > /tmp/ch/sleepy.config.toml
+    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \\
+        -- --profile sleepy
+    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \\
+        -- --profile sleepy --disable sleep_tool
 
 `--inherit-config` drops the probe's default `--ignore-user-config`, so `$CODEX_HOME/config.toml`
 and a `--profile` are read — that is the plugin's default `inherit` isolation, and the only way

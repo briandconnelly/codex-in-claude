@@ -180,24 +180,32 @@ def test_plugin_disable_outranks_profile_and_config_file_live(tmp_path):
     """The plugin's runtime `--disable` beats every operator config channel (#587 review).
 
     An opaque `--profile` and the `$CODEX_HOME/config.toml` `[features]` table (read at the
-    default `inherit` isolation) can both set `sleep_tool` to `always_on`; each is the
-    positive control for its own row. Neither survives the plugin's `--disable`, so the
+    default `inherit` isolation) can each set `sleep_tool` to `always_on`. The two channels
+    live in SEPARATE scratch homes so each positive control proves its own channel: a home
+    that carried both would let the profile rows pass even if `--profile` were ignored
+    (Copilot review of #592). Neither channel survives the plugin's `--disable`, so the
     posture has no operator escape hatch short of editing the plugin — the docs must not
-    claim one. Zero spend: the sink answers before any model call, and the scratch
-    `$CODEX_HOME` holds no credentials."""
-    home = tmp_path / "codex_home"
-    home.mkdir()
-    (home / "config.toml").write_text('[features]\nsleep_tool = { mode = "always_on" }\n')
-    (home / "sleepy.config.toml").write_text('[features]\nsleep_tool = { mode = "always_on" }\n')
+    claim one. Zero spend: the sink answers before any model call, and the scratch homes
+    hold no credentials (codex needs no `config.toml` to exist)."""
+    always_on = '[features]\nsleep_tool = { mode = "always_on" }\n'
+    config_home = tmp_path / "config_home"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text(always_on)
+    profile_home = tmp_path / "profile_home"
+    profile_home.mkdir()
+    (profile_home / "sleepy.config.toml").write_text(always_on)  # no config.toml at all
     disable = (cli_contract.DISABLE_FEATURE_FLAG, cli_contract.SLEEP_TOOL_FEATURE)
-    opts = ("--codex-home", str(home), "--inherit-config")
-    # Both channels expose the tool on their own (positive controls) ...
-    assert "clock" in _wire_tool_names(script_opts=opts)
-    assert "clock" in _wire_tool_names("--profile", "sleepy", script_opts=opts)
-    # ... and the plugin's disable removes it under each, in either argv order.
-    assert "clock" not in _wire_tool_names(*disable, script_opts=opts)
-    assert "clock" not in _wire_tool_names("--profile", "sleepy", *disable, script_opts=opts)
-    assert "clock" not in _wire_tool_names(*disable, "--profile", "sleepy", script_opts=opts)
+    via_config = ("--codex-home", str(config_home), "--inherit-config")
+    via_profile = ("--codex-home", str(profile_home), "--inherit-config")
+    # The config-file channel: exposes the tool on its own, and the disable removes it.
+    assert "clock" in _wire_tool_names(script_opts=via_config)
+    assert "clock" not in _wire_tool_names(*disable, script_opts=via_config)
+    # The profile channel, in isolation: the profile alone exposes it (so `--profile` is
+    # genuinely read), and the disable removes it in either argv order.
+    assert "clock" not in _wire_tool_names(script_opts=via_profile)  # nothing without --profile
+    assert "clock" in _wire_tool_names("--profile", "sleepy", script_opts=via_profile)
+    assert "clock" not in _wire_tool_names("--profile", "sleepy", *disable, script_opts=via_profile)
+    assert "clock" not in _wire_tool_names(*disable, "--profile", "sleepy", script_opts=via_profile)
 
 
 def test_status_live():
