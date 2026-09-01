@@ -710,8 +710,9 @@ def _extra_args_drift_match(extra: config.ExtraArgs | None, *texts: str | None) 
 
 # Prose for a run whose output capture failed (pontonier 0.8.0 `CommandRun.capture_failed`,
 # #579). The flag is STREAM-NEUTRAL — either pump thread (stdout or stderr) dying sets it,
-# and nothing records which — so the prose claims only what the flag proves: some output
-# was lost, and a child left writing into an undrained pipe can block until the deadline.
+# and nothing records which — so the prose claims only what the flag proves: a capture
+# thread died, output written after that (if any) was not read, and a child left writing
+# into an undrained pipe can block until the deadline. Every consequence is hedged.
 # It never changes a classification here (the answer channel is the last-message file,
 # not stdout); it only names the fault in the two branches whose diagnosis a lost stream
 # can mislead. All of it is `error.message`/`repair.alternative` prose, outside the
@@ -726,14 +727,14 @@ _CAPTURE_FAILED_TIMEOUT_MESSAGE = (
 # temporary) stay the table's.
 _CAPTURE_FAILED_TIMEOUT_ALTERNATIVE = (
     "Retry the same call once first: if the capture failure caused this timeout, the retry "
-    "finishes normally. If it times out again without this notice, treat it as an ordinary "
+    "may finish normally. If it times out again without this notice, treat it as an ordinary "
     "timeout — prefer the matching async tool (codex_consult_async / "
     "codex_review_changes_async / codex_delegate_async), or narrow the task or raise "
     "timeout_seconds."
 )
 _CAPTURE_FAILED_EXIT_NOTE = (
-    " (the plugin's output capture failed mid-run, so part of codex's output was lost and "
-    "this diagnosis may be incomplete)"
+    " (the plugin's output capture failed mid-run, so part of codex's output may have been "
+    "lost and this diagnosis may be incomplete)"
 )
 
 

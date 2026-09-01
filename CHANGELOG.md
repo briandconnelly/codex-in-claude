@@ -97,7 +97,7 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   the flag proves: the `timeout` message says codex may have been blocked rather than slow, and
   its `repair.alternative` says to retry the same call once before treating it as an ordinary
   timeout (the table's alternative, which assumes a retry will time out again, is overridden for
-  this case only); the generic `nonzero_exit` message notes that part of the output was lost and
+  this case only); the generic `nonzero_exit` message notes that part of the output may have been lost and
   its diagnosis may be incomplete. No classification changes -- a recognizable auth, drift, or
   rate-limit signature still wins -- and the success path deliberately ignores the flag: the
   answer is the file, so a dead capture thread costs at most the stream-derived

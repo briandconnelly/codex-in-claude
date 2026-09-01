@@ -2173,6 +2173,10 @@ def test_classify_timeout_with_capture_failed_names_the_lost_capture():
     assert flagged.repair.alternative != control.repair.alternative
     assert "once" in (flagged.repair.alternative or "")
     assert "codex_consult_async" in (flagged.repair.alternative or "")
+    # Hedged: the flag proves a capture thread died, not that a retry cannot hit it again
+    # or that this run was not also genuinely slow.
+    assert "may finish normally" in (flagged.repair.alternative or "")
+    assert "may be a bridge fault" in flagged.message
 
 
 def test_classify_nonzero_generic_with_capture_failed_notes_stderr_only():
@@ -2182,6 +2186,8 @@ def test_classify_nonzero_generic_with_capture_failed_notes_stderr_only():
     assert "boom" in flagged.message
     assert "capture failed" in flagged.message
     assert "capture failed" not in control.message
+    # Hedged: the flag does not prove codex wrote anything after the thread died.
+    assert "may have been lost" in flagged.message
 
 
 def test_classify_nonzero_generic_capture_failed_note_survives_the_detail_cap():
