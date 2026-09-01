@@ -922,3 +922,25 @@ def test_stamp_meta_owns_bare_dash_c_for_an_instruction_run(monkeypatch):
     out = orchestration._stamp_meta(result, _make_meta_with_di())
     assert out is not None
     assert out["error"]["code"] == "cli_contract_changed"
+
+
+# --- capture_failed on the SUCCESS path is not a failure (#579) ------------------------
+# Shape A: the stdout pump died but codex exited 0 and wrote the last-message file. The
+# answer lives in that file, not on stdout, so the run is a success with the stream-derived
+# metadata (usage, session_id) honestly absent. Routed through finalize_consult — the path
+# that ships — not through _stamp_meta alone.
+
+
+def test_finalize_consult_exit_zero_with_capture_failed_is_success_with_null_metadata():
+    result = codex.CodexExecResult(
+        run=CommandRun("", "", 0, 12, False, capture_failed=True),
+        last_message="THE ANSWER",
+        events="",
+        dropped_flags=[],
+    )
+    out = orchestration.finalize_consult(result, meta=_make_meta())
+    assert out["ok"] is True
+    assert out["summary"] == "THE ANSWER"
+    assert out["meta"]["usage"] is None
+    assert out["meta"]["session_id"] is None
+    assert out["meta"]["command_exit_code"] == 0

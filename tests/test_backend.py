@@ -310,3 +310,19 @@ async def test_prepare_fails_closed_on_delegate_instructions(clean_env):
     with pytest.raises(ValueError, match="delegate"):
         async with BACKEND.prepare(request):
             pass  # pragma: no cover
+
+
+def test_finalize_capture_failed_exit_zero_keeps_artifact_answer_with_null_metadata():
+    # Adapter parity with the bridge finalizers (#579): a dead capture thread on an exit-0
+    # run leaves the last-message artifact intact and the stream-derived metadata absent.
+    # The protocol path must agree with orchestration/delegate, which ignore the flag.
+    request = RunRequest(kind="consult", prompt="q", cwd=".", timeout_seconds=10)
+    outcome = RunOutcome(
+        run=CommandRun("", "", 0, 5, False, capture_failed=True),
+        events="",
+        artifact_texts={"last-message": "THE ANSWER"},
+    )
+    result = BACKEND.finalize(outcome, request)
+    assert result.answer == "THE ANSWER"
+    assert result.usage is None
+    assert result.session_id is None

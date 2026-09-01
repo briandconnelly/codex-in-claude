@@ -134,6 +134,11 @@ def _stamp_meta(result: codex.CodexExecResult, meta: Meta) -> dict | None:
     meta.command_exit_code = result.run.exit_code
     meta.compat_warnings = result.dropped_flags
     codex.reconcile_dropped_model(result, meta)
+    # `run.capture_failed` (pontonier 0.8.0) is deliberately NOT read here (#579): on an
+    # exit-0 run the answer is the last-message file, so a dead capture thread costs at
+    # most the stream-derived usage/session_id, which are documented as optional and read as
+    # honestly absent below. Failing the run would discard a correct, paid-for answer.
+    # classify_failure names the fault on the failure paths where it misleads.
     usage, session_id = normalize.parse_event_metadata(result.events)
     meta.usage = usage
     meta.session_id = session_id
