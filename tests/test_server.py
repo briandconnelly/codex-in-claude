@@ -388,8 +388,10 @@ def test_capabilities_names_tool_error_carrier():
 def test_capabilities_names_protocol_revision():
     # #423: the targeted MCP protocol revision was previously derivable only from the
     # `initialize` wire response, never stated in the agent-visible capability payload.
+    # #571: the target moved to the modern era once the served contract (error numerics,
+    # discover-era manifest) was written against it; ADR 0004's amendment owns the record.
     res = server.codex_capabilities()
-    assert res["protocol_revision"] == "2025-11-25"
+    assert res["protocol_revision"] == "2026-07-28"
 
 
 def test_capabilities_names_annotations_reading():
@@ -413,15 +415,11 @@ def test_protocol_revision_matches_installed_sdk_target():
     something unsupported. So a 2025-06-18 client gets `2025-06-18` back on the wire
     while this field still reports the target.
 
-    Workaround pin for the fastmcp 4 port (#570): this guard used to assert
-    `declared == LATEST_PROTOCOL_VERSION` so an SDK upgrade could never silently stale
-    the declared value. mcp 2 moved its own target to `2026-07-28`, but this server's
-    wire shapes are still written against `2025-11-25` — declaring `2026-07-28` before
-    the migration (era-correct error numerics, cache hints, the discover-era manifest)
-    would claim conformance the server does not yet have. #571 owns closing that gap
-    and restoring the strict equality below. Until then the gap is pinned EXPLICITLY on
-    both sides — the declared value and the SDK target — so the next SDK move (or the
-    #571 migration itself) still trips this test loudly instead of drifting."""
+    Strict equality with the SDK's own target is the guard: an SDK upgrade that moves
+    `LATEST_PROTOCOL_VERSION` trips this test instead of silently staling the declared
+    value. (The fastmcp 4 port, #570, pinned a deliberate gap here — declared 2025-11-25
+    against an SDK target of 2026-07-28 — until #571 wrote the served contract against
+    the modern era; that migration restored this equality.)"""
     import mcp.types as mcp_types
     from mcp.types.version import SUPPORTED_PROTOCOL_VERSIONS
 
@@ -430,16 +428,10 @@ def test_protocol_revision_matches_installed_sdk_target():
         f"{declared!r} is not one of the installed SDK's SUPPORTED_PROTOCOL_VERSIONS "
         f"{SUPPORTED_PROTOCOL_VERSIONS} (mcp.types.version)"
     )
-    assert declared == "2025-11-25", (
-        f"protocol_revision moved to {declared!r} — if this is the #571 migration, "
-        "restore the strict `declared == mcp_types.LATEST_PROTOCOL_VERSION` assertion "
-        "this workaround replaced (and retire the pin below)."
-    )
-    assert mcp_types.LATEST_PROTOCOL_VERSION == "2026-07-28", (
-        f"the installed SDK's target moved again (LATEST_PROTOCOL_VERSION == "
-        f"{mcp_types.LATEST_PROTOCOL_VERSION!r}, this pin expects '2026-07-28') — "
-        "re-judge the declared protocol_revision (and ADR 0004 / #571) deliberately "
-        "rather than leaving the declared value stale."
+    assert declared == mcp_types.LATEST_PROTOCOL_VERSION, (
+        f"protocol_revision {declared!r} != the installed SDK's LATEST_PROTOCOL_VERSION "
+        f"{mcp_types.LATEST_PROTOCOL_VERSION!r} — re-judge the declared target (and ADR "
+        "0004) deliberately rather than leaving the declared value stale."
     )
 
 
@@ -2738,7 +2730,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-88"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-89"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -4948,15 +4940,14 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
     class _Caps:
         roots = object()  # advertised: exercise the file-URI filtering, not the gate
 
-    class _Params:
-        capabilities = _Caps()
-
     class _ListRootsResult:
         def __init__(self, rs):
             self.roots = rs
 
     class _Session:
-        client_params = _Params()
+        # The era-neutral accessor the gate reads (see `_roots_from_ctx`); `client_params`
+        # is deliberately absent, as on a 2026-07-28 request that supplies no client info.
+        client_capabilities = _Caps()
 
         async def list_roots(self):
             return _ListRootsResult(
@@ -5407,11 +5398,13 @@ async def test_unknown_resource_read_carries_error_envelope(clean_env):
     from mcp import MCPError
 
     with pytest.raises(MCPError) as excinfo:
-        async with Client(server.mcp) as client:
+        # The envelope shape is era-neutral; the numeric code is era-pinned by the test
+        # below, so this one names its era explicitly rather than riding the default.
+        async with Client(server.mcp, mode="legacy") as client:
             await client.read_resource("codex://does-not-exist")
 
     err = excinfo.value.error
-    assert err.code == -32002  # MCP numeric "resource not found"
+    assert err.code == -32002  # MCP numeric "resource not found" (handshake era)
     # The URI/exception text is NOT echoed into the client-visible message (redaction
     # posture, #189) — it is a bounded generic string.
     assert err.message == "Resource not found."
@@ -5426,23 +5419,113 @@ async def test_unknown_resource_read_carries_error_envelope(clean_env):
     assert "ok" not in env and "meta" not in env
 
 
-async def test_unknown_resource_read_code_is_pinned_on_both_eras(clean_env):
-    """The middleware's numeric resource-not-found code is `-32002` on BOTH protocol
-    eras fastmcp 4 serves. On the modern (2026-07-28) era that value violates SEP-2164
-    (which renumbers it to `-32602`, and fastmcp 4's own core followed) — an
-    acknowledged gap of the fastmcp 4 port (#570), owned by #571 alongside the
-    documented `resource_error_carrier`. Pinned per-era here so the renumbering lands
-    as a deliberate, loud change — and so the default-mode envelope test above keeps
-    its meaning even if fastmcp's default era moves."""
+async def test_unknown_resource_read_code_is_pinned_per_era(clean_env):
+    """The middleware's numeric resource-not-found code follows the era the connection
+    negotiated: `-32002` on a handshake-era (<= 2025-11-25) connection, where that
+    revision defines it, and `-32602` on the modern (2026-07-28) era, whose spec lists
+    `-32002` under "MUST NOT emit" (SEP-2164; #571). The envelope in `error.data` is the
+    same on both. Pinned per era, through a real client on each, so a future change to
+    either value — or to fastmcp's default era — lands as a deliberate, loud change."""
     from fastmcp import Client
     from mcp import MCPError
 
-    for mode, expected_era in (("legacy", "2025-11-25"), ("auto", "2026-07-28")):
+    for mode, expected_era, expected_code in (
+        ("legacy", "2025-11-25", -32002),
+        ("auto", "2026-07-28", -32602),
+    ):
         async with Client(server.mcp, mode=mode) as client:
             assert client.protocol_version == expected_era
             with pytest.raises(MCPError) as excinfo:
                 await client.read_resource("codex://does-not-exist")
-        assert excinfo.value.error.code == -32002, mode
+        assert excinfo.value.error.code == expected_code, mode
+        assert excinfo.value.error.data["code"] == "resource_not_found", mode
+
+
+def _middleware_context_for(protocol_version: str | None) -> object:
+    """A stand-in `MiddlewareContext` carrying only the hop the era read walks:
+    `.fastmcp_context.request_context.protocol_version`. `None` models a Context
+    with no request context (the SDK returns None before a session exists)."""
+
+    class _RequestContext:
+        def __init__(self, version: str) -> None:
+            self.protocol_version = version
+
+    class _FastMCPContext:
+        def __init__(self, version: str | None) -> None:
+            self.request_context = None if version is None else _RequestContext(version)
+
+    class _MiddlewareContext:
+        def __init__(self, version: str | None) -> None:
+            self.fastmcp_context = _FastMCPContext(version)
+
+    return _MiddlewareContext(protocol_version)
+
+
+class TestResourceNotFoundCodePerEra:
+    """`_resource_not_found_code` reads the negotiated era from the request context and
+    maps it to the numeric the era's spec defines. Driven with stand-ins so every
+    branch — including the ones a real client cannot reach — is covered (#571)."""
+
+    def test_every_handshake_version_maps_to_the_legacy_code(self):
+        from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS
+
+        assert HANDSHAKE_PROTOCOL_VERSIONS  # positive control: the loop below runs
+        for version in HANDSHAKE_PROTOCOL_VERSIONS:
+            ctx = _middleware_context_for(version)
+            assert server._resource_not_found_code(ctx) == -32002, version
+
+    def test_every_modern_version_maps_to_the_renumbered_code(self):
+        from mcp.types.version import MODERN_PROTOCOL_VERSIONS
+
+        assert MODERN_PROTOCOL_VERSIONS  # positive control
+        for version in MODERN_PROTOCOL_VERSIONS:
+            ctx = _middleware_context_for(version)
+            assert server._resource_not_found_code(ctx) == -32602, version
+
+    def test_the_two_eras_are_derived_from_the_sdk_not_restated(self):
+        """The mapping keys on the SDK's own era sets, so an SDK that adds a version to
+        either set is honored without an edit here: an unknown-but-modern-looking string
+        is NOT treated as modern (only the SDK's set is), and the modern set is exactly
+        what the SDK says it is."""
+        from mcp.types.version import MODERN_PROTOCOL_VERSIONS
+
+        assert "2026-07-28" in MODERN_PROTOCOL_VERSIONS  # the era this migration targets
+        # A version string the SDK does not list is not modern by this server's reading.
+        ctx = _middleware_context_for("2099-01-01")
+        assert server._resource_not_found_code(ctx) == -32002
+
+    def test_no_request_context_defaults_to_the_legacy_code(self):
+        """Before a session exists the SDK's `request_context` is None; the middleware's
+        own unit tests also drive it with a bare `object()`. Both resolve to the
+        handshake-era value — the documented default, never the modern renumbering,
+        which is only ever emitted on positive evidence of a modern connection."""
+        assert server._resource_not_found_code(_middleware_context_for(None)) == -32002
+        assert server._resource_not_found_code(object()) == -32002
+
+    async def test_middleware_uses_the_per_era_code(self):
+        """End-to-end through the middleware seam with a stand-in context: a modern
+        request context yields the renumbered code, a handshake one the legacy code,
+        and the envelope in `error.data` is identical on both."""
+        from fastmcp.exceptions import NotFoundError
+        from mcp import MCPError
+
+        mw = server._ResourceErrorMiddleware()
+
+        async def call_next(_ctx):
+            raise NotFoundError("Unknown resource")
+
+        codes: dict[str, int] = {}
+        envelopes: dict[str, dict] = {}
+        for version in ("2025-11-25", "2026-07-28"):
+            with pytest.raises(MCPError) as excinfo:
+                await mw.on_read_resource(_middleware_context_for(version), call_next)
+            codes[version] = excinfo.value.error.code
+            env = dict(excinfo.value.error.data)
+            env.pop("request_id")  # fresh per failure by design
+            envelopes[version] = env
+        assert codes == {"2025-11-25": -32002, "2026-07-28": -32602}
+        assert envelopes["2025-11-25"] == envelopes["2026-07-28"]
+        assert envelopes["2026-07-28"]["code"] == "resource_not_found"
 
 
 async def test_known_resource_read_is_unaffected(clean_env):
@@ -5499,7 +5582,11 @@ def test_capabilities_advertises_resource_error_carrier(clean_env):
 
     carrier = codex_capabilities()["resource_error_carrier"]
     assert "error.data" in carrier
+    # Both era-specific numerics are stated, each tied to its era, so a client on
+    # either connection can match on the code it will actually receive (#571).
     assert "-32002" in carrier
+    assert "-32602" in carrier
+    assert "2026-07-28" in carrier
 
 
 class TestResourceErrorCorrelation:
@@ -6719,7 +6806,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-88")
+    assert result["fingerprint"].endswith("schema-89")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 
@@ -8536,15 +8623,14 @@ def _ctx_double(*, roots_advertised: bool, roots=(), list_roots_raises=None):
     class _Caps:
         roots = object() if roots_advertised else None
 
-    class _Params:
-        capabilities = _Caps()
-
     class _ListRootsResult:
         def __init__(self, rs):
             self.roots = rs
 
     class _Session:
-        client_params = _Params()
+        # The era-neutral accessor the gate reads (see `_roots_from_ctx`); `client_params`
+        # is deliberately absent, as on a 2026-07-28 request that supplies no client info.
+        client_capabilities = _Caps()
 
         async def list_roots(self):
             if list_roots_raises is not None:
@@ -8603,10 +8689,12 @@ async def test_roots_resolve_live_over_the_mcp_boundary(clean_env, monkeypatch, 
     that advertises a root, and asserts the resolved workspace actually came from it,
     so a fastmcp/mcp upgrade that breaks the live probe fails here loudly.
 
-    Pinned to the legacy handshake era on purpose: the modern (2026-07-28) protocol has
-    no back-channel for the roots request, so roots resolve on legacy connections only
-    (see `_roots_from_ctx`; the modern-era posture is #571's decision — if this test
-    starts failing because that era gate moved, re-judge it there)."""
+    Pinned to the legacy handshake era on purpose: `_roots_from_ctx` implements only the
+    push-style `session.list_roots()` probe, which needs the handshake era's back-channel.
+    The modern (2026-07-28) protocol still carries roots as an `InputRequiredResult`
+    round-trip, which this server does not implement — the decided posture (ADR 0004
+    amendment, D5). If this test starts failing because that era gate moved, re-judge it
+    there."""
     import os
 
     from fastmcp import Client
@@ -8621,6 +8709,32 @@ async def test_roots_resolve_live_over_the_mcp_boundary(clean_env, monkeypatch, 
     assert carrier["roots_source"] == "client"
     assert carrier["workspace_source"] == "roots"
     assert os.path.realpath(carrier["cwd"]) == os.path.realpath(str(tmp_path))
+
+
+async def test_modern_client_roots_report_probe_failed_live(clean_env, monkeypatch, tmp_path):
+    """The modern-era twin of the live test above (ADR 0004 amendment D5; #576 Copilot
+    review asked for exactly this): a REAL 2026-07-28 client that advertises a root gets
+    `roots_source: "probe_failed"` — the capability gate passes (the per-request
+    declaration is visible through the SDK's era-neutral `client_capabilities`), the
+    push-style `session.list_roots()` probe then raises because that era has no
+    server-initiated back-channel, and the call falls back exactly as a root-less
+    client would (`workspace_source: "cwd"`). Pinned through a real client because a
+    double cannot tell `not_negotiated` (gate failed) from `probe_failed` (probe failed)
+    the way the wire does. If this starts reporting `client`, the round-trip roots path
+    was implemented and D5 needs re-judging; if `not_negotiated`, the gate regressed."""
+    from fastmcp import Client
+
+    _init_repo(tmp_path)
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.chdir(tmp_path)
+    async with Client(server.mcp, roots=[tmp_path.as_uri()]) as client:
+        assert client.protocol_version == "2026-07-28"
+        result = await client.call_tool("codex_dry_run", {}, raise_on_error=False)
+    payload = result.structured_content
+    assert payload.get("ok") is True, payload
+    carrier = payload.get("meta") or payload
+    assert carrier["roots_source"] == "probe_failed"
+    assert carrier["workspace_source"] == "cwd"
 
 
 TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"

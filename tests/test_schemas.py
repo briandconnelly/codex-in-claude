@@ -516,7 +516,13 @@ def test_loosened_schemas_stay_under_byte_budget():
     Measured again (#426): `annotations_reading` added a second described `str` field
     to `CapabilitiesResult`, stripped the same way — CAPABILITIES_SCHEMA moved
     2006 -> 2046 B, still under the 2100 B cap (no raise needed this time).
-    STATUS_SCHEMA remains unaffected (1659 B, unchanged)."""
+    STATUS_SCHEMA remains unaffected (1659 B, unchanged).
+
+    Measured again (#571): `_FINGERPRINT_COVERS_DESC` is a KEPT description (registered in
+    `_KEPT_DESCRIPTIONS`, so it survives `_strip_schema_noise`), which makes it the one
+    place a wording change in `CapabilitiesResult` moves this schema byte-for-byte. A
+    128 B clause naming the discover-era server-version carrier pushed CAPABILITIES_SCHEMA
+    to 2174 B; it was cut to a 42 B clause instead of raising the cap — now 2088 B."""
     for name, (sch, _) in _OPAQUE_FIELD_SCHEMAS.items():
         size = len(json.dumps(sch, separators=(",", ":")))
         assert size < 2100, f"{name} is {size} B, over the 2100 B budget"
@@ -1036,7 +1042,7 @@ def test_async_lifecycle_advertises_activity_without_touching_progress_support()
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-88"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-89"
 
 
 def test_fingerprint_covers_is_a_nonempty_stable_tuple():

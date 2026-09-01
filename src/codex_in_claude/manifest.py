@@ -47,6 +47,59 @@ _RELEASE_VARIABLE_EXCLUDE = frozenset({"version", "server_version"})
 # changes precisely BECAUSE a covered category changed, so listing it would mislead.
 _SELF_REFERENTIAL_EXCLUDE = frozenset({"fingerprint"})
 _CAPABILITIES_EXCLUDE = _RELEASE_VARIABLE_EXCLUDE | _SELF_REFERENTIAL_EXCLUDE
+# Where the modern (2026-07-28) era carries the server identity: `server/discover` has no
+# top-level `serverInfo`; it rides `_meta` under this key. Its `version` is the same
+# release-variable value the legacy capture pops from `serverInfo` — the one disclosed
+# carve-out (`serverInfo.version` in `_FINGERPRINT_COVERS_DESC`) covers both carriers.
+_DISCOVER_SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+# The era a default fastmcp 4 client negotiates against this server. The discover
+# capture asserts it, so a framework move to another era fails the manifest loudly
+# instead of silently guarding a different surface.
+_MODERN_ERA = "2026-07-28"
+# The modern-only, contract-bearing wrapper fields on a list/read result (SEP-2549 cache
+# hints plus the result-type discriminator). Captured per covered method; everything
+# else in those results is either the era-neutral items or the release-variable `_meta`.
+_RESULT_ENVELOPE_FIELDS = ("resultType", "ttlMs", "cacheScope")
+# The single inventory of this server's non-template resources, split by whether the
+# manifest reads their CONTENT. Static: schema/contract bodies read on both eras (the
+# legacy read feeds the per-resource sections; the modern read feeds
+# `modern_result_envelopes`). Dynamic: metadata is listed but content is never read
+# (codex://models reflects $CODEX_HOME). tests/test_manifest.py asserts the listed
+# resources are exactly the union, so a new resource must be classified here before it
+# can land — that is what makes the modern envelope capture complete, not best-effort.
+_STATIC_RESOURCE_URIS = (
+    "codex://error-envelope",
+    "codex://result-meta",
+    "codex://capabilities-result",
+    "codex://status-result",
+    "codex://params",
+)
+_DYNAMIC_RESOURCE_URIS = ("codex://models",)
+# Manifest section that carries each static resource's parsed body (legacy read). Every
+# static URI has exactly one section; the test asserts the key sets match.
+_SECTION_BY_STATIC_URI = {
+    "codex://error-envelope": "error_envelope",
+    "codex://result-meta": "result_meta",
+    "codex://capabilities-result": "capabilities_result",
+    "codex://status-result": "status_result",
+    # codex://params body is guarantee/contract-bearing discovered surface (#333), so it
+    # is captured AND parsed like the schema resources — a weakened summary or a
+    # moved-detail change then moves the snapshot and is flagged for review.
+    "codex://params": "params",
+}
+
+
+# The tool call whose result envelope stands in for every tools/call result: free (no
+# Codex spend), deterministic, and side-effect-free. Only the wrapper fields are kept,
+# so the payload's content does not matter to the snapshot.
+_ENVELOPE_PROBE_TOOL = "codex_capabilities"
+_ENVELOPE_PROBE_ARGS: dict[str, Any] = {"detail": "summary"}
+
+
+def _envelope_fields(result: Any) -> dict[str, Any]:
+    """The modern result-envelope wrapper fields of one list/read result, by wire name."""
+    wire = _dump(result)
+    return {k: wire[k] for k in _RESULT_ENVELOPE_FIELDS if k in wire}
 
 
 def _sorted_by_json(items: list[Any]) -> list[Any]:
@@ -99,11 +152,11 @@ def _envelope_block(content: Any) -> dict[str, Any]:
 
 async def build_manifest() -> dict[str, Any]:
     """Assemble the normalized, canonical agent-visible surface manifest."""
-    # mode="legacy": fastmcp 4's default (`mode="auto"`) negotiates the modern
-    # (server/discover) era, where `initialize_result` is None and the capture below
-    # would lose the initialize section this snapshot guards. Pinning the handshake era
-    # keeps today's snapshot semantics; whether the guarded surface should become the
-    # modern `DiscoverResult` is #571's decision (#570).
+    # Both protocol eras are served and guarded (#571, ADR 0004 D3). mode="legacy" pins
+    # the `initialize` handshake — what today's production client negotiates — so the
+    # initialize section keeps its semantics; a second, default-mode client below
+    # captures the modern era's `server/discover` result, which is its own section
+    # because the two eras already disagree on the wire (e.g. `listChanged`).
     async with Client(mcp, mode="legacy") as client:
         tools = [_canonicalize(_dump(t)) for t in await client.list_tools()]
         resources = [_canonicalize(_dump(r)) for r in await client.list_resources()]
@@ -116,22 +169,54 @@ async def build_manifest() -> dict[str, Any]:
         server_info = initialize.get("serverInfo")
         if isinstance(server_info, dict):
             server_info.pop("version", None)
-        envelope = [
-            _envelope_block(c) for c in await client.read_resource("codex://error-envelope")
-        ]
-        result_meta = [
-            _envelope_block(c) for c in await client.read_resource("codex://result-meta")
-        ]
-        capabilities_result = [
-            _envelope_block(c) for c in await client.read_resource("codex://capabilities-result")
-        ]
-        status_result = [
-            _envelope_block(c) for c in await client.read_resource("codex://status-result")
-        ]
-        # codex://params body is guarantee/contract-bearing discovered surface (#333),
-        # so capture AND parse it (like the schema resources above) — a weakened summary
-        # or a moved-detail change then moves the snapshot and is flagged for review.
-        params = [_envelope_block(c) for c in await client.read_resource("codex://params")]
+        # One read per static resource, from the single inventory the modern envelope
+        # capture below also walks — so the two eras cannot read different sets.
+        static_sections: dict[str, list[dict[str, Any]]] = {
+            _SECTION_BY_STATIC_URI[uri]: [
+                _envelope_block(c) for c in await client.read_resource(uri)
+            ]
+            for uri in _STATIC_RESOURCE_URIS
+        }
+
+    # The modern era: a default client probes `server/discover` and adopts 2026-07-28.
+    # Its result is the whole discovered contract for that era — supported versions,
+    # advertised capabilities, instructions, and the cache hints the era makes mandatory
+    # — minus the release-variable server version (see _DISCOVER_SERVER_INFO_META).
+    async with Client(mcp) as modern:
+        if modern.protocol_version != _MODERN_ERA:  # pragma: no cover - guard
+            raise RuntimeError(
+                f"the default client negotiated {modern.protocol_version!r}, not "
+                f"{_MODERN_ERA!r}; the discover capture would guard the wrong era"
+            )
+        discover = _canonicalize(_dump(modern.session.discover_result))
+        # The modern era's result envelopes on the methods the caching spec covers
+        # (`server/utilities/caching`): the wrapper fields are contract-bearing and
+        # modern-only, while the items they wrap are era-neutral (pinned equal across
+        # eras by tests/test_manifest.py) and already guarded by the sections above.
+        modern_envelopes: dict[str, Any] = {
+            "tools/list": _envelope_fields(await modern.list_tools_mcp()),
+            "resources/list": _envelope_fields(await modern.list_resources_mcp()),
+            "resources/templates/list": _envelope_fields(
+                await modern.list_resource_templates_mcp()
+            ),
+            "prompts/list": _envelope_fields(await modern.list_prompts_mcp()),
+            "resources/read": {
+                uri: _envelope_fields(await modern.read_resource_mcp(uri))
+                for uri in _STATIC_RESOURCE_URIS
+            },
+            # tools/call is not a caching-spec method, but 2026-07-28 requires
+            # `resultType` on every result, and neither the tool records nor their
+            # output schemas carry that outer wrapper — so one deterministic, free,
+            # side-effect-free call captures it (Copilot review on #576).
+            "tools/call": _envelope_fields(
+                await modern.call_tool_mcp(_ENVELOPE_PROBE_TOOL, _ENVELOPE_PROBE_ARGS)
+            ),
+        }
+    discover_meta = discover.get("_meta")
+    if isinstance(discover_meta, dict):
+        discover_info = discover_meta.get(_DISCOVER_SERVER_INFO_META)
+        if isinstance(discover_info, dict):
+            discover_info.pop("version", None)
 
     # detail="full" is explicit and load-bearing here, not a stylistic default-follow: the
     # manifest exists to guard the FULL agent-visible surface, and use_when/returns/
@@ -150,11 +235,9 @@ async def build_manifest() -> dict[str, Any]:
         "resource_templates": sorted(templates, key=lambda t: t["uriTemplate"]),
         "prompts": sorted(prompts, key=lambda p: p["name"]),
         "initialize": initialize,
-        "error_envelope": envelope,
-        "result_meta": result_meta,
-        "capabilities_result": capabilities_result,
-        "status_result": status_result,
-        "params": params,
+        "discover": discover,
+        "modern_result_envelopes": modern_envelopes,
+        **static_sections,
         "capabilities": _canonicalize(caps),
     }
 

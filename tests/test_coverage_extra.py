@@ -132,16 +132,12 @@ class _FakeRoot:
 
 class _FakeCaps:
     # Present (non-None) to mirror a client that DID advertise the roots
-    # capability — the F8 gate on ctx.session.client_params.capabilities.roots.
+    # capability — the F8 gate on ctx.session.client_capabilities.roots.
     roots = object()
 
 
-class _FakeParams:
-    capabilities = _FakeCaps()
-
-
 class _FakeSession:
-    client_params = _FakeParams()
+    client_capabilities = _FakeCaps()
 
 
 class _FakeListRootsResult:

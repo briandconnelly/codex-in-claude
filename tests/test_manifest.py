@@ -10,7 +10,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "a1afe429395a86fe7c95e7d6a96cf9e1c3ebfbd18ba44166df09673c89531772"
+EXPECTED_MANIFEST_HASH = "e9a7676a075c592a814c8ff3bd20c6c6d35ff8dc4919da5e587c78c2dce3065c"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -90,6 +90,8 @@ async def test_fingerprint_covers_accounts_for_every_section():
         "resource_templates": {"resource_templates"},
         "prompts": {"prompts"},
         "initialize": {"initialize_response"},
+        "discover": {"discover_response"},
+        "modern_result_envelopes": {"modern_result_envelopes"},
         "error_envelope": {"error_envelope_schema"},
         "result_meta": {"result_meta_schema"},
         "capabilities_result": {"capabilities_result_schema"},
@@ -260,6 +262,118 @@ async def test_build_manifest_captures_initialize_without_version():
     assert "version" not in init.get("serverInfo", {})
     assert init.get("protocolVersion")
     assert "capabilities" in init
+
+
+_DISCOVER_SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+
+
+async def test_build_manifest_captures_discover_without_version():
+    """The modern (2026-07-28) era is served surface: a default fastmcp 4 client
+    negotiates it through `server/discover`, whose result is that era's whole
+    discovered contract — supported versions, advertised capabilities, instructions,
+    and the cache hints the era makes mandatory. It is guarded as its own section
+    (#571) because the two eras already disagree on the wire (e.g. `listChanged`),
+    so the legacy `initialize` capture cannot stand in for it. Minus only the
+    release-variable server version, which rides `_meta` on this era."""
+    m = await manifest.build_manifest()
+    disc = m["discover"]
+    assert disc["supportedVersions"] == ["2026-07-28"]
+    assert "capabilities" in disc
+    assert disc.get("instructions")
+    # The era's mandatory cache hints are part of the discovered contract.
+    assert "ttlMs" in disc
+    assert disc["cacheScope"] in {"public", "private"}
+    info = disc["_meta"][_DISCOVER_SERVER_INFO_META]
+    assert info["name"] == "codex-in-claude"
+    assert "version" not in info
+
+
+async def test_manifest_drops_exactly_the_declared_discover_server_info_fields():
+    """Same widening guard as the initialize one above, for the modern era's
+    server-identity carrier: only `version` is popped from the discover `_meta`
+    serverInfo, so equality against the live value catches a second pop."""
+    m = await manifest.build_manifest()
+    async with Client(server.mcp, mode="auto") as client:
+        assert client.protocol_version == "2026-07-28"
+        live = manifest._dump(client.session.discover_result)
+    live_info = live["_meta"][_DISCOVER_SERVER_INFO_META]
+    dropped = set(live_info) - set(m["discover"]["_meta"][_DISCOVER_SERVER_INFO_META])
+    assert dropped == {"version"}
+
+
+_CACHING_SPEC_LIST_METHODS = (
+    "tools/list",
+    "resources/list",
+    "resources/templates/list",
+    "prompts/list",
+)
+
+
+async def test_build_manifest_captures_the_modern_result_envelopes():
+    """The modern era's list/read results carry contract-bearing wrapper fields the
+    handshake era does not define — `resultType` and the mandatory cache hints
+    `ttlMs`/`cacheScope` (spec: server/utilities/caching) — so a framework change to
+    those envelopes must move the snapshot (#571, Copilot review). Every method the
+    caching spec covers is captured, and `resources/read` is captured per static
+    resource the manifest reads on both eras."""
+    m = await manifest.build_manifest()
+    env = m["modern_result_envelopes"]
+    assert set(env) == set(_CACHING_SPEC_LIST_METHODS) | {"resources/read", "tools/call"}
+    # tools/call is outside the caching spec but 2026-07-28 requires `resultType` on
+    # every result; the probe call is a free tool, so this never spends.
+    assert env["tools/call"]["resultType"] == "complete"
+    assert manifest._ENVELOPE_PROBE_TOOL in {
+        t["name"] for t in m["tools"] if not t["name"].startswith("codex_job")
+    }
+    assert manifest._ENVELOPE_PROBE_TOOL in server.codex_capabilities()["free_tools"]
+    for method in _CACHING_SPEC_LIST_METHODS:
+        assert set(env[method]) == set(manifest._RESULT_ENVELOPE_FIELDS), method
+        assert env[method]["resultType"] == "complete"
+        assert env[method]["cacheScope"] in {"public", "private"}
+    reads = env["resources/read"]
+    assert set(reads) == set(manifest._STATIC_RESOURCE_URIS)
+    for uri, fields in reads.items():
+        assert set(fields) == set(manifest._RESULT_ENVELOPE_FIELDS), uri
+    # The dynamic-content resource is deliberately not read on either era.
+    assert "codex://models" not in reads
+    assert set(reads).isdisjoint(manifest._DYNAMIC_RESOURCE_URIS)
+    # Two-way guard (Codex review on #576): the listed resources are EXACTLY the static
+    # inventory plus the dynamic one. A subset check would let a new static resource
+    # land unread on the modern era while CI stayed green; equality makes the author
+    # classify it first.
+    listed = {r["uri"] for r in m["resources"]}
+    assert listed == set(manifest._STATIC_RESOURCE_URIS) | set(manifest._DYNAMIC_RESOURCE_URIS)
+    # And the legacy per-resource sections are derived from the same inventory, so the
+    # two eras cannot read different resource sets.
+    assert set(manifest._SECTION_BY_STATIC_URI) == set(manifest._STATIC_RESOURCE_URIS)
+    for section in manifest._SECTION_BY_STATIC_URI.values():
+        assert m[section], section
+
+
+async def test_list_items_are_era_neutral_so_one_capture_suffices():
+    """Positive control for capturing only the modern WRAPPER fields: the items a
+    modern client lists (tools, resources, templates, prompts) are identical to the
+    ones the legacy capture already guards. If an era ever lists different items,
+    this fails and the modern items need their own capture too."""
+    async with Client(server.mcp, mode="legacy") as legacy, Client(server.mcp) as modern:
+        assert modern.protocol_version == "2026-07-28"
+        for lister in ("list_tools", "list_resources", "list_resource_templates", "list_prompts"):
+            a = [manifest._canonicalize(manifest._dump(x)) for x in await getattr(legacy, lister)()]
+            b = [manifest._canonicalize(manifest._dump(x)) for x in await getattr(modern, lister)()]
+            assert a == b, lister
+    # Positive control for the control: the tool catalog is non-empty, so equality is
+    # not vacuous.
+    async with Client(server.mcp) as modern:
+        assert await modern.list_tools()
+
+
+async def test_the_two_eras_disagree_so_both_captures_are_load_bearing():
+    """Positive control for guarding both eras: if the legacy `initialize` and the
+    modern `discover` captures ever agreed on the advertised capabilities, one of them
+    would be redundant. Today they do not (fastmcp 4 advertises `listChanged` only on
+    the handshake era), which is exactly why the discover section exists (#571)."""
+    m = await manifest.build_manifest()
+    assert m["initialize"]["capabilities"] != m["discover"]["capabilities"]
 
 
 async def test_build_manifest_strips_fastmcp_meta_from_tools():

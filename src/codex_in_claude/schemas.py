@@ -39,6 +39,17 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     # serverInfo/protocolVersion/advertised capabilities/instructions — minus the
     # release-variable `serverInfo.version` (#337).
     "initialize_response",
+    # The modern (2026-07-28) era's discovery result — `server/discover`: supported
+    # versions, advertised capabilities, instructions, cache hints — minus the same
+    # release-variable server version, which that era carries under `_meta` (#571). Both
+    # eras are served and already disagree on the wire, so each is guarded on its own.
+    "discover_response",
+    # The modern era's per-method result envelope on the list/read methods the caching
+    # spec covers — `resultType`/`ttlMs`/`cacheScope` on tools/list, resources/list,
+    # resources/templates/list, prompts/list, and resources/read. The items inside are
+    # era-neutral (a test pins them equal across eras) and are guarded by the sections
+    # above; only the modern-only wrapper fields are captured here (#571, Copilot review).
+    "modern_result_envelopes",
     "error_envelope_schema",  # codex://error-envelope content
     "result_meta_schema",  # codex://result-meta content
     "capabilities_result_schema",  # codex://capabilities-result content (#242)
@@ -59,7 +70,8 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
 _FINGERPRINT_COVERS_DESC = (
     "A contract-semantic change in any listed category changes the fingerprint; nothing "
     "outside them does. Release identity is excluded: serverInfo.version, version, "
-    "server_version change every release WITHOUT moving the fingerprint."
+    "server_version change every release WITHOUT moving the fingerprint (incl. its "
+    "server/discover _meta carrier)."
 )
 
 # Bump this whenever the agent-visible surface changes — see FINGERPRINT_COVERS above for the
@@ -69,7 +81,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-88"
+FINGERPRINT = "codex-in-claude/0.1/schema-89"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -242,8 +254,10 @@ CapabilitiesDetail = Literal["summary", "full", "contracts"]
 # "client" — the client advertised roots and list_roots() returned (possibly empty);
 # "not_negotiated" — this client never advertised the roots capability (pass
 # workspace_root instead); "probe_failed" — roots were advertised but the call
-# errored this turn (transient; retrying may help). Defined once here and imported
-# into server.py so the two modules cannot drift on the value set.
+# errored this turn (transient on a handshake-era connection; permanent on a
+# 2026-07-28 one, where this server's push-style probe cannot run — ADR 0004 D5).
+# Defined once here and imported into server.py so the two modules cannot drift on
+# the value set.
 RootsSource = Literal["client", "not_negotiated", "probe_failed"]
 # Lifecycle states for a background job. Terminal: done|failed|cancelled|timeout.
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
@@ -698,8 +712,10 @@ class Meta(BaseModel):
             "the roots capability and the probe returned, possibly an empty list), "
             "'not_negotiated' (this client never advertised the roots capability — pass "
             "workspace_root instead), or 'probe_failed' (roots were advertised but the call "
-            "errored this turn — retrying may help). Distinguishes a client limitation from "
-            "a transient failure, which a bare empty list could not. It reports the PROBE, "
+            "errored this turn; on a handshake-era connection retrying may help, on a "
+            "2026-07-28 connection it never will — this server's push-style probe cannot "
+            "run there, so pass workspace_root). Distinguishes a client limitation from a "
+            "probe failure, which a bare empty list could not. It reports the PROBE, "
             "not where the workspace came from — workspace_source answers that, and 'client' "
             "coexists with workspace_source 'param' (an explicit workspace_root wins over "
             "roots) or 'cwd' (the probe returned no usable root). WHEN PRESENT, which run it "
@@ -1375,23 +1391,25 @@ class CapabilitiesResult(BaseModel):
         "and content[0].text mirrors it as JSON"
     )
     # The MCP protocol revision this server's wire shapes are written against — a
-    # declared TARGET, not the per-session negotiated value (#423 Codex review): the
-    # installed SDK echoes back whatever older mutually-supported revision a client
-    # requests, so a given session's `initialize.protocolVersion` can be earlier than
-    # this field (see ADR 0004 and test_protocol_revision_matches_installed_sdk_target,
-    # which pins the target to the installed SDK's own default/fallback revision).
-    # Kept as a plain `str`, not a `Literal`, because a future revision bump changes the
-    # value without narrowing the type.
+    # declared TARGET, not the per-session negotiated value (#423 Codex review). The
+    # server serves both eras (#570/#571): a modern client carries this version per
+    # request; a handshake-era client gets whatever mutually-supported revision it asked
+    # for echoed back in `initialize.protocolVersion`, so a given session's negotiated
+    # value can be earlier than this field (see ADR 0004 and
+    # test_protocol_revision_matches_installed_sdk_target, which pins the target to the
+    # installed SDK's own LATEST_PROTOCOL_VERSION). Kept as a plain `str`, not a
+    # `Literal`, because a future revision bump changes the value without narrowing the
+    # type.
     protocol_revision: str = Field(
-        default="2025-11-25",
+        default="2026-07-28",
         description=(
             "The MCP protocol revision this server's wire shapes are written against "
-            "(the target). The installed SDK negotiates per session: a client "
-            "requesting an older mutually-supported revision (e.g. 2025-06-18) gets "
-            "that version back in `initialize.protocolVersion`, so a given session's "
-            "negotiated value can be earlier than this field. This field states the "
-            "target, not the per-session negotiation. The 2026-07-28 migration plan "
-            "for this target's deprecated features is recorded in ADR 0004 "
+            "— the target, not what a given connection runs. The server serves both "
+            "eras: a modern client adopts this revision from server/discover; a "
+            "handshake-era client requesting an older supported revision (e.g. "
+            "2025-11-25) gets that version back in `initialize.protocolVersion`, so a "
+            "connection's negotiated value can be earlier than this field. The era "
+            "migration and its per-era decisions are recorded in ADR 0004 "
             "(docs/adr/0004-mcp-2026-07-28-migration.md)."
         ),
     )
@@ -1429,17 +1447,22 @@ class CapabilitiesResult(BaseModel):
     # unknown/disabled URI returns a JSON-RPC error whose `error.data` now carries the
     # §6 ErrorInfo shape (code/message/temporary/retry_after_ms/repair — the `error`
     # object of codex://error-envelope), no longer a bare null. `error.code` is the MCP
-    # numeric -32002 (resource not found) or -32603 (read failure); the symbolic string
-    # code lives in `error.data.code` (e.g. resource_not_found). resource_uri/request_id
-    # (audit F6, #185) add correlation: the tool carrier already has request_id on
-    # `meta`, so those two are populated only here, never on the tool path.
+    # numeric for "resource not found" as the negotiated era defines it — -32002 on a
+    # handshake-era (<= 2025-11-25) connection, -32602 on a modern (2026-07-28)
+    # connection, which forbids -32002 (SEP-2164; #571) — or -32603 (read failure) on
+    # either; the symbolic string code lives in `error.data.code` (e.g.
+    # resource_not_found). resource_uri/request_id (audit F6, #185) add correlation: the
+    # tool carrier already has request_id on `meta`, so those two are populated only
+    # here, never on the tool path.
     resource_error_carrier: str = (
         "JSON-RPC error; the §6 ErrorInfo envelope (code/message/temporary/"
-        "retry_after_ms/repair/resource_uri/request_id) is in error.data, and error.code "
-        "is the MCP numeric -32002 (not found) or -32603 (read failure). Note: this "
-        "server keeps `code`/`message` rather than the machine_code/human_message "
-        "spelling some §6 profiles use — nesting inside `data` already avoids shadowing "
-        "the native JSON-RPC keys."
+        "retry_after_ms/repair/resource_uri/request_id) is in error.data. Classify by "
+        "error.data.code, not error.code: the numeric is era-bound — not-found is -32002 "
+        "on a handshake-era (<= 2025-11-25) connection but -32602 on a 2026-07-28 "
+        "connection, where -32602 is also the generic invalid-params code; a read "
+        "failure is -32603 on both. Field names are `code`/`message` (not "
+        "machine_code/human_message); nesting inside `data` avoids shadowing the native "
+        "JSON-RPC keys."
     )
     error_envelope_resource: str = "codex://error-envelope"
     result_meta_resource: str = "codex://result-meta"
