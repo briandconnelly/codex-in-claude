@@ -179,6 +179,35 @@ Then compare the surfaces the snapshots don't cover:
     `MISSING` and `UNREADABLE` are findings, not skips: a consumed schema that vanished or stopped
     parsing is exactly the drift this pass exists to catch. Read the printed lines — do not infer the
     outcome from the loop's exit status.
+- **The model-facing tool catalog.** `--help` and `codex features list` both stop at what the CLI
+  *accepts*; neither can see the tool list codex actually sends the model. Capture it from both
+  binaries and diff — zero spend, because the sink answers 400 before any model call:
+
+  ```sh
+  uv run python scripts/capture_wire_tools.py --bin "$OLD" > "$SCRATCH/tools-old.txt"
+  uv run python scripts/capture_wire_tools.py --bin "$NEW" > "$SCRATCH/tools-new.txt"
+  diff "$SCRATCH/tools-old.txt" "$SCRATCH/tools-new.txt"
+  # positive control: this MUST drop view_image, or the probe is blind and the diff proves nothing
+  uv run python scripts/capture_wire_tools.py -- --disable view_image | grep -q view_image \
+    && echo "CONTROL FAILED: probe is not observing feature gating"
+  ```
+
+  The script exits non-zero when it captures nothing; that is a failure, never "no tools".
+  **This is not optional, and 0.152.0 is why it exists**: that release silently dropped
+  `update_plan` from the default set and added a gated `clock.sleep`, while every `--help` surface
+  was byte-identical and the `features list` diff named neither (#586). Reconcile any added or
+  removed tool against the release notes, and record it in `COMPATIBILITY.md`.
+- **Model metadata that gates a tool.** A feature can read `stable`/default-**on** in `features
+  list` and still not reach the model, because exposure is gated on the model's advertised
+  capabilities. So also diff that metadata, which no CLI surface reports:
+
+  ```sh
+  jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+  ```
+
+  This is the gate that keeps `sleep_tool` off the exec path (COMPATIBILITY.md → "Sleep tool"). It
+  is **backend-populated and account-scoped**, so it can change with no CLI upgrade at all — which
+  is exactly why it is checked here rather than assumed to move with the version.
 - **Behavior with no CLI surface at all.** Some upstream changes have no flag and no subcommand —
   what reaches model context implicitly (auto-loaded `AGENTS.md`, discovered skills), and the
   feature flags that govern it. Run

@@ -291,9 +291,20 @@ registered by the ordinary `codex exec` tool planner, gated on the feature's `mo
   change.
 - `mode = "always_on"` exposes it regardless of model metadata.
 
-**How that was established** (zero spend — the sink answers 400 before any model call). A local HTTP
-sink stood in for the API via `-c 'model_providers.sink={...}' -c model_provider=sink`, and the
-captured outgoing request's `tools` array is the evidence, not the model's self-report:
+**How that was established** (zero spend — the sink answers 400 before any model call).
+`scripts/capture_wire_tools.py` points codex at a local HTTP sink instead of the real API and prints
+the `tools` array out of the request codex actually sent. That array is the evidence, not the
+model's self-report — asked directly, the model answered `NOTOOL`, which is a claim, not an
+observation. Each row below is one runnable command:
+
+```sh
+uv run python scripts/capture_wire_tools.py                                              # default
+uv run python scripts/capture_wire_tools.py -- -c 'features.sleep_tool.mode="always_on"'
+uv run python scripts/capture_wire_tools.py -- --disable sleep_tool -c 'features.sleep_tool.mode="always_on"'
+uv run python scripts/capture_wire_tools.py -- --disable view_image                      # positive control
+uv run python scripts/capture_wire_tools.py --bin "$OLD"                                 # the A/B's other half
+```
+
 
 | Run | `clock` in the request? |
 |---|---|
@@ -321,8 +332,12 @@ of a version bump.
 the failure mode is not an unbounded hang. It is **spend without result**: a single `sleep` call can
 consume the whole budget and turn a run that would have succeeded into a `timeout`.
 
-**Re-check on every upgrade.** Re-run the capture above, and re-read
-`experimental_supported_tools` in the live model cache, not just the feature's stage and default.
+**Re-check on every upgrade.** `docs/UPGRADING-CODEX.md` step 2A owns this as a required check.
+Re-run `scripts/capture_wire_tools.py` against both binaries **and** re-read
+`experimental_supported_tools` in the live model cache
+(`jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "$CODEX_HOME/models_cache.json"`),
+not just the feature's stage and default — the stage and default did not move when the exposure
+gate did.
 `--disable sleep_tool` is verified to work and an unknown feature name still fails loud as
 `Error: Unknown feature flag`, so adopting the disable later stays cheap.
 
@@ -338,9 +353,9 @@ difference.
 It is recorded because of **how it was found, not what it was**: every `--help` surface was
 byte-identical for this release, and the `codex features list` diff (four added rows, none removed)
 named nothing resembling this change — neither surface can see it at all. The model-facing request
-is a distinct surface. The sink capture in the section above is the only probe
-that sees it, so run it as an A/B — old binary and new — on every upgrade, and diff the `tools`
-array.
+is a distinct surface. `scripts/capture_wire_tools.py` is the only probe here that sees it, so run
+it as an A/B — old binary and new — on every upgrade and diff the `tools` array;
+`docs/UPGRADING-CODEX.md` step 2A carries it as a required step.
 
 ## The read boundary: there isn't one (#509)
 

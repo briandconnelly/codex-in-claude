@@ -286,12 +286,12 @@ def test_status_version_warning_never_echoes_the_version_string(monkeypatch, cle
 
 
 def test_status_keeps_the_support_verdict_on_the_raw_probe_output(monkeypatch, clean_env):
-    """Identity stays raw. `0.<BEL>151.0` DISPLAYS as a plausible supported version, but the
+    """Identity stays raw. `0.<BEL>152.0` DISPLAYS as a plausible supported version, but the
     raw string does not parse — so the verdict must be null, never repaired into true."""
-    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.\x07151.0")
+    monkeypatch.setattr(server.codex, "codex_version", lambda: "codex-cli 0.\x07152.0")
     monkeypatch.setattr(server.codex, "login_status", lambda: (False, None))
     res = server.codex_status()
-    assert res["codex_version"] == "codex-cli 0.151.0"
+    assert res["codex_version"] == "codex-cli 0.152.0"
     assert res["version_supported"] is None
     assert res["version_warning"] is None
 

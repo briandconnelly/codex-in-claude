@@ -1645,12 +1645,12 @@ def test_a_literal_truncation_marker_in_the_input_is_not_a_truncation_claim():
 def test_version_display_never_repairs_a_control_split_version_for_the_verdict():
     """The display copy is LOSSY and is not the identity.
 
-    Deleting the control character out of `0.<BEL>151.0` yields a plausible
-    `codex-cli 0.151.0` — but `version_supported` must keep parsing the RAW probe output,
+    Deleting the control character out of `0.<BEL>152.0` yields a plausible
+    `codex-cli 0.152.0` — but `version_supported` must keep parsing the RAW probe output,
     which does not parse at all. Pinning both halves keeps a future refactor from routing
     the verdict through this copy."""
-    raw = "codex-cli 0.\x07151.0"
-    assert codex.version_display(raw) == "codex-cli 0.151.0"
+    raw = "codex-cli 0.\x07152.0"
+    assert codex.version_display(raw) == "codex-cli 0.152.0"
     assert config.parse_version(raw) is None
     assert config.version_supported(raw) is None
 
