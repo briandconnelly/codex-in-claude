@@ -843,6 +843,9 @@ positive demonstration of exactly the egress path #472 describes.)
   on every argv*: several members ride only the invocations that need them (`--add-dir` and
   `--output-schema` when a caller supplies one, `--strict-config` when the run carries a `-c`
   override). What the class guarantees is that when such a flag is sent, its rejection is loud.
+  Nor does membership mean every *use* of a member is a guarantee: `--disable` carries both the
+  `remote_plugin` security guarantee and the `sleep_tool` spend-hygiene disable (#587), and what
+  the second one needs from the class is exactly the loud rejection of an unknown feature name.
 - **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
   `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
 
