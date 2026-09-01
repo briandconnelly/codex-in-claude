@@ -19,13 +19,17 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   `discover` section (the modern era's supported versions, capabilities, instructions, and
   `ttlMs`/`cacheScope` hints, minus the release-variable server version) and a
   `modern_result_envelopes` section (the modern `resultType`/`ttlMs`/`cacheScope` wrapper on every
-  list/read method the caching spec covers; the items inside are pinned equal across eras),
+  list/read method the caching spec covers, and the `tools/call` wrapper from one free call; the
+  items inside are pinned equal across eras),
   disclosed as the new `fingerprint_covers` tokens `discover_response` and
   `modern_result_envelopes` — the two eras already disagree on the wire (`listChanged`), so the
   legacy capture could not stand in for them. `roots_source`'s `probe_failed` description no
   longer promises that retrying may help: it does on a handshake-era connection and never on a
   `2026-07-28` one, where this server's push-style probe cannot run (the modern round-trip roots
-  path is deferred). `protocol_revision` moves to
+  path is deferred). The roots capability gate now reads the SDK's era-neutral
+  `session.client_capabilities` instead of the handshake-era `client_params`, so a `2026-07-28`
+  request that declares roots without client info is no longer misreported as `not_negotiated`;
+  a real modern-client test pins the emitted `probe_failed`. `protocol_revision` moves to
   `2026-07-28` and its SDK-drift guard is strict again (#570 had pinned the gap). Roots stay a
   handshake-era fallback (`probe_failed` on modern connections, unchanged); a dedicated modern-era
   `roots_source` value, cache-hint tuning, and the tasks extension are deferred and recorded in the

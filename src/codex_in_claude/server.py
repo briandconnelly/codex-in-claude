@@ -1076,10 +1076,16 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
         # "not_negotiated" (the honest answer: we could not establish that roots were
         # negotiated) rather than letting it escape uncaught, which the old blanket
         # `except` below incidentally covered before this pre-check existed.
-        params = getattr(ctx.session, "client_params", None)
+        # `client_capabilities` is the SDK's era-neutral accessor: on a handshake
+        # connection it is the negotiated `initialize` capabilities; on 2026-07-28 it is
+        # the per-request declaration, which can be present WITHOUT `client_params`
+        # (client info is optional there), so gating on `client_params.capabilities`
+        # would misreport a roots-declaring modern client as `not_negotiated` (#576
+        # Copilot review; the SDK's own docstring says to prefer this accessor).
+        capabilities = getattr(ctx.session, "client_capabilities", None)
     except RuntimeError:
         return [], "not_negotiated"
-    if params is None or getattr(params.capabilities, "roots", None) is None:
+    if capabilities is None or getattr(capabilities, "roots", None) is None:
         return [], "not_negotiated"
     try:
         # fastmcp 4 removed `Context.list_roots()` (#570); the SDK session method is the

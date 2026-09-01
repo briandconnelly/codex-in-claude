@@ -4940,15 +4940,14 @@ async def test_roots_from_ctx_filters_non_absolute_and_non_file(tmp_path):
     class _Caps:
         roots = object()  # advertised: exercise the file-URI filtering, not the gate
 
-    class _Params:
-        capabilities = _Caps()
-
     class _ListRootsResult:
         def __init__(self, rs):
             self.roots = rs
 
     class _Session:
-        client_params = _Params()
+        # The era-neutral accessor the gate reads (see `_roots_from_ctx`); `client_params`
+        # is deliberately absent, as on a 2026-07-28 request that supplies no client info.
+        client_capabilities = _Caps()
 
         async def list_roots(self):
             return _ListRootsResult(
@@ -8624,15 +8623,14 @@ def _ctx_double(*, roots_advertised: bool, roots=(), list_roots_raises=None):
     class _Caps:
         roots = object() if roots_advertised else None
 
-    class _Params:
-        capabilities = _Caps()
-
     class _ListRootsResult:
         def __init__(self, rs):
             self.roots = rs
 
     class _Session:
-        client_params = _Params()
+        # The era-neutral accessor the gate reads (see `_roots_from_ctx`); `client_params`
+        # is deliberately absent, as on a 2026-07-28 request that supplies no client info.
+        client_capabilities = _Caps()
 
         async def list_roots(self):
             if list_roots_raises is not None:
@@ -8711,6 +8709,32 @@ async def test_roots_resolve_live_over_the_mcp_boundary(clean_env, monkeypatch, 
     assert carrier["roots_source"] == "client"
     assert carrier["workspace_source"] == "roots"
     assert os.path.realpath(carrier["cwd"]) == os.path.realpath(str(tmp_path))
+
+
+async def test_modern_client_roots_report_probe_failed_live(clean_env, monkeypatch, tmp_path):
+    """The modern-era twin of the live test above (ADR 0004 amendment D5; #576 Copilot
+    review asked for exactly this): a REAL 2026-07-28 client that advertises a root gets
+    `roots_source: "probe_failed"` — the capability gate passes (the per-request
+    declaration is visible through the SDK's era-neutral `client_capabilities`), the
+    push-style `session.list_roots()` probe then raises because that era has no
+    server-initiated back-channel, and the call falls back exactly as a root-less
+    client would (`workspace_source: "cwd"`). Pinned through a real client because a
+    double cannot tell `not_negotiated` (gate failed) from `probe_failed` (probe failed)
+    the way the wire does. If this starts reporting `client`, the round-trip roots path
+    was implemented and D5 needs re-judging; if `not_negotiated`, the gate regressed."""
+    from fastmcp import Client
+
+    _init_repo(tmp_path)
+    monkeypatch.setenv("CODEX_IN_CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.chdir(tmp_path)
+    async with Client(server.mcp, roots=[tmp_path.as_uri()]) as client:
+        assert client.protocol_version == "2026-07-28"
+        result = await client.call_tool("codex_dry_run", {}, raise_on_error=False)
+    payload = result.structured_content
+    assert payload.get("ok") is True, payload
+    carrier = payload.get("meta") or payload
+    assert carrier["roots_source"] == "probe_failed"
+    assert carrier["workspace_source"] == "cwd"
 
 
 TRIAGE_META_KEY = "dev.bconnelly.codex-in-claude/triage"

@@ -71,6 +71,13 @@ _STATIC_RESOURCE_URIS = (
 )
 
 
+# The tool call whose result envelope stands in for every tools/call result: free (no
+# Codex spend), deterministic, and side-effect-free. Only the wrapper fields are kept,
+# so the payload's content does not matter to the snapshot.
+_ENVELOPE_PROBE_TOOL = "codex_capabilities"
+_ENVELOPE_PROBE_ARGS: dict[str, Any] = {"detail": "summary"}
+
+
 def _envelope_fields(result: Any) -> dict[str, Any]:
     """The modern result-envelope wrapper fields of one list/read result, by wire name."""
     wire = _dump(result)
@@ -187,6 +194,13 @@ async def build_manifest() -> dict[str, Any]:
                 uri: _envelope_fields(await modern.read_resource_mcp(uri))
                 for uri in _STATIC_RESOURCE_URIS
             },
+            # tools/call is not a caching-spec method, but 2026-07-28 requires
+            # `resultType` on every result, and neither the tool records nor their
+            # output schemas carry that outer wrapper — so one deterministic, free,
+            # side-effect-free call captures it (Copilot review on #576).
+            "tools/call": _envelope_fields(
+                await modern.call_tool_mcp(_ENVELOPE_PROBE_TOOL, _ENVELOPE_PROBE_ARGS)
+            ),
         }
     discover_meta = discover.get("_meta")
     if isinstance(discover_meta, dict):

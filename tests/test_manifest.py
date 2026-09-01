@@ -10,7 +10,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "2e9b59031ac3e4075c6fa3b706fc954dc0ab0074e92a095f1300c5f2cad6bc12"
+EXPECTED_MANIFEST_HASH = "e9a7676a075c592a814c8ff3bd20c6c6d35ff8dc4919da5e587c78c2dce3065c"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -318,7 +318,14 @@ async def test_build_manifest_captures_the_modern_result_envelopes():
     resource the manifest reads on both eras."""
     m = await manifest.build_manifest()
     env = m["modern_result_envelopes"]
-    assert set(env) == set(_CACHING_SPEC_LIST_METHODS) | {"resources/read"}
+    assert set(env) == set(_CACHING_SPEC_LIST_METHODS) | {"resources/read", "tools/call"}
+    # tools/call is outside the caching spec but 2026-07-28 requires `resultType` on
+    # every result; the probe call is a free tool, so this never spends.
+    assert env["tools/call"]["resultType"] == "complete"
+    assert manifest._ENVELOPE_PROBE_TOOL in {
+        t["name"] for t in m["tools"] if not t["name"].startswith("codex_job")
+    }
+    assert manifest._ENVELOPE_PROBE_TOOL in server.codex_capabilities()["free_tools"]
     for method in _CACHING_SPEC_LIST_METHODS:
         assert set(env[method]) == set(manifest._RESULT_ENVELOPE_FIELDS), method
         assert env[method]["resultType"] == "complete"

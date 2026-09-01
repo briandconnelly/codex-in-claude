@@ -2242,6 +2242,9 @@
       "resultType": "complete",
       "ttlMs": 0
     },
+    "tools/call": {
+      "resultType": "complete"
+    },
     "tools/list": {
       "cacheScope": "private",
       "resultType": "complete",
