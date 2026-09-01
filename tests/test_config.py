@@ -8,7 +8,7 @@ import unicodedata
 
 import pytest
 
-from codex_in_claude import config
+from codex_in_claude import cli_contract, config
 
 
 def test_job_store_configures_worktree_cleanup(clean_env):
@@ -467,6 +467,10 @@ def test_extra_args_allows_quoted_root_of_permitted_key(monkeypatch):
         # over-matching, not a mirror of codex's resolution (#312).
         "-c 'features.\"remote_plugin\"=true'",
         "-c '\"features\".remote_plugin=true'",
+        # A dotted DESCENDANT of the owned feature reaches the same feature table (#587:
+        # sleep_tool's `mode` sub-key is the real-world case); the denial is a
+        # segment-boundary prefix, not an exact key.
+        "-c features.remote_plugin.anything=true",
     ],
 )
 def test_extra_args_denies_remote_plugin_reenable(monkeypatch, raw):
@@ -474,6 +478,74 @@ def test_extra_args_denies_remote_plugin_reenable(monkeypatch, raw):
     ea = config.extra_args()
     assert ea.valid is False
     assert "remote_plugin" in (ea.error or "")
+
+
+# --- #587: sleep_tool is plugin-owned too (spend hygiene, not a security guarantee) ---
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "--enable sleep_tool",  # would be a silent no-op: the plugin's --disable outranks it
+        "--enable=sleep_tool",
+        "--enable Sleep_Tool",
+        "--disable sleep_tool",  # redundant, and would misattribute a rename to the operator
+        "-c features.sleep_tool=true",
+        "-c features.sleep_tool=false",
+        # The exposure gate itself: `mode="always_on"` bypasses the model-metadata gate.
+        "-c 'features.sleep_tool.mode=\"always_on\"'",
+        "-c features.sleep_tool.mode=model_driven",
+        "--config features.sleep_tool.mode=always_on",
+        "--config=features.sleep_tool.mode=always_on",
+        '-c " features . Sleep_Tool . mode =always_on"',  # whitespace/case around the key
+        "-c 'features.\"sleep_tool\".mode=always_on'",  # quoted segment survives shlex
+    ],
+)
+def test_extra_args_denies_sleep_tool_override(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "sleep_tool" in (ea.error or "")
+    # The refusal names the reason and the issue, and does NOT borrow remote_plugin's
+    # security-guarantee text: disabling the sleep tool bounds spend, not data egress.
+    assert "#587" in ea.error
+    assert "remote_plugin" not in ea.error
+
+
+def test_extra_args_bare_features_table_refusal_names_every_owned_feature(monkeypatch):
+    # The inline-table form reaches EVERY owned feature through the parent key, so its
+    # refusal names all of them (#287, #587) rather than one feature's reason.
+    monkeypatch.setenv(
+        "CODEX_IN_CLAUDE_EXTRA_ARGS", "-c 'features={sleep_tool={mode=\"always_on\"}}'"
+    )
+    ea = config.extra_args()
+    assert ea.valid is False
+    assert "remote_plugin" in ea.error
+    assert "sleep_tool" in ea.error
+
+
+def test_every_plugin_owned_feature_has_a_refusal_reason():
+    # A feature added to the inventory without a reason would raise KeyError at the exact
+    # moment an operator hits the denial; catch it here instead.
+    for feature in cli_contract.MODEL_RUN_DISABLED_FEATURES:
+        assert feature in config._PLUGIN_OWNED_FEATURE_REASONS
+    assert set(config._PLUGIN_OWNED_FEATURE_REASONS) == set(config._PLUGIN_OWNED_FEATURES)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Near misses of the owned feature names: the descendant denial is a
+        # SEGMENT-boundary prefix, so a longer segment sharing the prefix stays allowed.
+        "-c features.sleep_toolbox.mode=always_on",
+        "-c features.sleep_tool_mode=always_on",
+        "-c features.remote_plugins=true",
+        "--enable sleep_toolbox",
+        "--disable sleep_tool_v2",
+    ],
+)
+def test_extra_args_allows_near_misses_of_plugin_owned_features(monkeypatch, raw):
+    monkeypatch.setenv("CODEX_IN_CLAUDE_EXTRA_ARGS", raw)
+    ea = config.extra_args()
+    assert ea.valid is True, ea.error
 
 
 @pytest.mark.parametrize(

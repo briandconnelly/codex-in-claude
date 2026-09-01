@@ -127,10 +127,13 @@ def build_exec_command(
     tokens += ["--output-last-message", output_last_message_path]
     if ephemeral:
         tokens += ["--ephemeral"]
-    # Disable third-party connectors on every model-bearing call, regardless of tier or
-    # isolation (codex 0.143+ defaults `remote_plugin` on; #287). Guarantee-bearing and
-    # order-independent — `--disable` wins over any operator `--enable`/`-c ...=true`.
-    tokens += [cli_contract.DISABLE_FEATURE_FLAG, cli_contract.REMOTE_PLUGIN_FEATURE]
+    # Force off every plugin-owned feature on every model-bearing call, regardless of tier
+    # or isolation: the remote_plugin connectors (codex 0.143+ defaults them on; #287) and
+    # the native sleep tool (#587). Order-independent — `--disable` wins over any operator
+    # `--enable`/`-c ...=true` — and emitted BEFORE operator extra_args. The inventory (and
+    # its argv order) is owned by cli_contract.MODEL_RUN_DISABLED_FEATURES.
+    for feature in cli_contract.MODEL_RUN_DISABLED_FEATURES:
+        tokens += [cli_contract.DISABLE_FEATURE_FLAG, feature]
     # Pin the no-network-egress guarantee for workspace-write runs (#518): at `inherit`
     # isolation codex reads $CODEX_HOME/config.toml, where the user's own
     # `network_access = true` would silently grant the delegate egress. The `-c`

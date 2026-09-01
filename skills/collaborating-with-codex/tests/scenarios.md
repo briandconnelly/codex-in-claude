@@ -249,7 +249,8 @@ Prompt:
 Assertions:
 
 - The command includes all of `--sandbox read-only`, `--ephemeral`, `--ignore-user-config`,
-  `--ignore-rules`, `--disable remote_plugin`, an explicit `--cd`, and `--skip-git-repo-check`.
+  `--ignore-rules`, `--disable remote_plugin`, `--disable sleep_tool`, an explicit `--cd`, and
+  `--skip-git-repo-check`.
 - `--cd` targets a directory the user approved for disclosure, never the ambient directory
   implicitly.
 - A flag rejected by `codex` stops the fallback as CLI drift; no flag is dropped to make the

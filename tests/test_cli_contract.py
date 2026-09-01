@@ -19,6 +19,16 @@ def test_remote_plugin_disable_is_guarantee_bearing():
     assert cli_contract.DISABLE_FEATURE_FLAG in cli_contract.ALWAYS_SEND_FLAGS
 
 
+def test_model_run_disabled_features_is_the_ordered_inventory():
+    # #587: every feature the plugin forces off on a model-bearing run lives in ONE ordered
+    # inventory; the argv builder and the extra-args denylist both derive from it, so a
+    # feature added to one cannot be missing from the other (the #287 misattribution hole).
+    # Literal expectations on purpose: deriving them from the constants under test would
+    # make this unable to catch a wrong or reordered inventory.
+    assert cli_contract.SLEEP_TOOL_FEATURE == "sleep_tool"
+    assert cli_contract.MODEL_RUN_DISABLED_FEATURES == ("remote_plugin", "sleep_tool")
+
+
 def test_core_sandbox_values():
     assert cli_contract.SANDBOX_READ_ONLY in cli_contract.VALID_SANDBOXES
     assert cli_contract.SANDBOX_WORKSPACE_WRITE in cli_contract.VALID_SANDBOXES
@@ -35,6 +45,8 @@ def test_core_sandbox_values():
         # #287: a renamed/removed feature name behind `--disable <FEATURE>` — the exact wording
         # codex 0.144.1 prints — keeps the remote_plugin guarantee fail-closed as drift.
         "Error: Unknown feature flag: remote_plugin",
+        # #587: the same fail-closed conversion for the sleep-tool disable.
+        "Error: Unknown feature flag: sleep_tool",
     ],
 )
 def test_is_contract_drift_true(text):

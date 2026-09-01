@@ -304,12 +304,14 @@ user can reach, not just that tree):
 
 ```sh
 WORKSPACE=/absolute/approved/path codex exec --sandbox read-only --ephemeral \
-  --ignore-user-config --ignore-rules --disable remote_plugin \
+  --ignore-user-config --ignore-rules --disable remote_plugin --disable sleep_tool \
   --cd "$WORKSPACE" --skip-git-repo-check -
 ```
 
 Keep every flag — together they apply the plugin's guarantee-bearing flags at its strictest config
-isolation — but this still bypasses the plugin's diff gathering, secret redaction, input-byte
+isolation, plus `--disable sleep_tool`, which is spend hygiene rather than a guarantee (it removes
+Codex's native up-to-12-hour sleep tool, and here no server deadline would cut a sleep short) — but
+this still bypasses the plugin's diff gathering, secret redaction, input-byte
 bounding, and structured envelope, so sanitize input yourself and prefer restoring the server. See
 the `collaborating-with-codex` skill for the full fallback guidance.
 

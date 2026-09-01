@@ -200,24 +200,81 @@ _EXTRA_PROFILE_FLAGS = ("-p", "--profile")  # -p NAME       (layer a named confi
 _EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE
 
 # Feature NAMES that are wholly plugin-owned, refused even though `--enable`/`--disable`/`-c`
-# are allowlisted: the plugin disables the remote_plugin connectors on every model-bearing call
-# as a documented security guarantee (#287), so an operator override must not touch the feature
-# in EITHER direction. `--enable` would defeat the guarantee; `--disable` is redundant with the
-# plugin but, if allowed, injects a passthrough descriptor that could misattribute a plugin-owned
-# guarantee-flag drift to CODEX_IN_CLAUDE_EXTRA_ARGS — so both are refused. `--enable X` is exactly
-# `-c features.X=true`, so the `-c` spellings are denied too (see _DENIED_CONFIG_KEYS below). NOTE:
-# an opaque `--profile` can still re-enable it — the same documented operator-trust boundary that
-# bounds the `-c` denials (see COMPATIBILITY.md).
-_PLUGIN_OWNED_FEATURES = frozenset({cli_contract.REMOTE_PLUGIN_FEATURE})
-# Both the dotted key AND the bare `features` parent table are refused: `-c
+# are allowlisted. The plugin forces each of these off on every model-bearing call
+# (`cli_contract.MODEL_RUN_DISABLED_FEATURES` — the one inventory both this denylist and the
+# argv builder derive from), so an operator override must not touch the feature in EITHER
+# direction. `--enable` would be defeated anyway (`--disable` outranks it in any order), so
+# allowing it would only be a silent no-op; `--disable` is redundant with the plugin but, if
+# allowed, injects a passthrough descriptor that could misattribute a plugin-owned flag drift
+# (an upstream rename → `Unknown feature flag`) to CODEX_IN_CLAUDE_EXTRA_ARGS — so both are
+# refused. `--enable X` is exactly `-c features.X=true`, so the `-c` spellings are denied too
+# (see _plugin_owned_feature_for_key below). NOTE: an opaque `--profile` can still re-enable
+# them — the same documented operator-trust boundary that bounds the `-c` denials (see
+# COMPATIBILITY.md).
+_PLUGIN_OWNED_FEATURES = frozenset(cli_contract.MODEL_RUN_DISABLED_FEATURES)
+# Why each owned feature is refused, in the operator's terms. remote_plugin is a documented
+# SECURITY guarantee (#287); sleep_tool is SPEND hygiene (#587) and its refusal must not
+# borrow the security wording. Keyed by feature so a new inventory entry without a reason
+# fails the completeness test rather than emitting a wrong explanation.
+_PLUGIN_OWNED_FEATURE_REASONS: dict[str, str] = {
+    cli_contract.REMOTE_PLUGIN_FEATURE: (
+        "the plugin disables the remote_plugin connectors as a security guarantee (#287); "
+        "an operator override cannot re-enable them"
+    ),
+    cli_contract.SLEEP_TOOL_FEATURE: (
+        "the plugin disables the sleep_tool feature on every model-bearing run so a native "
+        "sleep (up to 12h) cannot burn the run's budget into a timeout (#587); an operator "
+        "override cannot re-enable it"
+    ),
+}
+# Both the dotted keys AND the bare `features` parent table are refused: `-c
 # features={remote_plugin=true}` (a TOML inline table) reaches the same setting through the
 # parent key, so denying only the dotted form leaves that inline-table bypass open. Denying
 # bare `features` refuses the whole-table inline form; a different feature is still settable
-# via its own dotted key (`-c features.some_other=true`), which is NOT in this set.
+# via its own dotted key (`-c features.some_other=true`), which no owned prefix matches.
 _FEATURES_NAMESPACE = "features"
-_DENIED_CONFIG_KEYS = frozenset(
-    {_FEATURES_NAMESPACE, f"{_FEATURES_NAMESPACE}.{cli_contract.REMOTE_PLUGIN_FEATURE}"}
-)
+
+
+def _plugin_owned_key_denial(normalized: str, key: str) -> ExtraArgs | None:
+    """The refusal for a `-c` KEY that reaches a plugin-owned feature, else None.
+
+    The bare `features` parent table can reach EVERY owned feature at once, so its refusal
+    names all of them; a dotted key names the one feature (and reason) it reaches."""
+    if normalized == _FEATURES_NAMESPACE:
+        owned_list = ", ".join(cli_contract.MODEL_RUN_DISABLED_FEATURES)
+        return ExtraArgs(
+            configured=True,
+            error=(
+                f"config key '{_safe_token(key.strip())}' is refused: the bare "
+                f"features table can reach the plugin-owned features ({owned_list}) "
+                "that the plugin forces off on every model-bearing run (#287, #587); "
+                "set another feature by its own dotted key instead"
+            ),
+        )
+    owned_feature = _plugin_owned_feature_for_key(normalized)
+    if owned_feature is None:
+        return None
+    return ExtraArgs(
+        configured=True,
+        error=(
+            f"config key '{_safe_token(key.strip())}' is refused: "
+            f"{_PLUGIN_OWNED_FEATURE_REASONS[owned_feature]}"
+        ),
+    )
+
+
+def _plugin_owned_feature_for_key(normalized: str) -> str | None:
+    """The plugin-owned feature a normalized `-c` KEY reaches, or None.
+
+    Matches `features.<owned>` and every dotted DESCENDANT (`features.sleep_tool.mode` is
+    the exposure gate itself) on a segment boundary, so `features.sleep_toolbox.mode` and
+    `features.sleep_tool_mode` — different keys sharing the prefix — stay allowed."""
+    for feature in cli_contract.MODEL_RUN_DISABLED_FEATURES:
+        owned = f"{_FEATURES_NAMESPACE}.{feature}"
+        if normalized == owned or normalized.startswith(f"{owned}."):
+            return feature
+    return None
+
 
 # Config-key roots refused even though `-c/--config` is allowlisted: a `-c` value can
 # override ANY dotted config path, and these would weaken a guarantee this server
@@ -517,16 +574,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                         "server advertises"
                     ),
                 )
-            if normalized in _DENIED_CONFIG_KEYS:
-                return ExtraArgs(
-                    configured=True,
-                    error=(
-                        f"config key '{_safe_token(key.strip())}' is refused: the plugin "
-                        "disables the remote_plugin connectors as a security guarantee "
-                        "(#287); an operator "
-                        "override cannot re-enable them"
-                    ),
-                )
+            if (owned_denial := _plugin_owned_key_denial(normalized, key)) is not None:
+                return owned_denial
             if normalized in _DENIED_INSTRUCTION_CONFIG_KEYS:
                 return _instruction_key_denial(normalized, key)
             reserved = _RESERVED_META_CONFIG_KEYS.get(normalized)
@@ -561,9 +610,8 @@ def _parse_extra_args(raw: str) -> ExtraArgs:
                     configured=True,
                     error=(
                         f"feature '{_safe_token(value.strip())}' is managed by the plugin "
-                        f"and cannot be set via {EXTRA_ARGS_ENV} (enable or disable): it "
-                        "disables the remote_plugin "
-                        "connectors as a security guarantee (#287)"
+                        f"and cannot be set via {EXTRA_ARGS_ENV} (enable or disable): "
+                        f"{_PLUGIN_OWNED_FEATURE_REASONS[value.strip().lower()]}"
                     ),
                 )
             tokens += [flag, value]
