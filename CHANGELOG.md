@@ -56,8 +56,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (`view_image = false`) so each profile row proves in the same capture that that exact profile was
   applied -- without it the rows that matter would pass vacuously.
   `tests/test_integration.py::test_plugin_disable_outranks_profile_for_remote_plugin_live` pins the
-  whole matrix and skips when the environment is blind, but fails when the calibration stops
-  toggling. `COMPATIBILITY.md`'s profile boundary is now stated as a precedence rule rather than a
+  whole matrix; it skips only in a preflight that needs unanimous evidence the environment cannot
+  be measured in (no plugin tool family, or an ambient `config.toml` that moves the features the
+  matrix reads), and asserts everywhere after. `COMPATIBILITY.md`'s profile boundary is now stated as a precedence rule rather than a
   numeric exception list, which had already gone stale (`writable_roots` was pinned and
   profile-outranking but uncounted). The `fingerprint` moves `schema-90` -> `schema-91` (the
   server-instructions sentence is discovered surface). Not breaking: it *strengthens* a documented

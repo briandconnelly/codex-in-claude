@@ -197,9 +197,11 @@ it does not describe the separate `codex app-server` path used by `codex_transfe
 **A `--profile` does NOT re-enable the feature — verified on 0.152.0, correcting what this
 section claimed through 0.152.0 (#591).** Every earlier revision said an opaque profile could
 re-enable `remote_plugin`, by analogy to the general `--profile` operator-trust boundary. That was
-never measured, and it is false: the plugin's `--disable remote_plugin` is a *runtime* override, and
-runtime flags load above profiles, so a profile cannot reach past one — the same precedence #587
-established for `sleep_tool`. Both profiles below also carry an **unrelated sentinel**
+never measured, and it is false: the plugin's `--disable remote_plugin` outranks a profile in
+either argv order — the same precedence #587 established for `sleep_tool`. (The *mechanism* — that
+`--disable X` becomes the runtime override `features.X=false`, and that profiles load below
+runtime flags — is Codex's reading of the 0.152.0 sources recorded on #591, not something this
+repo verified; what is measured here is the behavior.) Both profiles below also carry an **unrelated sentinel**
 (`view_image = false`), so every profile row proves *in the same capture* that that exact profile
 file was applied — without it, a row whose profile merely agrees with the default cannot be told
 apart from a profile that was silently ignored. 27 captures, the whole matrix run three times
@@ -255,9 +257,13 @@ instead (`scripts/capture_wire_tools.py`, local sink, zero spend):
   suspicion, unconfirmed) can move it.
 
 `tests/test_integration.py::test_plugin_disable_outranks_profile_for_remote_plugin_live` pins the
-table above, sentinels included, and **skips** when the scope guard is absent from the whole run —
-but **fails** if the explicit-flag calibration stops toggling the marker, since that is contract
-drift rather than a missing environment.
+table above, sentinels included. It **skips in one place only** — a preflight that needs *unanimous*
+evidence across three captures that the environment cannot be measured in, either because the plugin
+tool family is absent or because the ambient `config.toml` does not leave `remote_plugin` and the
+sentinel feature at their upstream defaults (an operator may legitimately set either). Everything
+after that preflight **asserts**: a scope guard lost under one particular flag combination, or an
+explicit-flag calibration that stops toggling the marker, is contract drift rather than a missing
+environment. An earlier revision skipped per-arm and would have gone quiet on exactly that drift.
 
 What remains true is the *general* `--profile` operator-trust boundary (see "Operator extra-args
 passthrough" below): a profile is an opaque on-disk TOML this server cannot inspect and can still
