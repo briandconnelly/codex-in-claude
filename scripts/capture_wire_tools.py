@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture the tool catalog codex sends to the model, without spending anything.
+r"""Capture the tool catalog codex sends to the model, without spending anything.
 
 Some upstream changes are visible ONLY in the model-facing request: codex 0.152.0 dropped
 `update_plan` from the default tool set and added a gated `clock.sleep`, while every `--help`
@@ -18,11 +18,11 @@ Usage (from the repo root):
     uv run python scripts/capture_wire_tools.py --json          # full tool definitions
     # config-file / profile channels: a scratch $CODEX_HOME (no config.toml needed) holding a
     # profile file, then the plugin's disable against it — `clock` present, then absent
-    mkdir -p /tmp/ch && printf '[features]\nsleep_tool = { mode = "always_on" }\n' \\
+    mkdir -p /tmp/ch && printf '[features]\nsleep_tool = { mode = "always_on" }\n' \
         > /tmp/ch/sleepy.config.toml
-    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \\
+    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \
         -- --profile sleepy
-    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \\
+    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \
         -- --profile sleepy --disable sleep_tool
 
 `--inherit-config` drops the probe's default `--ignore-user-config`, so `$CODEX_HOME/config.toml`
