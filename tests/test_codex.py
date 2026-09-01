@@ -492,9 +492,9 @@ def test_codex_version(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,
         "run_sync_capture",
-        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.151.0\n", "", 0, 1, False),
+        lambda cmd, timeout_seconds: CommandRun("codex-cli 0.152.0\n", "", 0, 1, False),
     )
-    assert codex.codex_version() == "codex-cli 0.151.0"
+    assert codex.codex_version() == "codex-cli 0.152.0"
 
 
 def test_codex_version_missing(monkeypatch):
@@ -1553,7 +1553,7 @@ def test_a_control_bearing_or_long_descriptor_is_still_attributed_to_the_operato
 
 
 def test_version_display_passes_an_ordinary_version_through():
-    assert codex.version_display("codex-cli 0.151.0") == "codex-cli 0.151.0"
+    assert codex.version_display("codex-cli 0.152.0") == "codex-cli 0.152.0"
 
 
 @pytest.mark.parametrize("value", [None, ""])
@@ -2325,8 +2325,8 @@ async def _exec_with_version(monkeypatch, tmp_path, version_stdout, *, exit_code
 
 async def test_run_codex_exec_records_the_serving_codex_version(monkeypatch, tmp_path):
     """RED before #519: CodexExecResult carried no codex identity at all."""
-    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.151.0\n")
-    assert result.codex_version == "codex-cli 0.151.0"
+    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.152.0\n")
+    assert result.codex_version == "codex-cli 0.152.0"
 
 
 async def test_version_probe_uses_the_same_token_the_run_spawns(monkeypatch, tmp_path):
@@ -2343,7 +2343,7 @@ async def test_version_probe_uses_the_same_token_the_run_spawns(monkeypatch, tmp
 
     def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
         probe.update(cmd=list(cmd), cwd=cwd, env=env)
-        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+        return CommandRun("codex-cli 0.152.0", "", 0, 1, False)
 
     async def recording_exec(
         cmd,
@@ -2376,7 +2376,7 @@ async def test_version_probe_uses_the_same_token_the_run_spawns(monkeypatch, tmp
     assert probe["cmd"] == [ran["cmd"][0], *cli_contract.VERSION_ARGS]
     assert probe["cwd"] == ran["cwd"]
     assert probe["env"] == ran["env"]
-    assert result.codex_version == "codex-cli 0.151.0"
+    assert result.codex_version == "codex-cli 0.152.0"
 
 
 async def test_version_probe_failure_leaves_the_field_absent(monkeypatch, tmp_path):
@@ -2389,9 +2389,9 @@ async def test_version_probe_failure_leaves_the_field_absent(monkeypatch, tmp_pa
 
 async def test_version_is_recorded_on_a_failed_run_too(monkeypatch, tmp_path):
     """A nonzero exit is exactly when 'which codex build was this?' matters most."""
-    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.151.0", exit_code=2)
+    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.152.0", exit_code=2)
     assert result.run.exit_code == 2
-    assert result.codex_version == "codex-cli 0.151.0"
+    assert result.codex_version == "codex-cli 0.152.0"
 
 
 async def test_no_version_is_claimed_when_the_spawn_found_no_binary(monkeypatch, tmp_path):
@@ -2400,7 +2400,7 @@ async def test_no_version_is_claimed_when_the_spawn_found_no_binary(monkeypatch,
     launched would be a fabricated attestation."""
 
     def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
-        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+        return CommandRun("codex-cli 0.152.0", "", 0, 1, False)
 
     monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
     monkeypatch.setattr(codex.runtime, "run_async", _fake_exec(binary_missing=True))
@@ -2523,7 +2523,7 @@ async def test_the_version_probe_uses_its_own_short_budget(monkeypatch, tmp_path
 
     def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
         seen["timeout"] = timeout_seconds
-        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+        return CommandRun("codex-cli 0.152.0", "", 0, 1, False)
 
     monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
     monkeypatch.setattr(codex.runtime, "run_async", _fake_exec())
@@ -2595,7 +2595,7 @@ async def test_the_version_is_probed_BEFORE_the_run_is_launched(monkeypatch, tmp
 
     def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
         order.append("probe")
-        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+        return CommandRun("codex-cli 0.152.0", "", 0, 1, False)
 
     async def recording_exec(
         cmd,
@@ -2626,7 +2626,7 @@ async def test_the_version_is_probed_BEFORE_the_run_is_launched(monkeypatch, tmp
         timeout_seconds=30,
     )
     assert order == ["probe", "exec"], order
-    assert result.codex_version == "codex-cli 0.151.0"
+    assert result.codex_version == "codex-cli 0.152.0"
 
 
 @pytest.fixture

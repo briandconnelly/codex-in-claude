@@ -7,7 +7,7 @@ an upstream breaking change is centralized, greppable, and testable. Revising it
 takes the lockstep procedure in docs/UPGRADING-CODEX.md, not an edit to this file
 alone. See COMPATIBILITY.md for the assumption -> upstream-source map.
 
-Verified against `codex-cli 0.151.0`.
+Verified against `codex-cli 0.152.0`.
 """
 
 from __future__ import annotations
@@ -42,8 +42,13 @@ EXEC_HELP_ARGS = ("exec", "--help")
 # whole surface below is EXPERIMENTAL upstream (`codex app-server` is labeled
 # [experimental] and the import method rides behind the `experimentalApi` capability),
 # so every wire assumption lives here; see COMPATIBILITY.md. Verified against
-# codex-cli 0.151.0 on 2026-08-29 via `codex app-server generate-json-schema --out <DIR>`
-# (the generator requires an --out directory instead of writing to stdout). The 0.149.1 -> 0.151.0
+# codex-cli 0.152.0 on 2026-09-01 via `codex app-server generate-json-schema --out <DIR>`
+# (the generator requires an --out directory instead of writing to stdout). The 0.151.0 -> 0.152.0
+# diff ADDED one v2 message we do NOT consume (`AuthRecoveryNotification`) and removed none; of the
+# seven schemas consumed below, six were byte-identical after canonicalization and
+# `GetAccountRateLimitsResponse` gained two OPTIONAL additive fields (`accountId`,
+# `rateLimitUpsell`) that this plugin neither reads nor echoes — the reader is key-based, so
+# unknown keys are ignored. The earlier 0.149.1 -> 0.151.0
 # diff added ten v2 messages we do NOT consume (`McpServerEventStreamNotification`,
 # `ThreadItemsList{Params,Response}`, `ThreadRealtimeItem{Started,Completed}Notification`,
 # `ThreadRealtimeItemTranscriptDeltaNotification`, `ThreadRevert{Params,Response}`,
@@ -874,7 +879,7 @@ MODEL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # copies the cache's slug set verbatim and lets `codex exec` be the real validator, so adding a
 # visibility filter would be a separate, deliberate policy change (#547).
 # Re-diff the slug set on every upgrade — this is the pass that catches it. Re-verified
-# unchanged on 2026-08-29 against codex-cli 0.151.0's live cache: the same eight slugs, and the
+# unchanged on 2026-09-01 against codex-cli 0.152.0's live cache: the same eight slugs, and the
 # reasoning-effort discovery fields still hold their pinned shape (`default_reasoning_level` a
 # string, `supported_reasoning_levels` a list of `{effort, ...}` objects; nothing degraded to None).
 # NOT authoritative and will age: it documents what shipped with the pinned CLI, not the
@@ -896,11 +901,11 @@ KNOWN_MODEL_SLUGS: tuple[str, ...] = (
 HELP_CACHE_TTL_SECONDS = 300
 
 # --- Supported `codex` major version(s) -----------------------------------------
-# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.151.x).
+# Codex is pre-1.0 and ships as 0.x; the "feature" version is the minor (0.152.x).
 # We track the minor as the compatibility axis and keep the env override so a user
 # can opt into an untested version themselves. Advisory only: a mismatch warns but
 # never blocks (auth + binary presence decide readiness).
-SUPPORTED_VERSIONS = frozenset({(0, 151)})
+SUPPORTED_VERSIONS = frozenset({(0, 152)})
 SUPPORTED_VERSIONS_ENV = "CODEX_IN_CLAUDE_SUPPORTED_VERSIONS"
 
 # --- Result / event extraction surface ------------------------------------------

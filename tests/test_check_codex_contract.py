@@ -41,7 +41,7 @@ Run Codex non-interactively
   -m, --model <MODEL>
 """
 
-VERSION = "codex-cli 0.151.0"
+VERSION = "codex-cli 0.152.0"
 
 
 def _ok(stdout: str) -> CommandRun:
