@@ -156,3 +156,51 @@ def repr_json(s: str) -> str:
     import json
 
     return json.dumps(s)
+
+
+def test_a_replacement_bearing_session_id_is_rejected_not_published():
+    """A lossy identifier must read as absent, never as a different valid-looking id (#578).
+
+    pontonier 0.8.0 decodes captured output with `errors="replace"`, so one invalid UTF-8
+    byte inside a `thread_id` now yields U+FFFD *inside an otherwise parseable event* --
+    a shape 0.7.0 could not produce, because it lost the whole capture instead. `session_id`
+    is not prose: an agent resumes a Codex thread with it, so a corrupted-but-plausible id
+    is worse than None. It sends the agent to `codex resume` against an id that never
+    existed, with nothing in the envelope hinting a byte was substituted.
+    """
+    events = '{"thread_id":"01a05a8d-e1d9-x�y-99b8-d2549f463b71"}'
+    _, session_id = normalize.parse_event_metadata(events)
+    assert session_id is None
+
+
+def test_an_intact_session_id_still_survives():
+    """Positive control: the rejection above must not swallow ordinary identifiers.
+
+    Without this, a `_find_session_id` that returned None unconditionally would pass the
+    rejection test, and the guard would prove nothing.
+    """
+    events = '{"thread_id":"01a05a8d-e1d9-75f2-99b8-d2549f463b71"}'
+    _, session_id = normalize.parse_event_metadata(events)
+    assert session_id == "01a05a8d-e1d9-75f2-99b8-d2549f463b71"
+
+
+def test_a_rejected_session_id_does_not_suppress_a_later_intact_one():
+    """Rejection drops the lossy value only -- the scan keeps looking (#578).
+
+    `parse_event_metadata` keeps the FIRST id it finds, so a naive guard could have made a
+    corrupted early event poison a stream whose later events carry the id intact.
+    """
+    events = '{"thread_id":"01a05a8d-x�y"}\n{"thread_id":"01a05a8d-e1d9-75f2-99b8-d2549f463b71"}'
+    _, session_id = normalize.parse_event_metadata(events)
+    assert session_id == "01a05a8d-e1d9-75f2-99b8-d2549f463b71"
+
+
+def test_a_replacement_bearing_nested_session_id_is_also_rejected():
+    """The guard must cover the nested `msg`/`payload`/`data` path, not just top level.
+
+    `_find_session_id` recurses, so a guard applied at only one level would leave the other
+    reachable -- and codex nests these events in practice.
+    """
+    events = '{"msg":{"thread_id":"01a05a8d-x�y-99b8"}}'
+    _, session_id = normalize.parse_event_metadata(events)
+    assert session_id is None

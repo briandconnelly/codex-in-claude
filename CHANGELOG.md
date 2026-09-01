@@ -14,16 +14,22 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   (#541). `pontonier` 0.8.0 isolates the `Popen` phase and returns `binary_missing` for every spawn
   failure, matching `run_async`, so the module and its errno/filename inference are deleted and
   `codex_version`, `login_status`, and `preflight._probe_help` call `runtime.run_sync_capture`
-  directly. No agent-visible behavior changes: the end-to-end guard in `tests/test_sync_tool_guard.py`
-  -- an executable directory named `codex` driven through `codex_status` -- still reports a readiness
-  fact, and was confirmed to fail without the fix before this landed. The `fingerprint` does not move.
-  Also inherited from `0.8.0`: both runners now decode captured output with `errors="replace"` rather
-  than strictly, so a `codex` invocation emitting a stray non-UTF-8 byte yields text containing
-  U+FFFD where 0.7.0 raised `UnicodeDecodeError` out of the sync probe and silently discarded the
-  async capture. U+FFFD is ordinary printable text (category `So`), so nothing in the control-character
-  or redaction handling treats it specially; #578 tracks the one case where that substitution can
-  reach a machine identifier.
-
+  directly. **The shim removal itself changes no behavior**: the end-to-end guard in
+  `tests/test_sync_tool_guard.py` -- an executable directory named `codex` driven through
+  `codex_status` -- still reports a readiness fact, and was confirmed to fail without the fix before
+  this landed. The `fingerprint` does not move.
+- **A `codex` run emitting invalid UTF-8 no longer loses its output, and cannot fabricate a session
+  id** (#577, #578): separately from the shim removal above, `pontonier` 0.8.0 decodes captured
+  output with `errors="replace"` rather than strictly, so a stray non-UTF-8 byte now yields text
+  containing U+FFFD where 0.7.0 raised `UnicodeDecodeError` out of the sync probe and silently
+  discarded the async capture. That is the better trade for diagnostic text -- U+FFFD is ordinary
+  printable text (category `So`), so the control-character and redaction handling treat it as any
+  other character -- but it made one new shape reachable: an invalid byte *inside* a JSONL
+  `thread_id` now parses into a valid-looking identifier rather than destroying the capture.
+  `session_id` is not prose, so `normalize` now rejects an identifier carrying U+FFFD and reports it
+  as absent: a lossy id would send an agent to `codex resume` against a thread that never existed,
+  with nothing in the envelope marking the substitution. A later intact id in the same stream still
+  wins.
 - **The served contract is written against MCP `2026-07-28`, on both protocol eras** (#571,
   ADR 0004 amendment): fastmcp 4 serves the legacy `initialize` handshake and the modern
   `server/discover` era side by side with no knob to restrict either, so this release makes the

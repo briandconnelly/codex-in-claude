@@ -555,6 +555,33 @@ def test_login_status_returns_none_none_when_override_binary_missing(clean_env, 
     assert result == (None, None)
 
 
+def test_login_status_returns_none_none_against_an_unusable_binary(clean_env, tmp_path):
+    """An UNUSABLE `codex` -- present on PATH, but impossible to exec -- must not raise (#541).
+
+    This must go through the BARE-LITERAL branch, not a `CODEX_IN_CLAUDE_CODEX_BIN` override:
+    `binpath` applies its own `is_file()` + `X_OK` predicate and rejects a bad override before
+    any spawn, so an override-based version of this test would pass without ever reaching
+    `run_sync_capture` -- proving nothing (verified: 0 spawn calls). With no override,
+    `codex_bin()` falls back to the literal "codex" and `subprocess` does its own PATH lookup
+    with no such predicate, so an executable DIRECTORY named `codex` reaches exec and fails
+    there. Verified to reach exactly one spawn, classified `binary_missing`.
+
+    `codex_status`'s end-to-end guard in tests/test_sync_tool_guard.py cannot cover this call
+    site: `server.codex_status` calls `login_status()` only `if found`, and this same shape
+    makes `codex_version()` return None first. So this is the one direct caller whose
+    real-spawn contract needs asserting here rather than at the MCP boundary.
+    """
+    (tmp_path / "codex").mkdir()
+    clean_env.delenv(binpath.ENV_VAR, raising=False)
+    clean_env.setenv("PATH", str(tmp_path))
+    binpath.reset_cache()
+    try:
+        result = codex.login_status()
+    except OSError as exc:  # pragma: no cover - the regression this pins
+        pytest.fail(f"login_status() must return (None, None), not raise {exc!r}")
+    assert result == (None, None)
+
+
 def test_login_status_unknown_when_missing(monkeypatch):
     monkeypatch.setattr(
         codex.runtime,
