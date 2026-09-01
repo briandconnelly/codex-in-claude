@@ -277,7 +277,10 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   whose posture was decided can have its stage or default moved under you. Re-check each of these
   in `codex features list` and confirm the recorded posture still holds:
   `remote_plugin` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Remote-plugin isolation"; the
-  plugin forces it off, and an upstream rename fails loud at arg-parse), `sleep_tool`
+  plugin forces it off, and an upstream rename fails loud at arg-parse — also re-run that
+  section's profile-precedence matrix, since its calibrated tool-catalog proxy is the only
+  instrument that can see a profile and could be decoupled upstream:
+  `uv run pytest -m integration --no-cov -k outranks_profile_for_remote_plugin`), `sleep_tool`
   ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Sleep tool"; forced off the same way since #587 —
   re-run that section's wire capture with its `always_on` positive control, and its live tests),
   and `view_image` / `recommended_plugins` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Image

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -206,6 +207,128 @@ def test_plugin_disable_outranks_profile_and_config_file_live(tmp_path):
     assert "clock" in _wire_tool_names("--profile", "sleepy", script_opts=via_profile)
     assert "clock" not in _wire_tool_names("--profile", "sleepy", *disable, script_opts=via_profile)
     assert "clock" not in _wire_tool_names(*disable, "--profile", "sleepy", script_opts=via_profile)
+
+
+_PLUGIN_TOOL_FAMILY_MARKER = "request_plugin_install"
+_REMOTE_PLUGIN_OFF_MARKER = "list_available_plugins_to_install"
+_PROFILE_SENTINEL_FEATURE = "view_image"  # the profiles set features.view_image=false
+_PROFILE_SENTINEL_TOOL = "view_image"  # ...which removes this tool; same string, by codex's naming
+
+
+def _read_remote_plugin(names: list[str]) -> tuple[bool, bool]:
+    """`(effective remote_plugin, profile sentinel applied)` from one captured tool list."""
+    return _REMOTE_PLUGIN_OFF_MARKER not in names, _PROFILE_SENTINEL_TOOL not in names
+
+
+def _capture_remote_plugin(*extra: str) -> tuple[bool, bool]:
+    """`_read_remote_plugin` over a MAJORITY OF THREE captures (#591).
+
+    `codex features list` is authoritative but blind to profiles (`codex --profile X features
+    list` is refused, `features list --profile X` is an unknown argument, and 0.152.0 rejects
+    the legacy `profile = "X"` config key), so a profile's effect has to be read elsewhere.
+    `_REMOTE_PLUGIN_OFF_MARKER` is a CALIBRATED PROXY, not a definition — the explicit-flag rows
+    in the test below re-calibrate it on every run rather than assuming it.
+
+    Majority of three because the marker carries a low-rate flake in BOTH directions that the
+    scope guard does not catch (~2 bad readings in ~90 captures while #591 was measured). A lone
+    flake cannot outvote two agreeing captures, and a three-way split fails loudly.
+
+    The scope guard is ASSERTED here, never skipped: `_preflight_or_skip` has already proved
+    this `$CODEX_HOME` exposes the plugin tool family, so a capture that loses it under one
+    particular flag combination is contract drift, not a missing environment (Copilot review of
+    #593 — the old per-arm skip would have silently stopped verifying)."""
+    readings: list[tuple[bool, bool]] = []
+    for _ in range(3):
+        # `--inherit-config` is load-bearing: without it the script sends `--ignore-user-config`,
+        # which drops `config.toml` AND every `--profile`, so a profile row would silently read
+        # as the upstream default and the control below would fail open.
+        names = _wire_tool_names(*extra, script_opts=("--inherit-config",))
+        assert _PLUGIN_TOOL_FAMILY_MARKER in names, (
+            f"scope guard lost under {extra} after preflight proved it present — contract "
+            f"drift, not a blind environment: {names}"
+        )
+        readings.append(_read_remote_plugin(names))
+    winner, count = Counter(readings).most_common(1)[0]
+    assert count >= 2, f"no majority across three captures of {extra}: {readings}"
+    return winner
+
+
+def _preflight_or_skip() -> None:
+    """The ONLY place this matrix skips: an environment it cannot measure in (#593 review).
+
+    Two ways the environment disqualifies itself, each needing UNANIMOUS evidence across three
+    captures so a single marker flake cannot cause a spurious skip:
+
+    - The plugin tool family is absent — it appears only in a logged-in `$CODEX_HOME`, and
+      without it an absent off-marker is a blind probe rather than a `true` reading.
+    - The ambient `config.toml` does not leave `remote_plugin` and the sentinel feature at their
+      upstream defaults. The matrix runs `--inherit-config` against the REAL home, so an
+      operator who legitimately sets either one would otherwise see this fail as if codex had
+      misbehaved.
+
+    Never copy credentials into a scratch home to make this portable (COMPATIBILITY.md)."""
+    runs = [_wire_tool_names(script_opts=("--inherit-config",)) for _ in range(3)]
+    if all(_PLUGIN_TOOL_FAMILY_MARKER not in names for names in runs):
+        pytest.skip(f"no plugin tool family in this $CODEX_HOME; the readout is blind: {runs[0]}")
+    if all(_read_remote_plugin(names) != (True, False) for names in runs):
+        pytest.skip(
+            "ambient $CODEX_HOME config does not leave remote_plugin and "
+            f"{_PROFILE_SENTINEL_FEATURE} at their upstream defaults; this matrix needs them there"
+        )
+
+
+def test_plugin_disable_outranks_profile_for_remote_plugin_live():
+    """`--disable remote_plugin` beats an opaque `--profile` (#591).
+
+    COMPATIBILITY.md claimed the opposite through 0.152.0 — that a profile could re-enable the
+    connectors — by analogy rather than measurement. It cannot: the plugin's `--disable` is a
+    runtime override that outranks a profile in either argv order, the same precedence #587
+    pinned for `sleep_tool`.
+
+    Both profiles carry an UNRELATED sentinel (`view_image = false`) so each profile row proves
+    in the SAME capture that that exact profile file was applied. Without it a profile whose
+    value merely agrees with the default cannot be told apart from one that was ignored, and
+    the two rows that matter most would pass vacuously.
+
+    The profile files must live in the REAL `$CODEX_HOME` (`--profile` resolves only there, and
+    a credential-free scratch home cannot see the readout at all), so they are created with
+    EXCLUSIVE `open(..., "x")` under pid-unique names — an `exists()` check plus `write_text`
+    would still race two runs into truncating each other's files — and only the paths this
+    invocation actually created are removed (Copilot review of #593). Zero spend: the sink
+    answers before any model call."""
+    _preflight_or_skip()
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    stem = f"pytest591x{os.getpid()}"
+    off_profile, on_profile = f"{stem}off", f"{stem}on"
+    disable = (cli_contract.DISABLE_FEATURE_FLAG, cli_contract.REMOTE_PLUGIN_FEATURE)
+    enable = ("--enable", cli_contract.REMOTE_PLUGIN_FEATURE)
+    sentinel = f"{_PROFILE_SENTINEL_FEATURE} = false\n"
+    created: list[Path] = []
+    try:
+        for profile, value in ((off_profile, "false"), (on_profile, "true")):
+            path = codex_home / f"{profile}.config.toml"
+            with path.open("x", encoding="utf-8") as handle:  # refuses to clobber, atomically
+                handle.write(f"[features]\nremote_plugin = {value}\n{sentinel}")
+            created.append(path)
+        # Calibration: the marker must still track the EXPLICIT controls. These are assertions,
+        # not skips — a marker that stopped toggling here is contract drift, not a missing
+        # environment, and would make every row below meaningless.
+        assert _capture_remote_plugin() == (True, False)
+        assert _capture_remote_plugin(*disable) == (False, False)
+        assert _capture_remote_plugin(*enable) == (True, False)
+        # Positive control: the profile channel genuinely moves the value away from the default.
+        assert _capture_remote_plugin("--profile", off_profile) == (False, True)
+        # The claim under test: a profile asking for `true` loses to the plugin's disable, in
+        # either argv order — and the sentinel proves that profile was live in those very runs.
+        assert _capture_remote_plugin("--profile", on_profile) == (True, True)
+        assert _capture_remote_plugin("--profile", on_profile, *disable) == (False, True)
+        assert _capture_remote_plugin(*disable, "--profile", on_profile) == (False, True)
+        # The converse: a runtime flag overrides a profile value that IS taking effect.
+        assert _capture_remote_plugin("--profile", off_profile, *enable) == (True, True)
+        assert _capture_remote_plugin(*enable, "--profile", off_profile) == (True, True)
+    finally:
+        for path in created:
+            path.unlink(missing_ok=True)
 
 
 def test_status_live():

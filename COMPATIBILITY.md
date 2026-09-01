@@ -192,10 +192,82 @@ two halves, and only one of them is reliably probeable on an arbitrary machine.
   the `codex exec` path this guarantee covers.
 
 **Scope and boundary.** The guarantee covers model-bearing `codex exec` calls (consult/review/delegate);
-it does not describe the separate `codex app-server` path used by `codex_transfer` (no model call). And
-like the sandbox/approval `-c` denials below, it is bounded by the **`--profile` operator-trust
-boundary** — an opaque profile this server cannot inspect could re-enable the feature, so only enable
-that knob with profiles you control.
+it does not describe the separate `codex app-server` path used by `codex_transfer` (no model call).
+
+**A `--profile` does NOT re-enable the feature — verified on 0.152.0, correcting what this
+section claimed through 0.152.0 (#591).** Every earlier revision said an opaque profile could
+re-enable `remote_plugin`, by analogy to the general `--profile` operator-trust boundary. That was
+never measured, and it is false: the plugin's `--disable remote_plugin` outranks a profile in
+either argv order — the same precedence #587 established for `sleep_tool`. (The *mechanism* — that
+`--disable X` becomes the runtime override `features.X=false`, and that profiles load below
+runtime flags — is Codex's reading of the 0.152.0 sources recorded on #591, not something this
+repo verified; what is measured here is the behavior.) Both profiles below also carry an **unrelated sentinel**
+(`view_image = false`), so every profile row proves *in the same capture* that that exact profile
+file was applied — without it, a row whose profile merely agrees with the default cannot be told
+apart from a profile that was silently ignored. 27 captures, the whole matrix run three times
+interleaved (not blocked per arm), every arm unanimous and byte-identical across repeats, zero spend:
+
+| argv (real `$CODEX_HOME`, `--inherit-config`) | effective `remote_plugin` | sentinel |
+|---|---|---|
+| (no flags) | `true` (upstream default) | — |
+| `--disable remote_plugin` | `false` | — |
+| `--enable remote_plugin` | `true` | — |
+| `--profile rpoff` — sets `false` — **positive control** | **`false`** | applied |
+| `--profile rpon` — sets `true` | `true` | applied |
+| `--profile rpon --disable remote_plugin` | **`false`** | applied |
+| `--disable remote_plugin --profile rpon` | **`false`** | applied |
+| `--profile rpoff --enable remote_plugin` | **`true`** | applied |
+| `--enable remote_plugin --profile rpoff` | **`true`** | applied |
+
+Three things make this non-vacuous: the control row shows the profile channel really does move the
+value; the `sentinel` column shows the profile was live in the very runs where the plugin flag beat
+it; and the last two rows show a runtime flag overriding a profile value that *was* taking effect,
+so the middle rows are not "the profile was ignored".
+
+**The instrument, and why the obvious one does not work.** `codex features list` is the
+authoritative readout but is blind to profiles: `codex --profile X features list` is refused
+(`--profile` only applies to runtime commands), `codex features list --profile X` is an unknown
+argument, and 0.152.0 rejects the legacy `profile = "X"` key in `config.toml` outright (`use
+--profile X with X.config.toml`). So read the effective value off the model-facing tool catalog
+instead (`scripts/capture_wire_tools.py`, local sink, zero spend):
+
+- **Readout — a calibrated proxy, not a definition.** `list_available_plugins_to_install` tracked
+  the effective `remote_plugin` value on 0.152.0 in an authenticated `$CODEX_HOME`: present when
+  the feature is off, absent when on. It is a separate tool from the guard below and upstream could
+  decouple the two, so **re-calibrate it rather than assume it**: on all six argv shapes
+  `codex features list` *can* see (`--disable`, `--enable`, `-c features.remote_plugin=…`, and both
+  `--enable`/`--disable` orders) the two instruments agreed 6/6. The explicit-flag rows in the table
+  are that calibration, carried in the same matrix as the profile rows.
+- **Scope guard — an absence here is ambiguous without it.** The whole plugin-tool family
+  (`request_plugin_install`, the `*_mcp_resource*` trio) appears only in a real, logged-in
+  `$CODEX_HOME`; a credential-free scratch home never shows it in *either* feature state — verified
+  still absent there even with a local marketplace configured and a plugin installed, so
+  marketplaces and installed plugins are not the gate. A run therefore counts only if
+  `request_plugin_install` is present; a run lacking it is **INVALID**, never a "feature on"
+  reading. Do **not** copy or symlink credentials into a scratch home to make this portable.
+- **The marker flakes at a low rate, in both directions, and the scope guard does NOT catch it.**
+  Two bad readings turned up in roughly 90 captures while this was measured: a `--disable` run that
+  read "feature on", and later an `--enable` run that read "feature off" — the second one *with*
+  `request_plugin_install` present, so the guard passed it. Both were non-reproducible: the same
+  argv, repeated six times immediately afterwards, was unanimous the other way. Treat a single
+  capture as untrustworthy. Read every arm as a **majority of three**, which is what the live test
+  does; the guard rules out a blind environment, repetition rules out the flake, and they are not
+  interchangeable. This is also why the readout is called a calibrated proxy above rather than an
+  oracle — something outside the feature (cached marketplace or recommendation state is the
+  suspicion, unconfirmed) can move it.
+
+`tests/test_integration.py::test_plugin_disable_outranks_profile_for_remote_plugin_live` pins the
+table above, sentinels included. It **skips in one place only** — a preflight that needs *unanimous*
+evidence across three captures that the environment cannot be measured in, either because the plugin
+tool family is absent or because the ambient `config.toml` does not leave `remote_plugin` and the
+sentinel feature at their upstream defaults (an operator may legitimately set either). Everything
+after that preflight **asserts**: a scope guard lost under one particular flag combination, or an
+explicit-flag calibration that stops toggling the marker, is contract drift rather than a missing
+environment. An earlier revision skipped per-arm and would have gone quiet on exactly that drift.
+
+What remains true is the *general* `--profile` operator-trust boundary (see "Operator extra-args
+passthrough" below): a profile is an opaque on-disk TOML this server cannot inspect and can still
+set any configuration this bridge does not pin — it just cannot override a pin that outranks it.
 
 ## Image reading (`view_image`, #479) — deliberately left enabled
 
@@ -379,9 +451,9 @@ trade-off it is rather than as an upstream fact:
   same table at the top level of `$CODEX_HOME/config.toml` read at the default `inherit`
   isolation. `tests/test_integration.py::test_plugin_disable_outranks_profile_and_config_file_live`
   pins it. So the passthrough denial exists for attribution and to refuse silent no-ops, not as
-  the last line of defense. (The `remote_plugin` section above still says a profile can
-  re-enable that feature; the same mechanism suggests otherwise, and that is re-verified
-  separately as #591 rather than rewritten here.) The raw-CLI fallback in `README.md` carries the flag
+  the last line of defense. (The `remote_plugin` section above made the opposite claim
+  until #591 measured it: the same precedence holds there too, so neither plugin-owned feature
+  has a profile escape hatch.) The raw-CLI fallback in `README.md` carries the flag
   for parity with what the plugin sends — there the run has *no* server deadline at all, so the
   affordance is worse.
 
@@ -1178,14 +1250,15 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   `--disable some_other`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
-  **operator-trust boundary** — only enable this knob with profiles you control. Two keys are
-  excepted, because a plugin-owned runtime override outranks profiles:
-  `sandbox_workspace_write.network_access` is pinned by a `-c` override (verified 0.148.0,
-  re-verified 0.149.1, 0.151.0 and 0.152.0; see Sandbox modes above), so a profile cannot
-  re-grant network egress to a `workspace-write` run; and `features.sleep_tool` is pinned by
-  `--disable sleep_tool` (verified 0.152.0 against a profile and the `config.toml` table, with
-  positive controls; see "Sleep tool" above). Whether `features.remote_plugin` belongs on this
-  list too is #591 — the section above still describes a profile as able to re-enable it.
+  **operator-trust boundary** — only enable this knob with profiles you control. The boundary is
+  scoped by **precedence, not by an exception list**: a profile can set anything this bridge does
+  not pin, and can override nothing this bridge pins with a higher-precedence runtime flag or `-c`
+  override. Each pin is verified and documented in its own section rather than counted here — a
+  numeric list drifts stale as pins are added, and it already had (`writable_roots` was pinned and
+  profile-outranking while the old "two keys" wording omitted it). The pins that outrank a profile
+  today: `sandbox_workspace_write.network_access` and `sandbox_workspace_write.writable_roots`
+  (Sandbox modes above), `features.sleep_tool` ("Sleep tool"), and `features.remote_plugin`
+  ("Remote-plugin isolation" — #591).
 
 ## Version policy
 
