@@ -347,12 +347,24 @@ def codex_version(timeout_seconds: int = 10) -> str | None:
     return run.stdout.strip() or None
 
 
+# The version probe's own wall-clock budget, deliberately far below the 10s floor a
+# caller's own deadline can be clamped to (config.MIN_TIMEOUT_SECONDS). The probe blocks
+# BEFORE the exec and its time is NOT deducted from the run's `timeout_seconds`, so it is
+# additive to what the caller was promised: at the default 10s budget a hung
+# `codex --version` would roughly double a minimum-length call (Copilot review of #519).
+# Deducting it from the run instead would be the worse trade -- it would shorten the paid
+# model run, spending a guaranteed good on an optional provenance field. Measured cost of
+# a healthy probe is ~30-40ms, so 2s is ~50x headroom for a slow or cold-cache machine
+# while bounding the worst case to a fifth of the shortest deadline.
+VERSION_PROBE_TIMEOUT_SECONDS = 2
+
+
 def probe_version_for_run(
     argv0: str,
     *,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
-    timeout_seconds: int = 10,
+    timeout_seconds: int = VERSION_PROBE_TIMEOUT_SECONDS,
 ) -> str | None:
     """The DISPLAY copy of `codex --version` for the executable a run is about to spawn.
 
@@ -368,8 +380,8 @@ def probe_version_for_run(
     (re-verified at codex-cli 0.151.0 -- see #519).
 
     Returns the sanitized, bounded copy `version_display` produces, or None on any
-    probe failure. A failed probe must never fail the run: the paid answer still ships,
-    honestly unstamped.
+    probe failure -- including exhausting its own short budget. A failed probe must never
+    fail the run: the paid answer still ships, honestly unstamped.
     """
     try:
         run = runtime.run_sync_capture(

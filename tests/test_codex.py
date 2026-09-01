@@ -2504,3 +2504,78 @@ async def test_a_raising_version_probe_still_lets_the_run_proceed(monkeypatch, t
     assert len(launched) == 1, "the paid run must still have been launched"
     assert result.run.exit_code == 0
     assert result.codex_version is None
+
+
+def test_the_version_probe_budget_is_small_against_the_shortest_run():
+    """The probe is ADDITIVE to the run's own deadline: it blocks before `run_async` and
+    its time is not deducted from `timeout_seconds`. So its budget must be small against
+    the shortest deadline a caller can ask for, or a hung `codex --version` roughly
+    doubles a minimum-length call (Copilot review of #519).
+
+    Pinned as a ratio against the real floor rather than as a bare literal, so raising the
+    budget or lowering the floor has to be a deliberate decision that trips this test."""
+    assert codex.VERSION_PROBE_TIMEOUT_SECONDS <= config.MIN_TIMEOUT_SECONDS / 4
+
+
+async def test_the_version_probe_uses_its_own_short_budget(monkeypatch, tmp_path):
+    """The bound has to reach the actual probe call, not just exist as a constant."""
+    seen: dict = {}
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        seen["timeout"] = timeout_seconds
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", _fake_exec())
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=600,
+    )
+    assert seen["timeout"] == codex.VERSION_PROBE_TIMEOUT_SECONDS
+
+
+async def test_a_hung_version_probe_still_lets_the_run_proceed(monkeypatch, tmp_path):
+    """A probe that exhausts its budget is a timed-out CommandRun, not a raise: the run
+    must still launch, unstamped."""
+    launched: list[list[str]] = []
+
+    def timing_out_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        from pontonier.core import runtime as _rt
+
+        return CommandRun("", _rt.TIMED_OUT, -9, timeout_seconds * 1000, True)
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        launched.append(list(cmd))
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", timing_out_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert len(launched) == 1
+    assert result.codex_version is None
