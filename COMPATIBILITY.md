@@ -284,7 +284,11 @@ registered by the ordinary `codex exec` tool planner, gated on the feature's `mo
 
 - `mode = "model_driven"` (the default) exposes it only when the selected model's
   `experimental_supported_tools` advertises `clock`. On 2026-09-01 that array is **empty for all
-  eight** slugs in the live `models_cache.json`, so no currently available model exposes it.
+  eight** slugs in the `models_cache.json` observed here. That cache is account-scoped and
+  backend-populated (see `KNOWN_MODEL_SLUGS`' provenance note in `cli_contract.py`), so the correct
+  reading is **"none of the eight models in the observed cache"** — not "no model anywhere". Another
+  account, or a later catalog refresh, could advertise `clock` and expose the tool with no CLI
+  change.
 - `mode = "always_on"` exposes it regardless of model metadata.
 
 **How that was established** (zero spend — the sink answers 400 before any model call). A local HTTP
@@ -301,7 +305,8 @@ captured outgoing request's `tools` array is the evidence, not the model's self-
 The positive control is what makes the first row evidence: without it, a blind capture and a genuine
 absence look identical. Do **not** record the absence as architectural — an earlier reading of this
 probe wrongly concluded the tool was interactive/app-server-only. It is on the `codex exec` code
-path; it was merely ungated for these models.
+path; the tool was simply **gated off** for these models, because none of them advertised
+`clock`.
 
 **Posture: assessed, left enabled, not sent.** The plugin does not send `--disable sleep_tool`
 today, because on the default path there is nothing to disable. That posture rests on **backend
@@ -325,11 +330,15 @@ consume the whole budget and turn a run that would have succeeded into a `timeou
 
 Codex **0.152.0** removed `update_plan` from the default tool set; `-c tools.update_plan.enabled=true`
 restores it (both confirmed by the same sink capture, 0.151.0 vs 0.152.0). This plugin references
-`update_plan` nowhere and parses the JSONL stream tolerantly, so nothing here depends on it.
+`update_plan` nowhere and parses the JSONL stream tolerantly, so **no contract or parser dependency
+here changed**. That is narrower than "nothing changed": the model-facing tool catalog genuinely
+did change, and a Codex run may behave differently for it — this plugin simply has no stake in the
+difference.
 
-It is recorded because of **how it was found, not what it was**: every `--help` surface and the whole
-`codex features list` diff were clean for this release, and this change is invisible to both. The
-model-facing request is a distinct surface. The sink capture in the section above is the only probe
+It is recorded because of **how it was found, not what it was**: every `--help` surface was
+byte-identical for this release, and the `codex features list` diff (four added rows, none removed)
+named nothing resembling this change — neither surface can see it at all. The model-facing request
+is a distinct surface. The sink capture in the section above is the only probe
 that sees it, so run it as an A/B — old binary and new — on every upgrade, and diff the `tools`
 array.
 
