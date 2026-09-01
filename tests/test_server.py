@@ -8691,10 +8691,12 @@ async def test_roots_resolve_live_over_the_mcp_boundary(clean_env, monkeypatch, 
     that advertises a root, and asserts the resolved workspace actually came from it,
     so a fastmcp/mcp upgrade that breaks the live probe fails here loudly.
 
-    Pinned to the legacy handshake era on purpose: the modern (2026-07-28) protocol has
-    no back-channel for the roots request, so roots resolve on handshake-era connections
-    only — the decided posture (ADR 0004 amendment, D5; see `_roots_from_ctx`). If this
-    test starts failing because that era gate moved, re-judge it there."""
+    Pinned to the legacy handshake era on purpose: `_roots_from_ctx` implements only the
+    push-style `session.list_roots()` probe, which needs the handshake era's back-channel.
+    The modern (2026-07-28) protocol still carries roots as an `InputRequiredResult`
+    round-trip, which this server does not implement — the decided posture (ADR 0004
+    amendment, D5). If this test starts failing because that era gate moved, re-judge it
+    there."""
     import os
 
     from fastmcp import Client

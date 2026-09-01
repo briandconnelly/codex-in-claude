@@ -56,6 +56,25 @@ _DISCOVER_SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
 # capture asserts it, so a framework move to another era fails the manifest loudly
 # instead of silently guarding a different surface.
 _MODERN_ERA = "2026-07-28"
+# The modern-only, contract-bearing wrapper fields on a list/read result (SEP-2549 cache
+# hints plus the result-type discriminator). Captured per covered method; everything
+# else in those results is either the era-neutral items or the release-variable `_meta`.
+_RESULT_ENVELOPE_FIELDS = ("resultType", "ttlMs", "cacheScope")
+# The static schema/contract resources the manifest reads on both eras. codex://models
+# is deliberately absent: its content is dynamic (see test_build_manifest_excludes_dynamic_fields).
+_STATIC_RESOURCE_URIS = (
+    "codex://error-envelope",
+    "codex://result-meta",
+    "codex://capabilities-result",
+    "codex://status-result",
+    "codex://params",
+)
+
+
+def _envelope_fields(result: Any) -> dict[str, Any]:
+    """The modern result-envelope wrapper fields of one list/read result, by wire name."""
+    wire = _dump(result)
+    return {k: wire[k] for k in _RESULT_ENVELOPE_FIELDS if k in wire}
 
 
 def _sorted_by_json(items: list[Any]) -> list[Any]:
@@ -153,6 +172,22 @@ async def build_manifest() -> dict[str, Any]:
                 f"{_MODERN_ERA!r}; the discover capture would guard the wrong era"
             )
         discover = _canonicalize(_dump(modern.session.discover_result))
+        # The modern era's result envelopes on the methods the caching spec covers
+        # (`server/utilities/caching`): the wrapper fields are contract-bearing and
+        # modern-only, while the items they wrap are era-neutral (pinned equal across
+        # eras by tests/test_manifest.py) and already guarded by the sections above.
+        modern_envelopes: dict[str, Any] = {
+            "tools/list": _envelope_fields(await modern.list_tools_mcp()),
+            "resources/list": _envelope_fields(await modern.list_resources_mcp()),
+            "resources/templates/list": _envelope_fields(
+                await modern.list_resource_templates_mcp()
+            ),
+            "prompts/list": _envelope_fields(await modern.list_prompts_mcp()),
+            "resources/read": {
+                uri: _envelope_fields(await modern.read_resource_mcp(uri))
+                for uri in _STATIC_RESOURCE_URIS
+            },
+        }
     discover_meta = discover.get("_meta")
     if isinstance(discover_meta, dict):
         discover_info = discover_meta.get(_DISCOVER_SERVER_INFO_META)
@@ -177,6 +212,7 @@ async def build_manifest() -> dict[str, Any]:
         "prompts": sorted(prompts, key=lambda p: p["name"]),
         "initialize": initialize,
         "discover": discover,
+        "modern_result_envelopes": modern_envelopes,
         "error_envelope": envelope,
         "result_meta": result_meta,
         "capabilities_result": capabilities_result,

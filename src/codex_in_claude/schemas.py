@@ -44,6 +44,12 @@ FINGERPRINT_COVERS: tuple[str, ...] = (
     # release-variable server version, which that era carries under `_meta` (#571). Both
     # eras are served and already disagree on the wire, so each is guarded on its own.
     "discover_response",
+    # The modern era's per-method result envelope on the list/read methods the caching
+    # spec covers — `resultType`/`ttlMs`/`cacheScope` on tools/list, resources/list,
+    # resources/templates/list, prompts/list, and resources/read. The items inside are
+    # era-neutral (a test pins them equal across eras) and are guarded by the sections
+    # above; only the modern-only wrapper fields are captured here (#571, Copilot review).
+    "modern_result_envelopes",
     "error_envelope_schema",  # codex://error-envelope content
     "result_meta_schema",  # codex://result-meta content
     "capabilities_result_schema",  # codex://capabilities-result content (#242)
@@ -248,8 +254,10 @@ CapabilitiesDetail = Literal["summary", "full", "contracts"]
 # "client" — the client advertised roots and list_roots() returned (possibly empty);
 # "not_negotiated" — this client never advertised the roots capability (pass
 # workspace_root instead); "probe_failed" — roots were advertised but the call
-# errored this turn (transient; retrying may help). Defined once here and imported
-# into server.py so the two modules cannot drift on the value set.
+# errored this turn (transient on a handshake-era connection; permanent on a
+# 2026-07-28 one, where this server's push-style probe cannot run — ADR 0004 D5).
+# Defined once here and imported into server.py so the two modules cannot drift on
+# the value set.
 RootsSource = Literal["client", "not_negotiated", "probe_failed"]
 # Lifecycle states for a background job. Terminal: done|failed|cancelled|timeout.
 # (TTL-expired records are deleted and reported as job_not_found, not a state.)
@@ -704,8 +712,10 @@ class Meta(BaseModel):
             "the roots capability and the probe returned, possibly an empty list), "
             "'not_negotiated' (this client never advertised the roots capability — pass "
             "workspace_root instead), or 'probe_failed' (roots were advertised but the call "
-            "errored this turn — retrying may help). Distinguishes a client limitation from "
-            "a transient failure, which a bare empty list could not. It reports the PROBE, "
+            "errored this turn; on a handshake-era connection retrying may help, on a "
+            "2026-07-28 connection it never will — this server's push-style probe cannot "
+            "run there, so pass workspace_root). Distinguishes a client limitation from a "
+            "probe failure, which a bare empty list could not. It reports the PROBE, "
             "not where the workspace came from — workspace_source answers that, and 'client' "
             "coexists with workspace_source 'param' (an explicit workspace_root wins over "
             "roots) or 'cwd' (the probe returned no usable root). WHEN PRESENT, which run it "

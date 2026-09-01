@@ -1059,12 +1059,15 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
     the MCP 2026-07-28 spec (final, not an RC) deprecates roots in favor of tool-argument
     scoping — see ADR 0004 for the migration plan.
 
-    On a modern (2026-07-28) connection the protocol has no back-channel for this request,
-    so the probe below raises every turn and this reports `probe_failed`: roots resolve on
-    handshake-era connections only. That is the decided posture (ADR 0004 amendment, D5):
-    the production client (Claude Code) negotiates the handshake era and advertises roots,
-    so the capability stays; a dedicated modern-era source value is deferred because it
-    would widen a Literal that persisted job results carry."""
+    On a modern (2026-07-28) connection there is no server-initiated back-channel, so the
+    push-style `session.list_roots()` probe below raises every turn and this reports
+    `probe_failed`. That is a limit of THIS probe, not of the protocol: 2026-07-28 still
+    carries `roots/list` (deprecated, SEP-2577) as an `InputRequiredResult.input_requests`
+    round-trip, which this server does not implement — so roots resolve on handshake-era
+    connections only. That is the decided posture (ADR 0004 amendment, D5): the production
+    client (Claude Code) negotiates the handshake era and advertises roots, so the
+    capability stays; the round-trip path and a dedicated modern-era source value are
+    deferred (the latter would widen a Literal that persisted job results carry)."""
     if ctx is None:
         return [], "not_negotiated"
     try:
