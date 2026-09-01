@@ -708,6 +708,36 @@ def _extra_args_drift_match(extra: config.ExtraArgs | None, *texts: str | None) 
     return matched or None
 
 
+# Prose for a run whose output capture failed (pontonier 0.8.0 `CommandRun.capture_failed`,
+# #579). The flag is STREAM-NEUTRAL — either pump thread (stdout or stderr) dying sets it,
+# and nothing records which — so the prose claims only what the flag proves: a capture
+# thread died, output written after that (if any) was not read, and a child left writing
+# into an undrained pipe can block until the deadline. Every consequence is hedged.
+# It never changes a classification here (the answer channel is the last-message file,
+# not stdout); it only names the fault in the two branches whose diagnosis a lost stream
+# can mislead. All of it is `error.message`/`repair.alternative` prose, outside the
+# discovered surface, so none of it moves FINGERPRINT.
+_CAPTURE_FAILED_TIMEOUT_MESSAGE = (
+    "codex exceeded the timeout, and the plugin's output capture failed mid-run (a capture "
+    "thread died). Codex may have been blocked on an undrained pipe rather than slow, so this "
+    "may be a bridge fault rather than a model timeout."
+)
+# Overrides the table's timeout alternative, which says the same sync call will likely time
+# out again — true of a slow model, not of a capture fault. Machine fields (code, next_step,
+# temporary) stay the table's.
+_CAPTURE_FAILED_TIMEOUT_ALTERNATIVE = (
+    "Retry the same call once first: if the capture failure caused this timeout, the retry "
+    "may finish normally. If it times out again without this notice, treat it as an ordinary "
+    "timeout — prefer the matching async tool (codex_consult_async / "
+    "codex_review_changes_async / codex_delegate_async), or narrow the task or raise "
+    "timeout_seconds."
+)
+_CAPTURE_FAILED_EXIT_NOTE = (
+    " (the plugin's output capture failed mid-run, so part of codex's output may have been "
+    "lost and this diagnosis may be incomplete)"
+)
+
+
 def classify_failure(
     run: CommandRun,
     *,
@@ -760,6 +790,18 @@ def classify_failure(
             "The `codex` CLI was not found; run codex_status for the resolution detail.",
         )
     if run.timed_out:
+        if run.capture_failed:
+            # One of the plugin's own capture threads died mid-run (pontonier 0.8.0
+            # `capture_failed`, #579). Nothing drained that pipe afterwards, so a codex still
+            # writing to it blocks until the deadline: a bridge fault wearing a timeout's
+            # shape. Hedged, because the flag cannot rule out a genuine slow run alongside
+            # it. Prose only (message + repair alternative): neither is part of the
+            # discovered surface, so no FINGERPRINT bump.
+            return make_error(
+                "timeout",
+                _CAPTURE_FAILED_TIMEOUT_MESSAGE,
+                repair_alternative=_CAPTURE_FAILED_TIMEOUT_ALTERNATIVE,
+            )
         return make_error("timeout", "codex exceeded the timeout.")
     event_error = normalize.extract_error_message(events) if events else None
     # `--strict-config` rejections are classified FIRST, from stderr alone (#524). Codex
@@ -847,4 +889,11 @@ def classify_failure(
     # as removing them.
     raw = (event_error or run.stderr or run.stdout).strip()
     detail = (sanitize(raw) if sanitize is not None else redaction.sanitize_echo_prose(raw))[:300]
-    return make_error("nonzero_exit", f"codex exited {run.exit_code}: {detail}")
+    message = f"codex exited {run.exit_code}: {detail}"
+    if run.capture_failed:
+        # Appended AFTER the 300-char cut so a verbose echo cannot truncate it away. Which
+        # stream was lost is unknown (#579): the JSONL error event that normally carries the
+        # cleanest diagnosis, or the stderr this echo may be reading — either way the text
+        # above may be incomplete, and the agent should not over-read it.
+        message += _CAPTURE_FAILED_EXIT_NOTE
+    return make_error("nonzero_exit", message)

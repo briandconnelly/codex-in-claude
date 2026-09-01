@@ -85,6 +85,26 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   and run with fastmcp's compat bridge OFF, so a camelCase read fails today instead of on the
   FastMCP 5 upgrade.
 
+### Fixed
+
+- **A run whose output capture failed now says so instead of reading as a slow model or a bare
+  crash** (#579): `pontonier` 0.8.0's `CommandRun.capture_failed` is set when one of the plugin's
+  own capture threads (stdout or stderr -- the flag does not say which) dies. Forced against the
+  pinned release, that produces two shapes on the model-bearing path -- a clean exit 0 with an
+  empty event stream and an intact `--output-last-message` file, or, when codex keeps writing, a
+  child blocked on the undrained pipe until the deadline and a `timeout` that is really a bridge
+  fault. `classify_failure` now names the lost capture in exactly those two places, hedged to what
+  the flag proves: the `timeout` message says codex may have been blocked rather than slow, and
+  its `repair.alternative` says to retry the same call once before treating it as an ordinary
+  timeout (the table's alternative, which assumes a retry will time out again, is overridden for
+  this case only); the generic `nonzero_exit` message notes that part of the output may have been lost and
+  its diagnosis may be incomplete. No classification changes -- a recognizable auth, drift, or
+  rate-limit signature still wins -- and the success path deliberately ignores the flag: the
+  answer is the file, so a dead capture thread costs at most the stream-derived
+  `usage`/`session_id`, which read as absent as they are documented to. These are
+  `error.message`/`repair.alternative` prose changes outside the discovered surface, so the
+  `fingerprint` does not move.
+
 ## [0.22.0] - 2026-08-31
 
 An install-repair and hardening release. The headline is the dependency cap: fastmcp 4.0.0

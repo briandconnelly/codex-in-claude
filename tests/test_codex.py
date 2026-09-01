@@ -2147,3 +2147,116 @@ def test_classify_shared_dash_c_stays_contract_changed_for_any_plugin_owned_key(
         plugin_config_keys=frozenset({cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY}),
     )
     assert err.code == "cli_contract_changed"
+
+
+# --- classify_failure(run.capture_failed): a lost capture is named, never reclassified ---
+# pontonier 0.8.0's `CommandRun.capture_failed` is set when a pump thread died (#579). The
+# answer channel here is the last-message file, so it changes no classification: it only
+# adds prose to the two branches whose diagnosis it can mislead. Both notes are asserted
+# against a no-flag control so they are proven conditional, not merely present.
+
+
+def test_classify_timeout_with_capture_failed_names_the_lost_capture():
+    # Shape B (#579): the pump died, codex blocked on the full pipe, and the run hit the
+    # deadline. Without the note the agent reads a bridge fault as a slow model.
+    flagged = codex.classify_failure(
+        CommandRun("", codex.runtime.TIMED_OUT, -9, 1, True, capture_failed=True)
+    )
+    control = codex.classify_failure(CommandRun("", codex.runtime.TIMED_OUT, -9, 1, True))
+    assert flagged.code == control.code == "timeout"
+    assert flagged.temporary and control.temporary
+    assert flagged.repair.next_step == control.repair.next_step  # machine fields untouched
+    assert "capture failed" in flagged.message
+    assert "capture failed" not in control.message
+    # The table's alternative says a retry will likely time out again — wrong for a capture
+    # fault — so the flagged envelope overrides it and must not contradict its own message.
+    assert flagged.repair.alternative != control.repair.alternative
+    assert "once" in (flagged.repair.alternative or "")
+    assert "codex_consult_async" in (flagged.repair.alternative or "")
+    # Hedged: the flag proves a capture thread died, not that a retry cannot hit it again
+    # or that this run was not also genuinely slow.
+    assert "may finish normally" in (flagged.repair.alternative or "")
+    assert "may be a bridge fault" in flagged.message
+
+
+def test_classify_nonzero_generic_with_capture_failed_notes_stderr_only():
+    flagged = codex.classify_failure(CommandRun("", "boom", 1, 1, False, capture_failed=True))
+    control = codex.classify_failure(CommandRun("", "boom", 1, 1, False))
+    assert flagged.code == control.code == "nonzero_exit"
+    assert "boom" in flagged.message
+    assert "capture failed" in flagged.message
+    assert "capture failed" not in control.message
+    # Hedged: the flag does not prove codex wrote anything after the thread died.
+    assert "may have been lost" in flagged.message
+
+
+def test_classify_nonzero_generic_capture_failed_note_survives_the_detail_cap():
+    # The stderr echo is cut at 300 chars; the note is appended AFTER the cut, so a verbose
+    # stderr cannot truncate it away.
+    err = codex.classify_failure(CommandRun("", "x" * 1000, 1, 1, False, capture_failed=True))
+    assert err.code == "nonzero_exit"
+    assert "capture failed" in err.message
+
+
+def test_classify_capture_failed_does_not_preempt_signature_classification():
+    # The flag adds prose to two branches only. A recognizable failure on stderr still
+    # classifies by its signature — an auth failure is not downgraded to nonzero_exit.
+    err = codex.classify_failure(
+        CommandRun("", "Not logged in. Run `codex login`", 1, 1, False, capture_failed=True)
+    )
+    assert err.code == "codex_auth_required"
+    assert "capture failed" not in err.message
+
+
+@pytest.mark.anyio
+async def test_run_codex_exec_capture_failed_exit_zero_still_reads_last_message(
+    monkeypatch, tmp_path
+):
+    # Shape A of #579 end to end: the capture died (empty stream, capture_failed=True) but
+    # codex exited 0 and wrote --output-last-message. run_codex_exec must still read the
+    # file, and the shipping finalizer must report success with the metadata honestly null.
+    from codex_in_claude import orchestration
+    from codex_in_claude.schemas import Meta
+
+    async def fake_run_async(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        out_path = cmd[cmd.index("--output-last-message") + 1]
+        Path(out_path).write_text("THE ANSWER")
+        return CommandRun("", "", 0, 7, False, capture_failed=True)
+
+    monkeypatch.setattr(codex.runtime, "run_async", fake_run_async)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert result.run.capture_failed is True
+    assert result.events == ""
+    assert result.last_message == "THE ANSWER"
+    meta = Meta(
+        cwd=str(tmp_path),
+        tier="consult",
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+        elapsed_ms=0,
+    )
+    out = orchestration.finalize_consult(result, meta=meta)
+    assert out["ok"] is True
+    assert out["summary"] == "THE ANSWER"
+    assert out["meta"]["usage"] is None
+    assert out["meta"]["session_id"] is None
