@@ -47,6 +47,15 @@ _RELEASE_VARIABLE_EXCLUDE = frozenset({"version", "server_version"})
 # changes precisely BECAUSE a covered category changed, so listing it would mislead.
 _SELF_REFERENTIAL_EXCLUDE = frozenset({"fingerprint"})
 _CAPABILITIES_EXCLUDE = _RELEASE_VARIABLE_EXCLUDE | _SELF_REFERENTIAL_EXCLUDE
+# Where the modern (2026-07-28) era carries the server identity: `server/discover` has no
+# top-level `serverInfo`; it rides `_meta` under this key. Its `version` is the same
+# release-variable value the legacy capture pops from `serverInfo` — the one disclosed
+# carve-out (`serverInfo.version` in `_FINGERPRINT_COVERS_DESC`) covers both carriers.
+_DISCOVER_SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+# The era a default fastmcp 4 client negotiates against this server. The discover
+# capture asserts it, so a framework move to another era fails the manifest loudly
+# instead of silently guarding a different surface.
+_MODERN_ERA = "2026-07-28"
 
 
 def _sorted_by_json(items: list[Any]) -> list[Any]:
@@ -99,11 +108,11 @@ def _envelope_block(content: Any) -> dict[str, Any]:
 
 async def build_manifest() -> dict[str, Any]:
     """Assemble the normalized, canonical agent-visible surface manifest."""
-    # mode="legacy": fastmcp 4's default (`mode="auto"`) negotiates the modern
-    # (server/discover) era, where `initialize_result` is None and the capture below
-    # would lose the initialize section this snapshot guards. Pinning the handshake era
-    # keeps today's snapshot semantics; whether the guarded surface should become the
-    # modern `DiscoverResult` is #571's decision (#570).
+    # Both protocol eras are served and guarded (#571, ADR 0004 D3). mode="legacy" pins
+    # the `initialize` handshake — what today's production client negotiates — so the
+    # initialize section keeps its semantics; a second, default-mode client below
+    # captures the modern era's `server/discover` result, which is its own section
+    # because the two eras already disagree on the wire (e.g. `listChanged`).
     async with Client(mcp, mode="legacy") as client:
         tools = [_canonicalize(_dump(t)) for t in await client.list_tools()]
         resources = [_canonicalize(_dump(r)) for r in await client.list_resources()]
@@ -133,6 +142,23 @@ async def build_manifest() -> dict[str, Any]:
         # or a moved-detail change then moves the snapshot and is flagged for review.
         params = [_envelope_block(c) for c in await client.read_resource("codex://params")]
 
+    # The modern era: a default client probes `server/discover` and adopts 2026-07-28.
+    # Its result is the whole discovered contract for that era — supported versions,
+    # advertised capabilities, instructions, and the cache hints the era makes mandatory
+    # — minus the release-variable server version (see _DISCOVER_SERVER_INFO_META).
+    async with Client(mcp) as modern:
+        if modern.protocol_version != _MODERN_ERA:  # pragma: no cover - guard
+            raise RuntimeError(
+                f"the default client negotiated {modern.protocol_version!r}, not "
+                f"{_MODERN_ERA!r}; the discover capture would guard the wrong era"
+            )
+        discover = _canonicalize(_dump(modern.session.discover_result))
+    discover_meta = discover.get("_meta")
+    if isinstance(discover_meta, dict):
+        discover_info = discover_meta.get(_DISCOVER_SERVER_INFO_META)
+        if isinstance(discover_info, dict):
+            discover_info.pop("version", None)
+
     # detail="full" is explicit and load-bearing here, not a stylistic default-follow: the
     # manifest exists to guard the FULL agent-visible surface, and use_when/returns/
     # required_params/key_optional_params live ONLY inside codex_capabilities' own output —
@@ -150,6 +176,7 @@ async def build_manifest() -> dict[str, Any]:
         "resource_templates": sorted(templates, key=lambda t: t["uriTemplate"]),
         "prompts": sorted(prompts, key=lambda p: p["name"]),
         "initialize": initialize,
+        "discover": discover,
         "error_envelope": envelope,
         "result_meta": result_meta,
         "capabilities_result": capabilities_result,

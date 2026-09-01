@@ -10,7 +10,7 @@ from codex_in_claude import manifest, server
 _FIXTURE = Path(__file__).parent / "fixtures" / "manifest_snapshot.json"
 
 # sha256 of the canonical manifest JSON; regenerate per the test failure message.
-EXPECTED_MANIFEST_HASH = "a1afe429395a86fe7c95e7d6a96cf9e1c3ebfbd18ba44166df09673c89531772"
+EXPECTED_MANIFEST_HASH = "2069554cc22b65cdf89dae3f72cbfc53868846cf6c3bab0bcfc44cc4e6f18629"
 
 
 def test_canonicalize_strips_only_fastmcp_meta():
@@ -90,6 +90,7 @@ async def test_fingerprint_covers_accounts_for_every_section():
         "resource_templates": {"resource_templates"},
         "prompts": {"prompts"},
         "initialize": {"initialize_response"},
+        "discover": {"discover_response"},
         "error_envelope": {"error_envelope_schema"},
         "result_meta": {"result_meta_schema"},
         "capabilities_result": {"capabilities_result_schema"},
@@ -260,6 +261,52 @@ async def test_build_manifest_captures_initialize_without_version():
     assert "version" not in init.get("serverInfo", {})
     assert init.get("protocolVersion")
     assert "capabilities" in init
+
+
+_DISCOVER_SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+
+
+async def test_build_manifest_captures_discover_without_version():
+    """The modern (2026-07-28) era is served surface: a default fastmcp 4 client
+    negotiates it through `server/discover`, whose result is that era's whole
+    discovered contract — supported versions, advertised capabilities, instructions,
+    and the cache hints the era makes mandatory. It is guarded as its own section
+    (#571) because the two eras already disagree on the wire (e.g. `listChanged`),
+    so the legacy `initialize` capture cannot stand in for it. Minus only the
+    release-variable server version, which rides `_meta` on this era."""
+    m = await manifest.build_manifest()
+    disc = m["discover"]
+    assert disc["supportedVersions"] == ["2026-07-28"]
+    assert "capabilities" in disc
+    assert disc.get("instructions")
+    # The era's mandatory cache hints are part of the discovered contract.
+    assert "ttlMs" in disc
+    assert disc["cacheScope"] in {"public", "private"}
+    info = disc["_meta"][_DISCOVER_SERVER_INFO_META]
+    assert info["name"] == "codex-in-claude"
+    assert "version" not in info
+
+
+async def test_manifest_drops_exactly_the_declared_discover_server_info_fields():
+    """Same widening guard as the initialize one above, for the modern era's
+    server-identity carrier: only `version` is popped from the discover `_meta`
+    serverInfo, so equality against the live value catches a second pop."""
+    m = await manifest.build_manifest()
+    async with Client(server.mcp, mode="auto") as client:
+        assert client.protocol_version == "2026-07-28"
+        live = manifest._dump(client.session.discover_result)
+    live_info = live["_meta"][_DISCOVER_SERVER_INFO_META]
+    dropped = set(live_info) - set(m["discover"]["_meta"][_DISCOVER_SERVER_INFO_META])
+    assert dropped == {"version"}
+
+
+async def test_the_two_eras_disagree_so_both_captures_are_load_bearing():
+    """Positive control for guarding both eras: if the legacy `initialize` and the
+    modern `discover` captures ever agreed on the advertised capabilities, one of them
+    would be redundant. Today they do not (fastmcp 4 advertises `listChanged` only on
+    the handshake era), which is exactly why the discover section exists (#571)."""
+    m = await manifest.build_manifest()
+    assert m["initialize"]["capabilities"] != m["discover"]["capabilities"]
 
 
 async def test_build_manifest_strips_fastmcp_meta_from_tools():

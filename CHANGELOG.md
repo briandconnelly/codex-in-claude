@@ -7,6 +7,30 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The served contract is written against MCP `2026-07-28`, on both protocol eras** (#571,
+  ADR 0004 amendment): fastmcp 4 serves the legacy `initialize` handshake and the modern
+  `server/discover` era side by side with no knob to restrict either, so this release makes the
+  modern path conformant instead of merely tolerated. A `resources/read` of an unknown URI now
+  returns the era-correct numeric — still `-32002` on a handshake-era connection (what Claude Code
+  negotiates today: a live capture of 2.1.252 shows `initialize` at `2025-11-25`, roots advertised,
+  and no `server/discover` on stdio), and `-32602` on a `2026-07-28` connection, whose spec forbids
+  `-32002` (SEP-2164); the `error.data` envelope is identical on both, and
+  `resource_error_carrier` states both numerics with their eras. The manifest snapshot gains a
+  `discover` section (the modern era's supported versions, capabilities, instructions, and
+  `ttlMs`/`cacheScope` hints, minus the release-variable server version), disclosed as the new
+  `fingerprint_covers` token `discover_response` — the two eras already disagree on the wire
+  (`listChanged`), so the legacy capture could not stand in for it. `protocol_revision` moves to
+  `2026-07-28` and its SDK-drift guard is strict again (#570 had pinned the gap). Roots stay a
+  handshake-era fallback (`probe_failed` on modern connections, unchanged); a dedicated modern-era
+  `roots_source` value, cache-hint tuning, and the tasks extension are deferred and recorded in the
+  ADR. The result `fingerprint` moves `schema-88` -> `schema-89`. **Breaking** for a client on a
+  `2026-07-28` connection that matched resource-not-found on the numeric: `resource_error_carrier`
+  documented `-32002` with no era qualifier while the server served both eras, so the modern
+  value moving to `-32602` narrows a documented guarantee (AGENTS.md § Versioning; the safe
+  direction, per #193). The handshake-era value is unchanged, and `error.data.code ==
+  "resource_not_found"` is stable on both eras — classify on that, as the carrier now says.
+  `protocol_revision` is documented as the target, not a per-session promise, and is not itself
+  breaking.
 - **Ported to fastmcp 4.0.0 / mcp 2.1.1** (#570): dependency caps move to `fastmcp>=4.0,<4.1`
   plus an explicitly declared `mcp>=2.1,<2.2` (imported directly; previously ridden as a
   transitive dependency — the class of gap that caused #572). The mechanical surface: the SDK's

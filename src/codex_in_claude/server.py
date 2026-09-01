@@ -31,7 +31,8 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
 from mcp import MCPError
 from mcp.shared.exceptions import MCPDeprecationWarning
-from mcp.types import INTERNAL_ERROR
+from mcp.types import INTERNAL_ERROR, INVALID_PARAMS
+from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
@@ -686,14 +687,35 @@ class _ArgumentValidationMiddleware(Middleware):
 mcp.add_middleware(_ArgumentValidationMiddleware())
 
 # Resource-read error envelope (#181/F9) ------------------------------------- #
-# MCP numeric error code for "resource not found", as documented on this server's
-# `resource_error_carrier`. -32002 is the 2025-11-25-era value; MCP 2026-07-28
-# renumbers it to -32602 (SEP-2164) and fastmcp 4's own core followed on every era,
-# so this constant is an acknowledged divergence held deliberately at the documented
-# value until #571 migrates the era contract (pinned per-era by
-# test_unknown_resource_read_code_is_pinned_on_both_eras). Read failures reuse the
-# JSON-RPC standard INTERNAL_ERROR (-32603).
-_MCP_RESOURCE_NOT_FOUND = -32002
+# MCP numeric error codes for "resource not found", as documented on this server's
+# `resource_error_carrier`. The value is era-bound: 2025-11-25 and earlier define
+# -32002; MCP 2026-07-28 renumbers it to -32602 (SEP-2164) and lists -32002 under
+# "MUST NOT emit". The server serves both eras (fastmcp 4 offers no restriction), so
+# the middleware picks per connection from the negotiated version (#571, ADR 0004 D2;
+# pinned per era by test_unknown_resource_read_code_is_pinned_per_era). Read failures
+# reuse the JSON-RPC standard INTERNAL_ERROR (-32603) on either era.
+_MCP_RESOURCE_NOT_FOUND_HANDSHAKE = -32002
+_MCP_RESOURCE_NOT_FOUND_MODERN = INVALID_PARAMS  # -32602
+
+
+def _resource_not_found_code(context: object) -> int:
+    """The era-correct "resource not found" numeric for the connection behind ``context``.
+
+    Walks ``context.fastmcp_context.request_context.protocol_version`` — the same hop
+    fastmcp's own ``Context._is_modern_protocol`` reads — and keys on the SDK's
+    ``MODERN_PROTOCOL_VERSIONS`` rather than restating the era boundary here, so an SDK
+    that adds a modern revision is honored without an edit. Every hop is defensive:
+    the SDK's ``request_context`` is ``None`` before a session exists, and the unit
+    tests drive the middleware with a bare stand-in. Anything short of positive
+    evidence of a modern connection resolves to the handshake-era value, which is the
+    documented default — the renumbering is emitted only on a connection whose spec
+    forbids the old code."""
+    fastmcp_context = getattr(context, "fastmcp_context", None)
+    request_context = getattr(fastmcp_context, "request_context", None)
+    version = getattr(request_context, "protocol_version", None)
+    if version in MODERN_PROTOCOL_VERSIONS:
+        return _MCP_RESOURCE_NOT_FOUND_MODERN
+    return _MCP_RESOURCE_NOT_FOUND_HANDSHAKE
 
 
 class _ResourceErrorMiddleware(Middleware):
@@ -711,7 +733,9 @@ class _ResourceErrorMiddleware(Middleware):
 
     Exception routing is deliberate and ordered (per a cross-model design review):
     - ``NotFoundError``/``DisabledError`` (unknown or disabled URI) → ``resource_not_found``
-      with MCP numeric -32002. FastMCP maps both to "resource not found" itself, so we match.
+      with the era-correct MCP numeric (``_resource_not_found_code``: -32002 on a
+      handshake-era connection, -32602 on a modern one). FastMCP maps both exceptions to
+      "resource not found" itself, so we match its classification.
     - ``ResourceError`` (a resource function raised; the core wraps arbitrary handler
       exceptions into this) → ``internal_error`` with -32603.
     - Any ``MCPError`` an inner layer already raised is re-raised untouched — never
@@ -731,7 +755,10 @@ class _ResourceErrorMiddleware(Middleware):
             return await call_next(context)
         except (NotFoundError, DisabledError) as exc:
             raise self._envelope_error(
-                "resource_not_found", _MCP_RESOURCE_NOT_FOUND, "Resource not found.", uri
+                "resource_not_found",
+                _resource_not_found_code(context),
+                "Resource not found.",
+                uri,
             ) from exc
         except ResourceError as exc:
             raise self._envelope_error(
@@ -1034,8 +1061,10 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
 
     On a modern (2026-07-28) connection the protocol has no back-channel for this request,
     so the probe below raises every turn and this reports `probe_failed`: roots resolve on
-    legacy connections only. Today's production client (Claude Code) negotiates legacy;
-    the modern-era roots posture is #571's decision."""
+    handshake-era connections only. That is the decided posture (ADR 0004 amendment, D5):
+    the production client (Claude Code) negotiates the handshake era and advertises roots,
+    so the capability stays; a dedicated modern-era source value is deferred because it
+    would widen a Literal that persisted job results carry."""
     if ctx is None:
         return [], "not_negotiated"
     try:
@@ -1050,11 +1079,11 @@ async def _roots_from_ctx(ctx: Context | None) -> tuple[list[str], RootsSource]:
     if params is None or getattr(params.capabilities, "roots", None) is None:
         return [], "not_negotiated"
     try:
-        # Workaround for the fastmcp 4 port (#570): `Context.list_roots()` is removed, and
-        # the SDK session method is the sanctioned legacy path until roots leave the spec
-        # (deprecated by SEP-2577, removable 2027-07-28 at the earliest — ADR 0004; the
-        # migration decision is #571). The `ty: ignore` here and the module-level warning
-        # filter beside the imports both annotate that same deliberate choice.
+        # fastmcp 4 removed `Context.list_roots()` (#570); the SDK session method is the
+        # sanctioned handshake-era path until roots leave the spec (deprecated by
+        # SEP-2577, removable 2027-07-28 at the earliest — ADR 0004, kept by its
+        # amendment's D5). The `ty: ignore` here and the module-level warning filter
+        # beside the imports both annotate that same deliberate choice.
         roots = (await ctx.session.list_roots()).roots  # ty: ignore[deprecated]
     except Exception:
         return [], "probe_failed"
@@ -2540,7 +2569,7 @@ def codex_capabilities(
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
         deprecation_policy="Pre-1.0: minor versions may change the agent-visible "
         "surface; the fingerprint changes when they do.",
-        protocol_revision="2025-11-25",
+        protocol_revision="2026-07-28",
     )
     # Inject per-tool error codes from the single source of truth; KeyError here
     # means a newly advertised tool is missing from _TOOL_ERROR_CODES. Strip any
