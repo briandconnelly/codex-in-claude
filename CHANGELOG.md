@@ -36,8 +36,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   in `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#587): the second entry of a new
   `cli_contract.MODEL_RUN_DISABLED_FEATURES` inventory, next to `remote_plugin`, from which both
   the `codex exec` argv and the passthrough denylist now derive. Codex 0.152.0's native
-  `clock.sleep` tool accepts a single `duration_ms` of up to 12 hours -- longer than either run
-  deadline -- so one call could turn a run that would have succeeded into a `timeout` (spend
+  `clock.sleep` tool accepts a single `duration_ms` of up to 12 hours -- beyond both run
+  deadlines even at their configurable maxima (sync 600s, async 7,200s) -- so one call could
+  turn a run that would have succeeded into a `timeout` (spend
   without result). Its exposure was gated only by backend-served model metadata that can change
   with no CLI upgrade, so the plugin now pins the posture itself. This is **spend hygiene, not a
   containment guarantee**: it removes the advertised native affordance, not the model's ability to

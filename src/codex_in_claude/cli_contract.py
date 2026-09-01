@@ -238,8 +238,10 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 
 # --- Sleep-tool suppression (issue #587) ------------------------------------------
 # Codex 0.152.0 added a `sleep_tool` feature (stage `stable`, default on) that can expose a
-# `clock.sleep` tool whose `duration_ms` is documented up to 43,200,000 (12 hours) — longer
-# than either of this server's run deadlines (sync 300s, async 1800s). Exposure is gated on
+# `clock.sleep` tool whose `duration_ms` is documented up to 43,200,000 (12 hours) — beyond
+# both of this server's run deadlines even at their configurable maxima (sync is clamped to
+# 600s by `config.clamp_timeout`, async to 7,200s by `config.job_max_seconds`; the defaults
+# are 300s/1,800s). Exposure is gated on
 # the feature's `mode`: the default `model_driven` requires the selected model to advertise
 # `clock` in its backend-served `experimental_supported_tools` (empty for every cached slug on
 # 2026-09-01), and `always_on` exposes it regardless. That gate is account-scoped backend
