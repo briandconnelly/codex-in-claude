@@ -32,6 +32,57 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`codex-cli 0.152.0` is the supported version** (#586): `SUPPORTED_VERSIONS` moves
+  `{0.151}` -> `{0.152}`, so `codex_status` no longer warns "outside the tested set" on a machine
+  running 0.152.x. It is a **replacement**, not an addition -- the project tracks a single verified
+  minor. No agent-visible surface changed, so the `fingerprint` does not move. The
+  `docs/UPGRADING-CODEX.md` checks were run against the installed 0.152.0 with 0.151.0 retrieved
+  side by side from npm (channel parity confirmed against a same-version npm copy): the mechanical
+  drift check is clean (all 12 `ALWAYS_SEND` flags, the
+  help-gated `--model`, and all three sandbox values present, no new unconsumed flag); every
+  captured `--help` surface -- `codex`, `exec`, `review`, `exec review`, and `app-server` -- is
+  byte-identical between the two binaries; `codex features list` gained four rows and lost none;
+  `KNOWN_MODEL_SLUGS` still matches the live cache (the same eight slugs, reasoning-effort
+  discovery fields unchanged in shape); the app-server schema diff added one v2 message this plugin
+  does not consume (`AuthRecoveryNotification`) and left six of the seven consumed schemas
+  byte-identical, with `GetAccountRateLimitsResponse` gaining two optional additive fields
+  (`accountId`, `rateLimitUpsell`) the key-based reader ignores; the `--strict-config`,
+  retired-setting, and invalid-value grammars all still parse; the two sandbox pins
+  (`network_access`, `writable_roots`) hold against both the config file and a `--profile`, each
+  with a live positive control; the reasoning-effort key is still applied (both bracketed rejection
+  markers); `--sandbox read-only` still blocks writes and `--output-last-message` still receives
+  the final message (each with a live positive control); the `SandboxWorkspaceWrite` field set is
+  unchanged between the two binaries, so no new widening key arrived; the live app-server
+  rate-limit read still returns a quota block (`test_live_rate_limits_read_roundtrip`); all four
+  `remote_plugin` mechanism arms still hold, positive control included; structured output still
+  conforms; and the implicit-context presence matrix is identical across both binaries on every row
+  and every variant. The read-boundary probe was **not** re-run: it is prescribed only when a
+  release touches the sandbox, `--sandbox` values, or filesystem access, and every one of those
+  surfaces is byte-identical here. `docs/codex-help/0.152.0/` carries the captures from the binary
+  actually verified, and the 19 live integration tests pass against it.
+
+- **`sleep_tool` assessed and recorded; the posture is unchanged** (#586): 0.152.0 added a
+  `stable`, default-on `sleep_tool` feature that can expose a `clock` tool namespace whose `sleep`
+  function accepts a `duration_ms` of up to 43,200,000 (12 hours) -- longer than either of this
+  server's deadlines. Captured wire requests (zero spend, with a positive control) show it is
+  **not** exposed on the default `codex exec` path at 0.152.0: exposure is gated on the feature's
+  `mode`, and under the default `model_driven` it requires the selected model to advertise `clock`
+  in `experimental_supported_tools`, which is empty for all eight slugs in the model cache observed
+  here. That cache is account-scoped, so this says nothing about other accounts or later catalog
+  refreshes.
+  Setting `mode = "always_on"` does expose it, and `--disable sleep_tool` removes it again. The
+  plugin therefore sends no new flag; because the posture rests on backend model metadata that can
+  change with no CLI upgrade, adopting the disable is tracked separately as a deliberate behavior
+  change. `COMPATIBILITY.md` records the mechanism, the probe, and the re-check.
+
+- **Recorded that 0.152.0 drops `update_plan` from the default tool set** (#586): restored with
+  `-c tools.update_plan.enabled=true`. Nothing here references `update_plan` and JSONL parsing is
+  tolerant, so no contract or parser dependency here changed -- though the model-facing tool
+  catalog itself did, and that is an upstream behavior change this bridge simply has no stake in.
+  It is documented because neither the `--help` surfaces (byte-identical) nor the `features list`
+  diff (four added rows) can see it at all -- the model-facing request is a separate surface, and
+  `COMPATIBILITY.md` now names the probe that observes it.
+
 - **The sync-probe spawn shim is gone; `pontonier` pins to `0.8.0`** (#577): `probe.py` existed only
   because `pontonier` 0.7.0's `run_sync_capture` wrapped spawn and drain in one `try` and caught just
   `(FileNotFoundError, NotADirectoryError)`, so an unusable `codex` on `PATH` -- an executable

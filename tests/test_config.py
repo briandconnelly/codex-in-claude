@@ -138,7 +138,16 @@ def test_placeholder_env_vars(clean_env):
 
 @pytest.mark.parametrize(
     "version,expected",
-    [("codex-cli 0.151.0", True), ("codex-cli 0.999.0", False), ("garbage", None), (None, None)],
+    [
+        ("codex-cli 0.152.0", True),
+        # The tracked minor is REPLACED on an upgrade, never accumulated (docs/UPGRADING-CODEX.md
+        # step 3). Without this case an accidental `{(0, 151), (0, 152)}` would pass unnoticed,
+        # leaving an unverified minor silently supported.
+        ("codex-cli 0.151.0", False),
+        ("codex-cli 0.999.0", False),
+        ("garbage", None),
+        (None, None),
+    ],
 )
 def test_version_supported(version, expected, clean_env):
     assert config.version_supported(version) is expected
@@ -147,12 +156,12 @@ def test_version_supported(version, expected, clean_env):
 def test_supported_versions_env_override(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "0.999")
     assert config.version_supported("codex-cli 0.999.3") is True
-    assert config.version_supported("codex-cli 0.151.0") is False
+    assert config.version_supported("codex-cli 0.152.0") is False
 
 
 def test_supported_versions_bad_env_falls_back(clean_env):
     clean_env.setenv("CODEX_IN_CLAUDE_SUPPORTED_VERSIONS", "garbage")
-    assert config.version_supported("codex-cli 0.151.0") is True
+    assert config.version_supported("codex-cli 0.152.0") is True
 
 
 def test_state_dir_default(clean_env, monkeypatch):

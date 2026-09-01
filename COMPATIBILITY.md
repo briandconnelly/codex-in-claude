@@ -6,7 +6,7 @@ incorporating one takes the lockstep procedure in
 [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md), not a single edit.
 Design goal: **fail loudly and safely, never silently weaken a guarantee.**
 
-Verified against `codex-cli 0.151.0`.
+Verified against `codex-cli 0.152.0`.
 
 ## Platform support
 
@@ -70,7 +70,7 @@ Two flows reach the `app-server` surface: `codex_transfer` (transcript import) a
 rate-limit read (`account/rateLimits/read`, added for #321 when codex 0.144 moved quota off the
 `codex exec` stream). Both are quarantined the same way: the surface is experimental upstream, so
 every assumption lives in `cli_contract.py` and `appserver.py`, neither call spends model tokens, and
-no paid call depends on either. The rate-limit read verifies against **codex-cli 0.151.0** (probe:
+no paid call depends on either. The rate-limit read verifies against **codex-cli 0.152.0** (probe:
 drive `codex app-server` and confirm `account/rateLimits/read` returns a quota block; an integration
 test does this live). See "Session transfer" below for the import flow.
 
@@ -98,7 +98,7 @@ their own interactive codex use would silently void the promise above (#518). Th
 `-c sandbox_workspace_write.network_access=false`
 (`cli_contract.WORKSPACE_WRITE_NETWORK_ACCESS_CONFIG_KEY`). The `-c` override outranks both the
 config file and an operator `--profile` (codex resolves by config layer, not argv order; verified
-live on 0.148.0 and re-verified on 0.149.1 and 0.151.0 with positive controls), so the promise holds at every
+live on 0.148.0 and re-verified on 0.149.1, 0.151.0 and 0.152.0 with positive controls), so the promise holds at every
 isolation level, and for
 this one key the `--profile` operator-trust carve-out is closed. This deliberately overrides the
 user's own setting for plugin-launched runs only; their interactive codex sessions are untouched.
@@ -114,7 +114,7 @@ treatment (#520): every `workspace-write` run also sends
 `writable_roots = [...]` — extra writable directories outside the workspace, reasonable for their
 interactive codex use — cannot silently widen a plugin-launched run. `[]` is codex's own default,
 so default-config runs are unchanged. The same precedence facts apply (verified live on 0.148.0 and
-re-verified on 0.149.1 and 0.151.0,
+re-verified on 0.149.1, 0.151.0 and 0.152.0,
 macOS, positive controls judged by on-disk state): the `-c` override outranks the config file and
 `--profile`, the same drift coverage holds (`--strict-config` catches a KEY rename; the
 `docs/UPGRADING-CODEX.md` semantic probe covers a same-name change of meaning), and the user's
@@ -165,7 +165,7 @@ two halves, and only one of them is reliably probeable on an arbitrary machine.
   `-c features.remote_plugin=true`, and an unknown feature name still fails loud. `tests/
   test_integration.py::test_remote_plugin_disabled_by_plugin_flag_live` covers most of this; the
   `-c` arm and the unknown-name arm are the upgrade-time additions. Verified on `0.148.0`,
-  re-verified identically on `0.149.1` (2026-08-25) and `0.151.0` (2026-08-29).
+  re-verified identically on `0.149.1` (2026-08-25), `0.151.0` (2026-08-29) and `0.152.0` (2026-09-01).
 - **The tool-surface half — run it only when a positive control exists.** Proving that no connector
   *tool* is exposed requires a machine where a connector actually IS exposed when the feature is
   enabled. On a machine with no connector installed, both arms of that A/B come back empty and the
@@ -195,7 +195,7 @@ that knob with profiles you control.
 ## Image reading (`view_image`, #479) — deliberately left enabled
 
 Codex **0.147+** ships a `view_image` feature, stage `stable`, default **on** (unchanged at
-`0.148.0`, `0.149.1`, and `0.151.0`). This plugin neither sends nor refuses it, and that is a decision, not an oversight.
+`0.148.0`, `0.149.1`, `0.151.0`, and `0.152.0`). This plugin neither sends nor refuses it, and that is a decision, not an oversight.
 The question #479 raised was whether it widens egress the way `remote_plugin` did, since a
 `read-only` sandbox bounds *writes*, not what gets read and sent.
 
@@ -268,6 +268,95 @@ One thing that verification exposed remains open, and is tracked separately beca
 stream — failures reach only stderr — so image egress is invisible to anything parsing it, this
 plugin included (#510).
 
+## Sleep tool (`sleep_tool`, `clock.sleep`) — assessed at 0.152.0, not disabled
+
+Codex **0.152.0** added a `sleep_tool` feature, stage `stable`, default **on**. It is the one new
+flag in that release with a model-facing surface, so it was assessed rather than rubber-stamped.
+
+**What it is.** When exposed, the model receives a `clock` tool **namespace** whose single function
+is `sleep`: "Pause execution for a specified duration. The sleep ends early when new input arrives
+for the active turn. Returns the elapsed wall-clock time." Its one parameter, `duration_ms`, is
+documented as **"Must be between 1 and 43200000"** — up to **12 hours**, far beyond this server's
+sync deadline (built-in 300s) and its async deadline (built-in 1800s).
+
+**Exposure is conditional, and it was NOT exposed on the default path at 0.152.0.** The tool is
+registered by the ordinary `codex exec` tool planner, gated on the feature's `mode`:
+
+- `mode = "model_driven"` (the default) exposes it only when the selected model's
+  `experimental_supported_tools` advertises `clock`. On 2026-09-01 that array is **empty for all
+  eight** slugs in the `models_cache.json` observed here. That cache is account-scoped and
+  backend-populated (see `KNOWN_MODEL_SLUGS`' provenance note in `cli_contract.py`), so the correct
+  reading is **"none of the eight models in the observed cache"** — not "no model anywhere". Another
+  account, or a later catalog refresh, could advertise `clock` and expose the tool with no CLI
+  change.
+- `mode = "always_on"` exposes it regardless of model metadata.
+
+**How that was established** (zero spend — the sink answers 400 before any model call).
+`scripts/capture_wire_tools.py` points codex at a local HTTP sink instead of the real API and prints
+the `tools` array out of the request codex actually sent. That array is the evidence, not the
+model's self-report — asked directly, the model answered `NOTOOL`, which is a claim, not an
+observation. Each row below is one runnable command:
+
+```sh
+uv run python scripts/capture_wire_tools.py                                              # default
+uv run python scripts/capture_wire_tools.py -- -c 'features.sleep_tool.mode="always_on"'
+uv run python scripts/capture_wire_tools.py -- --disable sleep_tool -c 'features.sleep_tool.mode="always_on"'
+uv run python scripts/capture_wire_tools.py -- --disable view_image                      # positive control
+uv run python scripts/capture_wire_tools.py --bin "$OLD"                                 # the A/B's other half
+```
+
+
+| Run | `clock` in the request? |
+|---|---|
+| Default flags | **No** |
+| `-c 'features.sleep_tool.mode="always_on"'` | **Yes** (the `clock` namespace, with `sleep`) |
+| `--disable sleep_tool` **plus** `mode="always_on"` | **No** — the flag outranks the mode |
+| `--disable view_image` (positive control) | `view_image` disappears |
+
+The positive control is what makes the first row evidence: without it, a blind capture and a genuine
+absence look identical. Do **not** record the absence as architectural — an earlier reading of this
+probe wrongly concluded the tool was interactive/app-server-only. It is on the `codex exec` code
+path; the tool was simply **gated off** for these models, because none of them advertised
+`clock`.
+
+**Posture: assessed, left enabled, not sent.** The plugin does not send `--disable sleep_tool`
+today, because on the default path there is nothing to disable. That posture rests on **backend
+model metadata**, which can change with no CLI upgrade and no version bump to notice it: a
+`models_cache.json` refresh that adds `clock` to `experimental_supported_tools` would expose the
+tool under the default `model_driven` mode. An operator can also reach it directly through
+`CODEX_IN_CLAUDE_EXTRA_ARGS`. Adopting the disable is tracked separately as a deliberate
+behavior change, per `AGENTS.md` → the rule that adopting or avoiding a new capability is not part
+of a version bump.
+
+**Why it would matter if exposed.** The deadline still binds — this server terminates the run — so
+the failure mode is not an unbounded hang. It is **spend without result**: a single `sleep` call can
+consume the whole budget and turn a run that would have succeeded into a `timeout`.
+
+**Re-check on every upgrade.** `docs/UPGRADING-CODEX.md` step 2A owns this as a required check.
+Re-run `scripts/capture_wire_tools.py` against both binaries **and** re-read
+`experimental_supported_tools` in the live model cache
+(`jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "$CODEX_HOME/models_cache.json"`),
+not just the feature's stage and default — the stage and default did not move when the exposure
+gate did.
+`--disable sleep_tool` is verified to work and an unknown feature name still fails loud as
+`Error: Unknown feature flag`, so adopting the disable later stays cheap.
+
+## Default tool-catalog changes are invisible to `--help` (`update_plan`, 0.152.0)
+
+Codex **0.152.0** removed `update_plan` from the default tool set; `-c tools.update_plan.enabled=true`
+restores it (both confirmed by the same sink capture, 0.151.0 vs 0.152.0). This plugin references
+`update_plan` nowhere and parses the JSONL stream tolerantly, so **no contract or parser dependency
+here changed**. That is narrower than "nothing changed": the model-facing tool catalog genuinely
+did change, and a Codex run may behave differently for it — this plugin simply has no stake in the
+difference.
+
+It is recorded because of **how it was found, not what it was**: every `--help` surface was
+byte-identical for this release, and the `codex features list` diff (four added rows, none removed)
+named nothing resembling this change — neither surface can see it at all. The model-facing request
+is a distinct surface. `scripts/capture_wire_tools.py` is the only probe here that sees it, so run
+it as an A/B — old binary and new — on every upgrade and diff the `tools` array;
+`docs/UPGRADING-CODEX.md` step 2A carries it as a required step.
+
 ## The read boundary: there isn't one (#509)
 
 The sandbox bounds writes, not reads. Neither `read-only` nor `workspace-write` confines what
@@ -294,7 +383,7 @@ that every file the OS user can read is reachable — a platform sandbox (macOS 
 individual paths to this process. `cli_contract.READ_SCOPE_FACT` is the canonical wording every
 carrier states; the `RULE` comment beside it lists them.
 
-`recommended_plugins` is `stable`/default-**off** at `0.148.0`, `0.149.1`, and `0.151.0`, and is left unreserved on the same
+`recommended_plugins` is `stable`/default-**off** at `0.148.0`, `0.149.1`, `0.151.0`, and `0.152.0`, and is left unreserved on the same
 reasoning as above — adjacency in the feature table is not evidence that it bypasses the
 `remote_plugin` guarantee. [`docs/UPGRADING-CODEX.md`](docs/UPGRADING-CODEX.md) owns the
 obligation to re-check both flags on each upgrade.
@@ -327,25 +416,26 @@ about *how* each part arrives, because the two differ: the `AGENTS.md` content a
 name/description are already in the model's context when the turn begins — codex reads them itself
 while assembling the prompt, so the model issues no read for them — while a selected skill's
 **body** was observed arriving by a read the **model** itself issues (0.147.0, 0.148.0, 0.149.1,
-0.151.0). Both are egress the caller never
+0.151.0, 0.152.0). Both are egress the caller never
 asked for — a global skill's body came back from a prompt that named neither the skill nor the file,
 the model having selected it on its auto-loaded description alone (probed 2026-08-18) — but only the
 first is auto-loading. Verified
 empirically against codex-cli 0.147.0 (2026-08-07, issues #300 and #358), re-verified 2026-08-18
 under the read-forbidding probe below, re-verified again 2026-08-19 against codex-cli 0.148.0, and
 re-verified once more 2026-08-25 against codex-cli 0.149.1, and again 2026-08-29 against
-codex-cli 0.151.0 — each A/B (against 0.146.0, then
-0.147.0, then 0.148.0, then 0.149.1) produced an identical presence matrix under that same probe, so the
+codex-cli 0.151.0, and again 2026-09-01 against codex-cli 0.152.0 — each A/B (against 0.146.0, then
+0.147.0, then 0.148.0, then 0.149.1, then 0.151.0) produced an identical presence matrix under that same probe, so the
 user-global discovery is pre-existing rather than new. The 0.149 run is worth naming: that release
 reworked skill selection and added an upstream change titled "Enforce filesystem permissions when
 loading AGENTS.md", and the matrix still did not move. The 0.151 run is worth naming for a different
 reason: 0.151 introduced a `skip_host_skill_discovery` feature flag, `under development` and
 default-**off**, whose name describes precisely the behavior this section documents. It is inert at
-that stage — the matrix did not move — but it is the flag to re-probe first when it stages.
+that stage — the matrix did not move — but it is the flag to re-probe first when it stages. It is
+still `under development`/**off** at 0.152.0 (2026-09-01), and the matrix again did not move.
 
 **The `AGENTS.md` sources, probed 2026-08-19 (`codex-cli 0.148.0`, #472), re-probed 2026-08-25
-(`codex-cli 0.149.1`, #542) and again 2026-08-29 (`codex-cli 0.151.0`) — identical results on every
-binary.** Every run below used
+(`codex-cli 0.149.1`, #542), again 2026-08-29 (`codex-cli 0.151.0`) and again 2026-09-01
+(`codex-cli 0.152.0`, #586) — identical results on every binary.** Every run below used
 the read-forbidding probe defined further down — the `--json` stream asserted free of tool items,
 so a codeword in the answer can only have arrived as auto-loaded context. Fixture:
 `<parent>/repo` (git root) with `repo/sub` as the resolved workspace, a distinct codeword in each
@@ -572,7 +662,7 @@ worded so that what comes back is still evidence:
   fails the assertion is discarded, not interpreted.
 - **Body egress** — ask it to use the global marker skill by name and report the codeword in its
   body. This run is **deliberately tool-using, so the assertion above does not apply to it**: on
-  0.147.0, 0.148.0, 0.149.1, and 0.151.0 the model reads the `SKILL.md` itself once it selects the skill. It demonstrates
+  0.147.0, 0.148.0, 0.149.1, 0.151.0, and 0.152.0 the model reads the `SKILL.md` itself once it selects the skill. It demonstrates
   *reachability* — a body outside the workspace reaching the model — and nothing else. In
   particular it **cannot** establish discovery, because naming the skill in the prompt is what let
   the model find the file: a read would have succeeded even if codex had never discovered that
@@ -625,16 +715,17 @@ either positive control comes back false, record nothing from that run: fix the 
 And read a difference conservatively — the backend model is an uncontrolled variable, so a change is
 *associated* with the binary, not proven caused by it. Reproduce it before concluding.
 
-Observed under codex-cli 0.151.0 and A/B'd against 0.149.1 with an identical presence matrix
+Observed under codex-cli 0.152.0 and A/B'd against 0.151.0 with an identical presence matrix
 (observations, not guarantees — re-run the probe rather than assuming they still hold). Rows 1-3
 were re-verified 2026-08-19 with the read-forbidding, assertion-backed probe above, run against
 **both** binaries side by side; each discovery capture passed the assertion, and the two matrices
 were identical — as they were in the 2026-08-18 0.147.0-vs-0.146.0 A/B, the 2026-08-25
-0.149.1-vs-0.148.0 A/B, and the 2026-08-29 0.151.0-vs-0.149.1 A/B. Every variant agreed on both
-binaries in the 2026-08-29 run: `project_doc_max_bytes=0`, the no-enclosing-repository fixture,
+0.149.1-vs-0.148.0 A/B, the 2026-08-29 0.151.0-vs-0.149.1 A/B, and the 2026-09-01
+0.152.0-vs-0.151.0 A/B (#586). Every variant agreed on both binaries in the 2026-08-29 and
+2026-09-01 runs: `project_doc_max_bytes=0`, the no-enclosing-repository fixture,
 process-cwd-instead-of-`--cd`, and override precedence.
 Row 1's egress half was
-re-confirmed on 0.148.0, on 0.149.1, and on 0.151.0 by both the body-egress and the unprompted-selection consults; the
+re-confirmed on 0.148.0, on 0.149.1, on 0.151.0, and on 0.152.0 by both the body-egress and the unprompted-selection consults; the
 unprompted run returned the global skill's codeword on **both** binaries from a prompt naming
 neither the skill nor the file. (The 0.149.1 body-egress run located and read the marker
 `SKILL.md`; the paired 0.147.0 run gave up searching for it and returned no codeword. Read that as
@@ -719,7 +810,7 @@ accept an optional `developer_instructions` parameter — caller stance/focus te
 developer turn. `codex exec` has no flag for developer-turn text, so the channel is the
 `developer_instructions` config key (`cli_contract.DEVELOPER_INSTRUCTIONS_CONFIG_KEY`), which
 lands as the **first developer-role message**, ahead of Codex's own developer messages and
-`AGENTS.md` (verified zero-spend with `codex debug prompt-input` on 0.151.0; the
+`AGENTS.md` (verified zero-spend with `codex debug prompt-input` on 0.152.0; the
 `tests/test_integration.py` probes pin it against the installed CLI, with a negative control).
 Deliberately *not* `model_instructions_file` — that key **replaces** the built-in instructions.
 
@@ -778,9 +869,10 @@ What bounds it, and what each bound is for:
 
 ## Reasoning-effort control (`model_reasoning_effort`, #309)
 
-`codex exec` 0.151.0 has no dedicated reasoning-effort flag (verified against
-`codex exec --help`, 2026-08-29 — the 0.149.1 → 0.151.0 diff adds NO `codex exec` flag at all:
-`codex exec --help` is byte-identical across those two releases. Earlier, the 0.148.0 → 0.149.1
+`codex exec` 0.152.0 has no dedicated reasoning-effort flag (verified against
+`codex exec --help`, 2026-09-01 — the 0.151.0 → 0.152.0 diff adds NO `codex exec` flag at all:
+`codex exec --help` is byte-identical across those two releases, as it was across
+0.149.1 → 0.151.0. Earlier, the 0.148.0 → 0.149.1
 diff added one flag, `--thread-source`, which is thread metadata and not an effort control; and,
 earlier still, only
 the `codex exec fork` subcommand, which this plugin never invokes), so the per-call
@@ -838,7 +930,8 @@ and the guarantee would reopen with no signal at all.
 
 `--strict-config` turns that into a **zero-spend startup failure**: codex parses config before it
 authenticates or calls a model, so an unknown key fails the run at once, for no spend. Verified live
-on codex-cli 0.148.0 (2026-08-20), re-verified on 0.149.1 (2026-08-25) and 0.151.0 (2026-08-29).
+on codex-cli 0.148.0 (2026-08-20), re-verified on 0.149.1 (2026-08-25), 0.151.0 (2026-08-29) and
+0.152.0 (2026-09-01).
 
 **Scope: runs that carry a `-c` override, not every run.** The flag is `ALWAYS_SEND`-class
 (guarantee-bearing, never help-gated), but it is *emitted* only when the built argv actually carries
@@ -851,7 +944,7 @@ codex build lacking the flag, argument parsing rejects it loudly and for zero sp
 direction.
 
 **Which config sources it validates** (all verified live on 0.148.0, re-verified on 0.149.1 and,
-for the override / file / `--ignore-user-config` rows, on 0.151.0):
+for the override / file / `--ignore-user-config` rows, on 0.151.0 and 0.152.0):
 
 | Source | Validated under `--strict-config`? |
 | --- | --- |
@@ -892,7 +985,7 @@ has retired produces a different message, which that parser cannot see and which
 `CONTRACT_DRIFT_STDERR_PATTERNS` entry either — so before #542 it reached the caller as a bare
 `nonzero_exit` with the diagnosis thrown away. Captured verbatim from `codex-cli 0.149.1`
 (2026-08-25, scratch `$CODEX_HOME`, zero spend); the same wording re-observed on `0.151.0`
-(2026-08-29), and `parse_strict_config_rejection` still returns the parsed origin, key, path, and
+(2026-08-29) and `0.152.0` (2026-09-01), and `parse_strict_config_rejection` still returns the parsed origin, key, path, and
 line from it:
 
 ```text
@@ -919,7 +1012,7 @@ Three properties make this worth its own recognizer rather than a broadened stri
 A recognized key whose value fails serde's own validation — the wrong enum variant, or the wrong
 TOML type — is a third message, two lines with the key on the second. Captured verbatim from
 `codex-cli 0.149.1` (2026-08-25, scratch `$CODEX_HOME`, zero spend), re-observed unchanged on
-`0.151.0` (2026-08-29) with both sub-grammars still parsing; these two sub-grammars, and
+`0.151.0` (2026-08-29) and `0.152.0` (2026-09-01) with both sub-grammars still parsing; these two sub-grammars, and
 only these, are what `parse_invalid_config_value` encodes:
 
 ```text
@@ -1000,7 +1093,7 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   `base_instructions` / `model_messages.instructions_template` for its slug, so an operator
   catalog redefines the selected model's built-in instructions). Every framing string this server sends (`prompts.py`,
   including the untrusted-data clause) rides the **user** turn on stdin; `-c developer_instructions`
-  lands as the *first* developer-role message (verified with `codex debug prompt-input` on 0.151.0),
+  lands as the *first* developer-role message (verified with `codex debug prompt-input` on 0.152.0),
   and `model_instructions_file` replaces the built-in instructions (documented — the prompt-input
   renderer does not show base instructions, so that key is denied on its documented semantics).
   `meta` records only that a valid passthrough was configured, never which keys, so such a run is
@@ -1027,7 +1120,7 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
   **operator-trust boundary** — only enable this knob with profiles you control. One key is
   excepted: `sandbox_workspace_write.network_access` is pinned by a plugin-owned `-c` override
-  that outranks profiles (verified 0.148.0, re-verified 0.149.1 and 0.151.0; see Sandbox modes above), so a profile cannot
+  that outranks profiles (verified 0.148.0, re-verified 0.149.1, 0.151.0 and 0.152.0; see Sandbox modes above), so a profile cannot
   re-grant network egress to a `workspace-write` run.
 
 ## Version policy
@@ -1050,9 +1143,14 @@ so an event-schema change degrades metadata rather than breaking a run.
 `Content-Length` framing). This whole surface is **experimental** upstream (`codex app-server` is
 labeled `[experimental]` and the import method rides behind the `experimentalApi` capability), so
 every assumption lives in `cli_contract.py` (the `APP_SERVER_*` / `IMPORT_*` constants) and
-`appserver.py`. Verified against `codex-cli 0.151.0` via `codex app-server generate-json-schema --out <DIR>`.
-The 0.149.1 → 0.151.0 schema diff added ten v2 messages this plugin does not consume, removed none,
-and left **all seven** consumed schemas byte-identical after canonicalization.
+`appserver.py`. Verified against `codex-cli 0.152.0` via `codex app-server generate-json-schema --out <DIR>`.
+The 0.151.0 → 0.152.0 schema diff added ONE v2 message this plugin does not consume
+(`AuthRecoveryNotification`), removed none, and left six of the seven consumed schemas
+byte-identical after canonicalization; `GetAccountRateLimitsResponse` gained two OPTIONAL additive
+fields (`accountId`, `rateLimitUpsell`). Neither is read: `appserver.py` extracts the rate-limit
+block key by key, so an added key is ignored, and the account identifier never reaches an envelope.
+The earlier 0.149.1 → 0.151.0 schema diff added ten v2 messages this plugin does not consume,
+removed none, and left **all seven** consumed schemas byte-identical after canonicalization.
 The earlier 0.148.0 → 0.149.1 schema diff left six of the seven consumed schemas byte-identical after
 canonicalization; `GetAccountRateLimitsResponse` gained two `PlanType` enum values (`edu_plus`,
 `edu_pro`), which this plugin absorbs because it reads `planType` as a bounded free-form string
