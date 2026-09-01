@@ -17,7 +17,6 @@ from codex_in_claude import (
     config,
     normalize,
     preflight,
-    probe,
     prompts,
 )
 from codex_in_claude.config import isolation_flags
@@ -325,7 +324,9 @@ def codex_version(timeout_seconds: int = 10) -> str | None:
         # A bad CODEX_IN_CLAUDE_CODEX_BIN override is a probe failure like any
         # other -- this function's contract is None on any failure, never a raise.
         return None
-    run = probe.run_probe([codex_path, *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds)
+    run = runtime.run_sync_capture(
+        [codex_path, *cli_contract.VERSION_ARGS], timeout_seconds=timeout_seconds
+    )
     if run.binary_missing or run.exit_code != 0:
         return None
     return run.stdout.strip() or None
@@ -345,7 +346,7 @@ def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:
         # other -- this function's contract is (None, None) on any failure,
         # never a raise.
         return None, None
-    run = probe.run_probe(
+    run = runtime.run_sync_capture(
         [codex_path, *cli_contract.LOGIN_STATUS_ARGS], timeout_seconds=timeout_seconds
     )
     if run.binary_missing or run.timed_out:

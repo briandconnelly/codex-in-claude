@@ -7,6 +7,23 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **The sync-probe spawn shim is gone; `pontonier` pins to `0.8.0`** (#577): `probe.py` existed only
+  because `pontonier` 0.7.0's `run_sync_capture` wrapped spawn and drain in one `try` and caught just
+  `(FileNotFoundError, NotADirectoryError)`, so an unusable `codex` on `PATH` -- an executable
+  directory, a file without the execute bit, `ENOEXEC` -- escaped a probe documented never to raise
+  (#541). `pontonier` 0.8.0 isolates the `Popen` phase and returns `binary_missing` for every spawn
+  failure, matching `run_async`, so the module and its errno/filename inference are deleted and
+  `codex_version`, `login_status`, and `preflight._probe_help` call `runtime.run_sync_capture`
+  directly. No agent-visible behavior changes: the end-to-end guard in `tests/test_sync_tool_guard.py`
+  -- an executable directory named `codex` driven through `codex_status` -- still reports a readiness
+  fact, and was confirmed to fail without the fix before this landed. The `fingerprint` does not move.
+  Also inherited from `0.8.0`: both runners now decode captured output with `errors="replace"` rather
+  than strictly, so a `codex` invocation emitting a stray non-UTF-8 byte yields text containing
+  U+FFFD where 0.7.0 raised `UnicodeDecodeError` out of the sync probe and silently discarded the
+  async capture. U+FFFD is ordinary printable text (category `So`), so nothing in the control-character
+  or redaction handling treats it specially; #578 tracks the one case where that substitution can
+  reach a machine identifier.
+
 - **The served contract is written against MCP `2026-07-28`, on both protocol eras** (#571,
   ADR 0004 amendment): fastmcp 4 serves the legacy `initialize` handshake and the modern
   `server/discover` era side by side with no knob to restrict either, so this release makes the

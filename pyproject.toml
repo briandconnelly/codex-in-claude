@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4",
-    "pontonier==0.7.0",
+    "pontonier==0.8.0",
     # Minor-line caps: fastmcp documents that breaking changes may land in minor releases, and
     # the uncapped floor already broke every published version once (#572). Widening either cap
     # is a deliberate upgrade PR, not a resolver decision.
