@@ -371,13 +371,23 @@ def probe_version_for_run(
     probe failure. A failed probe must never fail the run: the paid answer still ships,
     honestly unstamped.
     """
-    run = runtime.run_sync_capture(
-        [argv0, *cli_contract.VERSION_ARGS],
-        timeout_seconds=timeout_seconds,
-        cwd=cwd,
-        env=env,
-    )
-    if run.binary_missing or run.exit_code != 0:
+    try:
+        run = runtime.run_sync_capture(
+            [argv0, *cli_contract.VERSION_ARGS],
+            timeout_seconds=timeout_seconds,
+            cwd=cwd,
+            env=env,
+        )
+    except Exception:
+        # `run_sync_capture` returns spawn failures and timeouts as CommandRun facts but
+        # documents that "errors other than a spawn failure or a timeout still raise" --
+        # a drain failure propagates. This probe runs BEFORE the exec, so letting one
+        # escape would abort a paid run over an optional provenance field, turning a
+        # best-effort observation into an availability dependency of every model-bearing
+        # call. `Exception`, not `BaseException`: cancellation and interpreter exit must
+        # still tear this process down.
+        return None
+    if run.binary_missing or run.timed_out or run.exit_code != 0:
         return None
     return version_display(run.stdout.strip() or None)
 

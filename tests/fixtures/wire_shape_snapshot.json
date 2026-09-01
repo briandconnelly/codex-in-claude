@@ -53,6 +53,7 @@
         "diff": null,
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "compat_warnings": [],
           "cwd": "/repo",
           "elapsed_ms": 1,
@@ -270,6 +271,7 @@
         "diff": null,
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "compat_warnings": [],
           "cwd": "/repo",
           "elapsed_ms": 1,
@@ -450,7 +452,6 @@
     ],
     "delegate_no_changes": [
       "base",
-      "codex_version",
       "command_exit_code",
       "commit",
       "context_summary",

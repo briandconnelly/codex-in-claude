@@ -2330,17 +2330,53 @@ async def test_run_codex_exec_records_the_serving_codex_version(monkeypatch, tmp
 
 
 async def test_version_probe_uses_the_same_token_the_run_spawns(monkeypatch, tmp_path):
-    """The probe must interrogate the executable the run is ABOUT to spawn, not a
-    separately re-resolved one -- otherwise the envelope can name a different binary."""
-    monkeypatch.setenv(binpath.ENV_VAR, "")
-    result, seen = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.151.0")
-    assert seen["cmd"][0] == binpath.codex_bin()
-    assert seen["cmd"][1:] == list(cli_contract.VERSION_ARGS)
-    # The prepared run's own cwd and env, not the ambient ones: an isolation env
-    # ($CODEX_HOME, config isolation) can decide which binary a bare token reaches.
-    assert seen["cwd"] == str(tmp_path)
-    assert seen["env"] is not None
-    assert result.codex_version is not None
+    """The probe must interrogate the executable the run is ABOUT to spawn.
+
+    Asserted against what `run_async` was ACTUALLY handed, not against a fresh
+    `binpath.codex_bin()` call: re-deriving the expected token through the same resolver
+    the code uses would pass even if the probe resolved its executable independently of
+    the run -- the precise regression this invariant exists to forbid. The environment is
+    compared too, not merely checked non-null: an isolation env ($CODEX_HOME, config
+    isolation) can decide which binary a bare token reaches."""
+    probe: dict = {}
+    ran: dict = {}
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        probe.update(cmd=list(cmd), cwd=cwd, env=env)
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        ran.update(cmd=list(cmd), cwd=cwd, env=env)
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert probe["cmd"] == [ran["cmd"][0], *cli_contract.VERSION_ARGS]
+    assert probe["cwd"] == ran["cwd"]
+    assert probe["env"] == ran["env"]
+    assert result.codex_version == "codex-cli 0.151.0"
 
 
 async def test_version_probe_failure_leaves_the_field_absent(monkeypatch, tmp_path):
@@ -2424,3 +2460,47 @@ async def test_the_version_probe_is_not_cached_across_runs(monkeypatch, tmp_path
     assert len(calls) == 2, calls
     assert first.codex_version == "codex-cli 0.1.0"
     assert second.codex_version == "codex-cli 0.2.0"
+
+
+async def test_a_raising_version_probe_still_lets_the_run_proceed(monkeypatch, tmp_path):
+    """RED before the fix: `run_sync_capture` documents that errors other than a spawn
+    failure or a timeout STILL RAISE, and the probe runs BEFORE `run_async` — so an
+    incidental drain failure on a trivial `--version` call aborted the paid run and
+    surfaced as internal_error. Optional provenance must never become an availability
+    dependency of every model-bearing call."""
+    launched: list[list[str]] = []
+
+    def exploding_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        raise OSError("drain failed")
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        launched.append(list(cmd))
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", exploding_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert len(launched) == 1, "the paid run must still have been launched"
+    assert result.run.exit_code == 0
+    assert result.codex_version is None

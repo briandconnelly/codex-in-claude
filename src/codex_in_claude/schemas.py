@@ -827,9 +827,11 @@ class Meta(BaseModel):
             "background-job result carries the ORIGINATING run's value. NULL OR ABSENT "
             "whenever it was not recorded — no Codex run was launched (argument-validation "
             "and codex_job_* lifecycle errors, dry-run previews, async job-start handles), "
-            "the version probe itself failed, the spawn found no binary, the run failed "
-            "before the value was captured, or the payload was stored by a build predating "
-            "this field. Absence is never evidence that no run happened."
+            "the version probe itself failed or could not run, the spawn found no binary, "
+            "the run failed before the value was captured, a background worker crashed "
+            "unexpectedly (its envelope is rebuilt from the job spec, which holds no "
+            "observation of the run), or the payload was stored by a build predating this "
+            "field. Absence is never evidence that no run happened."
         ),
     )
     scope: str | None = None  # review scope: working_tree|branch|commit

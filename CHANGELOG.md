@@ -8,10 +8,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 ### Added
 
 - **Run envelopes now record which `codex` build served the run** (#519): `meta.codex_version`
-  carries the display copy of `codex --version` observed for that run, on every model-bearing
-  result -- consult, review, and delegate, sync and async, success and failure -- and it replays
-  with a stored job result, so a persisted envelope can answer "which codex produced this?" after
-  the fact. Previously `meta.server_version` named only the *plugin's* release and `codex_version`
+  carries the display copy of `codex --version` observed for that run -- on consult, review and
+  delegate results alike, sync and async, and on a run that failed as well as one that succeeded
+  -- and it replays with a stored job result, so a persisted envelope can answer "which codex
+  produced this?" after the fact. Previously `meta.server_version` named only the *plugin's* release and `codex_version`
   rode the `codex_status`/`codex_capabilities` envelopes alone, leaving the PATH-decided binary
   silently swappable between runs. The value is probed immediately before the run's exec, on the
   same executable token, working directory, and environment it is about to spawn, and never
@@ -21,9 +21,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   process, so a binary replaced or a shim retargeted between probe and exec would go unreported --
   the `codex exec --json` stream carries no version of its own (re-verified at codex-cli 0.151.0).
   It is null or absent whenever nothing was recorded -- no run was launched (argument-validation
-  and `codex_job_*` lifecycle errors, dry-run previews, async job-start handles), the probe failed,
-  the spawn found no binary, or the payload predates this field -- and its absence is never
-  evidence that no run happened. The resolved binary *path* is deliberately not reported: it is
+  and `codex_job_*` lifecycle errors, dry-run previews, async job-start handles), the probe failed
+  or could not run, the spawn found no binary, a background worker crashed unexpectedly (its
+  envelope is rebuilt from the job spec, which holds no observation of the run), or the payload
+  predates this field -- and its absence is never evidence that no run happened. The resolved binary *path* is deliberately not reported: it is
   operator-controlled text this server withholds from the wire, and it is not reliably a path at
   all. The `fingerprint` moves `schema-89` -> `schema-90`, and `RESULT_FORMAT` moves 11 -> 12
   (a stored success envelope gains the key, which an older reader's closed schema would reject).
