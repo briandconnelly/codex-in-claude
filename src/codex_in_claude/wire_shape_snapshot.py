@@ -55,6 +55,10 @@ from codex_in_claude.server import _finished_job_envelope
 _FINGERPRINT_SENTINEL = "<fingerprint>"
 _VERSION_SENTINEL = "0.0.0"
 _REQUEST_ID_SENTINEL = "0" * 32
+# A FIXED literal like every other sentinel here: the real value comes from a live
+# `codex --version` probe, so rendering the true one would churn the fixture on every
+# codex upgrade (#519).
+_CODEX_VERSION_SENTINEL = "codex-cli 0.0.0"
 
 
 def _meta(**optional: Any) -> Meta:
@@ -107,6 +111,11 @@ def _consult_meta() -> Meta:
         # A run prepared with the #556 parameter: the fingerprint (never the text)
         # must survive slimming and replay (#400: populate every producible optional).
         developer_instructions=DeveloperInstructions.of("focus on locking"),
+        # The codex build observed next to the run (#519). Populated on every builder
+        # backed by a real run -- INCLUDING the otherwise-sparse delegate below, which a
+        # real delegate run also stamps -- per #400: left null it would slim away at
+        # delivery, and a regression deleting it would render this fixture byte-identical.
+        codex_version=_CODEX_VERSION_SENTINEL,
         # 0 on purpose: a POPULATED FALSY optional. `slim_meta` keys on `is None`, never
         # falsiness, and this extends that guarantee from the unit test to the real
         # chokepoint. Do not "fix" it to a non-zero exit code.
@@ -131,6 +140,7 @@ def _review_meta() -> Meta:
         # review's omitted keys and hide a review-specific delivery regression
         # (Copilot, #559; the #400 convention).
         developer_instructions=DeveloperInstructions.of("focus"),
+        codex_version=_CODEX_VERSION_SENTINEL,
         command_exit_code=0,
         session_id="sess-1",
         usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
@@ -164,6 +174,7 @@ def _review_commit_truncated_meta() -> Meta:
         model="a-model",
         reasoning_effort="high",
         developer_instructions=DeveloperInstructions.of("focus"),
+        codex_version=_CODEX_VERSION_SENTINEL,
         command_exit_code=0,
         session_id="sess-1",
         usage=Usage(input_tokens=1, output_tokens=2, cached_input_tokens=3, total_tokens=6),
@@ -173,6 +184,21 @@ def _review_commit_truncated_meta() -> Meta:
         truncated=True,
         truncation_hint="diff truncated at the byte cap; narrow the scope with paths",
     )
+
+
+def _delegate_meta() -> Meta:
+    """The sparse meta PLUS the one optional a real delegate run always observes (#519).
+
+    `_sparse_meta` stays all-null on purpose (see below), but a successful delegate is a
+    model-bearing run: it goes through `delegate._apply_run_meta` and stamps
+    `codex_version` like any other. Leaving this builder wholly sparse let a
+    delegate-only delivery regression keep the golden fixture byte-identical, since the
+    consult/review representatives only catch a GLOBAL deletion. One populated key out of
+    ~20 leaves the omission case below fully intact.
+    """
+    meta = _sparse_meta()
+    meta.codex_version = _CODEX_VERSION_SENTINEL
+    return meta
 
 
 def _sparse_meta() -> Meta:
@@ -245,7 +271,7 @@ def _stored_envelopes() -> dict[str, dict]:
         # diff=None on purpose: a no-changes delegate. Its `diff` key must survive
         # delivery — it is the field the result's own next_steps tells callers to read.
         "delegate_no_changes": dump_success(
-            DelegateResult(summary="s", diff=None, raw_response=_raw(), meta=_sparse_meta())
+            DelegateResult(summary="s", diff=None, raw_response=_raw(), meta=_delegate_meta())
         ),
     }
 

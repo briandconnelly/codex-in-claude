@@ -39,12 +39,14 @@ def _make_exec_result(
     exit_code: int = 0,
     last_message: str = "ok",
     dropped_flags: list[str] | None = None,
+    codex_version: str | None = None,
 ) -> codex.CodexExecResult:
     return codex.CodexExecResult(
         run=CommandRun(events, "", exit_code, 12, exit_code == -9),
         last_message=last_message,
         events=events,
         dropped_flags=dropped_flags or [],
+        codex_version=codex_version,
     )
 
 
@@ -944,3 +946,40 @@ def test_finalize_consult_exit_zero_with_capture_failed_is_success_with_null_met
     assert out["meta"]["usage"] is None
     assert out["meta"]["session_id"] is None
     assert out["meta"]["command_exit_code"] == 0
+
+
+# --- #519: the observed codex build reaches the envelope through the shipping hook -----
+
+
+def test_stamp_meta_records_the_observed_codex_version():
+    meta = _make_meta()
+    orchestration._stamp_meta(_make_exec_result(codex_version="codex-cli 0.151.0"), meta)
+    assert meta.codex_version == "codex-cli 0.151.0"
+
+
+def test_stamp_meta_records_the_version_on_a_failed_run_too():
+    """A stored FAILURE is the envelope where "which codex served this?" matters most,
+    and _stamp_meta returns early down the error branch — so this is a distinct path,
+    not a restatement of the success case."""
+    meta = _make_meta()
+    out = orchestration._stamp_meta(
+        _make_exec_result(exit_code=2, codex_version="codex-cli 0.151.0"), meta
+    )
+    assert out is not None and out["ok"] is False
+    assert out["meta"]["codex_version"] == "codex-cli 0.151.0"
+
+
+def test_stamp_meta_leaves_the_version_absent_when_the_probe_gave_nothing():
+    meta = _make_meta()
+    orchestration._stamp_meta(_make_exec_result(codex_version=None), meta)
+    assert meta.codex_version is None
+
+
+def test_a_delivered_consult_envelope_carries_the_version():
+    """Through the real finalizer, not just the stamp helper: a value set on `meta` that
+    the delivery path then slims away would satisfy the unit test and reach no caller."""
+    meta = _make_meta()
+    result = _make_exec_result(last_message="ANSWER", codex_version="codex-cli 0.151.0")
+    out = orchestration.finalize_consult(result, meta=meta)
+    assert out["ok"] is True
+    assert out["meta"]["codex_version"] == "codex-cli 0.151.0"

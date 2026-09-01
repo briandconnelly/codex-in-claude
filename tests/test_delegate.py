@@ -36,12 +36,14 @@ def _make_exec_result(
     exit_code: int = 0,
     last_message: str = "ok",
     dropped_flags: list[str] | None = None,
+    codex_version: str | None = None,
 ) -> codex.CodexExecResult:
     return codex.CodexExecResult(
         run=CommandRun(events, "", exit_code, 12, exit_code == -9),
         last_message=last_message,
         events=events,
         dropped_flags=dropped_flags or [],
+        codex_version=codex_version,
     )
 
 
@@ -651,3 +653,72 @@ def test_run_delegate_attributes_a_config_value_rejection_by_its_own_pins(
     )
     assert out["ok"] is False
     assert out["error"]["code"] == expected_code
+
+
+# --- #519: delegate's own stamp hook -------------------------------------------------
+# A separate hook from orchestration's, so it needs its own coverage: the two have
+# drifted before, and a stamp added to only one would leave delegate envelopes silent.
+
+
+def test_apply_run_meta_records_the_observed_codex_version():
+    from codex_in_claude import delegate
+
+    meta = _make_meta()
+    delegate._apply_run_meta(meta, _make_exec_result(codex_version="codex-cli 0.151.0"))
+    assert meta.codex_version == "codex-cli 0.151.0"
+
+
+def test_apply_run_meta_leaves_the_version_absent_when_the_probe_gave_nothing():
+    from codex_in_claude import delegate
+
+    meta = _make_meta()
+    delegate._apply_run_meta(meta, _make_exec_result(codex_version=None))
+    assert meta.codex_version is None
+
+
+def test_a_delivered_delegate_envelope_carries_the_version(monkeypatch, tmp_path):
+    """Through the real `run_delegate`, not just the stamp helper.
+
+    `test_apply_run_meta_records_the_observed_codex_version` above exercises the helper,
+    and the wire-shape delegate representative hand-populates its sentinel — so the
+    delegate side of this field rested on a single helper-level assertion, while the
+    consult side had a delivered-envelope test. Delegate is the tool whose representative
+    was already caught left sparse once, so it gets the symmetric depth the comment above
+    claims for it.
+    """
+    from types import SimpleNamespace
+
+    import anyio
+    from pontonier.core import worktree
+
+    from codex_in_claude import delegate
+
+    async def fake_exec(prompt, **kwargs):
+        return codex.CodexExecResult(
+            run=CommandRun("", "", 0, 1, False),
+            last_message="done",
+            codex_version="codex-cli 0.151.0",
+        )
+
+    wt_path = str(tmp_path / "cic-worktree-v" / "tree")
+    monkeypatch.setattr(
+        worktree, "create", lambda *a, **k: SimpleNamespace(path=wt_path, baseline_warning=None)
+    )
+    monkeypatch.setattr(worktree, "capture_diff", lambda *a, **k: "")
+    monkeypatch.setattr(worktree, "remove", lambda *a, **k: None)
+    monkeypatch.setattr(delegate.codex, "run_codex_exec", fake_exec)
+
+    out = anyio.run(
+        lambda: delegate.run_delegate(
+            "task",
+            "/repo",
+            _make_meta(),
+            sandbox="workspace-write",
+            isolation="inherit",
+            timeout_seconds=10,
+            model=None,
+            git_timeout=30,
+        )
+    )
+    assert out["ok"] is True
+    assert out["meta"]["codex_version"] == "codex-cli 0.151.0"

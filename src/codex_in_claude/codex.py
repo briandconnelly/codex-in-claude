@@ -16,6 +16,7 @@ from codex_in_claude import (
     cli_contract,
     config,
     normalize,
+    obs,
     preflight,
     prompts,
 )
@@ -42,6 +43,11 @@ class CodexExecResult:
     last_message: str | None
     events: str = ""
     dropped_flags: list[str] = field(default_factory=list)
+    # The DISPLAY copy of `codex --version` observed immediately before this run's exec,
+    # from the same argv token/cwd/env it was about to spawn (#519). None when the probe
+    # could not run or the spawn found no binary. Best-effort observation, never
+    # attestation -- see `probe_version_for_run`.
+    codex_version: str | None = None
 
 
 def _gate_optional(tokens: list[str], fs: FlagSupport) -> tuple[list[str], list[str]]:
@@ -288,6 +294,12 @@ async def run_codex_exec(
             last_message=None,
         )
     async with BACKEND.prepare(request) as prepared:
+        # Observe the version BEFORE the exec, on the same token/cwd/env this run is
+        # about to spawn (#519). Deliberately uncached: every run -- sync included --
+        # executes in a fresh detached worker, so a process cache would save nothing on
+        # the paid path while widening the window in which the stamped version is not the
+        # one that served the run.
+        version = probe_version_for_run(prepared.argv[0], cwd=prepared.cwd, env=prepared.env)
         run = await runtime.run_async(
             list(prepared.argv),
             cwd=prepared.cwd,
@@ -305,6 +317,10 @@ async def run_codex_exec(
         last_message=last_message,
         events=run.stdout,
         dropped_flags=list(prepared.dropped_flags),
+        # Withheld when the spawn found no binary: the probe answering is not evidence
+        # the exec did, and naming a version for a run that never launched would be a
+        # fabricated attestation.
+        codex_version=None if run.binary_missing else version,
     )
 
 
@@ -330,6 +346,84 @@ def codex_version(timeout_seconds: int = 10) -> str | None:
     if run.binary_missing or run.exit_code != 0:
         return None
     return run.stdout.strip() or None
+
+
+# The version probe's own wall-clock budget, deliberately far below the 10s floor a
+# caller's own deadline can be clamped to (config.MIN_TIMEOUT_SECONDS). The probe blocks
+# BEFORE the exec and its time is NOT deducted from the run's `timeout_seconds`, so it is
+# additive to what the caller was promised: at the default 10s budget a hung
+# `codex --version` would roughly double a minimum-length call (Copilot review of #519).
+# Deducting it from the run instead would be the worse trade -- it would shorten the paid
+# model run, spending a guaranteed good on an optional provenance field. Measured cost of
+# a healthy probe is ~30-40ms, so 2s is ~50x headroom for a slow or cold-cache machine
+# while bounding the worst case to a fifth of the shortest deadline.
+VERSION_PROBE_TIMEOUT_SECONDS = 2
+
+
+def probe_version_for_run(
+    argv0: str,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    timeout_seconds: int = VERSION_PROBE_TIMEOUT_SECONDS,
+) -> str | None:
+    """The DISPLAY copy of `codex --version` for the executable a run is about to spawn.
+
+    Takes `argv0` rather than re-resolving through `binpath`: the caller has already
+    decided which token it will spawn, and interrogating a separately resolved one could
+    name a different binary than the one that serves the run.
+
+    BEST-EFFORT, NOT ATTESTATION, and the field built from it says so. This is a second
+    process: between it and the exec, the path can be replaced, a symlink or npm shim
+    retargeted, or the file rewritten in place. Probing immediately before the spawn
+    shrinks that window; nothing available from the CLI closes it, because the
+    `codex exec --json` stream carries no version, model, or binary field at all
+    (re-verified at codex-cli 0.151.0 -- see #519).
+
+    Returns the sanitized, bounded copy `version_display` produces, or None on any
+    probe failure -- including exhausting its own short budget. A failed probe must never
+    fail the run: the paid answer still ships, honestly unstamped.
+    """
+    try:
+        run = runtime.run_sync_capture(
+            [argv0, *cli_contract.VERSION_ARGS],
+            timeout_seconds=timeout_seconds,
+            cwd=cwd,
+            env=env,
+        )
+    except Exception:
+        # `run_sync_capture` returns spawn failures and timeouts as CommandRun facts but
+        # documents that "errors other than a spawn failure or a timeout still raise" --
+        # a drain failure propagates. This probe runs BEFORE the exec, so letting one
+        # escape would abort a paid run over an optional provenance field, turning a
+        # best-effort observation into an availability dependency of every model-bearing
+        # call. `Exception`, not `BaseException`: cancellation and interpreter exit must
+        # still tear this process down.
+        return _probe_gave_nothing("the probe raised")
+    if run.binary_missing:
+        return _probe_gave_nothing("no binary at the run's own argv[0]")
+    if run.timed_out:
+        return _probe_gave_nothing(f"timed out after {timeout_seconds}s")
+    if run.exit_code != 0:
+        return _probe_gave_nothing(f"exit code {run.exit_code}")
+    return version_display(run.stdout.strip() or None) or _probe_gave_nothing(
+        "nothing printable survived sanitization"
+    )
+
+
+def _probe_gave_nothing(why: str) -> None:
+    """Log WHY the run went unstamped, then report the absence.
+
+    Without this a persistently failing probe is invisible: the field is optional, its
+    absence has six documented causes, and nothing else on the envelope distinguishes
+    them -- so an operator whose envelopes are never stamped (a slow npm shim on WSL2 or a
+    cold network mount exceeding the short budget is the realistic case) has no way to
+    tell that from "this build predates the field". DEBUG, not WARNING: a failed probe
+    costs only provenance and must not look like a broken run, and this is per paid call.
+    The reason is derived from the probe's own outcome, never from its output -- codex's
+    stdout is foreign text that only reaches the wire through `version_display`.
+    """
+    obs.get_logger("codex_in_claude.codex").debug("codex --version probe gave nothing: %s", why)
 
 
 def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:

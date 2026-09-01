@@ -2260,3 +2260,447 @@ async def test_run_codex_exec_capture_failed_exit_zero_still_reads_last_message(
     assert out["summary"] == "THE ANSWER"
     assert out["meta"]["usage"] is None
     assert out["meta"]["session_id"] is None
+
+
+# --- codex_version stamped onto the run envelope (#519) -------------------------------
+# A stored result could not answer "which codex build produced this?": meta.server_version
+# is the PLUGIN's version, and codex_version rode only the status/capabilities envelopes.
+# The probe is uncached and runs immediately before the exec, on the SAME argv token /
+# cwd / env the run is about to use -- a TTL cache would buy nothing (every run, sync or
+# async, is a fresh worker process) while widening the window in which the reported
+# version is not the one that served the run.
+
+
+def _fake_exec(exit_code: int = 0, *, binary_missing: bool = False):
+    """A run_async double that satisfies --output-last-message and returns one run."""
+
+    async def _fake(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        if binary_missing:
+            from pontonier.core import runtime as _rt
+
+            return CommandRun("", _rt.BINARY_NOT_FOUND, 127, 0, False)
+        return CommandRun("", "", exit_code, 5, False)
+
+    return _fake
+
+
+async def _exec_with_version(monkeypatch, tmp_path, version_stdout, *, exit_code=0):
+    """Run run_codex_exec with `codex --version` answering `version_stdout`."""
+    seen: dict = {}
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        seen["cmd"] = list(cmd)
+        seen["cwd"] = cwd
+        seen["env"] = env
+        if version_stdout is None:
+            return CommandRun("", "boom", 1, 1, False)
+        return CommandRun(version_stdout, "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", _fake_exec(exit_code))
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    return result, seen
+
+
+async def test_run_codex_exec_records_the_serving_codex_version(monkeypatch, tmp_path):
+    """RED before #519: CodexExecResult carried no codex identity at all."""
+    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.151.0\n")
+    assert result.codex_version == "codex-cli 0.151.0"
+
+
+async def test_version_probe_uses_the_same_token_the_run_spawns(monkeypatch, tmp_path):
+    """The probe must interrogate the executable the run is ABOUT to spawn.
+
+    Asserted against what `run_async` was ACTUALLY handed, not against a fresh
+    `binpath.codex_bin()` call: re-deriving the expected token through the same resolver
+    the code uses would pass even if the probe resolved its executable independently of
+    the run -- the precise regression this invariant exists to forbid. The environment is
+    compared too, not merely checked non-null: an isolation env ($CODEX_HOME, config
+    isolation) can decide which binary a bare token reaches."""
+    probe: dict = {}
+    ran: dict = {}
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        probe.update(cmd=list(cmd), cwd=cwd, env=env)
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        ran.update(cmd=list(cmd), cwd=cwd, env=env)
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert probe["cmd"] == [ran["cmd"][0], *cli_contract.VERSION_ARGS]
+    assert probe["cwd"] == ran["cwd"]
+    assert probe["env"] == ran["env"]
+    assert result.codex_version == "codex-cli 0.151.0"
+
+
+async def test_version_probe_failure_leaves_the_field_absent(monkeypatch, tmp_path):
+    """A failed probe must not fail the run: the paid answer still ships, honestly
+    unstamped. Absence never means 'no run happened'."""
+    result, _ = await _exec_with_version(monkeypatch, tmp_path, None)
+    assert result.codex_version is None
+    assert result.run.exit_code == 0
+
+
+async def test_version_is_recorded_on_a_failed_run_too(monkeypatch, tmp_path):
+    """A nonzero exit is exactly when 'which codex build was this?' matters most."""
+    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli 0.151.0", exit_code=2)
+    assert result.run.exit_code == 2
+    assert result.codex_version == "codex-cli 0.151.0"
+
+
+async def test_no_version_is_claimed_when_the_spawn_found_no_binary(monkeypatch, tmp_path):
+    """A probe can succeed and the exec still find no binary (a race, or a shim that
+    answers --version and fails to exec). Reporting a version for a run that never
+    launched would be a fabricated attestation."""
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", _fake_exec(binary_missing=True))
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert result.run.binary_missing
+    assert result.codex_version is None
+
+
+async def test_recorded_version_is_the_sanitized_display_copy(monkeypatch, tmp_path):
+    """The stamp is a DISPLAY projection (#531): codex's stdout is foreign text that can
+    carry control characters, and it ships on the wire and into result.json."""
+    result, _ = await _exec_with_version(
+        monkeypatch, tmp_path, "codex-cli 9.9.9\x1b[2K\x1b[31m rogue"
+    )
+    assert result.codex_version is not None
+    assert not _has_control(result.codex_version), repr(result.codex_version)
+
+
+async def test_recorded_version_is_bounded(monkeypatch, tmp_path):
+    """An unbounded version string would ride into every persisted envelope."""
+    result, _ = await _exec_with_version(monkeypatch, tmp_path, "codex-cli " + "A" * 5000)
+    assert result.codex_version is not None
+    assert len(result.codex_version) == codex._ECHO_MAX_CHARS
+    assert result.codex_version.endswith(codex._ECHO_TRUNC_MARKER)
+
+
+async def test_the_version_probe_is_not_cached_across_runs(monkeypatch, tmp_path):
+    """Every run, sync or async, executes in a FRESH worker process, so a TTL cache saves
+    nothing on the paid path while widening the window in which the stamped version is not
+    the one that served the run. Two runs in one process must probe twice."""
+    calls: list[list[str]] = []
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        calls.append(list(cmd))
+        return CommandRun(f"codex-cli 0.{len(calls)}.0", "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", _fake_exec())
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    kwargs = dict(
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    first = await codex.run_codex_exec("q", **kwargs)
+    second = await codex.run_codex_exec("q", **kwargs)
+    assert len(calls) == 2, calls
+    assert first.codex_version == "codex-cli 0.1.0"
+    assert second.codex_version == "codex-cli 0.2.0"
+
+
+async def test_a_raising_version_probe_still_lets_the_run_proceed(monkeypatch, tmp_path):
+    """RED before the fix: `run_sync_capture` documents that errors other than a spawn
+    failure or a timeout STILL RAISE, and the probe runs BEFORE `run_async` — so an
+    incidental drain failure on a trivial `--version` call aborted the paid run and
+    surfaced as internal_error. Optional provenance must never become an availability
+    dependency of every model-bearing call."""
+    launched: list[list[str]] = []
+
+    def exploding_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        raise OSError("drain failed")
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        launched.append(list(cmd))
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", exploding_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert len(launched) == 1, "the paid run must still have been launched"
+    assert result.run.exit_code == 0
+    assert result.codex_version is None
+
+
+def test_the_version_probe_budget_is_small_against_the_shortest_run():
+    """The probe is ADDITIVE to the run's own deadline: it blocks before `run_async` and
+    its time is not deducted from `timeout_seconds`. So its budget must be small against
+    the shortest deadline a caller can ask for, or a hung `codex --version` roughly
+    doubles a minimum-length call (Copilot review of #519).
+
+    Pinned as a ratio against the real floor rather than as a bare literal, so raising the
+    budget or lowering the floor has to be a deliberate decision that trips this test."""
+    assert codex.VERSION_PROBE_TIMEOUT_SECONDS <= config.MIN_TIMEOUT_SECONDS / 4
+
+
+async def test_the_version_probe_uses_its_own_short_budget(monkeypatch, tmp_path):
+    """The bound has to reach the actual probe call, not just exist as a constant."""
+    seen: dict = {}
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        seen["timeout"] = timeout_seconds
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", _fake_exec())
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=600,
+    )
+    assert seen["timeout"] == codex.VERSION_PROBE_TIMEOUT_SECONDS
+
+
+async def test_a_hung_version_probe_still_lets_the_run_proceed(monkeypatch, tmp_path):
+    """A probe that exhausts its budget is a timed-out CommandRun, not a raise: the run
+    must still launch, unstamped."""
+    launched: list[list[str]] = []
+
+    def timing_out_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        from pontonier.core import runtime as _rt
+
+        return CommandRun("", _rt.TIMED_OUT, -9, timeout_seconds * 1000, True)
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        launched.append(list(cmd))
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", timing_out_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert len(launched) == 1
+    assert result.codex_version is None
+
+
+async def test_the_version_is_probed_BEFORE_the_run_is_launched(monkeypatch, tmp_path):
+    """Ordering, not just sameness — and it is the field's whole point.
+
+    `test_version_probe_uses_the_same_token_the_run_spawns` records both calls but never
+    their order, so moving the probe to AFTER `run_async` left the entire suite green
+    while every doc still claimed "immediately before the run's exec". That is not
+    pedantry: probing afterwards would report whichever binary is on disk when the run
+    FINISHES, so an install swapped mid-run — the long-review-plus-upgrade case, and the
+    PATH-swap incident this field exists for — would be named wrongly and confidently.
+    """
+    order: list[str] = []
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        order.append("probe")
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        order.append("exec")
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert order == ["probe", "exec"], order
+    assert result.codex_version == "codex-cli 0.151.0"
+
+
+@pytest.fixture
+def codex_log_messages():
+    """Messages emitted on the `codex_in_claude.codex` logger.
+
+    Not `caplog`: `obs.configure` deliberately sets `propagate = False` on the package
+    loggers (so records never reach a root handler an embedding host may have wired to
+    stdout), and caplog attaches to root — it would see nothing, failing for a reason
+    unrelated to the code under test.
+
+    Level goes through `setLevel`, NOT a direct attribute assignment: CPython caches
+    `isEnabledFor` per logger and only `setLevel` invalidates that cache. Assigning
+    `logger.level` worked in isolation and silently did nothing in the full suite, where
+    an earlier call had already cached "DEBUG is off" — a test that passed alone and
+    failed in company.
+    """
+    import logging
+
+    messages: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    logger = logging.getLogger("codex_in_claude.codex")
+    original_handlers, original_level = logger.handlers[:], logger.level
+    logger.handlers = [_Collect()]
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield messages
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+
+
+@pytest.mark.parametrize(
+    ("capture", "expected_reason"),
+    [
+        (lambda: CommandRun("", "", 1, 1, False), "exit code 1"),
+        (lambda: CommandRun("", "timed out", -9, 1, True), "timed out"),
+        (lambda: CommandRun("\x1b\x07", "", 0, 1, False), "nothing printable"),
+    ],
+)
+def test_a_failing_probe_says_why_in_the_log(
+    monkeypatch, codex_log_messages, capture, expected_reason
+):
+    """A persistently failing probe must be diagnosable.
+
+    The field is optional and its absence has several documented causes, none
+    distinguishable from the envelope — so with no log line an operator whose runs are
+    never stamped (a slow shim exceeding the short budget is the realistic case) cannot
+    tell that from "this build predates the field". DEBUG, not WARNING: a failed probe
+    costs only provenance and must not read as a broken run.
+
+    Each case is a DISTINCT branch, so a reason wired to the wrong one fails here rather
+    than passing on a shared string.
+    """
+    monkeypatch.setattr(
+        codex.runtime, "run_sync_capture", lambda cmd, timeout_seconds=10, **k: capture()
+    )
+    assert codex.probe_version_for_run("codex") is None
+    assert any(expected_reason in m for m in codex_log_messages), codex_log_messages
+
+
+def test_the_probe_log_never_echoes_the_command_output(monkeypatch, codex_log_messages):
+    """The reason is derived from the probe's OUTCOME, never its output: codex's stdout is
+    foreign text whose only sanctioned route to a reader is `version_display`."""
+    secret = "sk-livesecrettoken1234567890"
+    monkeypatch.setattr(
+        codex.runtime,
+        "run_sync_capture",
+        lambda cmd, timeout_seconds=10, **k: CommandRun(secret, secret, 1, 1, False),
+    )
+    assert codex.probe_version_for_run("codex") is None
+    assert codex_log_messages, "the probe must have logged something for this to test"
+    assert not any(secret in m for m in codex_log_messages), codex_log_messages

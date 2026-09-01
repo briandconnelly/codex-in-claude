@@ -5,6 +5,7 @@
         "assumptions": [],
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
@@ -52,6 +53,7 @@
         "diff": null,
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "compat_warnings": [],
           "cwd": "/repo",
           "elapsed_ms": 1,
@@ -92,6 +94,7 @@
         "findings": [],
         "meta": {
           "base": "main",
+          "codex_version": "codex-cli 0.0.0",
           "command_exit_code": 0,
           "compat_warnings": [],
           "context_summary": {
@@ -160,6 +163,7 @@
         },
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "command_exit_code": 0,
           "commit": "0000000000000000000000000000000000000000",
           "compat_warnings": [],
@@ -219,6 +223,7 @@
         "assumptions": [],
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "command_exit_code": 0,
           "compat_warnings": [],
           "cwd": "/repo",
@@ -266,6 +271,7 @@
         "diff": null,
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "compat_warnings": [],
           "cwd": "/repo",
           "elapsed_ms": 1,
@@ -306,6 +312,7 @@
         "findings": [],
         "meta": {
           "base": "main",
+          "codex_version": "codex-cli 0.0.0",
           "command_exit_code": 0,
           "compat_warnings": [],
           "context_summary": {
@@ -374,6 +381,7 @@
         },
         "findings": [],
         "meta": {
+          "codex_version": "codex-cli 0.0.0",
           "command_exit_code": 0,
           "commit": "0000000000000000000000000000000000000000",
           "compat_warnings": [],
