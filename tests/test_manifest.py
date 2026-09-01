@@ -336,9 +336,18 @@ async def test_build_manifest_captures_the_modern_result_envelopes():
         assert set(fields) == set(manifest._RESULT_ENVELOPE_FIELDS), uri
     # The dynamic-content resource is deliberately not read on either era.
     assert "codex://models" not in reads
-    # Every read URI is a listed static resource (the set has no stale entry).
+    assert set(reads).isdisjoint(manifest._DYNAMIC_RESOURCE_URIS)
+    # Two-way guard (Codex review on #576): the listed resources are EXACTLY the static
+    # inventory plus the dynamic one. A subset check would let a new static resource
+    # land unread on the modern era while CI stayed green; equality makes the author
+    # classify it first.
     listed = {r["uri"] for r in m["resources"]}
-    assert set(manifest._STATIC_RESOURCE_URIS) <= listed
+    assert listed == set(manifest._STATIC_RESOURCE_URIS) | set(manifest._DYNAMIC_RESOURCE_URIS)
+    # And the legacy per-resource sections are derived from the same inventory, so the
+    # two eras cannot read different resource sets.
+    assert set(manifest._SECTION_BY_STATIC_URI) == set(manifest._STATIC_RESOURCE_URIS)
+    for section in manifest._SECTION_BY_STATIC_URI.values():
+        assert m[section], section
 
 
 async def test_list_items_are_era_neutral_so_one_capture_suffices():

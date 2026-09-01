@@ -60,8 +60,13 @@ _MODERN_ERA = "2026-07-28"
 # hints plus the result-type discriminator). Captured per covered method; everything
 # else in those results is either the era-neutral items or the release-variable `_meta`.
 _RESULT_ENVELOPE_FIELDS = ("resultType", "ttlMs", "cacheScope")
-# The static schema/contract resources the manifest reads on both eras. codex://models
-# is deliberately absent: its content is dynamic (see test_build_manifest_excludes_dynamic_fields).
+# The single inventory of this server's non-template resources, split by whether the
+# manifest reads their CONTENT. Static: schema/contract bodies read on both eras (the
+# legacy read feeds the per-resource sections; the modern read feeds
+# `modern_result_envelopes`). Dynamic: metadata is listed but content is never read
+# (codex://models reflects $CODEX_HOME). tests/test_manifest.py asserts the listed
+# resources are exactly the union, so a new resource must be classified here before it
+# can land — that is what makes the modern envelope capture complete, not best-effort.
 _STATIC_RESOURCE_URIS = (
     "codex://error-envelope",
     "codex://result-meta",
@@ -69,6 +74,19 @@ _STATIC_RESOURCE_URIS = (
     "codex://status-result",
     "codex://params",
 )
+_DYNAMIC_RESOURCE_URIS = ("codex://models",)
+# Manifest section that carries each static resource's parsed body (legacy read). Every
+# static URI has exactly one section; the test asserts the key sets match.
+_SECTION_BY_STATIC_URI = {
+    "codex://error-envelope": "error_envelope",
+    "codex://result-meta": "result_meta",
+    "codex://capabilities-result": "capabilities_result",
+    "codex://status-result": "status_result",
+    # codex://params body is guarantee/contract-bearing discovered surface (#333), so it
+    # is captured AND parsed like the schema resources — a weakened summary or a
+    # moved-detail change then moves the snapshot and is flagged for review.
+    "codex://params": "params",
+}
 
 
 # The tool call whose result envelope stands in for every tools/call result: free (no
@@ -151,22 +169,14 @@ async def build_manifest() -> dict[str, Any]:
         server_info = initialize.get("serverInfo")
         if isinstance(server_info, dict):
             server_info.pop("version", None)
-        envelope = [
-            _envelope_block(c) for c in await client.read_resource("codex://error-envelope")
-        ]
-        result_meta = [
-            _envelope_block(c) for c in await client.read_resource("codex://result-meta")
-        ]
-        capabilities_result = [
-            _envelope_block(c) for c in await client.read_resource("codex://capabilities-result")
-        ]
-        status_result = [
-            _envelope_block(c) for c in await client.read_resource("codex://status-result")
-        ]
-        # codex://params body is guarantee/contract-bearing discovered surface (#333),
-        # so capture AND parse it (like the schema resources above) — a weakened summary
-        # or a moved-detail change then moves the snapshot and is flagged for review.
-        params = [_envelope_block(c) for c in await client.read_resource("codex://params")]
+        # One read per static resource, from the single inventory the modern envelope
+        # capture below also walks — so the two eras cannot read different sets.
+        static_sections: dict[str, list[dict[str, Any]]] = {
+            _SECTION_BY_STATIC_URI[uri]: [
+                _envelope_block(c) for c in await client.read_resource(uri)
+            ]
+            for uri in _STATIC_RESOURCE_URIS
+        }
 
     # The modern era: a default client probes `server/discover` and adopts 2026-07-28.
     # Its result is the whole discovered contract for that era — supported versions,
@@ -227,11 +237,7 @@ async def build_manifest() -> dict[str, Any]:
         "initialize": initialize,
         "discover": discover,
         "modern_result_envelopes": modern_envelopes,
-        "error_envelope": envelope,
-        "result_meta": result_meta,
-        "capabilities_result": capabilities_result,
-        "status_result": status_result,
-        "params": params,
+        **static_sections,
         "capabilities": _canonicalize(caps),
     }
 
