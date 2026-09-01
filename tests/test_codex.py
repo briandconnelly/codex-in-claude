@@ -2579,3 +2579,128 @@ async def test_a_hung_version_probe_still_lets_the_run_proceed(monkeypatch, tmp_
     )
     assert len(launched) == 1
     assert result.codex_version is None
+
+
+async def test_the_version_is_probed_BEFORE_the_run_is_launched(monkeypatch, tmp_path):
+    """Ordering, not just sameness — and it is the field's whole point.
+
+    `test_version_probe_uses_the_same_token_the_run_spawns` records both calls but never
+    their order, so moving the probe to AFTER `run_async` left the entire suite green
+    while every doc still claimed "immediately before the run's exec". That is not
+    pedantry: probing afterwards would report whichever binary is on disk when the run
+    FINISHES, so an install swapped mid-run — the long-review-plus-upgrade case, and the
+    PATH-swap incident this field exists for — would be named wrongly and confidently.
+    """
+    order: list[str] = []
+
+    def fake_capture(cmd, timeout_seconds=10, *, cwd=None, env=None, stdin_text=None):
+        order.append("probe")
+        return CommandRun("codex-cli 0.151.0", "", 0, 1, False)
+
+    async def recording_exec(
+        cmd,
+        *,
+        cwd,
+        timeout_seconds,
+        stdin_text=None,
+        env=None,
+        on_stdout_line=None,
+        max_output_bytes=None,
+    ):
+        from pathlib import Path
+
+        order.append("exec")
+        if "--output-last-message" in cmd:
+            Path(cmd[cmd.index("--output-last-message") + 1]).write_text("done")
+        return CommandRun("", "", 0, 5, False)
+
+    monkeypatch.setattr(codex.runtime, "run_sync_capture", fake_capture)
+    monkeypatch.setattr(codex.runtime, "run_async", recording_exec)
+    monkeypatch.setattr(codex.preflight, "flag_support", lambda force=False: _ALL_FLAGS)
+    result = await codex.run_codex_exec(
+        "q",
+        kind="consult",
+        cwd=str(tmp_path),
+        sandbox="read-only",
+        isolation="inherit",
+        timeout_seconds=30,
+    )
+    assert order == ["probe", "exec"], order
+    assert result.codex_version == "codex-cli 0.151.0"
+
+
+@pytest.fixture
+def codex_log_messages():
+    """Messages emitted on the `codex_in_claude.codex` logger.
+
+    Not `caplog`: `obs.configure` deliberately sets `propagate = False` on the package
+    loggers (so records never reach a root handler an embedding host may have wired to
+    stdout), and caplog attaches to root — it would see nothing, failing for a reason
+    unrelated to the code under test.
+
+    Level goes through `setLevel`, NOT a direct attribute assignment: CPython caches
+    `isEnabledFor` per logger and only `setLevel` invalidates that cache. Assigning
+    `logger.level` worked in isolation and silently did nothing in the full suite, where
+    an earlier call had already cached "DEBUG is off" — a test that passed alone and
+    failed in company.
+    """
+    import logging
+
+    messages: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    logger = logging.getLogger("codex_in_claude.codex")
+    original_handlers, original_level = logger.handlers[:], logger.level
+    logger.handlers = [_Collect()]
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield messages
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+
+
+@pytest.mark.parametrize(
+    ("capture", "expected_reason"),
+    [
+        (lambda: CommandRun("", "", 1, 1, False), "exit code 1"),
+        (lambda: CommandRun("", "timed out", -9, 1, True), "timed out"),
+        (lambda: CommandRun("\x1b\x07", "", 0, 1, False), "nothing printable"),
+    ],
+)
+def test_a_failing_probe_says_why_in_the_log(
+    monkeypatch, codex_log_messages, capture, expected_reason
+):
+    """A persistently failing probe must be diagnosable.
+
+    The field is optional and its absence has several documented causes, none
+    distinguishable from the envelope — so with no log line an operator whose runs are
+    never stamped (a slow shim exceeding the short budget is the realistic case) cannot
+    tell that from "this build predates the field". DEBUG, not WARNING: a failed probe
+    costs only provenance and must not read as a broken run.
+
+    Each case is a DISTINCT branch, so a reason wired to the wrong one fails here rather
+    than passing on a shared string.
+    """
+    monkeypatch.setattr(
+        codex.runtime, "run_sync_capture", lambda cmd, timeout_seconds=10, **k: capture()
+    )
+    assert codex.probe_version_for_run("codex") is None
+    assert any(expected_reason in m for m in codex_log_messages), codex_log_messages
+
+
+def test_the_probe_log_never_echoes_the_command_output(monkeypatch, codex_log_messages):
+    """The reason is derived from the probe's OUTCOME, never its output: codex's stdout is
+    foreign text whose only sanctioned route to a reader is `version_display`."""
+    secret = "sk-livesecrettoken1234567890"
+    monkeypatch.setattr(
+        codex.runtime,
+        "run_sync_capture",
+        lambda cmd, timeout_seconds=10, **k: CommandRun(secret, secret, 1, 1, False),
+    )
+    assert codex.probe_version_for_run("codex") is None
+    assert codex_log_messages, "the probe must have logged something for this to test"
+    assert not any(secret in m for m in codex_log_messages), codex_log_messages

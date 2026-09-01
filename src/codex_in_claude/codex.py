@@ -16,6 +16,7 @@ from codex_in_claude import (
     cli_contract,
     config,
     normalize,
+    obs,
     preflight,
     prompts,
 )
@@ -398,10 +399,31 @@ def probe_version_for_run(
         # best-effort observation into an availability dependency of every model-bearing
         # call. `Exception`, not `BaseException`: cancellation and interpreter exit must
         # still tear this process down.
-        return None
-    if run.binary_missing or run.timed_out or run.exit_code != 0:
-        return None
-    return version_display(run.stdout.strip() or None)
+        return _probe_gave_nothing("the probe raised")
+    if run.binary_missing:
+        return _probe_gave_nothing("no binary at the run's own argv[0]")
+    if run.timed_out:
+        return _probe_gave_nothing(f"timed out after {timeout_seconds}s")
+    if run.exit_code != 0:
+        return _probe_gave_nothing(f"exit code {run.exit_code}")
+    return version_display(run.stdout.strip() or None) or _probe_gave_nothing(
+        "nothing printable survived sanitization"
+    )
+
+
+def _probe_gave_nothing(why: str) -> None:
+    """Log WHY the run went unstamped, then report the absence.
+
+    Without this a persistently failing probe is invisible: the field is optional, its
+    absence has six documented causes, and nothing else on the envelope distinguishes
+    them -- so an operator whose envelopes are never stamped (a slow npm shim on WSL2 or a
+    cold network mount exceeding the short budget is the realistic case) has no way to
+    tell that from "this build predates the field". DEBUG, not WARNING: a failed probe
+    costs only provenance and must not look like a broken run, and this is per paid call.
+    The reason is derived from the probe's own outcome, never from its output -- codex's
+    stdout is foreign text that only reaches the wire through `version_display`.
+    """
+    obs.get_logger("codex_in_claude.codex").debug("codex --version probe gave nothing: %s", why)
 
 
 def login_status(timeout_seconds: int = 10) -> tuple[bool | None, str | None]:

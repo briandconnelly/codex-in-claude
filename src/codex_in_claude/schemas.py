@@ -825,13 +825,16 @@ class Meta(BaseModel):
             "rewritten between the probe and the exec would go unreported; the "
             "`codex exec --json` stream carries no version of its own. A retrieved "
             "background-job result carries the ORIGINATING run's value. NULL OR ABSENT "
-            "whenever it was not recorded — no Codex run was launched (argument-validation "
-            "and codex_job_* lifecycle errors, dry-run previews, async job-start handles), "
-            "the version probe itself failed or could not run, the spawn found no binary, "
-            "the run failed before the value was captured, a background worker crashed "
-            "unexpectedly (its envelope is rebuilt from the job spec, which holds no "
-            "observation of the run), or the payload was stored by a build predating this "
-            "field. Absence is never evidence that no run happened."
+            "whenever it was not recorded: no Codex run was launched (argument-validation "
+            "errors, dry-run previews, async job-start handles); the envelope was GENERATED "
+            "by a codex_job_* lifecycle call rather than delivered from a run, which "
+            "includes job_cancelled and job_timeout — those describe a job whose run DID "
+            "launch and spend, so their absence of a version is not a claim that nothing "
+            "ran; the probe failed, could not run, exhausted its short budget, or printed "
+            "nothing that survived sanitization; the spawn found no binary; a background "
+            "worker crashed unexpectedly, its envelope rebuilt from the job spec, which "
+            "holds no observation of the run; or the payload was stored by a build "
+            "predating this field. Absence is never evidence that no run happened."
         ),
     )
     scope: str | None = None  # review scope: working_tree|branch|commit
