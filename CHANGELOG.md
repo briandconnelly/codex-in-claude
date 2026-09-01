@@ -95,8 +95,8 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   here. That cache is account-scoped, so this says nothing about other accounts or later catalog
   refreshes.
   Setting `mode = "always_on"` does expose it, and `--disable sleep_tool` removes it again. #586
-  itself sent no new flag; the posture decision was deferred to #587 and is the first entry under
-  Changed below, which supersedes this assessment's "unchanged" posture. `COMPATIBILITY.md` records
+  itself sent no new flag; the posture decision was deferred to #587 — the first entry of this
+  Changed section, above — which supersedes this assessment's "unchanged" posture. `COMPATIBILITY.md` records
   the mechanism, the probe, and the re-check.
 
 - **Recorded that 0.152.0 drops `update_plan` from the default tool set** (#586): restored with

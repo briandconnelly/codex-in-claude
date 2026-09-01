@@ -38,9 +38,10 @@ The `pyproject.toml` trove classifiers declare `Operating System :: MacOS` and
 - `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]
   [--ephemeral] [--ignore-user-config] [--ignore-rules] [--skip-git-repo-check] [--add-dir <dir>]
   --disable remote_plugin --disable sleep_tool [--model <m>] -` — prompt delivered on **stdin**
-  (the trailing `-`), keeping context out of argv. The two `--disable`s are the plugin-owned
-  feature inventory (`cli_contract.MODEL_RUN_DISABLED_FEATURES`; see "Remote-plugin isolation"
-  and "Sleep tool" below).
+  (the trailing `-`), keeping context out of argv. Flag order is illustrative —
+  `codex.build_exec_command` is authoritative. The two `--disable`s are the plugin-owned feature
+  inventory (`cli_contract.MODEL_RUN_DISABLED_FEATURES`; see "Remote-plugin isolation" and
+  "Sleep tool" below).
 - `codex app-server` — short-lived JSON-RPC sessions, driven by `codex_transfer` (session import)
   and by `codex_status`'s rate-limit read (`account/rateLimits/read`, no model spend — see #321).
   See "Session transfer" below.
@@ -325,7 +326,7 @@ uv run python scripts/capture_wire_tools.py --bin "$OLD"                        
 | `--disable sleep_tool -c features.sleep_tool=true` + `mode="always_on"` | **No** — nor the config layer |
 | `--disable view_image` (positive control) | `view_image` disappears |
 
-The three precedence rows (2026-09-01, `0.152.0`) are what let the disable be plugin-owned in the
+The three argv-order rows added at #587 (2026-09-01, `0.152.0`) are what let the disable be plugin-owned in the
 passthrough: an operator `--enable`/`-c features.sleep_tool=true` would be a silent no-op, which is
 why it is refused rather than passed through (see "Operator extra-args passthrough").
 `tests/test_integration.py::test_plugin_disables_keep_clock_out_of_the_model_request_live`
@@ -365,9 +366,8 @@ trade-off it is rather than as an upstream fact:
   here the second half does not hold — no caller request needs Codex to sleep.
 - **Plugin-owned in the passthrough.** `--enable sleep_tool`, `--disable sleep_tool`, and every
   `-c features.sleep_tool…` key (including the exposure gate `features.sleep_tool.mode`) are
-  refused in `CODEX_IN_CLAUDE_EXTRA_ARGS`, for the same two reasons as `remote_plugin`: a
-  re-enable would be a silent no-op, and a redundant operator `--disable` would let an upstream
-  rename be misattributed to the passthrough. The refusal text says *spend*, not *security*.
+  refused in `CODEX_IN_CLAUDE_EXTRA_ARGS` — the reasons are owned by "Operator extra-args
+  passthrough" below. The refusal text says *spend*, not *security*.
 - **Drift.** Fail-closed like `remote_plugin`: an upstream rename or removal of the feature name
   makes every model-bearing run fail at arg-parse as `cli_contract_changed`, zero spend. That is
   deliberate — such a rename is exactly the event that needs the assessment re-run — and it means a
@@ -379,7 +379,7 @@ trade-off it is rather than as an upstream fact:
 **Re-check on every upgrade.** `docs/UPGRADING-CODEX.md` step 2A owns this as a required check.
 Re-run `scripts/capture_wire_tools.py` against both binaries — the `always_on` positive control and
 the plugin's disable set — **and** still re-read `experimental_supported_tools` in the live model
-cache (`jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "$CODEX_HOME/models_cache.json"`):
+cache (`jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "${CODEX_HOME:-$HOME/.codex}/models_cache.json"`):
 the metadata no longer decides the posture, but a slug that starts advertising `clock` is the
 signal that upstream considers the tool model-ready, which is when the trade-off above is worth
 re-reading. An unknown feature name still fails loud as `Error: Unknown feature flag`
