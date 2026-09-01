@@ -205,9 +205,11 @@ Then compare the surfaces the snapshots don't cover:
   jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "${CODEX_HOME:-$HOME/.codex}/models_cache.json"
   ```
 
-  This is the gate that keeps `sleep_tool` off the exec path (COMPATIBILITY.md → "Sleep tool"). It
-  is **backend-populated and account-scoped**, so it can change with no CLI upgrade at all — which
-  is exactly why it is checked here rather than assumed to move with the version.
+  This gate is what kept `sleep_tool` off the exec path before the plugin pinned the posture with
+  `--disable sleep_tool` (COMPATIBILITY.md → "Sleep tool"; #587). It is **backend-populated and
+  account-scoped**, so it can change with no CLI upgrade at all — which is exactly why it is checked
+  here rather than assumed to move with the version: a slug that starts advertising `clock` is the
+  signal to re-read that section's trade-off, not a change in what the plugin sends.
 - **Behavior with no CLI surface at all.** Some upstream changes have no flag and no subcommand —
   what reaches model context implicitly (auto-loaded `AGENTS.md`, discovered skills), and the
   feature flags that govern it. Run
@@ -275,9 +277,11 @@ under [`docs/codex-help/`](codex-help/) when npm is unreachable. Then check:
   whose posture was decided can have its stage or default moved under you. Re-check each of these
   in `codex features list` and confirm the recorded posture still holds:
   `remote_plugin` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Remote-plugin isolation"; the
-  plugin forces it off, and an upstream rename fails loud at arg-parse) and `view_image` /
-  `recommended_plugins` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Image reading"; both left
-  enabled/unreserved deliberately). If `view_image`'s stage or default moves, or the release notes
+  plugin forces it off, and an upstream rename fails loud at arg-parse), `sleep_tool`
+  ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Sleep tool"; forced off the same way since #587 —
+  re-run that section's wire capture with its `always_on` positive control, and its live tests),
+  and `view_image` / `recommended_plugins` ([`COMPATIBILITY.md`](../COMPATIBILITY.md) → "Image
+  reading"; both left enabled/unreserved deliberately). If `view_image`'s stage or default moves, or the release notes
   touch image handling, re-run the no-auto-attachment A/B that section records — `codex debug
   prompt-input` with and without `--disable view_image`, **plus the `-i` positive control** without
   which a zero count proves nothing.

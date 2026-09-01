@@ -37,7 +37,11 @@ The `pyproject.toml` trove classifiers declare `Operating System :: MacOS` and
 
 - `codex exec --json --sandbox <mode> --cd <dir> --output-last-message <file> [--output-schema <file>]
   [--ephemeral] [--ignore-user-config] [--ignore-rules] [--skip-git-repo-check] [--add-dir <dir>]
-  [--model <m>] -` — prompt delivered on **stdin** (the trailing `-`), keeping context out of argv.
+  --disable remote_plugin --disable sleep_tool [--model <m>] -` — prompt delivered on **stdin**
+  (the trailing `-`), keeping context out of argv. Flag order is illustrative —
+  `codex.build_exec_command` is authoritative. The two `--disable`s are the plugin-owned feature
+  inventory (`cli_contract.MODEL_RUN_DISABLED_FEATURES`; see "Remote-plugin isolation" and
+  "Sleep tool" below).
 - `codex app-server` — short-lived JSON-RPC sessions, driven by `codex_transfer` (session import)
   and by `codex_status`'s rate-limit read (`account/rateLimits/read`, no model spend — see #321).
   See "Session transfer" below.
@@ -147,7 +151,8 @@ snapshots (`~/.cache/codex-runtimes/`, `~/.codex/.tmp/bundled-marketplaces/`), n
 
 The server therefore sends **`--disable remote_plugin`** on **every model-bearing `codex exec` call**,
 regardless of tier or isolation (`cli_contract.py`: `DISABLE_FEATURE_FLAG` + `REMOTE_PLUGIN_FEATURE`,
-emitted in `codex.build_exec_command`). It is an **ALWAYS_SEND** guarantee-bearing flag:
+the first entry of `MODEL_RUN_DISABLED_FEATURES`, emitted in `codex.build_exec_command` — the
+`sleep_tool` entry below rides the same mechanism). It is an **ALWAYS_SEND** guarantee-bearing flag:
 
 - `--disable <FEATURE>` is documented as exactly `-c features.<FEATURE>=false`, and it wins over any
   `--enable`/`-c features.remote_plugin=true` **regardless of order**.
@@ -268,10 +273,15 @@ One thing that verification exposed remains open, and is tracked separately beca
 stream — failures reach only stderr — so image egress is invisible to anything parsing it, this
 plugin included (#510).
 
-## Sleep tool (`sleep_tool`, `clock.sleep`) — assessed at 0.152.0, not disabled
+## Sleep tool (`sleep_tool`, `clock.sleep`, #587) — disabled on every model-bearing run
 
 Codex **0.152.0** added a `sleep_tool` feature, stage `stable`, default **on**. It is the one new
-flag in that release with a model-facing surface, so it was assessed rather than rubber-stamped.
+flag in that release with a model-facing surface, so it was assessed (#586) rather than
+rubber-stamped, and the posture was then decided separately (#587): the server sends
+**`--disable sleep_tool`** on **every model-bearing `codex exec` call**, next to `--disable
+remote_plugin` (`cli_contract.SLEEP_TOOL_FEATURE`, the second entry of
+`MODEL_RUN_DISABLED_FEATURES`). Unlike `remote_plugin`, this is **spend hygiene, not a
+containment guarantee** — the distinction is spelled out under "Posture" below.
 
 **What it is.** When exposed, the model receives a `clock` tool **namespace** whose single function
 is `sleep`: "Pause execution for a specified duration. The sleep ends early when new input arrives
@@ -311,7 +321,18 @@ uv run python scripts/capture_wire_tools.py --bin "$OLD"                        
 | Default flags | **No** |
 | `-c 'features.sleep_tool.mode="always_on"'` | **Yes** (the `clock` namespace, with `sleep`) |
 | `--disable sleep_tool` **plus** `mode="always_on"` | **No** — the flag outranks the mode |
+| `--disable sleep_tool --enable sleep_tool` + `mode="always_on"` | **No** — a later `--enable` does not win |
+| `--enable sleep_tool` + `mode="always_on"` + `--disable sleep_tool` | **No** — nor an earlier one |
+| `--disable sleep_tool -c features.sleep_tool=true` + `mode="always_on"` | **No** — nor the config layer |
 | `--disable view_image` (positive control) | `view_image` disappears |
+
+The three argv-order rows added at #587 (2026-09-01, `0.152.0`) are what let the disable be plugin-owned in the
+passthrough: an operator `--enable`/`-c features.sleep_tool=true` would be a silent no-op, which is
+why it is refused rather than passed through (see "Operator extra-args passthrough").
+`tests/test_integration.py::test_plugin_disables_keep_clock_out_of_the_model_request_live`
+re-runs this table against the wire — with the `always_on` row as its positive control — and
+`::test_sleep_tool_disabled_by_plugin_flag_live` pins the `features list` state the same way
+`remote_plugin`'s test does.
 
 The positive control is what makes the first row evidence: without it, a blind capture and a genuine
 absence look identical. Do **not** record the absence as architectural — an earlier reading of this
@@ -319,27 +340,59 @@ probe wrongly concluded the tool was interactive/app-server-only. It is on the `
 path; the tool was simply **gated off** for these models, because none of them advertised
 `clock`.
 
-**Posture: assessed, left enabled, not sent.** The plugin does not send `--disable sleep_tool`
-today, because on the default path there is nothing to disable. That posture rests on **backend
-model metadata**, which can change with no CLI upgrade and no version bump to notice it: a
-`models_cache.json` refresh that adds `clock` to `experimental_supported_tools` would expose the
-tool under the default `model_driven` mode. An operator can also reach it directly through
-`CODEX_IN_CLAUDE_EXTRA_ARGS`. Adopting the disable is tracked separately as a deliberate
-behavior change, per `AGENTS.md` → the rule that adopting or avoiding a new capability is not part
-of a version bump.
+**Posture: disabled, deliberately (#587).** At #586 the tool was left enabled because on the
+default path there was nothing to disable. That posture rested on **backend model metadata**, which
+can change with no CLI upgrade and no version bump to notice it: a `models_cache.json` refresh that
+adds `clock` to `experimental_supported_tools` would expose the tool under the default
+`model_driven` mode, and nothing in this repo re-reads that metadata between upgrades. So the
+posture is now pinned by the plugin instead of by the backend. The reasoning, stated as the
+trade-off it is rather than as an upstream fact:
 
-**Why it would matter if exposed.** The deadline still binds — this server terminates the run — so
-the failure mode is not an unbounded hang. It is **spend without result**: a single `sleep` call can
-consume the whole budget and turn a run that would have succeeded into a `timeout`.
+- **What the tool would cost.** The deadline still binds — this server terminates the run — so the
+  failure mode is not an unbounded hang. It is **spend without result**: a single `sleep` call
+  (`duration_ms` up to 43,200,000) can consume the whole budget and turn a run that would have
+  succeeded into a `timeout`.
+- **What disabling it removes.** The native tool has no *unique* benefit on this bridge: a
+  headless `codex exec` run receives no further input, legitimate waits (polling a process the
+  model itself started) are uncommon in a bounded consult/review/delegate, and the model keeps a
+  shell, so waiting remains possible via a shell `sleep`. What goes away is an *advertised*
+  affordance whose one parameter invites a wait longer than any run can survive.
+- **What this is not.** It is **not a containment guarantee** and is not disclosed as one: the
+  server instructions and tool descriptions promise nothing about sleeping, because the capability
+  to wait is not removed, only the native tool. `remote_plugin` is disclosed because connectors
+  are a data channel a caller relies on being closed; there is no analogous promise here, so no
+  agent-visible text changed and the `fingerprint` did not move. `view_image` (above) was left
+  enabled because disabling it would buy no containment *and* would break legitimate requests;
+  here the second half does not hold — no caller request needs Codex to sleep.
+- **Plugin-owned in the passthrough.** `--enable sleep_tool`, `--disable sleep_tool`, and every
+  `-c features.sleep_tool…` key (including the exposure gate `features.sleep_tool.mode`) are
+  refused in `CODEX_IN_CLAUDE_EXTRA_ARGS` — the reasons are owned by "Operator extra-args
+  passthrough" below. The refusal text says *spend*, not *security*.
+- **Drift.** Fail-closed like `remote_plugin`: an upstream rename or removal of the feature name
+  makes every model-bearing run fail at arg-parse as `cli_contract_changed`, zero spend. That is
+  deliberate — such a rename is exactly the event that needs the assessment re-run — and it means a
+  spend-hygiene flag can now stop the plugin until the next contract bump, like the guarantee flag.
+- **No operator escape hatch — verified, and unlike what `remote_plugin`'s section claims.**
+  The plugin's `--disable` is a runtime override, and on `0.152.0` it removed `clock` under both
+  channels an operator controls (each its own positive control, zero spend): a `--profile` whose
+  `<name>.config.toml` sets `sleep_tool = { mode = "always_on" }`, in either argv order, and the
+  same table at the top level of `$CODEX_HOME/config.toml` read at the default `inherit`
+  isolation. `tests/test_integration.py::test_plugin_disable_outranks_profile_and_config_file_live`
+  pins it. So the passthrough denial exists for attribution and to refuse silent no-ops, not as
+  the last line of defense. (The `remote_plugin` section above still says a profile can
+  re-enable that feature; the same mechanism suggests otherwise, and that is re-verified
+  separately as #591 rather than rewritten here.) The raw-CLI fallback in `README.md` carries the flag
+  for parity with what the plugin sends — there the run has *no* server deadline at all, so the
+  affordance is worse.
 
 **Re-check on every upgrade.** `docs/UPGRADING-CODEX.md` step 2A owns this as a required check.
-Re-run `scripts/capture_wire_tools.py` against both binaries **and** re-read
-`experimental_supported_tools` in the live model cache
-(`jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "$CODEX_HOME/models_cache.json"`),
-not just the feature's stage and default — the stage and default did not move when the exposure
-gate did.
-`--disable sleep_tool` is verified to work and an unknown feature name still fails loud as
-`Error: Unknown feature flag`, so adopting the disable later stays cheap.
+Re-run `scripts/capture_wire_tools.py` against both binaries — the `always_on` positive control and
+the plugin's disable set — **and** still re-read `experimental_supported_tools` in the live model
+cache (`jq -r '.models[] | "\(.slug): \(.experimental_supported_tools)"' "${CODEX_HOME:-$HOME/.codex}/models_cache.json"`):
+the metadata no longer decides the posture, but a slug that starts advertising `clock` is the
+signal that upstream considers the tool model-ready, which is when the trade-off above is worth
+re-reading. An unknown feature name still fails loud as `Error: Unknown feature flag`
+(`tests/test_integration.py::test_unknown_feature_name_fails_loud_live`).
 
 ## Default tool-catalog changes are invisible to `--help` (`update_plan`, 0.152.0)
 
@@ -799,6 +852,9 @@ positive demonstration of exactly the egress path #472 describes.)
   on every argv*: several members ride only the invocations that need them (`--add-dir` and
   `--output-schema` when a caller supplies one, `--strict-config` when the run carries a `-c`
   override). What the class guarantees is that when such a flag is sent, its rejection is loud.
+  Nor does membership mean every *use* of a member is a guarantee: `--disable` carries both the
+  `remote_plugin` security guarantee and the `sleep_tool` spend-hygiene disable (#587), and what
+  the second one needs from the class is exactly the loud rejection of an unknown feature name.
 - **HELP_GATED_FLAGS** — depth/cosmetic only (e.g. `--model`). Feature-detected via
   `codex exec --help`; dropped gracefully if absent and noted in `meta.compat_warnings`.
 
@@ -1107,21 +1163,29 @@ descriptors this server injected; a rejection of a plugin-owned guarantee flag s
   the user's own `config.toml`, can still set them: the operator-trust boundary below, restated
   (with one carve-out: a run that *carries* the parameter outranks a `config.toml`
   `developer_instructions`, verified live — see the section below).
-- **`remote_plugin` is wholly plugin-owned in the passthrough.** Both `--enable remote_plugin` and
-  `--disable remote_plugin`, and any `-c features.remote_plugin=…` (either spelling, since
-  `--enable X` == `-c features.X=true`), are refused — the server manages this feature as a documented
-  security guarantee (#287, above). `--disable` is refused even though it agrees with the plugin, so a
-  drift on the plugin's own guarantee flag can't be misattributed to the operator's passthrough. The
-  refusal also covers the bare **`-c features=…`** parent key (a TOML inline table that could reach
-  `remote_plugin`) and quoted key segments that resolve to the same path (`features."remote_plugin"`,
-  `"features".remote_plugin`). Other features set by their own dotted key (`-c features.some_other=true`,
+- **The plugin-owned features are wholly plugin-owned in the passthrough** — `remote_plugin`
+  (#287, a documented security guarantee) and `sleep_tool` (#587, spend hygiene), the entries of
+  `cli_contract.MODEL_RUN_DISABLED_FEATURES`. For each, both `--enable <feature>` and
+  `--disable <feature>`, and any `-c features.<feature>…=…` key (either spelling, since `--enable X`
+  == `-c features.X=true`) **including dotted descendants** such as `features.sleep_tool.mode`, are
+  refused. `--disable` is refused even though it agrees with the plugin, so a drift on the plugin's
+  own flag can't be misattributed to the operator's passthrough; `--enable` is refused because it
+  would be a silent no-op (the plugin's `--disable` outranks it in any order). The refusal also
+  covers the bare **`-c features=…`** parent key (a TOML inline table that could reach any owned
+  feature) and quoted key segments that resolve to the same path (`features."remote_plugin"`,
+  `"features".remote_plugin`). The descendant match is on a segment boundary, so other features set
+  by their own dotted key (`-c features.some_other=true`, `-c features.sleep_toolbox.mode=…`,
   `--disable some_other`) are still allowed.
 - **`--profile` layers an opaque on-disk TOML** this server cannot inspect. A profile can therefore
   re-introduce configuration the denylist would otherwise refuse, so a profile is a documented
-  **operator-trust boundary** — only enable this knob with profiles you control. One key is
-  excepted: `sandbox_workspace_write.network_access` is pinned by a plugin-owned `-c` override
-  that outranks profiles (verified 0.148.0, re-verified 0.149.1, 0.151.0 and 0.152.0; see Sandbox modes above), so a profile cannot
-  re-grant network egress to a `workspace-write` run.
+  **operator-trust boundary** — only enable this knob with profiles you control. Two keys are
+  excepted, because a plugin-owned runtime override outranks profiles:
+  `sandbox_workspace_write.network_access` is pinned by a `-c` override (verified 0.148.0,
+  re-verified 0.149.1, 0.151.0 and 0.152.0; see Sandbox modes above), so a profile cannot
+  re-grant network egress to a `workspace-write` run; and `features.sleep_tool` is pinned by
+  `--disable sleep_tool` (verified 0.152.0 against a profile and the `config.toml` table, with
+  positive controls; see "Sleep tool" above). Whether `features.remote_plugin` belongs on this
+  list too is #591 — the section above still describes a profile as able to re-enable it.
 
 ## Version policy
 

@@ -32,6 +32,33 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ### Changed
 
+- **`--disable sleep_tool` is sent on every model-bearing run, and `sleep_tool` is plugin-owned
+  in `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#587): the second entry of a new
+  `cli_contract.MODEL_RUN_DISABLED_FEATURES` inventory, next to `remote_plugin`, from which both
+  the `codex exec` argv and the passthrough denylist now derive. Codex 0.152.0's native
+  `clock.sleep` tool accepts a single `duration_ms` of up to 12 hours -- beyond both run
+  deadlines even at their configurable maxima (sync 600s, async 7,200s) -- so one call could
+  turn a run that would have succeeded into a `timeout` (spend
+  without result). Its exposure was gated only by backend-served model metadata that can change
+  with no CLI upgrade, so the plugin now pins the posture itself. This is **spend hygiene, not a
+  containment guarantee**: it removes the advertised native affordance, not the model's ability to
+  wait via its shell, so no server instruction, tool description, or other discovered surface
+  changed and the `fingerprint` does not move (`schema-90`). The disable is fail-closed like
+  `remote_plugin` -- an upstream rename of the feature name fails every run at arg-parse as
+  `cli_contract_changed`, zero spend -- and verified by wire capture with a positive control
+  (`--disable sleep_tool` removes `clock` even under `mode="always_on"`, in every argv order
+  against an operator `--enable` or `-c features.sleep_tool=true`). The raw-CLI fallback command
+  in `README.md` and the bundled skill carries the flag for parity. **Breaking** for an operator:
+  `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses `--enable sleep_tool`, `--disable sleep_tool`, and every
+  `-c features.sleep_tool…` key, including the dotted descendant `features.sleep_tool.mode`, and
+  the existing `remote_plugin` denial likewise extends to dotted descendants -- a narrowing of a
+  documented operator interface (AGENTS.md § Versioning, the #555 precedent). Refusing rather than
+  passing through matters because a re-enable would be a silent no-op, and a redundant operator
+  `--disable` would let a future upstream rename be misattributed to the passthrough
+  (`extra_args_rejected`) instead of failing closed. The refusal text for `sleep_tool` says spend,
+  not security. The runtime `--disable` was also verified to outrank an opaque `--profile` and
+  the `config.toml` `[features]` table (a live zero-spend test pins it), so for this feature there
+  is no operator escape hatch to document.
 - **`codex-cli 0.152.0` is the supported version** (#586): `SUPPORTED_VERSIONS` moves
   `{0.151}` -> `{0.152}`, so `codex_status` no longer warns "outside the tested set" on a machine
   running 0.152.x. It is a **replacement**, not an addition -- the project tracks a single verified
@@ -70,10 +97,10 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   in `experimental_supported_tools`, which is empty for all eight slugs in the model cache observed
   here. That cache is account-scoped, so this says nothing about other accounts or later catalog
   refreshes.
-  Setting `mode = "always_on"` does expose it, and `--disable sleep_tool` removes it again. The
-  plugin therefore sends no new flag; because the posture rests on backend model metadata that can
-  change with no CLI upgrade, adopting the disable is tracked separately as a deliberate behavior
-  change. `COMPATIBILITY.md` records the mechanism, the probe, and the re-check.
+  Setting `mode = "always_on"` does expose it, and `--disable sleep_tool` removes it again. #586
+  itself sent no new flag; the posture decision was deferred to #587 — the first entry of this
+  Changed section, above — which supersedes this assessment's "unchanged" posture. `COMPATIBILITY.md` records
+  the mechanism, the probe, and the re-check.
 
 - **Recorded that 0.152.0 drops `update_plan` from the default tool set** (#586): restored with
   `-c tools.update_plan.enabled=true`. Nothing here references `update_plan` and JSONL parsing is

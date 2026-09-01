@@ -56,7 +56,11 @@ def test_site_list_matches_the_authoritative_rule():
     adding one to the RULE fail until it is enforced here too.
     """
     contract = (_REPO_ROOT / "src/codex_in_claude/cli_contract.py").read_text(encoding="utf-8")
-    rule = contract.split("# RULE:", 1)[1].split("\n\n", 1)[0]
+    # Anchor on the QUALIFIED marker, like the read/preview/write-scope guards below: a bare
+    # `# RULE:` split read whichever RULE block came first in the file, and #587's
+    # `# RULE (disabled features):` block now precedes this one.
+    assert contract.count("# RULE (egress caveat):") == 1
+    rule = contract.split("# RULE (egress caveat):", 1)[1].split("\n\n", 1)[0]
 
     # How each RULE mention maps to the file that must carry the disclosure.
     expected = {

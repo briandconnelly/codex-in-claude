@@ -236,6 +236,35 @@ VALID_SANDBOXES = (SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, SANDBOX_DANGER_FU
 DISABLE_FEATURE_FLAG = "--disable"  # `--disable <FEATURE>`; == `-c features.<FEATURE>=false`
 REMOTE_PLUGIN_FEATURE = "remote_plugin"
 
+# --- Sleep-tool suppression (issue #587) ------------------------------------------
+# Codex 0.152.0 added a `sleep_tool` feature (stage `stable`, default on) that can expose a
+# `clock.sleep` tool whose `duration_ms` is documented up to 43,200,000 (12 hours) — beyond
+# both of this server's run deadlines even at their configurable maxima (sync is clamped to
+# 600s by `config.clamp_timeout`, async to 7,200s by `config.job_max_seconds`; the defaults
+# are 300s/1,800s). Exposure is gated on
+# the feature's `mode`: the default `model_driven` requires the selected model to advertise
+# `clock` in its backend-served `experimental_supported_tools` (empty for every cached slug on
+# 2026-09-01), and `always_on` exposes it regardless. That gate is account-scoped backend
+# metadata that can change with NO CLI upgrade, so the posture is pinned here instead:
+# `--disable sleep_tool` on every model-bearing run. Verified on 0.152.0 by wire capture
+# (scripts/capture_wire_tools.py, zero spend): the disable removes `clock` even under
+# `mode="always_on"` and outranks a later `--enable`/`-c features.sleep_tool=true` in every
+# order. This is SPEND HYGIENE, not containment: it removes the advertised native affordance
+# (one call could burn the whole budget into `timeout`), while the model keeps a shell and
+# could still wait with a shell `sleep`. It shares remote_plugin's fail-closed drift property
+# (an unknown feature name is `Error: Unknown feature flag`, classified cli_contract_changed).
+SLEEP_TOOL_FEATURE = "sleep_tool"
+
+# RULE (disabled features): every feature the plugin forces off on a model-bearing `codex exec`
+# run is listed here, in argv order, and ONLY here. `codex.build_exec_command` emits one
+# `--disable <FEATURE>` per entry, and `config` derives the CODEX_IN_CLAUDE_EXTRA_ARGS denylist
+# (both `--enable`/`--disable` and the `-c features.<FEATURE>[.…]` keys) from the same tuple —
+# an entry present in one and absent from the other would let an operator `--disable` of a
+# plugin-owned feature re-attribute an upstream rename to the passthrough (`extra_args_rejected`)
+# instead of failing closed (#287 review). Each entry needs a refusal reason in
+# `config._PLUGIN_OWNED_FEATURE_REASONS`.
+MODEL_RUN_DISABLED_FEATURES: tuple[str, ...] = (REMOTE_PLUGIN_FEATURE, SLEEP_TOOL_FEATURE)
+
 # --- Implicit Codex context (issues #300, #358, #472) ----------------------------
 # `codex exec` automatically loads guidance from THREE `AGENTS.md` sources into model
 # context and auto-discovers skills from TWO roots (per upstream docs: name/description
@@ -276,7 +305,7 @@ REMOTE_PLUGIN_FEATURE = "remote_plugin"
 # section the single home for all of it. Do not re-list its probe results here: they are
 # expected to change on the next Codex upgrade.
 #
-# RULE: every egress-caveat prose site — the server instructions, the codex_status
+# RULE (egress caveat): every egress-caveat prose site — the server instructions, the codex_status
 # caveat, the tool capability descriptions and docstrings, codex_capabilities'
 # negative_scope, README.md, COMPATIBILITY.md, SECURITY.md, and the
 # collaborating-with-codex skill — must disclose BOTH skills roots. No feature-detection
@@ -444,7 +473,7 @@ ALWAYS_SEND_FLAGS = frozenset(
         "--ignore-rules",  # isolation: drop user/project execpolicy .rules
         "--add-dir",  # extra writable dir for the propose/apply tiers
         "--output-schema",  # enforce a JSON Schema on the final response (structured findings)
-        DISABLE_FEATURE_FLAG,  # isolation: disable remote_plugin connectors (#287)
+        DISABLE_FEATURE_FLAG,  # one per MODEL_RUN_DISABLED_FEATURES entry (#287, #587)
         STRICT_CONFIG_FLAG,  # fail loud on an unknown `-c` config KEY (#524)
     }
 )

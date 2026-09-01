@@ -15,6 +15,7 @@ codex exec \
   --ignore-user-config \
   --ignore-rules \
   --disable remote_plugin \
+  --disable sleep_tool \
   --cd "$WORKSPACE" \
   --skip-git-repo-check -
 ```
@@ -26,7 +27,10 @@ Send the prompt on stdin.
   strictest config isolation — no persisted session, no `$CODEX_HOME/config.toml`, no execpolicy
   rules, no remote-plugin connectors, an explicit working root instead of the ambient directory.
   The plugin itself sends the two config-isolation flags only when the operator raises isolation
-  above the default `inherit`.)
+  above the default `inherit`. `--disable sleep_tool` is the one flag that is spend hygiene rather
+  than a guarantee: it removes Codex's native sleep tool, whose single call can last up to 12
+  hours, and no server deadline bounds this fallback — it does not stop the model from waiting by
+  other means.)
 - Set `WORKSPACE` to a directory the user approved for disclosure.
 - If nothing beyond the sanitized stdin prompt may be visible to Codex, do not use this fallback
   at all.

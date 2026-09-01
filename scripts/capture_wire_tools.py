@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture the tool catalog codex sends to the model, without spending anything.
+r"""Capture the tool catalog codex sends to the model, without spending anything.
 
 Some upstream changes are visible ONLY in the model-facing request: codex 0.152.0 dropped
 `update_plan` from the default tool set and added a gated `clock.sleep`, while every `--help`
@@ -16,6 +16,20 @@ Usage (from the repo root):
     uv run python scripts/capture_wire_tools.py --bin /path/to/old/codex
     uv run python scripts/capture_wire_tools.py -- -c 'features.sleep_tool.mode="always_on"'
     uv run python scripts/capture_wire_tools.py --json          # full tool definitions
+    # config-file / profile channels: a scratch $CODEX_HOME (no config.toml needed) holding a
+    # profile file, then the plugin's disable against it — `clock` present, then absent
+    mkdir -p /tmp/ch && printf '[features]\nsleep_tool = { mode = "always_on" }\n' \
+        > /tmp/ch/sleepy.config.toml
+    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \
+        -- --profile sleepy
+    uv run python scripts/capture_wire_tools.py --codex-home /tmp/ch --inherit-config \
+        -- --profile sleepy --disable sleep_tool
+
+`--inherit-config` drops the probe's default `--ignore-user-config`, so `$CODEX_HOME/config.toml`
+and a `--profile` are read — that is the plugin's default `inherit` isolation, and the only way
+to probe what an operator config channel can and cannot do against a plugin flag (#587).
+`--codex-home` points codex at a scratch `$CODEX_HOME` (no credentials needed: the sink
+answers before any authenticated call) so such a probe never touches the real one.
 
 Exit status: 0 on a captured request, 1 on failure (nothing captured). A non-zero exit means
 the probe did not run — never read it as "no tools".
@@ -57,7 +71,14 @@ def _make_handler(captured: list[bytes]) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def capture(binary: str, model: str, extra: list[str]) -> dict | None:
+def capture(
+    binary: str,
+    model: str,
+    extra: list[str],
+    *,
+    codex_home: str | None = None,
+    inherit_config: bool = False,
+) -> dict | None:
     """Run one codex turn against a local sink and return the parsed request body."""
     captured: list[bytes] = []
     server = HTTPServer((SINK_HOST, 0), _make_handler(captured))
@@ -74,7 +95,7 @@ def capture(binary: str, model: str, extra: list[str]) -> dict | None:
         "--json",
         "--sandbox",
         "read-only",
-        "--ignore-user-config",
+        *([] if inherit_config else ["--ignore-user-config"]),
         "--ephemeral",
         "--skip-git-repo-check",
         "-c",
@@ -87,6 +108,8 @@ def capture(binary: str, model: str, extra: list[str]) -> dict | None:
         "hi",
     ]
     env = {**os.environ, "OPENAI_API_KEY": "sink-placeholder-not-a-credential"}
+    if codex_home is not None:
+        env["CODEX_HOME"] = codex_home
     try:
         subprocess.run(  # argv list, never a shell string
             cmd,
@@ -133,6 +156,16 @@ def main() -> int:
         help="print full tool definitions, not just names",
     )
     parser.add_argument(
+        "--codex-home",
+        default=None,
+        help="run codex against this $CODEX_HOME instead of the real one (a scratch dir)",
+    )
+    parser.add_argument(
+        "--inherit-config",
+        action="store_true",
+        help="do not send --ignore-user-config, so config.toml and --profile are read",
+    )
+    parser.add_argument(
         "extra",
         nargs="*",
         help="extra codex args, after `--` (e.g. -- --disable view_image)",
@@ -140,7 +173,13 @@ def main() -> int:
     args = parser.parse_args()
 
     binary = shutil.which(args.bin) or args.bin
-    body = capture(binary, args.model, list(args.extra))
+    body = capture(
+        binary,
+        args.model,
+        list(args.extra),
+        codex_home=args.codex_home,
+        inherit_config=args.inherit_config,
+    )
     if body is None:
         return 1
     tools = body.get("tools")

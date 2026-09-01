@@ -20,6 +20,11 @@ _ALL_FLAGS = FlagSupport(
 _NO_MODEL = FlagSupport(supported=frozenset(cli_contract.ALWAYS_SEND_FLAGS), help_parsed=True)
 
 
+def _disabled_features(cmd: list[str]) -> list[str]:
+    """Every `<FEATURE>` following a `--disable` token, in argv order (the flag repeats)."""
+    return [cmd[i + 1] for i, tok in enumerate(cmd) if tok == cli_contract.DISABLE_FEATURE_FLAG]
+
+
 def test_build_exec_command_core(tmp_path, monkeypatch):
     # This test is about the argv build, not binary resolution (that behavior is
     # covered by tests/test_binresolve.py and tests/test_binpath.py) -- pin the
@@ -79,7 +84,10 @@ def test_build_exec_command_disables_remote_plugin_every_tier(tmp_path, sandbox,
         output_last_message_path=str(tmp_path / "l"),
         flag_support=_ALL_FLAGS,
     )
-    assert cmd[cmd.index("--disable") + 1] == cli_contract.REMOTE_PLUGIN_FEATURE
+    # Literal, ordered, and complete: `--disable` repeats, so indexing the first occurrence
+    # would prove only remote_plugin. #587 adds sleep_tool (spend hygiene: a native
+    # `clock.sleep` of up to 12h can burn the whole run budget into `timeout`).
+    assert _disabled_features(cmd) == ["remote_plugin", "sleep_tool"]
     # It is a plugin-owned flag (before operator extra_args), never gated away.
     assert cli_contract.DISABLE_FEATURE_FLAG in cli_contract.ALWAYS_SEND_FLAGS
 
@@ -238,7 +246,11 @@ def test_build_exec_command_disable_precedes_extra_args(tmp_path):
         extra_args=("-c", "model_provider=x"),
         flag_support=_ALL_FLAGS,
     )
-    assert cmd.index("--disable") < cmd.index("-c")
+    # EVERY plugin-owned --disable precedes the first operator token, not just the first
+    # one `cmd.index` happens to find (#587: the flag now repeats).
+    disables = [i for i, tok in enumerate(cmd) if tok == "--disable"]
+    assert len(disables) == len(cli_contract.MODEL_RUN_DISABLED_FEATURES) == 2
+    assert all(i < cmd.index("-c") for i in disables)
 
 
 def test_build_exec_command_drops_unsupported_model(tmp_path):
@@ -314,6 +326,14 @@ def test_classify_unknown_feature_flag_is_contract_drift():
     # "Unknown feature flag" — must fail-closed as cli_contract_changed, not generic nonzero_exit.
     err = codex.classify_failure(
         CommandRun("", "Error: Unknown feature flag: remote_plugin", 1, 1, False)
+    )
+    assert err.code == "cli_contract_changed"
+
+
+def test_classify_unknown_sleep_tool_feature_flag_is_contract_drift():
+    # #587: same fail-closed conversion for the second plugin-owned disable.
+    err = codex.classify_failure(
+        CommandRun("", "Error: Unknown feature flag: sleep_tool", 1, 1, False)
     )
     assert err.code == "cli_contract_changed"
 

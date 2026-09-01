@@ -9,6 +9,8 @@ tokens, so they are excluded from the default run.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
 from pontonier.core import runtime
@@ -106,6 +108,104 @@ def test_unknown_feature_name_fails_loud_live():
         )
         == "false"
     )
+
+
+def test_sleep_tool_disabled_by_plugin_flag_live():
+    # #587: the second plugin-owned disable, pinned the same way as remote_plugin above —
+    # the feature exists and is readable, and the plugin flag drives it to false in EITHER
+    # order against `--enable` and against the `-c features.<name>=true` config layer.
+    feature = cli_contract.SLEEP_TOOL_FEATURE
+    assert _feature_state(feature) in {"true", "false"}
+    assert _feature_state(feature, cli_contract.DISABLE_FEATURE_FLAG, feature) == "false"
+    assert (
+        _feature_state(feature, "--enable", feature, cli_contract.DISABLE_FEATURE_FLAG, feature)
+        == "false"
+    )
+    assert (
+        _feature_state(feature, cli_contract.DISABLE_FEATURE_FLAG, feature, "--enable", feature)
+        == "false"
+    )
+    assert (
+        _feature_state(
+            feature, "-c", f"features.{feature}=true", cli_contract.DISABLE_FEATURE_FLAG, feature
+        )
+        == "false"
+    )
+
+
+_WIRE_CAPTURE = Path(__file__).resolve().parents[1] / "scripts" / "capture_wire_tools.py"
+_SLEEP_ALWAYS_ON = "-c", 'features.sleep_tool.mode="always_on"'
+
+
+def _wire_tool_names(*extra: str, script_opts: tuple[str, ...] = ()) -> list[str]:
+    """The tool names codex sends the model under `extra` flags (zero spend, no auth).
+
+    Drives `scripts/capture_wire_tools.py` — a local HTTP sink answers the first request
+    with 400, so the run stops before any model call. `script_opts` are the script's own
+    switches (before `--`); `extra` goes to codex (after it). A non-zero exit means NOTHING
+    was captured and is a failure here, never an empty catalog (see the script's docstring)."""
+    run = runtime.run_sync_capture(
+        [sys.executable, str(_WIRE_CAPTURE), *script_opts, "--", *extra], timeout_seconds=150
+    )
+    assert run.exit_code == 0, f"wire capture failed (nothing captured): {run.stderr}"
+    return run.stdout.split()
+
+
+def test_plugin_disables_keep_clock_out_of_the_model_request_live():
+    """The sleep-tool posture's real oracle is the request codex sends (#587).
+
+    `codex features list` reports feature STATE; whether the `clock` namespace reaches the
+    model is decided by the exec tool planner, gated on the feature's `mode`. So pin the
+    wire: with `mode="always_on"` (which bypasses the model-metadata gate) `clock` MUST
+    appear — the positive control that proves the capture observes feature gating — and
+    with the plugin's own disable set added, in the argv orders an operator could produce,
+    it must not."""
+    disables = [
+        tok
+        for feature in cli_contract.MODEL_RUN_DISABLED_FEATURES
+        for tok in (cli_contract.DISABLE_FEATURE_FLAG, feature)
+    ]
+    exposed = _wire_tool_names(*_SLEEP_ALWAYS_ON)
+    assert "clock" in exposed, exposed  # positive control: an absent clock here is a blind probe
+    assert "clock" not in _wire_tool_names(*disables, *_SLEEP_ALWAYS_ON)
+    # The disable outranks an operator re-enable in either order, and the config layer.
+    assert "clock" not in _wire_tool_names(*disables, "--enable", "sleep_tool", *_SLEEP_ALWAYS_ON)
+    assert "clock" not in _wire_tool_names("--enable", "sleep_tool", *_SLEEP_ALWAYS_ON, *disables)
+    assert "clock" not in _wire_tool_names(
+        *disables, "-c", "features.sleep_tool=true", *_SLEEP_ALWAYS_ON
+    )
+
+
+def test_plugin_disable_outranks_profile_and_config_file_live(tmp_path):
+    """The plugin's runtime `--disable` beats every operator config channel (#587 review).
+
+    An opaque `--profile` and the `$CODEX_HOME/config.toml` `[features]` table (read at the
+    default `inherit` isolation) can each set `sleep_tool` to `always_on`. The two channels
+    live in SEPARATE scratch homes so each positive control proves its own channel: a home
+    that carried both would let the profile rows pass even if `--profile` were ignored
+    (Copilot review of #592). Neither channel survives the plugin's `--disable`, so the
+    posture has no operator escape hatch short of editing the plugin — the docs must not
+    claim one. Zero spend: the sink answers before any model call, and the scratch homes
+    hold no credentials (codex needs no `config.toml` to exist)."""
+    always_on = '[features]\nsleep_tool = { mode = "always_on" }\n'
+    config_home = tmp_path / "config_home"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text(always_on)
+    profile_home = tmp_path / "profile_home"
+    profile_home.mkdir()
+    (profile_home / "sleepy.config.toml").write_text(always_on)  # no config.toml at all
+    disable = (cli_contract.DISABLE_FEATURE_FLAG, cli_contract.SLEEP_TOOL_FEATURE)
+    via_config = ("--codex-home", str(config_home), "--inherit-config")
+    via_profile = ("--codex-home", str(profile_home), "--inherit-config")
+    # The config-file channel: exposes the tool on its own, and the disable removes it.
+    assert "clock" in _wire_tool_names(script_opts=via_config)
+    assert "clock" not in _wire_tool_names(*disable, script_opts=via_config)
+    # The profile channel, in isolation: the profile alone exposes it (so `--profile` is
+    # genuinely read), and the disable removes it in either argv order.
+    assert "clock" not in _wire_tool_names(script_opts=via_profile)  # nothing without --profile
+    assert "clock" in _wire_tool_names("--profile", "sleepy", script_opts=via_profile)
+    assert "clock" not in _wire_tool_names("--profile", "sleepy", *disable, script_opts=via_profile)
+    assert "clock" not in _wire_tool_names(*disable, "--profile", "sleepy", script_opts=via_profile)
 
 
 def test_status_live():
