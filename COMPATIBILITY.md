@@ -372,9 +372,18 @@ trade-off it is rather than as an upstream fact:
   makes every model-bearing run fail at arg-parse as `cli_contract_changed`, zero spend. That is
   deliberate — such a rename is exactly the event that needs the assessment re-run — and it means a
   spend-hygiene flag can now stop the plugin until the next contract bump, like the guarantee flag.
-- **Bounded the same way.** An opaque `--profile` can still set the feature (the operator-trust
-  boundary below), and the raw-CLI fallback in `README.md` carries the flag for parity with what
-  the plugin sends — there the run has *no* server deadline at all, so the affordance is worse.
+- **No operator escape hatch — verified, and unlike what `remote_plugin`'s section claims.**
+  The plugin's `--disable` is a runtime override, and on `0.152.0` it removed `clock` under both
+  channels an operator controls (each its own positive control, zero spend): a `--profile` whose
+  `<name>.config.toml` sets `sleep_tool = { mode = "always_on" }`, in either argv order, and the
+  same table at the top level of `$CODEX_HOME/config.toml` read at the default `inherit`
+  isolation. `tests/test_integration.py::test_plugin_disable_outranks_profile_and_config_file_live`
+  pins it. So the passthrough denial exists for attribution and to refuse silent no-ops, not as
+  the last line of defense. (The `remote_plugin` section above still says a profile can
+  re-enable that feature; the same mechanism suggests otherwise, and that is re-verified
+  separately as #591 rather than rewritten here.) The raw-CLI fallback in `README.md` carries the flag
+  for parity with what the plugin sends — there the run has *no* server deadline at all, so the
+  affordance is worse.
 
 **Re-check on every upgrade.** `docs/UPGRADING-CODEX.md` step 2A owns this as a required check.
 Re-run `scripts/capture_wire_tools.py` against both binaries — the `always_on` positive control and

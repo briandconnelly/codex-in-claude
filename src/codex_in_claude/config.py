@@ -208,9 +208,11 @@ _EXTRA_FEATURE_FLAGS = ("--enable", "--disable")  # --enable/--disable FEATURE
 # allowed, injects a passthrough descriptor that could misattribute a plugin-owned flag drift
 # (an upstream rename → `Unknown feature flag`) to CODEX_IN_CLAUDE_EXTRA_ARGS — so both are
 # refused. `--enable X` is exactly `-c features.X=true`, so the `-c` spellings are denied too
-# (see _plugin_owned_feature_for_key below). NOTE: an opaque `--profile` can still re-enable
-# them — the same documented operator-trust boundary that bounds the `-c` denials (see
-# COMPATIBILITY.md).
+# (see _plugin_owned_feature_for_key below). For sleep_tool the runtime `--disable` was verified
+# (0.152.0, wire capture with positive controls) to outrank BOTH an opaque `--profile` and the
+# `$CODEX_HOME/config.toml` `[features]` table, so the denylist here is not what keeps it off —
+# it exists for attribution and to refuse silent no-ops. Whether the older claim that a
+# `--profile` can re-enable remote_plugin (#287) still holds is tracked as #591.
 _PLUGIN_OWNED_FEATURES = frozenset(cli_contract.MODEL_RUN_DISABLED_FEATURES)
 # Why each owned feature is refused, in the operator's terms. remote_plugin is a documented
 # SECURITY guarantee (#287); sleep_tool is SPEND hygiene (#587) and its refusal must not

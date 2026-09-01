@@ -137,14 +137,15 @@ _WIRE_CAPTURE = Path(__file__).resolve().parents[1] / "scripts" / "capture_wire_
 _SLEEP_ALWAYS_ON = "-c", 'features.sleep_tool.mode="always_on"'
 
 
-def _wire_tool_names(*extra: str) -> list[str]:
+def _wire_tool_names(*extra: str, script_opts: tuple[str, ...] = ()) -> list[str]:
     """The tool names codex sends the model under `extra` flags (zero spend, no auth).
 
     Drives `scripts/capture_wire_tools.py` — a local HTTP sink answers the first request
-    with 400, so the run stops before any model call. A non-zero exit means NOTHING was
-    captured and is a failure here, never an empty catalog (see the script's docstring)."""
+    with 400, so the run stops before any model call. `script_opts` are the script's own
+    switches (before `--`); `extra` goes to codex (after it). A non-zero exit means NOTHING
+    was captured and is a failure here, never an empty catalog (see the script's docstring)."""
     run = runtime.run_sync_capture(
-        [sys.executable, str(_WIRE_CAPTURE), "--", *extra], timeout_seconds=150
+        [sys.executable, str(_WIRE_CAPTURE), *script_opts, "--", *extra], timeout_seconds=150
     )
     assert run.exit_code == 0, f"wire capture failed (nothing captured): {run.stderr}"
     return run.stdout.split()
@@ -173,6 +174,30 @@ def test_plugin_disables_keep_clock_out_of_the_model_request_live():
     assert "clock" not in _wire_tool_names(
         *disables, "-c", "features.sleep_tool=true", *_SLEEP_ALWAYS_ON
     )
+
+
+def test_plugin_disable_outranks_profile_and_config_file_live(tmp_path):
+    """The plugin's runtime `--disable` beats every operator config channel (#587 review).
+
+    An opaque `--profile` and the `$CODEX_HOME/config.toml` `[features]` table (read at the
+    default `inherit` isolation) can both set `sleep_tool` to `always_on`; each is the
+    positive control for its own row. Neither survives the plugin's `--disable`, so the
+    posture has no operator escape hatch short of editing the plugin — the docs must not
+    claim one. Zero spend: the sink answers before any model call, and the scratch
+    `$CODEX_HOME` holds no credentials."""
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    (home / "config.toml").write_text('[features]\nsleep_tool = { mode = "always_on" }\n')
+    (home / "sleepy.config.toml").write_text('[features]\nsleep_tool = { mode = "always_on" }\n')
+    disable = (cli_contract.DISABLE_FEATURE_FLAG, cli_contract.SLEEP_TOOL_FEATURE)
+    opts = ("--codex-home", str(home), "--inherit-config")
+    # Both channels expose the tool on their own (positive controls) ...
+    assert "clock" in _wire_tool_names(script_opts=opts)
+    assert "clock" in _wire_tool_names("--profile", "sleepy", script_opts=opts)
+    # ... and the plugin's disable removes it under each, in either argv order.
+    assert "clock" not in _wire_tool_names(*disable, script_opts=opts)
+    assert "clock" not in _wire_tool_names("--profile", "sleepy", *disable, script_opts=opts)
+    assert "clock" not in _wire_tool_names(*disable, "--profile", "sleepy", script_opts=opts)
 
 
 def test_status_live():

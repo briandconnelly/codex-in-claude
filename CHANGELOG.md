@@ -55,7 +55,9 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
   passing through matters because a re-enable would be a silent no-op, and a redundant operator
   `--disable` would let a future upstream rename be misattributed to the passthrough
   (`extra_args_rejected`) instead of failing closed. The refusal text for `sleep_tool` says spend,
-  not security. An opaque `--profile` remains the documented operator-trust boundary.
+  not security. The runtime `--disable` was also verified to outrank an opaque `--profile` and
+  the `config.toml` `[features]` table (a live zero-spend test pins it), so for this feature there
+  is no operator escape hatch to document.
 - **`codex-cli 0.152.0` is the supported version** (#586): `SUPPORTED_VERSIONS` moves
   `{0.151}` -> `{0.152}`, so `codex_status` no longer warns "outside the tested set" on a machine
   running 0.152.x. It is a **replacement**, not an addition -- the project tracks a single verified
