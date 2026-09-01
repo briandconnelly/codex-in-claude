@@ -4,8 +4,8 @@ requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version < '3.14' and sys_platform == 'win32'",
     "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 
@@ -256,7 +256,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4" },
     { name = "fastmcp", specifier = ">=4.0,<4.1" },
     { name = "mcp", specifier = ">=2.1,<2.2" },
-    { name = "pontonier", specifier = "==0.7.0" },
+    { name = "pontonier", specifier = "==0.8.0" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
@@ -891,14 +891,14 @@ wheels = [
 
 [[package]]
 name = "pontonier"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/5f/cbb0df7bd48fa5a8389e9a12dbb9cc03abb8771731a435cbdb2f61f141c8/pontonier-0.7.0.tar.gz", hash = "sha256:fdc7d67a4e80a86cc920b4312686f4a358a6f7b6d884604364160851d2c77102", size = 490547, upload-time = "2026-08-30T19:19:23.431Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/ed/7e07e52294d9d0703b472e9cfce7adc7349c542ee9393e7ca5895ec1f841/pontonier-0.8.0.tar.gz", hash = "sha256:70bef0816c8f9e02919ce69994a58b987a8119e3171a59dbd19f56e2208d37e2", size = 500245, upload-time = "2026-09-01T00:33:37.884Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/ee/03db1360ee935f3f20cbc083ef8581aa81f56889a93435e88c2b45e59716/pontonier-0.7.0-py3-none-any.whl", hash = "sha256:40405615f29b7cd274f2faf325c9d01f1da53b085c864f0d020ba296244f3b9f", size = 145836, upload-time = "2026-08-30T19:19:21.971Z" },
+    { url = "https://files.pythonhosted.org/packages/28/22/4c911e6f2ec70fd4d14dd82587b97b454fa5a0f09003728e1a98818edce4/pontonier-0.8.0-py3-none-any.whl", hash = "sha256:ef2c0cd0ca5cb801ede9d1fa67dcfe0f2bf82746a8c33daa30c258991c9ffb03", size = 147587, upload-time = "2026-09-01T00:33:36.013Z" },
 ]
 
 [[package]]

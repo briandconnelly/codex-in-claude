@@ -85,10 +85,20 @@ def _unwrap_json_message(message: str) -> str:
     return text
 
 
+# U+FFFD is what a decoder substitutes for a byte it could not decode. In prose that is an
+# acceptable loss; in an IDENTIFIER it is not, because the substitution is silent and the
+# result stays syntactically plausible. Only reachable since pontonier 0.8.0 decodes captured
+# output with `errors="replace"` -- 0.7.0 discarded the whole capture instead, so a lossy id
+# could never be published (#578).
+_REPLACEMENT_CHAR = "\ufffd"
+
+
 def _find_session_id(event: dict) -> str | None:
     for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id"):
         value = event.get(key)
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and value and _REPLACEMENT_CHAR not in value:
+            # A lossy id reads as absent. Returning it would send the agent to `codex resume`
+            # against a thread that never existed, with nothing marking the substitution.
             return value
     # Some events nest payload under "msg"/"payload".
     for nest in ("msg", "payload", "data"):
