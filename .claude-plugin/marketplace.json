@@ -8,7 +8,7 @@
     {
       "name": "codex-in-claude",
       "source": "./",
-      "description": "Call OpenAI Codex from Claude Code for delegation, review, and second opinions."
+      "description": "Deprecated: superseded by amicus (https://github.com/briandconnelly/amicus). Call OpenAI Codex from Claude Code for delegation, review, and second opinions."
     }
   ]
 }

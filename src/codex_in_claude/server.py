@@ -160,6 +160,11 @@ warnings.filterwarnings(
 # its own imperative sentence, and background (async-job mechanics, cached rate-limit
 # semantics) last so an agent that skims reaches the actionable rules first.
 CAPABILITY_SUMMARY = (
+    # Deprecation notice first, so an agent choosing between bridges reads it before routing.
+    "DEPRECATED: codex-in-claude is superseded by amicus "
+    "(https://github.com/briandconnelly/amicus), which calls Codex and other backends. "
+    "When both are installed, prefer amicus's tools. "
+    "This plugin's tools still work. "
     # Lead: what it does and, up front, what it does not do.
     "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a "
     "structured review of your git changes, or a delegated coding task. This plugin does "

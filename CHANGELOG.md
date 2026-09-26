@@ -5,6 +5,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Deprecated
+
+- **codex-in-claude is deprecated in favor of [amicus](https://github.com/briandconnelly/amicus)**,
+  which calls Codex and other backends through one MCP server. The MCP server instructions now
+  open with a deprecation notice that steers agents to amicus's tools when both are installed
+  (`FINGERPRINT` → `schema-92`; wording-only, not breaking). The README, plugin and marketplace
+  descriptions, and the PyPI classifier (`Development Status :: 7 - Inactive`) say the same. The
+  tools themselves are unchanged.
+
 ### Added
 
 - **Run envelopes now record which `codex` build served the run** (#519): `meta.codex_version`
