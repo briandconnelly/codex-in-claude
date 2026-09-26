@@ -5,249 +5,127 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-26
+
+A deprecation release. codex-in-claude is superseded by
+[amicus](https://github.com/briandconnelly/amicus), and the server instructions now open by saying
+so. Alongside that, the server is ported to fastmcp 4 / mcp 2 and its contract is written against
+MCP `2026-07-28` on both protocol eras. Every model-bearing run also disables Codex's native
+`sleep_tool`, run envelopes record which `codex` build served them, and the tracked Codex version
+moves to `0.152`. Two changes are breaking. `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses the
+`sleep_tool` flags. A `2026-07-28` connection now gets `-32602`, not `-32002`, for an unknown
+resource URI. The agent-visible surface changed five times: the result `fingerprint` goes from
+`codex-in-claude/0.1/schema-87` to `schema-92`, and the persisted `RESULT_FORMAT` from `11` to
+`12`. Pre-1.0, that makes this a minor release, and clients that cache by `fingerprint` re-fetch
+the contract.
+
 ### Deprecated
 
-- **codex-in-claude is deprecated in favor of [amicus](https://github.com/briandconnelly/amicus)**,
-  which calls Codex and other backends through one MCP server. The MCP server instructions now
-  open with a deprecation notice that steers agents to amicus's tools when both are installed
-  (`FINGERPRINT` → `schema-92`; wording-only, not breaking). The README, plugin and marketplace
-  descriptions, and the PyPI classifier (`Development Status :: 7 - Inactive`) say the same. The
-  tools themselves are unchanged.
+- **codex-in-claude is deprecated in favor of [amicus](https://github.com/briandconnelly/amicus)**
+  (#604), which calls Codex and other backends through one MCP server. The server instructions now
+  open with a deprecation notice. When both are installed, the notice tells agents to prefer
+  amicus's tools. The README, the plugin and marketplace descriptions, and the PyPI classifier
+  (`Development Status :: 7 - Inactive`) say the same. The tools themselves are unchanged and still
+  work. Not breaking: this adds wording only.
 
 ### Added
 
-- **Run envelopes now record which `codex` build served the run** (#519): `meta.codex_version`
-  carries the display copy of `codex --version` observed for that run -- on consult, review and
-  delegate results alike, sync and async, and on a run that failed as well as one that succeeded
-  -- and it replays with a stored job result, so a persisted envelope can answer "which codex
-  produced this?" after the fact. Previously `meta.server_version` named only the *plugin's* release and `codex_version`
-  rode the `codex_status`/`codex_capabilities` envelopes alone, leaving the PATH-decided binary
-  silently swappable between runs. The value is probed immediately before the run's exec, on the
-  same executable token, working directory, and environment it is about to spawn, and never
-  cached: every run -- sync included -- executes in a fresh worker process, so a cache would save
-  nothing on the paid path while widening the window in which the reported version is not the one
-  that served the run. It is **best-effort observation, not attestation**: it comes from a second
-  process, so a binary replaced or a shim retargeted between probe and exec would go unreported --
-  the `codex exec --json` stream carries no version of its own (re-verified at codex-cli 0.151.0).
-  It is null or absent whenever nothing was recorded -- no run was launched (argument-validation
-  and `codex_job_*` lifecycle errors, dry-run previews, async job-start handles), the probe failed
-  or could not run, the spawn found no binary, a background worker crashed unexpectedly (its
-  envelope is rebuilt from the job spec, which holds no observation of the run), or the payload
-  predates this field -- and its absence is never evidence that no run happened. The resolved binary *path* is deliberately not reported: it is
-  operator-controlled text this server withholds from the wire, and it is not reliably a path at
-  all. The `fingerprint` moves `schema-89` -> `schema-90`, and `RESULT_FORMAT` moves 11 -> 12
-  (a stored success envelope gains the key, which an older reader's closed schema would reject).
-  Backward-compatible: a field addition, no input or guarantee changed.
+- **Run envelopes record which `codex` build served the run** (#519): `meta.codex_version` carries
+  the display copy of `codex --version` observed for that run. It appears on consult, review and
+  delegate results, sync and async, failed or successful, and it replays with a stored job result.
+  Before this, only `codex_status`/`codex_capabilities` reported a Codex version, so the binary
+  that `PATH` picked could change between runs without any record. The value is probed right before
+  the run's exec, using the same executable token, working directory and environment, and is never
+  cached. It is **best-effort observation, not attestation**: it comes from a second process, so a
+  binary swapped between probe and exec would go unreported. It is null or absent whenever nothing
+  was recorded: no run launched, the probe failed, the spawn found no binary, a background worker
+  crashed, or the payload predates the field. Its absence is never evidence that no run happened.
+  The resolved binary path is deliberately withheld. `RESULT_FORMAT` moves to `12` because a
+  stored success envelope gains the key.
 
 ### Changed
 
-- **The `remote_plugin` guarantee no longer carves out an operator `--profile` -- because that
-  carve-out was false** (#591). The server instructions said third-party connectors "aren't exposed
-  to the Codex run -- barring a custom operator-supplied Codex profile", and `COMPATIBILITY.md`,
-  `docs/UPGRADING-CODEX.md` and the `cli_contract.py`/`config.py` comments carried the same claim.
-  Nothing had measured it; it was an analogy to the general `--profile` operator-trust boundary.
-  Measured on 0.152.0 it is wrong in the safe direction: the plugin's `--disable remote_plugin` is a
-  *runtime* override and runtime flags load above profiles, so a profile setting
-  `remote_plugin = true` loses in either argv order -- the same precedence #587 established for
-  `sleep_tool`, so neither plugin-owned feature has a profile escape hatch. The summary now says the
-  feature is forced off "with a runtime override an operator-supplied Codex profile cannot
-  supersede", scoped to connectors supplied *through that feature* rather than to every connector
-  route (the installed-connector tool-surface A/B is still recorded as unexercised).
-  The measurement needed a new instrument, since `codex features list` is blind to profiles at every
-  argv position and 0.152.0 rejects the legacy `profile = "X"` config key outright: the effective
-  value is read off the model-facing tool catalog (`scripts/capture_wire_tools.py`, zero spend),
-  where `list_available_plugins_to_install` tracks the effective value. That marker is documented as
-  a **calibrated proxy, not an oracle** -- it agreed with `codex features list` on all six argv
-  shapes both instruments can see, it carries a scope guard (the plugin tool family appears only in
-  a logged-in `$CODEX_HOME`, so a run without it is INVALID rather than a "feature on" reading), and
-  it has a low-rate flake in both directions that the guard does *not* catch, so every arm is read as
-  a majority of three. Both profiles in the matrix carry an unrelated sentinel
-  (`view_image = false`) so each profile row proves in the same capture that that exact profile was
-  applied -- without it the rows that matter would pass vacuously.
-  `tests/test_integration.py::test_plugin_disable_outranks_profile_for_remote_plugin_live` pins the
-  whole matrix; it skips only in a preflight that needs unanimous evidence the environment cannot
-  be measured in (no plugin tool family, or an ambient `config.toml` that moves the features the
-  matrix reads), and asserts everywhere after. `COMPATIBILITY.md`'s profile boundary is now stated as a precedence rule rather than a
-  numeric exception list, which had already gone stale (`writable_roots` was pinned and
-  profile-outranking but uncounted). The `fingerprint` moves `schema-90` -> `schema-91` (the
-  server-instructions sentence is discovered surface). Not breaking: it *strengthens* a documented
-  guarantee and narrows nothing -- a profile still sets anything this bridge does not pin.
-
-- **`--disable sleep_tool` is sent on every model-bearing run, and `sleep_tool` is plugin-owned
-  in `CODEX_IN_CLAUDE_EXTRA_ARGS`** (#587): the second entry of a new
-  `cli_contract.MODEL_RUN_DISABLED_FEATURES` inventory, next to `remote_plugin`, from which both
-  the `codex exec` argv and the passthrough denylist now derive. Codex 0.152.0's native
-  `clock.sleep` tool accepts a single `duration_ms` of up to 12 hours -- beyond both run
-  deadlines even at their configurable maxima (sync 600s, async 7,200s) -- so one call could
-  turn a run that would have succeeded into a `timeout` (spend
-  without result). Its exposure was gated only by backend-served model metadata that can change
-  with no CLI upgrade, so the plugin now pins the posture itself. This is **spend hygiene, not a
-  containment guarantee**: it removes the advertised native affordance, not the model's ability to
-  wait via its shell, so no server instruction, tool description, or other discovered surface
-  changed and the `fingerprint` does not move (`schema-90`). The disable is fail-closed like
-  `remote_plugin` -- an upstream rename of the feature name fails every run at arg-parse as
-  `cli_contract_changed`, zero spend -- and verified by wire capture with a positive control
-  (`--disable sleep_tool` removes `clock` even under `mode="always_on"`, in every argv order
-  against an operator `--enable` or `-c features.sleep_tool=true`). The raw-CLI fallback command
-  in `README.md` and the bundled skill carries the flag for parity. **Breaking** for an operator:
-  `CODEX_IN_CLAUDE_EXTRA_ARGS` now refuses `--enable sleep_tool`, `--disable sleep_tool`, and every
-  `-c features.sleep_tool…` key, including the dotted descendant `features.sleep_tool.mode`, and
-  the existing `remote_plugin` denial likewise extends to dotted descendants -- a narrowing of a
-  documented operator interface (AGENTS.md § Versioning, the #555 precedent). Refusing rather than
-  passing through matters because a re-enable would be a silent no-op, and a redundant operator
-  `--disable` would let a future upstream rename be misattributed to the passthrough
-  (`extra_args_rejected`) instead of failing closed. The refusal text for `sleep_tool` says spend,
-  not security. The runtime `--disable` was also verified to outrank an opaque `--profile` and
-  the `config.toml` `[features]` table (a live zero-spend test pins it), so for this feature there
-  is no operator escape hatch to document.
-- **`codex-cli 0.152.0` is the supported version** (#586): `SUPPORTED_VERSIONS` moves
-  `{0.151}` -> `{0.152}`, so `codex_status` no longer warns "outside the tested set" on a machine
-  running 0.152.x. It is a **replacement**, not an addition -- the project tracks a single verified
-  minor. No agent-visible surface changed, so the `fingerprint` does not move. The
-  `docs/UPGRADING-CODEX.md` checks were run against the installed 0.152.0 with 0.151.0 retrieved
-  side by side from npm (channel parity confirmed against a same-version npm copy): the mechanical
-  drift check is clean (all 12 `ALWAYS_SEND` flags, the
-  help-gated `--model`, and all three sandbox values present, no new unconsumed flag); every
-  captured `--help` surface -- `codex`, `exec`, `review`, `exec review`, and `app-server` -- is
-  byte-identical between the two binaries; `codex features list` gained four rows and lost none;
-  `KNOWN_MODEL_SLUGS` still matches the live cache (the same eight slugs, reasoning-effort
-  discovery fields unchanged in shape); the app-server schema diff added one v2 message this plugin
-  does not consume (`AuthRecoveryNotification`) and left six of the seven consumed schemas
-  byte-identical, with `GetAccountRateLimitsResponse` gaining two optional additive fields
-  (`accountId`, `rateLimitUpsell`) the key-based reader ignores; the `--strict-config`,
-  retired-setting, and invalid-value grammars all still parse; the two sandbox pins
-  (`network_access`, `writable_roots`) hold against both the config file and a `--profile`, each
-  with a live positive control; the reasoning-effort key is still applied (both bracketed rejection
-  markers); `--sandbox read-only` still blocks writes and `--output-last-message` still receives
-  the final message (each with a live positive control); the `SandboxWorkspaceWrite` field set is
-  unchanged between the two binaries, so no new widening key arrived; the live app-server
-  rate-limit read still returns a quota block (`test_live_rate_limits_read_roundtrip`); all four
-  `remote_plugin` mechanism arms still hold, positive control included; structured output still
-  conforms; and the implicit-context presence matrix is identical across both binaries on every row
-  and every variant. The read-boundary probe was **not** re-run: it is prescribed only when a
-  release touches the sandbox, `--sandbox` values, or filesystem access, and every one of those
-  surfaces is byte-identical here. `docs/codex-help/0.152.0/` carries the captures from the binary
-  actually verified, and the 19 live integration tests pass against it.
-
-- **`sleep_tool` assessed and recorded; the posture is unchanged** (#586): 0.152.0 added a
-  `stable`, default-on `sleep_tool` feature that can expose a `clock` tool namespace whose `sleep`
-  function accepts a `duration_ms` of up to 43,200,000 (12 hours) -- longer than either of this
-  server's deadlines. Captured wire requests (zero spend, with a positive control) show it is
-  **not** exposed on the default `codex exec` path at 0.152.0: exposure is gated on the feature's
-  `mode`, and under the default `model_driven` it requires the selected model to advertise `clock`
-  in `experimental_supported_tools`, which is empty for all eight slugs in the model cache observed
-  here. That cache is account-scoped, so this says nothing about other accounts or later catalog
-  refreshes.
-  Setting `mode = "always_on"` does expose it, and `--disable sleep_tool` removes it again. #586
-  itself sent no new flag; the posture decision was deferred to #587 — the first entry of this
-  Changed section, above — which supersedes this assessment's "unchanged" posture. `COMPATIBILITY.md` records
-  the mechanism, the probe, and the re-check.
-
-- **Recorded that 0.152.0 drops `update_plan` from the default tool set** (#586): restored with
-  `-c tools.update_plan.enabled=true`. Nothing here references `update_plan` and JSONL parsing is
-  tolerant, so no contract or parser dependency here changed -- though the model-facing tool
-  catalog itself did, and that is an upstream behavior change this bridge simply has no stake in.
-  It is documented because neither the `--help` surfaces (byte-identical) nor the `features list`
-  diff (four added rows) can see it at all -- the model-facing request is a separate surface, and
-  `COMPATIBILITY.md` now names the probe that observes it.
-
-- **The sync-probe spawn shim is gone; `pontonier` pins to `0.8.0`** (#577): `probe.py` existed only
-  because `pontonier` 0.7.0's `run_sync_capture` wrapped spawn and drain in one `try` and caught just
-  `(FileNotFoundError, NotADirectoryError)`, so an unusable `codex` on `PATH` -- an executable
-  directory, a file without the execute bit, `ENOEXEC` -- escaped a probe documented never to raise
-  (#541). `pontonier` 0.8.0 isolates the `Popen` phase and returns `binary_missing` for every spawn
-  failure, matching `run_async`, so the module and its errno/filename inference are deleted and
-  `codex_version`, `login_status`, and `preflight._probe_help` call `runtime.run_sync_capture`
-  directly. **The shim removal itself changes no behavior**: the end-to-end guard in
-  `tests/test_sync_tool_guard.py` -- an executable directory named `codex` driven through
-  `codex_status` -- still reports a readiness fact, and was confirmed to fail without the fix before
-  this landed. The `fingerprint` does not move.
-- **A `codex` run emitting invalid UTF-8 no longer loses its output, and cannot fabricate a session
-  id** (#577, #578): separately from the shim removal above, `pontonier` 0.8.0 decodes captured
-  output with `errors="replace"` rather than strictly, so a stray non-UTF-8 byte now yields text
-  containing U+FFFD where 0.7.0 raised `UnicodeDecodeError` out of the sync probe and silently
-  discarded the async capture. That is the better trade for diagnostic text -- U+FFFD is ordinary
-  printable text (category `So`), so the control-character and redaction handling treat it as any
-  other character -- but it made one new shape reachable: an invalid byte *inside* a JSONL
-  `thread_id` now parses into a valid-looking identifier rather than destroying the capture.
-  `session_id` is not prose, so `normalize` now rejects an identifier carrying U+FFFD and reports it
-  as absent: a lossy id would send an agent to `codex resume` against a thread that never existed,
-  with nothing in the envelope marking the substitution. A later intact id in the same stream still
-  wins.
-- **The served contract is written against MCP `2026-07-28`, on both protocol eras** (#571,
-  ADR 0004 amendment): fastmcp 4 serves the legacy `initialize` handshake and the modern
-  `server/discover` era side by side with no knob to restrict either, so this release makes the
-  modern path conformant instead of merely tolerated. A `resources/read` of an unknown URI now
-  returns the era-correct numeric — still `-32002` on a handshake-era connection (what Claude Code
-  negotiates today: a live capture of 2.1.252 shows `initialize` at `2025-11-25`, roots advertised,
-  and no `server/discover` on stdio), and `-32602` on a `2026-07-28` connection, whose spec forbids
-  `-32002` (SEP-2164); the `error.data` envelope is identical on both, and
-  `resource_error_carrier` states both numerics with their eras. The manifest snapshot gains a
-  `discover` section (the modern era's supported versions, capabilities, instructions, and
-  `ttlMs`/`cacheScope` hints, minus the release-variable server version) and a
-  `modern_result_envelopes` section (the modern `resultType`/`ttlMs`/`cacheScope` wrapper on every
-  list/read method the caching spec covers, and the `tools/call` wrapper from one free call; the
-  items inside are pinned equal across eras),
-  disclosed as the new `fingerprint_covers` tokens `discover_response` and
-  `modern_result_envelopes` — the two eras already disagree on the wire (`listChanged`), so the
-  legacy capture could not stand in for them. `roots_source`'s `probe_failed` description no
-  longer promises that retrying may help: it does on a handshake-era connection and never on a
-  `2026-07-28` one, where this server's push-style probe cannot run (the modern round-trip roots
-  path is deferred). The roots capability gate now reads the SDK's era-neutral
-  `session.client_capabilities` instead of the handshake-era `client_params`, so a `2026-07-28`
-  request that declares roots without client info is no longer misreported as `not_negotiated`;
-  a real modern-client test pins the emitted `probe_failed`. `protocol_revision` moves to
-  `2026-07-28` and its SDK-drift guard is strict again (#570 had pinned the gap). Roots stay a
-  handshake-era fallback (`probe_failed` on modern connections, unchanged); a dedicated modern-era
-  `roots_source` value, cache-hint tuning, and the tasks extension are deferred and recorded in the
-  ADR. The result `fingerprint` moves `schema-88` -> `schema-89`. **Breaking** for a client on a
-  `2026-07-28` connection that matched resource-not-found on the numeric: `resource_error_carrier`
-  documented `-32002` with no era qualifier while the server served both eras, so the modern
-  value moving to `-32602` narrows a documented guarantee (AGENTS.md § Versioning; the safe
-  direction, per #193). The handshake-era value is unchanged, and `error.data.code ==
-  "resource_not_found"` is stable on both eras — classify on that, as the carrier now says.
-  `protocol_revision` is documented as the target, not a per-session promise, and is not itself
-  breaking.
-- **Ported to fastmcp 4.0.0 / mcp 2.1.1** (#570): dependency caps move to `fastmcp>=4.0,<4.1`
-  plus an explicitly declared `mcp>=2.1,<2.2` (imported directly; previously ridden as a
-  transitive dependency — the class of gap that caused #572). The mechanical surface: the SDK's
-  `McpError` -> `MCPError` rename and keyword constructor in the resource-error middleware; the
-  #424 UI-extension filter reads the now-declared `ServerCapabilities.extensions` field instead
-  of `model_extra` (and is tested on BOTH protocol eras fastmcp 4 serves); the roots probe moves
-  from the removed `Context.list_roots()` to the SDK session (legacy-era only — a modern
-  2026-07-28 connection has no back-channel, reports `roots_source: "probe_failed"`, and falls
-  back exactly as a root-less client always did), now guarded by a live-path regression test
-  driving the real server through a real client, since the doubles-only coverage is how the dead
-  path stayed green; the manifest capture pins `Client(mode="legacy")` because fastmcp 4's
-  default negotiates the modern era where `initialize_result` is `None`. The legacy `initialize`
-  capture loses its empty `capabilities.experimental` map (an mcp-2 serialization change, not a
-  capability change), so the result `fingerprint` moves `schema-87` -> `schema-88`; nothing is
-  breaking. `protocol_revision` deliberately stays `2025-11-25` — the SDK's own target moved to
-  `2026-07-28`, but declaring it before the era migration (error renumbering, cache hints, the
-  discover-era manifest) would overstate conformance; the drift guard now pins that gap
-  explicitly on both sides, and #571 owns closing it. Tests drop every camelCase SDK-field read
-  and run with fastmcp's compat bridge OFF, so a camelCase read fails today instead of on the
-  FastMCP 5 upgrade.
+- **The served contract is written against MCP `2026-07-28`, on both protocol eras** (#571, ADR
+  0004 amendment). fastmcp 4 serves the legacy `initialize` handshake and the modern
+  `server/discover` era side by side, so the modern path is now conformant instead of merely
+  tolerated. A `resources/read` of an unknown URI returns `-32002` on a handshake-era connection,
+  which is what Claude Code negotiates today, and `-32602` on a `2026-07-28` connection, whose spec
+  forbids `-32002` (SEP-2164). The `error.data` envelope is identical on both, and
+  `resource_error_carrier` states both numerics with their eras. The manifest snapshot gains
+  `discover` and `modern_result_envelopes` sections, disclosed as the new `fingerprint_covers`
+  tokens `discover_response` and `modern_result_envelopes`. `roots_source`'s `probe_failed` no
+  longer promises that a retry may help. A retry can help on a handshake-era connection but never
+  on a `2026-07-28` one, where the push-style roots probe cannot run. The roots capability gate now
+  reads the era-neutral `session.client_capabilities`, so a modern request that declares roots
+  without client info is no longer misreported as `not_negotiated`. `protocol_revision` moves to
+  `2026-07-28` and is documented as the target, not a per-session promise. A modern-era
+  `roots_source` value, cache-hint tuning and the tasks extension are deferred and recorded in the
+  ADR. **Breaking** for a client on a `2026-07-28` connection that matched resource-not-found on
+  the numeric, which was documented as `-32002` with no era qualifier. Classify on
+  `error.data.code == "resource_not_found"` instead, which is stable on both eras.
+- **Ported to fastmcp 4 / mcp 2** (#570, #601). Dependencies are now `fastmcp>=4.0,<4.1` and an
+  explicitly declared `mcp>=2.1,<2.3`, which was previously a transitive dependency; the class of
+  gap behind #572. The roots probe moves from the removed `Context.list_roots()` to the SDK
+  session. It is legacy-era only: a `2026-07-28` connection reports `roots_source: "probe_failed"`
+  and falls back as a root-less client always did. A live-path test now drives the real server
+  through a real client, because doubles-only coverage is how the dead path stayed green. The
+  legacy `initialize` capture loses its empty `capabilities.experimental` map, which is a
+  serialization change, not a capability change.
+- **`--disable sleep_tool` is sent on every model-bearing run** (#587). Codex 0.152.0 added a
+  default-on `sleep_tool` feature whose `clock.sleep` accepts up to 12 hours. That is beyond both
+  run deadlines even at their maxima, so one call could turn a run that would have succeeded into a
+  `timeout`, which is spend without result. At 0.152.0 it was not exposed on the default path: its
+  exposure depended on backend-served model metadata that can change with no CLI upgrade. The
+  plugin now pins the posture itself. The flag comes from a new
+  `cli_contract.MODEL_RUN_DISABLED_FEATURES` inventory, next to `remote_plugin`, which also feeds
+  the passthrough denylist. It fails closed: an upstream rename fails every run at arg-parse as
+  `cli_contract_changed`, zero spend. It outranks an operator `--profile`, `--enable` and
+  `config.toml` `[features]` in every argv order, and a live zero-spend test pins that. This is
+  **spend hygiene, not a containment guarantee**. The model can still wait through its shell, so
+  no discovered surface changed. **Breaking** for an operator: `CODEX_IN_CLAUDE_EXTRA_ARGS` now
+  refuses `--enable sleep_tool`, `--disable sleep_tool`, and every `-c features.sleep_tool…` key,
+  dotted descendants included. The existing `remote_plugin` denial likewise extends to dotted
+  descendants, which narrows a documented operator interface (the #555 precedent).
+- **The `remote_plugin` guarantee no longer carves out an operator `--profile`, because the
+  carve-out was false** (#591). The server instructions said third-party connectors aren't exposed
+  to the Codex run "barring a custom operator-supplied Codex profile". Measured on 0.152.0, the
+  plugin's `--disable remote_plugin` is a runtime override that outranks a profile in either argv
+  order. The instructions now say the feature is forced off "with a runtime override an
+  operator-supplied Codex profile cannot supersede". The measurement reads the model-facing tool
+  catalog (`scripts/capture_wire_tools.py`, zero spend), a calibrated proxy documented with its
+  scope guard and flake rate. It is pinned by
+  `tests/test_integration.py::test_plugin_disable_outranks_profile_for_remote_plugin_live`.
+  `COMPATIBILITY.md` now states the profile boundary as a precedence rule. Not breaking: it
+  strengthens a guarantee.
+- **`codex-cli 0.152.0` is the supported version** (#586): `SUPPORTED_VERSIONS` moves from
+  `{0.151}` to `{0.152}`, so `codex_status` no longer warns "outside the tested set" on 0.152.x.
+  Every `docs/UPGRADING-CODEX.md` check was run against 0.152.0, with 0.151.0 side by side from
+  npm, and all passed. The drift check, `--help` surfaces, model slugs, consumed app-server
+  schemas, config grammars, sandbox pins and implicit-context matrix all came out clean, and the
+  live integration tests pass. `docs/codex-help/0.152.0/` carries the captures. 0.152.0 also drops
+  `update_plan` from the default tool set. Nothing here depends on it, and `COMPATIBILITY.md` now
+  names the wire-capture probe that sees the model-facing catalog, which `--help` and
+  `features list` cannot.
+- **`pontonier` pins to `0.9.0`** (#577, #601). 0.8.0 returns `binary_missing` for every spawn
+  failure, so the `probe.py` workaround for 0.7.0 is deleted. Its behavior is unchanged, and
+  `tests/test_sync_tool_guard.py` still guards it end to end. 0.9.0's additions are all additive
+  and defaulted, and this bridge uses none of them.
 
 ### Fixed
 
+- **A `codex` run emitting invalid UTF-8 no longer loses its output, and cannot fabricate a session
+  id** (#577, #578). `pontonier` 0.8.0 decodes captured output with `errors="replace"`. A stray
+  non-UTF-8 byte now yields U+FFFD, where it used to raise out of the sync probe and silently
+  discard the async capture. `normalize` rejects a `thread_id` carrying U+FFFD and reports the
+  session id as absent, so an agent is never sent to `codex resume` against a thread that never
+  existed. A later intact id in the same stream still wins.
 - **A run whose output capture failed now says so instead of reading as a slow model or a bare
-  crash** (#579): `pontonier` 0.8.0's `CommandRun.capture_failed` is set when one of the plugin's
-  own capture threads (stdout or stderr -- the flag does not say which) dies. Forced against the
-  pinned release, that produces two shapes on the model-bearing path -- a clean exit 0 with an
-  empty event stream and an intact `--output-last-message` file, or, when codex keeps writing, a
-  child blocked on the undrained pipe until the deadline and a `timeout` that is really a bridge
-  fault. `classify_failure` now names the lost capture in exactly those two places, hedged to what
-  the flag proves: the `timeout` message says codex may have been blocked rather than slow, and
-  its `repair.alternative` says to retry the same call once before treating it as an ordinary
-  timeout (the table's alternative, which assumes a retry will time out again, is overridden for
-  this case only); the generic `nonzero_exit` message notes that part of the output may have been lost and
-  its diagnosis may be incomplete. No classification changes -- a recognizable auth, drift, or
-  rate-limit signature still wins -- and the success path deliberately ignores the flag: the
-  answer is the file, so a dead capture thread costs at most the stream-derived
-  `usage`/`session_id`, which read as absent as they are documented to. These are
-  `error.message`/`repair.alternative` prose changes outside the discovered surface, so the
-  `fingerprint` does not move.
+  crash** (#579). When one of the plugin's capture threads dies, the `timeout` message says codex
+  may have been blocked rather than slow. In that case `repair.alternative` says to retry once
+  before treating it as an ordinary timeout. The generic `nonzero_exit` message notes that output
+  may have been lost. No classification changes, and the success path ignores the flag because the
+  answer is the `--output-last-message` file. These are prose changes outside the discovered
+  surface.
 
 ## [0.22.0] - 2026-08-31
 
