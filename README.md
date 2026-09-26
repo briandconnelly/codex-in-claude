@@ -9,6 +9,11 @@ Call **OpenAI Codex** from **Claude Code** — an independent second opinion, st
 review, and delegated coding tasks (**cross-model review**) — through a FastMCP plugin that drives
 the `codex` CLI safely.
 
+> [!WARNING]
+> **Deprecated.** `codex-in-claude` is superseded by [**amicus**](https://github.com/briandconnelly/amicus),
+> which calls Codex and other backends (Kimi, Claude Code) through one MCP server.
+> New users should install amicus; existing installs keep working, but new work lands in amicus.
+
 **Contents:** [Why](#why) · [Quick start](#quick-start) · [Example](#example) ·
 [Requirements](#requirements) · [Tools](#tools) · [Skills](#skills) ·
 [Result envelopes](#result-envelopes) · [Safety](#safety) ·
