@@ -965,7 +965,8 @@ CapabilitiesDetailParam = Annotated[
     CapabilitiesDetail,
     Field(
         description="What to return: 'summary' (default) returns each tool's name, cost, "
-        "stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds "
+        "stability, error_codes, and deprecation marker; the *_async tools also get "
+        "async_lifecycle. 'full' adds "
         "use_when, returns, and the parameter lists (which tools/list already carries). "
         "'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without "
         "re-paying for the inventory."
@@ -1588,7 +1589,7 @@ _LIFECYCLE_META_KEY = "dev.bconnelly.codex-in-claude/lifecycle"
 _NEEDS_BACKEND = (
     'Pass backend="codex"; arguments and results differ, so read amicus_capabilities first.'
 )
-_JOB_IDS_STAY = "Job ids do not carry over: finish jobs started here with this tool."
+_JOB_IDS_STAY = "Job ids do not carry over: finish jobs started here with this server's job tools."
 
 
 _TOOL_SUCCESSORS: dict[str, tuple[str | None, str]] = {
@@ -1633,11 +1634,12 @@ _TOOL_DEPRECATIONS: dict[str, ToolDeprecation] = {
 
 
 def _tool_meta(name: str) -> dict[str, object]:
-    stability = _TOOL_STABILITY.get(name, _SERVER_STABILITY)
     return {
-        _STABILITY_META_KEY: stability,
+        _STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY),
         _LIFECYCLE_META_KEY: {
-            "stability": stability,
+            # The convention's closed tier set has no "alpha", so this copy matches the
+            # tool's codex_capabilities entry: null means it inherits the server-wide tier.
+            "stability": _TOOL_STABILITY.get(name),
             "deprecation": _TOOL_DEPRECATIONS[name].model_dump(),
         },
     }

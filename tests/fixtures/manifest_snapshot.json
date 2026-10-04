@@ -445,7 +445,7 @@
       {
         "cost": "free",
         "deprecation": {
-          "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
           "removal_at_or_after": "0.25.0",
           "replaced_by": "amicus_job_status",
           "since": "0.23.0"
@@ -471,7 +471,7 @@
       {
         "cost": "free",
         "deprecation": {
-          "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
           "removal_at_or_after": "0.25.0",
           "replaced_by": "amicus_job_result",
           "since": "0.23.0"
@@ -503,7 +503,7 @@
       {
         "cost": "free",
         "deprecation": {
-          "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
           "removal_at_or_after": "0.25.0",
           "replaced_by": "amicus_job_consume_result",
           "since": "0.23.0"
@@ -535,7 +535,7 @@
       {
         "cost": "free",
         "deprecation": {
-          "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
           "removal_at_or_after": "0.25.0",
           "replaced_by": "amicus_job_cancel",
           "since": "0.23.0"
@@ -561,7 +561,7 @@
       {
         "cost": "free",
         "deprecation": {
-          "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
           "removal_at_or_after": "0.25.0",
           "replaced_by": "amicus_job_list",
           "since": "0.23.0"
@@ -3724,7 +3724,7 @@
             "replaced_by": "amicus_capabilities",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -3739,7 +3739,7 @@
         "properties": {
           "detail": {
             "default": "summary",
-            "description": "What to return: 'summary' (default) returns each tool's name, cost, stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries). 'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without re-paying for the inventory.",
+            "description": "What to return: 'summary' (default) returns each tool's name, cost, stability, error_codes, and deprecation marker; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries). 'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without re-paying for the inventory.",
             "enum": [
               "contracts",
               "full",
@@ -3952,7 +3952,7 @@
             "replaced_by": "amicus_consult",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -4587,7 +4587,7 @@
             "replaced_by": "amicus_delegate",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -5184,7 +5184,7 @@
             "replaced_by": "amicus_delegate_dry_run",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -5492,7 +5492,7 @@
             "replaced_by": "amicus_review_changes_dry_run",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -5992,7 +5992,7 @@
       "_meta": {
         "dev.bconnelly.codex-in-claude/lifecycle": {
           "deprecation": {
-            "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
             "removal_at_or_after": "0.25.0",
             "replaced_by": "amicus_job_cancel",
             "since": "0.23.0"
@@ -6235,7 +6235,7 @@
       "_meta": {
         "dev.bconnelly.codex-in-claude/lifecycle": {
           "deprecation": {
-            "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
             "removal_at_or_after": "0.25.0",
             "replaced_by": "amicus_job_consume_result",
             "since": "0.23.0"
@@ -6349,7 +6349,7 @@
       "_meta": {
         "dev.bconnelly.codex-in-claude/lifecycle": {
           "deprecation": {
-            "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
             "removal_at_or_after": "0.25.0",
             "replaced_by": "amicus_job_list",
             "since": "0.23.0"
@@ -6589,7 +6589,7 @@
       "_meta": {
         "dev.bconnelly.codex-in-claude/lifecycle": {
           "deprecation": {
-            "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
             "removal_at_or_after": "0.25.0",
             "replaced_by": "amicus_job_result",
             "since": "0.23.0"
@@ -6701,7 +6701,7 @@
       "_meta": {
         "dev.bconnelly.codex-in-claude/lifecycle": {
           "deprecation": {
-            "migration": "Job ids do not carry over: finish jobs started here with this tool.",
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
             "removal_at_or_after": "0.25.0",
             "replaced_by": "amicus_job_status",
             "since": "0.23.0"
@@ -6947,7 +6947,7 @@
             "replaced_by": "amicus_models",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -7126,7 +7126,7 @@
             "replaced_by": "amicus_review_changes",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
@@ -7982,7 +7982,7 @@
             "replaced_by": "amicus_backends",
             "since": "0.23.0"
           },
-          "stability": "alpha"
+          "stability": null
         },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },

@@ -2845,10 +2845,14 @@ async def test_every_tool_carries_a_deprecation_marker_in_meta():
         assert marker["removal_at_or_after"] == "0.25.0", name
         assert marker["replaced_by"] == _EXPECTED_SUCCESSORS[name], name
         assert marker["migration"].strip(), name
-        # The pre-existing stability key stays (removing it would break its readers) and
-        # agrees with the lifecycle copy. Deprecation is a separate axis, not a tier.
+        # The pre-existing stability key stays as it was (removing it would break its
+        # readers). The lifecycle copy uses the convention's closed tier set, so the
+        # server-wide "alpha" can't appear there: an inheriting tool gets null, exactly as
+        # on its codex_capabilities entry (Copilot, #612).
         assert tool.meta[_STABILITY_META_KEY] in {"alpha", "experimental"}, name
-        assert lifecycle["stability"] == tool.meta[_STABILITY_META_KEY], name
+        assert lifecycle["stability"] in {"stable", "preview", "experimental", None}, name
+        expected_tier = None if tool.meta[_STABILITY_META_KEY] == "alpha" else "experimental"
+        assert lifecycle["stability"] == expected_tier, name
 
 
 async def test_migration_text_names_backend_only_where_the_successor_requires_it():
@@ -2870,9 +2874,18 @@ async def test_migration_text_names_backend_only_where_the_successor_requires_it
     for name, tool in tools.items():
         migration = _marker(tool)["migration"]
         assert ('backend="codex"' in migration) == (name in requires_backend), name
-    for name in ("codex_job_status", "codex_job_result", "codex_job_cancel"):
+    for name in (
+        "codex_job_status",
+        "codex_job_result",
+        "codex_job_consume_result",
+        "codex_job_cancel",
+        "codex_job_list",
+    ):
         migration = _marker(tools[name])["migration"]
         assert "do not carry over" in migration, name
+        # codex_job_status and codex_job_list can't finish a job, so the shared text must
+        # point at the job tools as a set, not "this tool" (Copilot, #612).
+        assert "this server's job tools" in migration, name
 
 
 async def test_every_tool_description_leads_with_the_deprecation():
@@ -2894,6 +2907,7 @@ async def test_capabilities_mirror_the_meta_deprecation_marker(detail):
     assert set(by_name) == set(tools)
     for name, tool in tools.items():
         assert by_name[name]["deprecation"] == _marker(tool), name
+        assert by_name[name]["stability"] == tool.meta[_LIFECYCLE_META_KEY]["stability"], name
 
 
 def test_capabilities_name_the_final_release():
@@ -2916,6 +2930,14 @@ def test_capabilities_description_lists_deprecation_in_summary_mode():
     doc = server.codex_capabilities.__doc__ or ""
     summary_para = doc.split('`detail="summary"`', 1)[1].split('`detail="full"`', 1)[0]
     assert "deprecation" in summary_para
+
+
+async def test_capabilities_detail_param_lists_deprecation_in_summary_mode():
+    """Clients that read inputSchema rather than the description need the same disclosure."""
+    tools = await _wire_tools()
+    detail = tools["codex_capabilities"].input_schema["properties"]["detail"]["description"]
+    summary_part = detail.split("'full'", 1)[0]
+    assert "deprecation" in summary_part
 
 
 def test_server_advertises_tools_list_changed():
