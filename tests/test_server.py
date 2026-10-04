@@ -2812,7 +2812,12 @@ _EXPECTED_SUCCESSORS = {
     "codex_job_cancel": "amicus_job_cancel",
     "codex_job_list": "amicus_job_list",
 }
-_DEPRECATION_META_KEY = "dev.bconnelly.codex-in-claude/deprecation"
+_LIFECYCLE_META_KEY = "dev.bconnelly.codex-in-claude/lifecycle"
+_STABILITY_META_KEY = "dev.bconnelly.codex-in-claude/stability"
+
+
+def _marker(tool) -> dict:
+    return tool.meta[_LIFECYCLE_META_KEY]["deprecation"]
 
 
 async def _wire_tools() -> dict:
@@ -2824,19 +2829,26 @@ async def _wire_tools() -> dict:
 
 async def test_every_tool_carries_a_deprecation_marker_in_meta():
     """#605: the notice in `instructions` misses clients that don't show them, so each
-    tool's own discovery record carries the marker under a namespaced `_meta` key."""
+    tool's own discovery record carries the marker. Per the lifecycle convention, stability
+    and deprecation ride together under one namespaced `<reverse-dns>/lifecycle` key."""
     tools = await _wire_tools()
     assert set(tools) == set(_EXPECTED_SUCCESSORS), "a tool gained or lost a marker"
     for name, tool in tools.items():
-        marker = (tool.meta or {}).get(_DEPRECATION_META_KEY)
-        assert marker is not None, name
+        lifecycle = (tool.meta or {}).get(_LIFECYCLE_META_KEY)
+        assert lifecycle is not None, name
+        assert set(lifecycle) == {"stability", "deprecation"}, name
+        marker = lifecycle["deprecation"]
         assert set(marker) == {"since", "removal_at_or_after", "replaced_by", "migration"}
         assert marker["since"] == "0.23.0", name
-        assert marker["removal_at_or_after"] == "2026-11-01", name
+        # A version, not a date: 0.24.0 is the final release, so the earliest version a
+        # tool could disappear in is one that will never be published.
+        assert marker["removal_at_or_after"] == "0.25.0", name
         assert marker["replaced_by"] == _EXPECTED_SUCCESSORS[name], name
         assert marker["migration"].strip(), name
-        # The stability key is untouched: deprecation is a separate axis, not a tier.
-        assert tool.meta["dev.bconnelly.codex-in-claude/stability"] in {"alpha", "experimental"}
+        # The pre-existing stability key stays (removing it would break its readers) and
+        # agrees with the lifecycle copy. Deprecation is a separate axis, not a tier.
+        assert tool.meta[_STABILITY_META_KEY] in {"alpha", "experimental"}, name
+        assert lifecycle["stability"] == tool.meta[_STABILITY_META_KEY], name
 
 
 async def test_migration_text_names_backend_only_where_the_successor_requires_it():
@@ -2856,10 +2868,10 @@ async def test_migration_text_names_backend_only_where_the_successor_requires_it
     }
     tools = await _wire_tools()
     for name, tool in tools.items():
-        migration = tool.meta[_DEPRECATION_META_KEY]["migration"]
+        migration = _marker(tool)["migration"]
         assert ('backend="codex"' in migration) == (name in requires_backend), name
     for name in ("codex_job_status", "codex_job_result", "codex_job_cancel"):
-        migration = tools[name].meta[_DEPRECATION_META_KEY]["migration"]
+        migration = _marker(tools[name])["migration"]
         assert "do not carry over" in migration, name
 
 
@@ -2869,7 +2881,7 @@ async def test_every_tool_description_leads_with_the_deprecation():
     for name, tool in tools.items():
         successor = _EXPECTED_SUCCESSORS[name]
         tail = f"use {successor}." if successor else "amicus has no equivalent."
-        assert tool.description.startswith(f"Deprecated (unsupported after 2026-11-01): {tail}")
+        assert tool.description.startswith(f"Deprecated: {tail} "), name
 
 
 @pytest.mark.parametrize("detail", ["summary", "full"])
@@ -2881,14 +2893,29 @@ async def test_capabilities_mirror_the_meta_deprecation_marker(detail):
     by_name = {t["name"]: t for t in caps["tool_details"]}
     assert set(by_name) == set(tools)
     for name, tool in tools.items():
-        assert by_name[name]["deprecation"] == tool.meta[_DEPRECATION_META_KEY], name
+        assert by_name[name]["deprecation"] == _marker(tool), name
 
 
-def test_capabilities_state_the_end_of_support_date():
+def test_capabilities_name_the_final_release():
     caps = server.codex_capabilities()
-    assert "2026-11-01" in caps["deprecation_policy"]
-    assert "amicus" in caps["deprecation_policy"]
-    assert "2026-11-01" in server.CAPABILITY_SUMMARY
+    for text in (caps["deprecation_policy"], server.CAPABILITY_SUMMARY):
+        assert "0.24.0 is the final release" in text
+        assert "amicus" in text
+
+
+def test_successor_claims_allow_for_tools_without_one():
+    """codex_transfer has no amicus successor, so prose that describes the markers must not
+    promise every tool names one (Copilot, #612)."""
+    for text in (server.CAPABILITY_SUMMARY, server.codex_capabilities()["deprecation_policy"]):
+        assert "null where amicus has none" in text
+
+
+def test_capabilities_description_lists_deprecation_in_summary_mode():
+    """The detail="summary" paragraph enumerates the fields that mode keeps; it must name
+    the marker it now carries (Copilot, #612)."""
+    doc = server.codex_capabilities.__doc__ or ""
+    summary_para = doc.split('`detail="summary"`', 1)[1].split('`detail="full"`', 1)[0]
+    assert "deprecation" in summary_para
 
 
 def test_server_advertises_tools_list_changed():

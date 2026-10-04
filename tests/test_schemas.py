@@ -883,9 +883,9 @@ def _wire_catalog_bytes() -> int:
 # and may be silent" in the compressed summary, which ships on the four consult/review
 # tools, so every summary byte costs four here): 96,989 -> 97,253 bytes (+264 B) — over
 # cap; cap raised to the next 1,000 above the measured value.
-# Measured again 2026-10-04 (#605, a deprecation marker in every tool's `_meta` plus a
+# Measured again 2026-10-04 (#605, a lifecycle record in every tool's `_meta` plus a
 # deprecation lead on every description; see test_wire_size.py for why neither can move):
-# 97,253 -> 102,402 bytes (+5,149 B) — over cap; cap raised to the next 1,000 above the
+# 97,253 -> 102,447 bytes (+5,194 B) — over cap; cap raised to the next 1,000 above the
 # measured value.
 CATALOG_BYTE_CAP = 103_000
 

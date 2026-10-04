@@ -161,7 +161,10 @@ warnings.filterwarnings(
 # tool's deprecation marker.
 _AMICUS_URL = "https://github.com/briandconnelly/amicus"
 _DEPRECATED_SINCE = "0.23.0"
-_END_OF_SUPPORT = "2026-11-01"
+_FINAL_RELEASE = "0.24.0"
+# The marker's removal field is the earliest VERSION a tool may disappear in: the one after
+# the final release, which will never be published.
+_REMOVAL_AT_OR_AFTER = "0.25.0"
 
 # Rules-then-context (audit F8, #180): a does/does-not lead, then each binding rule as
 # its own imperative sentence, and background (async-job mechanics, cached rate-limit
@@ -171,9 +174,10 @@ CAPABILITY_SUMMARY = (
     "DEPRECATED: codex-in-claude is superseded by amicus "
     f"({_AMICUS_URL}), which calls Codex and other backends. "
     "When both are installed, prefer amicus's tools. "
-    f"This plugin is unsupported after {_END_OF_SUPPORT}, when its repository is archived; "
-    "installed versions keep running but get no fixes. Each tool's deprecation marker "
-    "(in its _meta and its codex_capabilities entry) names its amicus successor. "
+    f"{_FINAL_RELEASE} is the final release; the repository is archived after it ships, and "
+    "installed versions keep running but get no fixes. Each tool's deprecation marker (in its "
+    "_meta lifecycle key and its codex_capabilities entry) names its amicus successor, or "
+    "null where amicus has none. "
     # Lead: what it does and, up front, what it does not do.
     "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a "
     "structured review of your git changes, or a delegated coding task. This plugin does "
@@ -1570,11 +1574,13 @@ _TOOL_STABILITY: dict[str, ToolStability] = {
 
 
 # #605: per-tool deprecation markers, in one place — like _TOOL_STABILITY, every surface
-# that states one (each tool's namespaced _meta, its ToolCapability entry, and the
+# that states one (each tool's _meta lifecycle key, its ToolCapability entry, and the
 # description prefix) reads this map. Deprecation is a separate axis from stability, so a
 # deprecated tool keeps its tier. Every registered tool must have an entry: _tool_meta and
 # _deprecated index it directly, so a new tool without one fails at import.
-_DEPRECATION_META_KEY = "dev.bconnelly.codex-in-claude/deprecation"
+# The lifecycle key carries {stability, deprecation} together, per the lifecycle `_meta`
+# convention; the older stability-only key stays beside it for its existing readers.
+_LIFECYCLE_META_KEY = "dev.bconnelly.codex-in-claude/lifecycle"
 
 
 # Migration prose leaves the successor's name to `replaced_by`: every byte here ships 17
@@ -1593,8 +1599,8 @@ _TOOL_SUCCESSORS: dict[str, tuple[str | None, str]] = {
     ),
     "codex_transfer": (
         None,
-        "amicus has no transcript hand-off. This tool keeps working in installed versions "
-        f"but is unsupported after {_END_OF_SUPPORT}.",
+        "amicus has no transcript hand-off. This tool keeps working in installed versions, "
+        "without fixes.",
     ),
     "codex_capabilities": (
         "amicus_capabilities",
@@ -1618,7 +1624,7 @@ _TOOL_SUCCESSORS: dict[str, tuple[str | None, str]] = {
 _TOOL_DEPRECATIONS: dict[str, ToolDeprecation] = {
     name: ToolDeprecation(
         since=_DEPRECATED_SINCE,
-        removal_at_or_after=_END_OF_SUPPORT,
+        removal_at_or_after=_REMOVAL_AT_OR_AFTER,
         replaced_by=successor,
         migration=migration,
     )
@@ -1627,9 +1633,13 @@ _TOOL_DEPRECATIONS: dict[str, ToolDeprecation] = {
 
 
 def _tool_meta(name: str) -> dict[str, object]:
+    stability = _TOOL_STABILITY.get(name, _SERVER_STABILITY)
     return {
-        _STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY),
-        _DEPRECATION_META_KEY: _TOOL_DEPRECATIONS[name].model_dump(),
+        _STABILITY_META_KEY: stability,
+        _LIFECYCLE_META_KEY: {
+            "stability": stability,
+            "deprecation": _TOOL_DEPRECATIONS[name].model_dump(),
+        },
     }
 
 
@@ -1643,7 +1653,7 @@ def _deprecated(fn: _ToolFn) -> _ToolFn:
     first line on purpose: a line of its own would defeat the docstring dedent."""
     successor = _TOOL_DEPRECATIONS[getattr(fn, "__name__", "tool")].replaced_by
     tail = f"use {successor}." if successor else "amicus has no equivalent."
-    fn.__doc__ = f"Deprecated (unsupported after {_END_OF_SUPPORT}): {tail} {fn.__doc__}"
+    fn.__doc__ = f"Deprecated: {tail} {fn.__doc__}"
     return fn
 
 
@@ -2282,9 +2292,9 @@ def codex_capabilities(
     """List this server's tools, tiers, and the result fingerprint.
     Free — no model call. Clients can cache by the fingerprint.
 
-    `detail="summary"` (default) returns each tool's name, cost, stability, and
-    error_codes — the facts `tools/list` does not already carry — plus async_lifecycle,
-    but only for the `*_async` tools. `detail="full"` adds
+    `detail="summary"` (default) returns each tool's name, cost, stability, error_codes,
+    and deprecation marker — the facts `tools/list` does not already carry — plus
+    async_lifecycle, but only for the `*_async` tools. `detail="full"` adds
     use_when/returns/required_params/key_optional_params, restating what you already hold.
     `detail="contracts"` omits tool_details.
 
@@ -2679,10 +2689,9 @@ def codex_capabilities(
         ],
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
         deprecation_policy=f"Deprecated since {_DEPRECATED_SINCE} in favor of amicus "
-        f"({_AMICUS_URL}). Unsupported after {_END_OF_SUPPORT}, when the repository is "
-        "archived: installed versions keep running but get no fixes. Each tool's "
-        "`deprecation` marker names its amicus successor. Until then, pre-1.0: minor "
-        "versions may change the agent-visible surface; the fingerprint changes when they do.",
+        f"({_AMICUS_URL}). {_FINAL_RELEASE} is the final release; the repository is archived "
+        "after it ships, and installed versions keep running but get no fixes. Each tool's "
+        "`deprecation` marker names its amicus successor, or null where amicus has none.",
         protocol_revision="2026-07-28",
     )
     # Inject per-tool error codes from the single source of truth; KeyError here

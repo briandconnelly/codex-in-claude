@@ -1368,9 +1368,8 @@ class ToolDeprecation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     since: str  # the release the deprecation took effect
-    # The earliest point the tool may stop being supported — an ISO date here, not a
-    # version: the repository is archived then, so no later version carries the removal.
-    removal_at_or_after: str
+    removal_at_or_after: str  # the earliest version the tool may disappear in
+
     replaced_by: str | None  # the successor amicus tool name; null when amicus has none
     migration: str  # what an agent changes to move to the successor
 

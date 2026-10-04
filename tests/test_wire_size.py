@@ -199,12 +199,13 @@ from codex_in_claude.server import mcp
 # codex://params full contract): 96,972 -> 97,236 bytes (+264, +0.3%) — still within budget,
 # no change.
 # Measured again 2026-10-04 (#605, per-tool deprecation markers: each of the 17 tools carries
-# its marker under a namespaced `_meta` key and leads its description with the end-of-support
-# date and successor. A client that shows neither the server instructions nor `_meta` — the
-# gap #605 closes — still reads descriptions, so neither copy can move to a resource):
-# 97,236 -> 102,505 bytes (+5,269 B, +5.4%) — over budget; budget raised to the next 500
-# above the measured value. Compacted first: the migration prose leaves the successor's name
-# to `replaced_by` instead of restating it (103,223 -> 102,505).
+# a `{stability, deprecation}` lifecycle record under a namespaced `_meta` key and leads its
+# description with its successor. A client that shows neither the server instructions nor
+# `_meta` — the gap #605 closes — still reads descriptions, so neither copy can move to a
+# resource): 97,236 -> 102,550 bytes (+5,314 B, +5.5%) — over budget; budget raised to the
+# next 500 above the measured value. Compacted first: the migration prose leaves the
+# successor's name to `replaced_by` instead of restating it, and the description prefix
+# leaves the final-release fact to the marker and the instructions.
 TOOLS_LIST_BYTE_BUDGET = 103_000
 
 # The measured tools/list size as of the last deliberate review above — NOT a second gate.
@@ -217,7 +218,7 @@ TOOLS_LIST_BYTE_BUDGET = 103_000
 # history above is "still within budget, no further change" rows that grew the measured size
 # without touching the budget; the target must track every one of those too, or it silently
 # goes stale between the raises).
-TOOLS_LIST_BYTE_TARGET = 102_505
+TOOLS_LIST_BYTE_TARGET = 102_550
 
 
 def _budget_failure_message(measured: int) -> str:
