@@ -9,7 +9,7 @@
       "codex_delegate_async"
     ],
     "annotations_reading": "readOnlyHint tracks whether a call changes observable state that outlives the response — a job record, committed spend — rather than file I/O. That's why codex_consult, codex_review_changes, and codex_delegate (and their _async variants) are readOnlyHint: false even though consult and review never write files, while codex_dry_run and codex_delegate_dry_run, which create no job record, stay readOnlyHint: true. destructiveHint is true only for the delegate tools: the workspace-write sandbox grants the OS temp roots by default, where a task can overwrite pre-existing files (#523); consult/review runs write nothing and their job records are additive, so they stay destructiveHint: false.",
-    "deprecation_policy": "Pre-1.0: minor versions may change the agent-visible surface; the fingerprint changes when they do.",
+    "deprecation_policy": "Deprecated since 0.23.0 in favor of amicus (https://github.com/briandconnelly/amicus). 0.24.0 is the final release; the repository is archived after it ships, and installed versions keep running but get no fixes. Each tool's `deprecation` marker names its amicus successor, or null where amicus has none.",
     "error_envelope_resource": "codex://error-envelope",
     "fingerprint_covers": [
       "tool_names",
@@ -84,6 +84,12 @@
     "tool_details": [
       {
         "cost": "active",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_consult",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -146,6 +152,12 @@
           "status_field": "status"
         },
         "cost": "active",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_consult_async",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -188,6 +200,12 @@
       },
       {
         "cost": "active",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_review_changes",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -257,6 +275,12 @@
           "status_field": "status"
         },
         "cost": "active",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_review_changes_async",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -306,6 +330,12 @@
       },
       {
         "cost": "active",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_delegate",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -367,6 +397,12 @@
           "status_field": "status"
         },
         "cost": "active",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_delegate_async",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -408,6 +444,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_job_status",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -428,6 +470,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_job_result",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -454,6 +502,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_job_consume_result",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -480,6 +534,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_job_cancel",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -500,6 +560,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_job_list",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -519,6 +585,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Call amicus_backends with detail=\"full\" to check that Codex is installed and authenticated.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_backends",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "internal_error",
           "invalid_arguments"
@@ -532,6 +604,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "amicus has no transcript hand-off. This tool keeps working in installed versions, without fixes.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": null,
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -559,6 +637,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_review_changes_dry_run",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -593,6 +677,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_delegate_dry_run",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "invalid_workspace_root",
           "workspace_outside_roots",
@@ -621,6 +711,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Call amicus_capabilities for amicus's inventory; it covers every backend, not only Codex.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_capabilities",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "internal_error",
           "invalid_arguments"
@@ -634,6 +730,12 @@
       },
       {
         "cost": "free",
+        "deprecation": {
+          "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+          "removal_at_or_after": "0.25.0",
+          "replaced_by": "amicus_models",
+          "since": "0.23.0"
+        },
         "error_codes": [
           "internal_error",
           "invalid_arguments"
@@ -653,7 +755,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 9813
+          "size_bytes": 10561
         }
       },
       "mimeType": "application/schema+json",
@@ -775,6 +877,17 @@
                 "title": "Cost",
                 "type": "string"
               },
+              "deprecation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ToolDeprecation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "error_codes": {
                 "items": {
                   "enum": [
@@ -894,6 +1007,43 @@
             ],
             "title": "ToolCapability",
             "type": "object"
+          },
+          "ToolDeprecation": {
+            "additionalProperties": false,
+            "description": "A tool's deprecation marker (#605): one object, fixed field set, the same values on\n`codex_capabilities` and under the tool's namespaced `_meta` key. Presence is the signal.",
+            "properties": {
+              "migration": {
+                "title": "Migration",
+                "type": "string"
+              },
+              "removal_at_or_after": {
+                "title": "Removal At Or After",
+                "type": "string"
+              },
+              "replaced_by": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Replaced By"
+              },
+              "since": {
+                "title": "Since",
+                "type": "string"
+              }
+            },
+            "required": [
+              "migration",
+              "removal_at_or_after",
+              "replaced_by",
+              "since"
+            ],
+            "title": "ToolDeprecation",
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -922,7 +1072,7 @@
             "type": "string"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-92",
+            "default": "codex-in-claude/0.1/schema-93",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -1089,7 +1239,7 @@
         "listChanged": false
       }
     },
-    "instructions": "DEPRECATED: codex-in-claude is superseded by amicus (https://github.com/briandconnelly/amicus), which calls Codex and other backends. When both are installed, prefer amicus's tools. This plugin's tools still work. Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Every model-bearing call also forces Codex's remote_plugin feature off with a runtime override an operator-supplied Codex profile cannot supersede, so third-party connectors supplied through that feature (GitHub, Gmail, Slack, Drive, …) aren't exposed to the Codex run. Every model-bearing call sends your inputs to OpenAI raw. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it. Use codex_consult for a read-only second opinion or Q&A — including on a diff you paste inline. Use codex_review_changes for a structured review of changes gathered from git (working_tree, branch, or commit); prefer it over codex_consult whenever the changes already live in git. Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Prefer the matching _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async) for work that can exceed the synchronous deadline — a high-reasoning-effort or broad repo-grounded consult, a multi-file or whole-branch review, or a substantial implementation task — because a sync call whose deadline expires is terminated and its partial work is lost; keep the sync tool for focused work that finishes well inside the deadline. Use codex_transfer (free) to hand off the current Claude Code session transcript to a resumable Codex thread when the user wants to continue this conversation inside Codex. Before the first paid call in a session, run codex_status (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it). Branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory. Before overriding the model or reasoning_effort, use codex_models (or the codex://models resource) to discover valid model slugs and each model's advertised reasoning-effort set (the listing is advisory; codex and the backend validate the real values). To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. A dry run reports metadata about the input this plugin would assemble; it does not invoke Codex, and it neither enumerates nor bounds the files the model itself reads and sends during the paid call. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|blocked|unknown|unavailable) showing how much Codex quota remains, read live from the app-server with no model spend; unknown/unavailable mean no usable reading, not a problem, while blocked means a backend spend control no reset clears.",
+    "instructions": "DEPRECATED: codex-in-claude is superseded by amicus (https://github.com/briandconnelly/amicus), which calls Codex and other backends. When both are installed, prefer amicus's tools. 0.24.0 is the final release; the repository is archived after it ships, and installed versions keep running but get no fixes. Each tool's deprecation marker (in its _meta lifecycle key and its codex_capabilities entry) names its amicus successor, or null where amicus has none. Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Every model-bearing call also forces Codex's remote_plugin feature off with a runtime override an operator-supplied Codex profile cannot supersede, so third-party connectors supplied through that feature (GitHub, Gmail, Slack, Drive, …) aren't exposed to the Codex run. Every model-bearing call sends your inputs to OpenAI raw. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it. Use codex_consult for a read-only second opinion or Q&A — including on a diff you paste inline. Use codex_review_changes for a structured review of changes gathered from git (working_tree, branch, or commit); prefer it over codex_consult whenever the changes already live in git. Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Prefer the matching _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async) for work that can exceed the synchronous deadline — a high-reasoning-effort or broad repo-grounded consult, a multi-file or whole-branch review, or a substantial implementation task — because a sync call whose deadline expires is terminated and its partial work is lost; keep the sync tool for focused work that finishes well inside the deadline. Use codex_transfer (free) to hand off the current Claude Code session transcript to a resumable Codex thread when the user wants to continue this conversation inside Codex. Before the first paid call in a session, run codex_status (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it). Branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory. Before overriding the model or reasoning_effort, use codex_models (or the codex://models resource) to discover valid model slugs and each model's advertised reasoning-effort set (the listing is advisory; codex and the backend validate the real values). To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. A dry run reports metadata about the input this plugin would assemble; it does not invoke Codex, and it neither enumerates nor bounds the files the model itself reads and sends during the paid call. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|blocked|unknown|unavailable) showing how much Codex quota remains, read live from the app-server with no model spend; unknown/unavailable mean no usable reading, not a problem, while blocked means a backend spend control no reset clears.",
     "resultType": "complete",
     "supportedVersions": [
       "2026-07-28"
@@ -1563,7 +1713,7 @@
                 "type": "integer"
               },
               "fingerprint": {
-                "default": "codex-in-claude/0.1/schema-92",
+                "default": "codex-in-claude/0.1/schema-93",
                 "title": "Fingerprint",
                 "type": "string"
               },
@@ -2206,7 +2356,7 @@
         "listChanged": true
       }
     },
-    "instructions": "DEPRECATED: codex-in-claude is superseded by amicus (https://github.com/briandconnelly/amicus), which calls Codex and other backends. When both are installed, prefer amicus's tools. This plugin's tools still work. Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Every model-bearing call also forces Codex's remote_plugin feature off with a runtime override an operator-supplied Codex profile cannot supersede, so third-party connectors supplied through that feature (GitHub, Gmail, Slack, Drive, …) aren't exposed to the Codex run. Every model-bearing call sends your inputs to OpenAI raw. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it. Use codex_consult for a read-only second opinion or Q&A — including on a diff you paste inline. Use codex_review_changes for a structured review of changes gathered from git (working_tree, branch, or commit); prefer it over codex_consult whenever the changes already live in git. Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Prefer the matching _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async) for work that can exceed the synchronous deadline — a high-reasoning-effort or broad repo-grounded consult, a multi-file or whole-branch review, or a substantial implementation task — because a sync call whose deadline expires is terminated and its partial work is lost; keep the sync tool for focused work that finishes well inside the deadline. Use codex_transfer (free) to hand off the current Claude Code session transcript to a resumable Codex thread when the user wants to continue this conversation inside Codex. Before the first paid call in a session, run codex_status (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it). Branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory. Before overriding the model or reasoning_effort, use codex_models (or the codex://models resource) to discover valid model slugs and each model's advertised reasoning-effort set (the listing is advisory; codex and the backend validate the real values). To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. A dry run reports metadata about the input this plugin would assemble; it does not invoke Codex, and it neither enumerates nor bounds the files the model itself reads and sends during the paid call. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|blocked|unknown|unavailable) showing how much Codex quota remains, read live from the app-server with no model spend; unknown/unavailable mean no usable reading, not a problem, while blocked means a backend spend control no reset clears.",
+    "instructions": "DEPRECATED: codex-in-claude is superseded by amicus (https://github.com/briandconnelly/amicus), which calls Codex and other backends. When both are installed, prefer amicus's tools. 0.24.0 is the final release; the repository is archived after it ships, and installed versions keep running but get no fixes. Each tool's deprecation marker (in its _meta lifecycle key and its codex_capabilities entry) names its amicus successor, or null where amicus has none. Call OpenAI Codex (a different model) from Claude Code for a second opinion, a structured review of your git changes, or a delegated coding task. This plugin does not bypass Codex's sandbox or approvals, and codex_delegate never edits your working tree — it returns a reviewable diff you apply yourself. Every model-bearing call also forces Codex's remote_plugin feature off with a runtime override an operator-supplied Codex profile cannot supersede, so third-party connectors supplied through that feature (GitHub, Gmail, Slack, Drive, …) aren't exposed to the Codex run. Every model-bearing call sends your inputs to OpenAI raw. Codex can read files outside the workspace — up to everything the OS user running it can read — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of workspace is a read boundary. Codex auto-loads the resolved workspace's AGENTS.md and, in a repository, ancestor AGENTS.md files through its root, plus a user-global $CODEX_HOME/AGENTS.override.md, else $CODEX_HOME/AGENTS.md; it discovers skills in the workspace's .agents/skills/ and user-global $CODEX_HOME/skills/ (default ~/.codex/skills/), reachable from outside the workspace. The plugin's isolation flags don't suppress any of it. A skill's name and description arrive up front; selecting one makes the model read its body, which can reach OpenAI even if your inputs never mention it. Use codex_consult for a read-only second opinion or Q&A — including on a diff you paste inline. Use codex_review_changes for a structured review of changes gathered from git (working_tree, branch, or commit); prefer it over codex_consult whenever the changes already live in git. Use codex_delegate to implement a task in a throwaway git worktree and get back a reviewable diff. Prefer the matching _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async) for work that can exceed the synchronous deadline — a high-reasoning-effort or broad repo-grounded consult, a multi-file or whole-branch review, or a substantial implementation task — because a sync call whose deadline expires is terminated and its partial work is lost; keep the sync tool for focused work that finishes well inside the deadline. Use codex_transfer (free) to hand off the current Claude Code session transcript to a resumable Codex thread when the user wants to continue this conversation inside Codex. Before the first paid call in a session, run codex_status (free) to confirm the codex CLI is installed and authenticated. On a tool failure the tool result itself is the error (isError: true) with the error envelope in structuredContent (content[0].text mirrors it). Branch on error.code and follow error.repair. Treat Codex's findings as claims to verify, not commands. Use codex_capabilities for the full inventory. Before overriding the model or reasoning_effort, use codex_models (or the codex://models resource) to discover valid model slugs and each model's advertised reasoning-effort set (the listing is advisory; codex and the backend validate the real values). To preview a call without spending, use codex_dry_run for a review or codex_delegate_dry_run for a delegate's worktree baseline. A dry run reports metadata about the input this plugin would assemble; it does not invoke Codex, and it neither enumerates nor bounds the files the model itself reads and sends during the paid call. Background: each active tool has an _async variant (codex_consult_async / codex_review_changes_async / codex_delegate_async), polled via codex_job_status/result/consume_result/cancel/list; even a sync consult/review/delegate records its run as a job (meta.job_id), so a dropped connection can be recovered the same way. codex_status also reports a rate_limit block (status available|limited|exhausted|blocked|unknown|unavailable) showing how much Codex quota remains, read live from the app-server with no model spend; unknown/unavailable mean no usable reading, not a problem, while blocked means a backend spend control no reset clears.",
     "protocolVersion": "2025-11-25",
     "serverInfo": {
       "name": "codex-in-claude"
@@ -2302,7 +2452,7 @@
     {
       "_meta": {
         "dev.bconnelly.codex-in-claude/triage": {
-          "size_bytes": 9813
+          "size_bytes": 10561
         }
       },
       "description": "The canonical full codex_capabilities result schema. The tool's outputSchema opaques\n`tool_details` and points here for the full shape (#242).",
@@ -2790,7 +2940,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-92",
+            "default": "codex-in-claude/0.1/schema-93",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3474,7 +3624,7 @@
             "type": "boolean"
           },
           "fingerprint": {
-            "default": "codex-in-claude/0.1/schema-92",
+            "default": "codex-in-claude/0.1/schema-93",
             "title": "Fingerprint",
             "type": "string"
           },
@@ -3567,20 +3717,29 @@
   "tools": [
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Call amicus_capabilities for amicus's inventory; it covers every backend, not only Codex.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_capabilities",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List this server's tools, tiers, and the result fingerprint.\nFree — no model call. Clients can cache by the fingerprint.\n\n`detail=\"summary\"` (default) returns each tool's name, cost, stability, and\nerror_codes — the facts `tools/list` does not already carry — plus async_lifecycle,\nbut only for the `*_async` tools. `detail=\"full\"` adds\nuse_when/returns/required_params/key_optional_params, restating what you already hold.\n`detail=\"contracts\"` omits tool_details.\n\nPass include_schemas to also embed the full 'error-envelope', 'result-meta',\n'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'\ndocument (a contract doc, not a JSON Schema) — a tool-reachable fallback to the\ncodex:// resources for resource-blind clients. It works in any detail mode.",
+      "description": "Deprecated: use amicus_capabilities. List this server's tools, tiers, and the result fingerprint.\nFree — no model call. Clients can cache by the fingerprint.\n\n`detail=\"summary\"` (default) returns each tool's name, cost, stability, error_codes,\nand deprecation marker — the facts `tools/list` does not already carry — plus\nasync_lifecycle, but only for the `*_async` tools. `detail=\"full\"` adds\nuse_when/returns/required_params/key_optional_params, restating what you already hold.\n`detail=\"contracts\"` omits tool_details.\n\nPass include_schemas to also embed the full 'error-envelope', 'result-meta',\n'capabilities-result', and/or 'status-result' schema, and/or the 'parameter-contracts'\ndocument (a contract doc, not a JSON Schema) — a tool-reachable fallback to the\ncodex:// resources for resource-blind clients. It works in any detail mode.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "detail": {
             "default": "summary",
-            "description": "What to return: 'summary' (default) returns each tool's name, cost, stability, and error_codes; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries). 'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without re-paying for the inventory.",
+            "description": "What to return: 'summary' (default) returns each tool's name, cost, stability, error_codes, and deprecation marker; the *_async tools also get async_lifecycle. 'full' adds use_when, returns, and the parameter lists (which tools/list already carries). 'contracts' drops tool_details: fetch a schema, or recheck fingerprint, without re-paying for the inventory.",
             "enum": [
               "contracts",
               "full",
@@ -3786,6 +3945,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_consult",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
@@ -3794,7 +3962,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) for a read-only second opinion or answer.\n\nPAID — this spends Codex quota on every new call; there is no dry-run preview for a\nconsult, so run codex_status (free) first to confirm the CLI is installed and\nauthenticated.\n\nRuns `codex exec` in a read-only sandbox — Codex never edits files. A STATIC\nreview, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run needs, so Codex can't run your checks to confirm its claims —\ntreat findings as unvalidated claims you verify yourself. Pass `workspace_root`\n(absolute) for a repo-grounded question; omit it for pure Q&A. Returns a result\nenvelope.\n\nData egress: this sends your `question`, `extra_context`, and\n`developer_instructions` to OpenAI via the\ncodex CLI. Codex always runs with a resolved working directory (`workspace_root`,\nyour MCP roots, or the server's cwd as a fallback) — that selects where it works,\nnot what it can read.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a\nrepository, ancestor `AGENTS.md` files through its root, plus a user-global\n`$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the\nworkspace's\n`.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),\nreachable from outside the workspace. The plugin's\nisolation flags don't suppress any of it. A skill's name and description arrive up\nfront; selecting one makes the model read its body, which can reach OpenAI even if\nyour inputs never mention it. Your inputs are sent raw — secret\nredaction is best-effort and does not cover them (it covers gathered diffs and\nCodex's returned output, not what you type or what Codex reads from files).\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nhigh-`reasoning_effort` or broad repo-grounded consult that may exceed it, prefer\n`codex_consult_async` (a background job, built-in default 1800s deadline; poll\n`codex_job_status`). Coarse `notifications/progress` streams while it blocks when your client\nrequests it; some MCP clients background a long call before the deadline, so\n`timeout_seconds` bounds the run, not necessarily the inline wait — either way the detached run\n(`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_status`→`codex_job_result`.",
+      "description": "Deprecated: use amicus_consult. Ask Codex (a different model) for a read-only second opinion or answer.\n\nPAID — this spends Codex quota on every new call; there is no dry-run preview for a\nconsult, so run codex_status (free) first to confirm the CLI is installed and\nauthenticated.\n\nRuns `codex exec` in a read-only sandbox — Codex never edits files. A STATIC\nreview, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run needs, so Codex can't run your checks to confirm its claims —\ntreat findings as unvalidated claims you verify yourself. Pass `workspace_root`\n(absolute) for a repo-grounded question; omit it for pure Q&A. Returns a result\nenvelope.\n\nData egress: this sends your `question`, `extra_context`, and\n`developer_instructions` to OpenAI via the\ncodex CLI. Codex always runs with a resolved working directory (`workspace_root`,\nyour MCP roots, or the server's cwd as a fallback) — that selects where it works,\nnot what it can read.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a\nrepository, ancestor `AGENTS.md` files through its root, plus a user-global\n`$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the\nworkspace's\n`.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),\nreachable from outside the workspace. The plugin's\nisolation flags don't suppress any of it. A skill's name and description arrive up\nfront; selecting one makes the model read its body, which can reach OpenAI even if\nyour inputs never mention it. Your inputs are sent raw — secret\nredaction is best-effort and does not cover them (it covers gathered diffs and\nCodex's returned output, not what you type or what Codex reads from files).\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nhigh-`reasoning_effort` or broad repo-grounded consult that may exceed it, prefer\n`codex_consult_async` (a background job, built-in default 1800s deadline; poll\n`codex_job_status`). Coarse `notifications/progress` streams while it blocks when your client\nrequests it; some MCP clients background a long call before the deadline, so\n`timeout_seconds` bounds the run, not necessarily the inline wait — either way the detached run\n(`meta.job_id`) is recoverable via `codex_job_list`→`codex_job_status`→`codex_job_result`.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4110,6 +4278,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_consult_async",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
@@ -4118,7 +4295,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex for a read-only second opinion in the background; get a `job_id`\nback immediately instead of blocking.\n\nPAID — this spends Codex quota on every new call; there is no dry-run preview for a\nconsult, so run codex_status (free) first to confirm the CLI is installed and\nauthenticated.\n\nSame read-only behavior as `codex_consult` (Codex never edits files), but detached —\nprefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the\nsynchronous deadline (built-in default 300s), since a sync run whose deadline expires loses\nits partial work; this job's own deadline is separately configured (built-in default 1800s).\nStarting a job commits to spend (it runs to completion or its wall-clock deadline even if\nyou never poll). Poll `codex_job_status`; read/consume the consult envelope with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.\n\nData egress: same as `codex_consult` — sends your `question`, `extra_context`, and\n`developer_instructions`\n(raw, unredacted) to OpenAI via the codex CLI. Its resolved working directory\n(`workspace_root`, your MCP roots, or the server cwd) selects where Codex works, not\nwhat it can read.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary.\nCodex auto-loads the resolved workspace's `AGENTS.md` and, in a repository, ancestor\n`AGENTS.md` files through its root, plus a user-global `$CODEX_HOME/AGENTS.override.md`,\nelse `$CODEX_HOME/AGENTS.md`; it discovers skills in the workspace's `.agents/skills/` and\nuser-global\n`$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from outside the workspace. A\nskill's name and\ndescription arrive up front; selecting one makes the model read its body, which can\nreach OpenAI even if your inputs never mention it.",
+      "description": "Deprecated: use amicus_consult_async. Ask Codex for a read-only second opinion in the background; get a `job_id`\nback immediately instead of blocking.\n\nPAID — this spends Codex quota on every new call; there is no dry-run preview for a\nconsult, so run codex_status (free) first to confirm the CLI is installed and\nauthenticated.\n\nSame read-only behavior as `codex_consult` (Codex never edits files), but detached —\nprefer it for a high-`reasoning_effort` or broad repo-grounded consult that can exceed the\nsynchronous deadline (built-in default 300s), since a sync run whose deadline expires loses\nits partial work; this job's own deadline is separately configured (built-in default 1800s).\nStarting a job commits to spend (it runs to completion or its wall-clock deadline even if\nyou never poll). Poll `codex_job_status`; read/consume the consult envelope with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`.\n\nData egress: same as `codex_consult` — sends your `question`, `extra_context`, and\n`developer_instructions`\n(raw, unredacted) to OpenAI via the codex CLI. Its resolved working directory\n(`workspace_root`, your MCP roots, or the server cwd) selects where Codex works, not\nwhat it can read.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary.\nCodex auto-loads the resolved workspace's `AGENTS.md` and, in a repository, ancestor\n`AGENTS.md` files through its root, plus a user-global `$CODEX_HOME/AGENTS.override.md`,\nelse `$CODEX_HOME/AGENTS.md`; it discovers skills in the workspace's `.agents/skills/` and\nuser-global\n`$CODEX_HOME/skills/` (default `~/.codex/skills/`), reachable from outside the workspace. A\nskill's name and\ndescription arrive up front; selecting one makes the model read its body, which can\nreach OpenAI even if your inputs never mention it.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4403,6 +4580,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_delegate",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
@@ -4411,7 +4597,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex (a different model) in an isolated git\nworktree, and get back a **reviewable diff that is NOT applied** to your tree.\n\nPAID — this spends Codex quota on every new call; use codex_delegate_dry_run or\ncodex_status (both free) first if you only need to check scope or readiness.\n\nCodex edits files with `workspace-write` in a throwaway worktree seeded from\nyour current tracked state. The returned `diff` is Codex's changes;\nreview it, then apply it yourself if you want it. Requires a git repo with at\nleast one commit. Pass `workspace_root` (absolute).\n\nNO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the\nsandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`\nanything, `curl`, publish, or install dependencies (those fail inside the sandbox\nwith a DNS/host-resolution error). Ask only for local code changes; do any network\nstep yourself afterward. This does NOT mean nothing leaves the machine: the Codex\nmodel call still sends your `task` to OpenAI. The worktree does not bound Codex's\nwrites: codex's workspace-write sandbox also lets commands write the OS temp roots\n(/tmp and $TMPDIR) by default. Temp-root writes are neither captured in the\nreturned diff nor cleaned up.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md`\nand, in a repository, ancestor `AGENTS.md` files through its root, plus a user-global\n`$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the\nworkspace's\n`.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),\nreachable from outside the workspace. The plugin's isolation flags don't suppress any of it.\nFor delegate,\nthat workspace is the worktree; scrubbing it doesn't exclude `$CODEX_HOME/skills/`.\nA skill's name and description arrive up front; selecting one makes the model read\nits body, which can reach OpenAI even if your inputs never mention it.\nYour `task` is sent raw — secret redaction is best-effort and does not cover it or\nfiles Codex reads itself.\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nsubstantial or multi-file task that may exceed it, prefer `codex_delegate_async` (a background\njob, built-in default 1800s deadline; poll `codex_job_status`). Coarse `notifications/progress`\nstreams while it blocks when your client requests it; some MCP clients background a long call\nbefore the deadline, so `timeout_seconds` bounds the run, not necessarily the inline wait —\neither way the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_status`→`codex_job_result`.",
+      "description": "Deprecated: use amicus_delegate. Delegate a coding task to Codex (a different model) in an isolated git\nworktree, and get back a **reviewable diff that is NOT applied** to your tree.\n\nPAID — this spends Codex quota on every new call; use codex_delegate_dry_run or\ncodex_status (both free) first if you only need to check scope or readiness.\n\nCodex edits files with `workspace-write` in a throwaway worktree seeded from\nyour current tracked state. The returned `diff` is Codex's changes;\nreview it, then apply it yourself if you want it. Requires a git repo with at\nleast one commit. Pass `workspace_root` (absolute).\n\nNO NETWORK: `workspace-write` blocks network egress for commands Codex RUNS in the\nsandbox, so the task must be self-contained — it cannot `git push`/`fetch`, `gh`\nanything, `curl`, publish, or install dependencies (those fail inside the sandbox\nwith a DNS/host-resolution error). Ask only for local code changes; do any network\nstep yourself afterward. This does NOT mean nothing leaves the machine: the Codex\nmodel call still sends your `task` to OpenAI. The worktree does not bound Codex's\nwrites: codex's workspace-write sandbox also lets commands write the OS temp roots\n(/tmp and $TMPDIR) by default. Temp-root writes are neither captured in the\nreturned diff nor cleaned up.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md`\nand, in a repository, ancestor `AGENTS.md` files through its root, plus a user-global\n`$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the\nworkspace's\n`.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),\nreachable from outside the workspace. The plugin's isolation flags don't suppress any of it.\nFor delegate,\nthat workspace is the worktree; scrubbing it doesn't exclude `$CODEX_HOME/skills/`.\nA skill's name and description arrive up front; selecting one makes the model read\nits body, which can reach OpenAI even if your inputs never mention it.\nYour `task` is sent raw — secret redaction is best-effort and does not cover it or\nfiles Codex reads itself.\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nsubstantial or multi-file task that may exceed it, prefer `codex_delegate_async` (a background\njob, built-in default 1800s deadline; poll `codex_job_status`). Coarse `notifications/progress`\nstreams while it blocks when your client requests it; some MCP clients background a long call\nbefore the deadline, so `timeout_seconds` bounds the run, not necessarily the inline wait —\neither way the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_status`→`codex_job_result`.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4713,6 +4899,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_delegate_async",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
@@ -4721,7 +4916,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nPAID — this spends Codex quota on every new call; use codex_delegate_dry_run or\ncodex_status (both free) first if you only need to check scope or readiness.\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\ndetached; prefer it for a substantial or multi-file implementation task that can exceed the\nsynchronous deadline (built-in default 300s), since a sync run whose deadline expires loses\nits partial work (this job's own deadline is separately configured, built-in default 1800s).\nStarting a job commits to spend (it runs to completion or its wall-clock deadline even if\nyou never poll). Poll `codex_job_status`; read/consume with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Requires a git\nrepo with at least one commit; pass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI. The worktree\ndoes not bound Codex's writes: codex's workspace-write sandbox also lets commands\nwrite the OS temp roots (/tmp and $TMPDIR) by default. Temp-root writes are neither\ncaptured in the returned diff nor cleaned up.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved\nworkspace's `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root,\nplus a user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it\ndiscovers skills in\nthe workspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default\n`~/.codex/skills/`), reachable from outside the workspace. For delegate, that workspace is\nthe worktree; scrubbing it\ndoesn't exclude `$CODEX_HOME/skills/`. A skill's name and description arrive up\nfront; selecting one makes the model read its body, which can reach OpenAI even if\nyour inputs never mention it. Secret redaction is best-effort and\ndoes not cover your `task` or files Codex reads itself.",
+      "description": "Deprecated: use amicus_delegate_async. Delegate a coding task to Codex in the background and get a `job_id` back\nimmediately (does not block on the run).\n\nPAID — this spends Codex quota on every new call; use codex_delegate_dry_run or\ncodex_status (both free) first if you only need to check scope or readiness.\n\nSame propose-tier behavior as `codex_delegate` — Codex works in a throwaway git\nworktree and the result carries a **reviewable diff that is NOT applied** — but\ndetached; prefer it for a substantial or multi-file implementation task that can exceed the\nsynchronous deadline (built-in default 300s), since a sync run whose deadline expires loses\nits partial work (this job's own deadline is separately configured, built-in default 1800s).\nStarting a job commits to spend (it runs to completion or its wall-clock deadline even if\nyou never poll). Poll `codex_job_status`; read/consume with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Requires a git\nrepo with at least one commit; pass `workspace_root` (absolute).\n\nNO NETWORK: like `codex_delegate`, this runs under `workspace-write`, which blocks\nnetwork egress for commands Codex RUNS in the sandbox — the task must be\nself-contained (no push/fetch/`gh`/curl/publish/dependency install; those fail with\na DNS/host-resolution error in the sandbox). This does NOT mean nothing leaves the\nmachine: the Codex model call still sends your `task` (raw) to OpenAI. The worktree\ndoes not bound Codex's writes: codex's workspace-write sandbox also lets commands\nwrite the OS temp roots (/tmp and $TMPDIR) by default. Temp-root writes are neither\ncaptured in the returned diff nor cleaned up.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved\nworkspace's `AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root,\nplus a user-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it\ndiscovers skills in\nthe workspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default\n`~/.codex/skills/`), reachable from outside the workspace. For delegate, that workspace is\nthe worktree; scrubbing it\ndoesn't exclude `$CODEX_HOME/skills/`. A skill's name and description arrive up\nfront; selecting one makes the model read its body, which can reach OpenAI even if\nyour inputs never mention it. Secret redaction is best-effort and\ndoes not cover your `task` or files Codex reads itself.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -4982,13 +5177,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_delegate_dry_run",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Preview what a `codex_delegate`/`codex_delegate_async` call would do — the\nbaseline it seeds from (HEAD commit, tracked file count/size, uncommitted and\nuntracked counts), the prompt size that would be sent, and the resolved\nworkspace/isolation. Free — no model call, no spend, no worktree created.\n\nUse it before delegating to confirm scope and repo before committing to cost,\nexactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real\ndelegate's zero-spend validation (workspace, isolation, task size, git repo), so\na failure here is a failure the paid call would also hit. The returned\n`tier`/`sandbox` describe the previewed propose run, not this read-only preview;\nthe result echoes the effective `model`/`reasoning_effort` overrides the paid\ncall would send (unvalidated). `deadline_advisory` is non-null when size or\nreasoning effort risks the synchronous deadline and names `codex_delegate_async`\nverbatim — the async counterpart of the previewed call, not of this dry-run tool.\nA hint, not a refusal.\n\nA dry run reports metadata about the input this plugin would assemble; it does not\ninvoke Codex, and it neither enumerates nor bounds the files the model itself reads\nand sends during the paid call. Codex can read files outside the workspace — up to\neverything the OS user running it can read — and send them to OpenAI. The sandbox\nbounds writes, not reads, so no choice of workspace is a read boundary.",
+      "description": "Deprecated: use amicus_delegate_dry_run. Preview what a `codex_delegate`/`codex_delegate_async` call would do — the\nbaseline it seeds from (HEAD commit, tracked file count/size, uncommitted and\nuntracked counts), the prompt size that would be sent, and the resolved\nworkspace/isolation. Free — no model call, no spend, no worktree created.\n\nUse it before delegating to confirm scope and repo before committing to cost,\nexactly as `codex_dry_run` previews `codex_review_changes`. Mirrors the real\ndelegate's zero-spend validation (workspace, isolation, task size, git repo), so\na failure here is a failure the paid call would also hit. The returned\n`tier`/`sandbox` describe the previewed propose run, not this read-only preview;\nthe result echoes the effective `model`/`reasoning_effort` overrides the paid\ncall would send (unvalidated). `deadline_advisory` is non-null when size or\nreasoning effort risks the synchronous deadline and names `codex_delegate_async`\nverbatim — the async counterpart of the previewed call, not of this dry-run tool.\nA hint, not a refusal.\n\nA dry run reports metadata about the input this plugin would assemble; it does not\ninvoke Codex, and it neither enumerates nor bounds the files the model itself reads\nand sends during the paid call. Codex can read files outside the workspace — up to\neverything the OS user running it can read — and send them to OpenAI. The sandbox\nbounds writes, not reads, so no choice of workspace is a read boundary.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5281,13 +5485,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_review_changes_dry_run",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Preview what a `codex_review_changes` call would send — scope, diff size,\nredactions, truncation. Free — no model call, no spend. Use it before a\nreview to inspect the scope and the reported redactions; redaction is\nbest-effort, so treat the preview as a check on scope, not as confirmation\nthat no secret remains. Pass the same `extra_context` and `untracked` policy\nyou would give the review so the preview matches it. `would_call_model` reports\nwhether the paid call would actually run the model (False on an empty diff, where\n`prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the\nreview would. The result echoes the effective `model`/`reasoning_effort` overrides\nthe paid call would send (unvalidated). `deadline_advisory` is non-null when size\nor effort risks the synchronous deadline (null whenever `would_call_model` is\nFalse) and names `codex_review_changes_async` verbatim — the async counterpart of\nthe previewed call, not of this dry-run tool. A hint, not a refusal.\n\nA dry run reports metadata about the input this plugin would assemble; it does not\ninvoke Codex, and it neither enumerates nor bounds the files the model itself reads\nand sends during the paid call. Codex can read files outside the workspace — up to\neverything the OS user running it can read — and send them to OpenAI. The sandbox\nbounds writes, not reads, so no choice of workspace is a read boundary.",
+      "description": "Deprecated: use amicus_review_changes_dry_run. Preview what a `codex_review_changes` call would send — scope, diff size,\nredactions, truncation. Free — no model call, no spend. Use it before a\nreview to inspect the scope and the reported redactions; redaction is\nbest-effort, so treat the preview as a check on scope, not as confirmation\nthat no secret remains. Pass the same `extra_context` and `untracked` policy\nyou would give the review so the preview matches it. `would_call_model` reports\nwhether the paid call would actually run the model (False on an empty diff, where\n`prompt_bytes` is 0), and `coverage` discloses omitted untracked files just as the\nreview would. The result echoes the effective `model`/`reasoning_effort` overrides\nthe paid call would send (unvalidated). `deadline_advisory` is non-null when size\nor effort risks the synchronous deadline (null whenever `would_call_model` is\nFalse) and names `codex_review_changes_async` verbatim — the async counterpart of\nthe previewed call, not of this dry-run tool. A hint, not a refusal.\n\nA dry run reports metadata about the input this plugin would assemble; it does not\ninvoke Codex, and it neither enumerates nor bounds the files the model itself reads\nand sends during the paid call. Codex can read files outside the workspace — up to\neverything the OS user running it can read — and send them to OpenAI. The sandbox\nbounds writes, not reads, so no choice of workspace is a read boundary.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -5777,6 +5990,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_job_cancel",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
@@ -5785,7 +6007,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Cancel a running background Codex job.\n\nAsks the worker to shut down gracefully so it tears down its throwaway worktree,\nthen force-kills it if it overstays, and marks the job cancelled (cancelled jobs\ncannot be resumed). If the worktree could not be removed, `cleanup_warnings`\nnames the leftover path. Already-terminal jobs are returned unchanged, so cancel\nis idempotent — a retry after a lost response is safe. Free — no model call.",
+      "description": "Deprecated: use amicus_job_cancel. Cancel a running background Codex job.\n\nAsks the worker to shut down gracefully so it tears down its throwaway worktree,\nthen force-kills it if it overstays, and marks the job cancelled (cancelled jobs\ncannot be resumed). If the worktree could not be removed, `cleanup_warnings`\nnames the leftover path. Already-terminal jobs are returned unchanged, so cancel\nis idempotent — a retry after a lost response is safe. Free — no model call.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6011,6 +6233,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_job_consume_result",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
@@ -6019,7 +6250,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Fetch a finished background Codex job's result and delete the stored record.\n\nSame envelope as codex_job_result (matching the job's kind — branch on `tool`),\nthen removes completed job state — but only once the stored result has been read\nintact and validated (a success or the job's own error envelope): a stored result\nthis release cannot read (job_result_incompatible or a corruption internal_error)\nis NOT deleted, so it stays inspectable via codex_job_result. Deletion precedes\nthe response, so a response lost in transit does not restore the record; a failed\nremoval retains the record until its TTL (codex_job_status still shows it). Use\nonly when you no longer need to poll or re-read the job. Non-done jobs are not\ndeleted. Free — no model call.\n\n`detail` works as in codex_job_result (#56).",
+      "description": "Deprecated: use amicus_job_consume_result. Fetch a finished background Codex job's result and delete the stored record.\n\nSame envelope as codex_job_result (matching the job's kind — branch on `tool`),\nthen removes completed job state — but only once the stored result has been read\nintact and validated (a success or the job's own error envelope): a stored result\nthis release cannot read (job_result_incompatible or a corruption internal_error)\nis NOT deleted, so it stays inspectable via codex_job_result. Deletion precedes\nthe response, so a response lost in transit does not restore the record; a failed\nremoval retains the record until its TTL (codex_job_status still shows it). Use\nonly when you no longer need to poll or re-read the job. Non-done jobs are not\ndeleted. Free — no model call.\n\n`detail` works as in codex_job_result (#56).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6116,13 +6347,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_job_list",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List the background jobs known for this workspace, newest first.\n\nFree — no model call. Use to recover job_ids lost across context compaction or\ninterruption. Returns each job's id, kind, status, start time, result_available,\n`result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,\nso a stored failure is triageable without fetching each result.\n\nReturns every retained job by default; pass `limit` (1-1000) or `status` to narrow. They\nnarrow independently — omitting `limit` returns every job matching `status`, not every\njob. Only an explicit `limit` truncates: when more jobs match, the response sets\n`truncated: true` with a `truncation_hint` — the extra rows are dropped, not paged, so\nomit `limit` to get them all rather than looking for a cursor.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so a busy workspace can hold more than the cap — and\nmore than `limit`'s 1000 ceiling.\nIncludes sync-originated records (any sync consult/review/delegate call); the cap/TTL\neviction covers both.",
+      "description": "Deprecated: use amicus_job_list. List the background jobs known for this workspace, newest first.\n\nFree — no model call. Use to recover job_ids lost across context compaction or\ninterruption. Returns each job's id, kind, status, start time, result_available,\n`result_ok` (a done job's outcome — true/false/null; see codex_job_status), and expiry,\nso a stored failure is triageable without fetching each result.\n\nReturns every retained job by default; pass `limit` (1-1000) or `status` to narrow. They\nnarrow independently — omitting `limit` returns every job matching `status`, not every\njob. Only an explicit `limit` truncates: when more jobs match, the response sets\n`truncated: true` with a `truncation_hint` — the extra rows are dropped, not paged, so\nomit `limit` to get them all rather than looking for a cursor.\n\nRead a job's result promptly — a finished record can silently drop off. This list is\nnot permanent storage: terminal records expire after the TTL (default 24h), and a\nper-workspace soft cap (default 50, clamped 1-1000) evicts the oldest terminal records\nas new jobs start, so a finished job can disappear even before its `expires_at`.\nRunning jobs are never evicted, so a busy workspace can hold more than the cap — and\nmore than `limit`'s 1000 ceiling.\nIncludes sync-originated records (any sync consult/review/delegate call); the cap/TTL\neviction covers both.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6347,13 +6587,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_job_result",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Fetch a finished background Codex job's result WITHOUT deleting the record.\n\nWorks for any async job or sync consult/review/delegate (whose `meta.job_id` names\nits record) — codex_delegate_async (a `diff`), codex_consult_async (a consult\nanswer), or codex_review_changes_async (a review with `verdict`). Use when\ncodex_job_status reports result_available=true; the envelope matches the job's\nkind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-\nout/failed job returns an error envelope — as does a done job whose stored result\nthis release cannot read (job_result_incompatible). To fetch and delete, use\ncodex_job_consume_result. Free — no model call.\n\n`detail=\"summary\"` (default) omits the raw model text; pass `detail=\"full\"` for\nthe complete raw output and metadata (#56).",
+      "description": "Deprecated: use amicus_job_result. Fetch a finished background Codex job's result WITHOUT deleting the record.\n\nWorks for any async job or sync consult/review/delegate (whose `meta.job_id` names\nits record) — codex_delegate_async (a `diff`), codex_consult_async (a consult\nanswer), or codex_review_changes_async (a review with `verdict`). Use when\ncodex_job_status reports result_available=true; the envelope matches the job's\nkind, so branch on `tool`. meta.job_id is set. A still-running/cancelled/timed-\nout/failed job returns an error envelope — as does a done job whose stored result\nthis release cannot read (job_result_incompatible). To fetch and delete, use\ncodex_job_consume_result. Free — no model call.\n\n`detail=\"summary\"` (default) omits the raw model text; pass `detail=\"full\"` for\nthe complete raw output and metadata (#56).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6450,13 +6699,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Job ids do not carry over: finish jobs started here with this server's job tools.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_job_status",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Check a background job's lifecycle state without fetching the full result.\n\nUse after any `*_async` call (codex_delegate_async, codex_consult_async,\ncodex_review_changes_async) or any sync consult/review/delegate (whose `meta.job_id`\nnames its record). Returns status, elapsed time, expiry, and `result_available`; when\nit is true, call codex_job_result. `result_ok` reports a done job's producer-declared\noutcome — true (success), false (a stored error envelope), or null (running, no stored\nenvelope, an unclassifiable payload, or a record finalized before this field) — so you\ncan spot a stored FAILURE without fetching it. It does not guarantee the payload is\nstill fetchable; a cross-release record may report an outcome yet fail codex_job_result\nwith job_result_incompatible. Free — no model call.\n\nHonor `poll_after_ms` between polls — for a running job it GROWS with elapsed\nruntime (bounded), so following it backs you off instead of tight-looping (a\ndelegate often runs ~20s). `expires_at` is null while running and is set once the\njob finishes; results are then retained `ttl_seconds` past that completion.",
+      "description": "Deprecated: use amicus_job_status. Check a background job's lifecycle state without fetching the full result.\n\nUse after any `*_async` call (codex_delegate_async, codex_consult_async,\ncodex_review_changes_async) or any sync consult/review/delegate (whose `meta.job_id`\nnames its record). Returns status, elapsed time, expiry, and `result_available`; when\nit is true, call codex_job_result. `result_ok` reports a done job's producer-declared\noutcome — true (success), false (a stored error envelope), or null (running, no stored\nenvelope, an unclassifiable payload, or a record finalized before this field) — so you\ncan spot a stored FAILURE without fetching it. It does not guarantee the payload is\nstill fetchable; a cross-release record may report an outcome yet fail codex_job_result\nwith job_result_incompatible. Free — no model call.\n\nHonor `poll_after_ms` between polls — for a running job it GROWS with elapsed\nruntime (bounded), so following it backs you off instead of tight-looping (a\ndelegate often runs ~20s). `expires_at` is null while running and is set once the\njob finishes; results are then retained `ttl_seconds` past that completion.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6682,13 +6940,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_models",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "List Codex model slugs you can pass as `model`, with each model's advertised\nreasoning-effort set for `reasoning_effort`. Free — no model call.\n\nAdvisory discovery only: read from Codex's on-disk cache when present, else a\nbundled fallback (`source` says which; the fallback carries no effort data).\n`codex exec` validates the real slug and the backend validates the real effort, so\nan unlisted value may still work and a listed one may be unavailable to your\naccount. Same payload as the codex://models resource. Not fingerprint-stable — do\nnot cache it by the capabilities fingerprint.",
+      "description": "Deprecated: use amicus_models. List Codex model slugs you can pass as `model`, with each model's advertised\nreasoning-effort set for `reasoning_effort`. Free — no model call.\n\nAdvisory discovery only: read from Codex's on-disk cache when present, else a\nbundled fallback (`source` says which; the fallback carries no effort data).\n`codex exec` validates the real slug and the backend validates the real effort, so\nan unlisted value may still work and a listed one may be unavailable to your\naccount. Same payload as the codex://models resource. Not fingerprint-stable — do\nnot cache it by the capabilities fingerprint.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -6852,6 +7119,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_review_changes",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
@@ -6860,7 +7136,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nPAID — this spends Codex quota on every new call; use codex_dry_run or codex_status\n(both free) first if you only need to check scope or readiness.\n\nscope: `working_tree` (tracked changes vs HEAD — untracked files follow the\n`untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo. Optional\n`extra_context` (author intent, bounded like the diff) cuts false positives.\n\nThe result's top-level `review_status` and `coverage` disclose whether the model\nactually ran and what it was shown: a `pass` over partial coverage is surfaced as\n`unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run needs, so Codex can't run the project's checks to confirm its\nfindings — treat them as unvalidated claims you verify yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` and\n`developer_instructions` are sent raw (unredacted).\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's\n`AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root, plus a\nuser-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers\nskills in the\nworkspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default\n`~/.codex/skills/`), reachable from outside the workspace. The plugin's isolation flags\ndon't suppress any of it.\nA skill's name and description arrive up front; selecting one makes the model read\nits body, which can reach OpenAI even if your inputs never mention it.\nRedaction is not a guarantee. Do not rely on it to protect live credentials; keep\nthem out of the reviewed tree and your supplied inputs, or do not request a review\nof that tree.\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nmulti-file or whole-branch review that may exceed it, prefer `codex_review_changes_async` (a\nbackground job, built-in default 1800s deadline; poll `codex_job_status`). Coarse\n`notifications/progress` streams while it blocks when your client requests it; some MCP\nclients background a long call before the deadline, so `timeout_seconds` bounds the run, not\nnecessarily the inline wait — either way the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_status`→`codex_job_result`.",
+      "description": "Deprecated: use amicus_review_changes. Ask Codex (a different model) to review your git changes for an independent\nsecond opinion.\n\nPAID — this spends Codex quota on every new call; use codex_dry_run or codex_status\n(both free) first if you only need to check scope or readiness.\n\nscope: `working_tree` (tracked changes vs HEAD — untracked files follow the\n`untracked` policy and are NOT reviewed by default), `branch` (needs `base`, reviews\n`base...HEAD`), or `commit` (needs a `commit` SHA). The diff is gathered, secret-\nredacted, and bounded by this server; Codex reviews it read-only and returns\nstructured findings. Pass `workspace_root` (absolute) for the right repo. Optional\n`extra_context` (author intent, bounded like the diff) cuts false positives.\n\nThe result's top-level `review_status` and `coverage` disclose whether the model\nactually ran and what it was shown: a `pass` over partial coverage is surfaced as\n`unknown`, and a tree with nothing reviewable returns `not_run`, never a `pass`.\n\nSTATIC review, not a verify mode: the read-only sandbox blocks the writes a\ntest/build/lint run needs, so Codex can't run the project's checks to confirm its\nfindings — treat them as unvalidated claims you verify yourself before acting.\n\nData egress: this sends the gathered diff to OpenAI via the codex CLI. The diff is\nsecret-redacted (best-effort), but your `extra_context` and\n`developer_instructions` are sent raw (unredacted).\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's\n`AGENTS.md` and, in a repository, ancestor `AGENTS.md` files through its root, plus a\nuser-global `$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers\nskills in the\nworkspace's `.agents/skills/` and user-global `$CODEX_HOME/skills/` (default\n`~/.codex/skills/`), reachable from outside the workspace. The plugin's isolation flags\ndon't suppress any of it.\nA skill's name and description arrive up front; selecting one makes the model read\nits body, which can reach OpenAI even if your inputs never mention it.\nRedaction is not a guarantee. Do not rely on it to protect live credentials; keep\nthem out of the reviewed tree and your supplied inputs, or do not request a review\nof that tree.\n\nProgress & recovery: blocks up to the resolved deadline (`timeout_seconds`, clamped\n10-600s; when omitted, the server-configured value, built-in default 300s). If that deadline\nexpires the run is terminated and its partial output is not recoverable or resumable, so for a\nmulti-file or whole-branch review that may exceed it, prefer `codex_review_changes_async` (a\nbackground job, built-in default 1800s deadline; poll `codex_job_status`). Coarse\n`notifications/progress` streams while it blocks when your client requests it; some MCP\nclients background a long call before the deadline, so `timeout_seconds` bounds the run, not\nnecessarily the inline wait — either way the detached run (`meta.job_id`) is recoverable via\n`codex_job_list`→`codex_job_status`→`codex_job_result`.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -7343,6 +7619,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Pass backend=\"codex\"; arguments and results differ, so read amicus_capabilities first.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_review_changes_async",
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
@@ -7351,7 +7636,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Review your git changes in the background; get a `job_id` back immediately.\n\nPAID — this spends Codex quota on every new call; use codex_dry_run or codex_status\n(both free) first if you only need to check scope or readiness.\n\nSame read-only behavior as `codex_review_changes` (the diff is gathered, secret-\nredacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file\nor whole-branch review that can exceed the synchronous deadline (built-in default 300s),\nsince a sync run whose deadline expires loses its partial work; this job's own deadline is\nseparately configured (built-in default 1800s). The diff is gathered inside the job, so a bad\n`base`/`commit` comes back as the same structured error with **zero spend** (a bad\n`scope` is rejected by MCP input validation before the job starts). Starting a job commits to\nspend. Poll `codex_job_status`; read/consume the review envelope with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Pass\n`workspace_root` (absolute).\n\nData egress: same as `codex_review_changes` — sends the secret-redacted diff plus\nyour raw (unredacted) `extra_context` and `developer_instructions` to OpenAI via\nthe codex CLI.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a\nrepository, ancestor `AGENTS.md` files through its root, plus a user-global\n`$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the\nworkspace's\n`.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),\nreachable from outside the workspace. A skill's name\nand description arrive up front; selecting one makes the model read its body, which\ncan reach OpenAI even if your inputs never mention it. Redaction is best-effort, not\na guarantee.",
+      "description": "Deprecated: use amicus_review_changes_async. Review your git changes in the background; get a `job_id` back immediately.\n\nPAID — this spends Codex quota on every new call; use codex_dry_run or codex_status\n(both free) first if you only need to check scope or readiness.\n\nSame read-only behavior as `codex_review_changes` (the diff is gathered, secret-\nredacted, and bounded, then reviewed read-only), but detached — prefer it for a multi-file\nor whole-branch review that can exceed the synchronous deadline (built-in default 300s),\nsince a sync run whose deadline expires loses its partial work; this job's own deadline is\nseparately configured (built-in default 1800s). The diff is gathered inside the job, so a bad\n`base`/`commit` comes back as the same structured error with **zero spend** (a bad\n`scope` is rejected by MCP input validation before the job starts). Starting a job commits to\nspend. Poll `codex_job_status`; read/consume the review envelope with\n`codex_job_result`/`codex_job_consume_result`; stop with `codex_job_cancel`. Pass\n`workspace_root` (absolute).\n\nData egress: same as `codex_review_changes` — sends the secret-redacted diff plus\nyour raw (unredacted) `extra_context` and `developer_instructions` to OpenAI via\nthe codex CLI.\nCodex can read files outside the workspace — up to everything the OS user running it can\nread — and send them to OpenAI. The sandbox bounds writes, not reads, so no choice of\nworkspace is a read boundary. Codex auto-loads the resolved workspace's `AGENTS.md` and, in a\nrepository, ancestor `AGENTS.md` files through its root, plus a user-global\n`$CODEX_HOME/AGENTS.override.md`, else `$CODEX_HOME/AGENTS.md`; it discovers skills in the\nworkspace's\n`.agents/skills/` and user-global `$CODEX_HOME/skills/` (default `~/.codex/skills/`),\nreachable from outside the workspace. A skill's name\nand description arrive up front; selecting one makes the model read its body, which\ncan reach OpenAI even if your inputs never mention it. Redaction is best-effort, not\na guarantee.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -7690,13 +7975,22 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "Call amicus_backends with detail=\"full\" to check that Codex is installed and authenticated.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": "amicus_backends",
+            "since": "0.23.0"
+          },
+          "stability": null
+        },
         "dev.bconnelly.codex-in-claude/stability": "alpha"
       },
       "annotations": {
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Check that the `codex` CLI is installed, authenticated, and a supported\nversion, and report the resolved defaults. Free — no model call. Run it before\nyour first paid call in a session to confirm setup, and again whenever a run\nfails with a setup error.\nAlso reports a `rate_limit` block — how much of the Codex quota windows remains,\nfetched LIVE from `codex app-server` (a read-only call with no model spend). `primary`\nis the shorter/rolling window, `secondary` the longer one; the account reports only the\nwindows that currently bind it, so either may be null. Use it to decide whether to spend:\n`available` is deliberately conservative (only when every reported window is healthy);\nwhen `limited`/`exhausted`, prefer to defer non-urgent Codex calls (urgent ones may still\nproceed); `unknown` means the live read couldn't complete just now (retry) or only a stale\ncache was available; `unavailable` means this codex/account exposes no quota data — none\nof these means anything is wrong.\n`blocked` is different: the backend reports a SPEND control (`spend_control_reached: true`),\nso paid calls will fail and waiting for a quota reset will NOT clear it — don't defer, and\nsurface it to the user. `spend_control_reached` is null when this codex/backend didn't report\nthat state (then `available` covers the quota windows only, and `note` says so).\n`is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different\nCODEX_HOME.",
+      "description": "Deprecated: use amicus_backends. Check that the `codex` CLI is installed, authenticated, and a supported\nversion, and report the resolved defaults. Free — no model call. Run it before\nyour first paid call in a session to confirm setup, and again whenever a run\nfails with a setup error.\nAlso reports a `rate_limit` block — how much of the Codex quota windows remains,\nfetched LIVE from `codex app-server` (a read-only call with no model spend). `primary`\nis the shorter/rolling window, `secondary` the longer one; the account reports only the\nwindows that currently bind it, so either may be null. Use it to decide whether to spend:\n`available` is deliberately conservative (only when every reported window is healthy);\nwhen `limited`/`exhausted`, prefer to defer non-urgent Codex calls (urgent ones may still\nproceed); `unknown` means the live read couldn't complete just now (retry) or only a stale\ncache was available; `unavailable` means this codex/account exposes no quota data — none\nof these means anything is wrong.\n`blocked` is different: the backend reports a SPEND control (`spend_control_reached: true`),\nso paid calls will fail and waiting for a quota reset will NOT clear it — don't defer, and\nsurface it to the user. `spend_control_reached` is null when this codex/backend didn't report\nthat state (then `available` covers the quota windows only, and `note` says so).\n`is_stale`/`as_of` show freshness; `home_unverified` flags a snapshot from a different\nCODEX_HOME.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -7866,6 +8160,15 @@
     },
     {
       "_meta": {
+        "dev.bconnelly.codex-in-claude/lifecycle": {
+          "deprecation": {
+            "migration": "amicus has no transcript hand-off. This tool keeps working in installed versions, without fixes.",
+            "removal_at_or_after": "0.25.0",
+            "replaced_by": null,
+            "since": "0.23.0"
+          },
+          "stability": "experimental"
+        },
         "dev.bconnelly.codex-in-claude/stability": "experimental"
       },
       "annotations": {
@@ -7874,7 +8177,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Hand off the current Claude Code session to a resumable Codex thread.\n\nImports a Claude session transcript (.jsonl) into a persistent Codex thread via\n`codex app-server` and returns `resume_command` (`codex resume <thread_id>`) to\ncontinue that exact conversation in Codex (TUI or App). Free — no model call and no\ntoken spend; it is a local file conversion, typically seconds. It does create a\nthread in $CODEX_HOME (so it is not read-only) but never edits your working tree.\n\nPass `transcript_path`: the current session's transcript is the newest *.jsonl under\n~/.claude/projects/<cwd-slug>/. If that is ambiguous — for example, more than one recent\ntranscript could be the current session — ask the user which one to transfer. Transferring\na still-live session creates a NEW thread each call — Codex dedups only a byte-identical\ntranscript — so this is not idempotent for an active session.\n\nIdentifiers the app-server reports (the imported thread id and $CODEX_HOME) are validated:\na drifted, oversized, or malformed value fails as cli_contract_changed rather than\nproducing a corrupt resume_command or importing into the wrong home. `resume_command` is\nPOSIX shell syntax.\n\ncodex_status (free) can confirm Codex is installed and authenticated beforehand.",
+      "description": "Deprecated: amicus has no equivalent. Hand off the current Claude Code session to a resumable Codex thread.\n\nImports a Claude session transcript (.jsonl) into a persistent Codex thread via\n`codex app-server` and returns `resume_command` (`codex resume <thread_id>`) to\ncontinue that exact conversation in Codex (TUI or App). Free — no model call and no\ntoken spend; it is a local file conversion, typically seconds. It does create a\nthread in $CODEX_HOME (so it is not read-only) but never edits your working tree.\n\nPass `transcript_path`: the current session's transcript is the newest *.jsonl under\n~/.claude/projects/<cwd-slug>/. If that is ambiguous — for example, more than one recent\ntranscript could be the current session — ask the user which one to transfer. Transferring\na still-live session creates a NEW thread each call — Codex dedups only a byte-identical\ntranscript — so this is not idempotent for an active session.\n\nIdentifiers the app-server reports (the imported thread id and $CODEX_HOME) are validated:\na drifted, oversized, or malformed value fails as cli_contract_changed rather than\nproducing a corrupt resume_command or importing into the wrong home. `resume_command` is\nPOSIX shell syntax.\n\ncodex_status (free) can confirm Codex is installed and authenticated beforehand.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

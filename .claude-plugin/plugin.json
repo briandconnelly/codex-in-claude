@@ -1,7 +1,7 @@
 {
   "name": "codex-in-claude",
   "version": "0.23.0",
-  "description": "Deprecated: superseded by amicus (https://github.com/briandconnelly/amicus). Call OpenAI Codex from Claude Code for delegation, review, and second opinions.",
+  "description": "Deprecated: superseded by amicus (https://github.com/briandconnelly/amicus); 0.24.0 is the final release. Call OpenAI Codex from Claude Code for delegation, review, and second opinions.",
   "author": {
     "name": "Brian Connelly"
   },
@@ -21,8 +21,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Codex (for Claude Code) — deprecated",
-    "shortDescription": "Deprecated: use amicus instead.",
-    "longDescription": "Deprecated: codex-in-claude is superseded by amicus (https://github.com/briandconnelly/amicus), which calls Codex and other backends. codex-in-claude lets Claude Code call the OpenAI Codex CLI for an independent second opinion, structured code review, and delegated coding tasks. Delegation runs in an isolated git worktree and returns a reviewable diff that is never applied to your working tree. Read-only by default \u2014 which bounds what Codex writes, not what it can read.",
+    "shortDescription": "Deprecated: use amicus. 0.24.0 is the final release.",
+    "longDescription": "Deprecated: codex-in-claude is superseded by amicus (https://github.com/briandconnelly/amicus), which calls Codex and other backends. 0.24.0 is the final release; the repository is archived after it ships. codex-in-claude lets Claude Code call the OpenAI Codex CLI for an independent second opinion, structured code review, and delegated coding tasks. Delegation runs in an isolated git worktree and returns a reviewable diff that is never applied to your working tree. Read-only by default \u2014 which bounds what Codex writes, not what it can read.",
     "developerName": "Brian Connelly",
     "category": "Developer Tools",
     "capabilities": ["MCP", "Skills"],

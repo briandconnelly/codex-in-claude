@@ -12,7 +12,10 @@ the `codex` CLI safely.
 > [!WARNING]
 > **Deprecated.** `codex-in-claude` is superseded by [**amicus**](https://github.com/briandconnelly/amicus),
 > which calls Codex and other backends (Kimi, Claude Code) through one MCP server.
-> New users should install amicus; existing installs keep working, but new work lands in amicus.
+> **0.24.0 is the final release.** The repository is archived after it ships: installed versions
+> keep running, but get no fixes or releases. New users should install amicus. Each tool's
+> deprecation marker (in its `_meta` and its `codex_capabilities` entry) names its amicus successor,
+> except `codex_transfer`, which has none.
 
 **Contents:** [Why](#why) · [Quick start](#quick-start) · [Example](#example) ·
 [Requirements](#requirements) · [Tools](#tools) · [Skills](#skills) ·
@@ -32,8 +35,7 @@ Codex a question, a diff to review, or a task to implement — and get back a st
 | `review` | `read-only` | nothing — structured findings | reviewing your git changes |
 | `propose` (the `delegate` tools) | `workspace-write` (temp git **worktree** + OS temp roots) | worktree diff → returns a **reviewable diff, never auto-applied** | delegating a coding task |
 
-Planned later milestone: an explicit opt-in `apply` tier for live-tree edits. It is not exposed by
-the current tool set.
+An opt-in `apply` tier for live-tree edits was planned but never shipped, and no tool exposes it.
 
 ## Quick start
 
@@ -278,8 +280,8 @@ rate-limit reporting (`codex_status`), background-job semantics, and workspace s
 | `CODEX_IN_CLAUDE_ALLOW_UNSUPPORTED_PLATFORM` | unset | set to `1` to downgrade the non-POSIX startup refusal to a stderr warning for knowingly consult-only, unsupported use; the async-job safety layer cannot hold, so do not run delegate/review against untrusted work (see [Requirements](#requirements) / `COMPATIBILITY.md`) |
 | `CODEX_IN_CLAUDE_CODEX_BIN` | unset | explicit override for which `codex` binary to invoke; a non-empty value is used exactly as given, with no `PATH` re-resolution, and must exist on disk as an executable file (execute bit set) or a readiness error results. Unset leaves resolution automatic (WSL2-aware; falls back to the bare `codex` on `PATH` — see `COMPATIBILITY.md`) |
 
-Two further variables, `CODEX_IN_CLAUDE_TIER_DEFAULT` and `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`, exist
-ahead of the planned `apply` tier. They only change the defaults `codex_status` reports — every
+Two further variables, `CODEX_IN_CLAUDE_TIER_DEFAULT` and `CODEX_IN_CLAUDE_SANDBOX_DEFAULT`, were
+added for that unshipped `apply` tier. They only change the defaults `codex_status` reports — every
 shipped tool pins its own tier and sandbox and ignores them.
 
 ## Troubleshooting

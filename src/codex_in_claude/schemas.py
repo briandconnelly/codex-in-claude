@@ -81,7 +81,7 @@ _FINGERPRINT_COVERS_DESC = (
 # this and regenerate the fixture in the same commit. It is an acknowledgment guard — it surfaces
 # the drift, it does not mechanically force the integer bump (the snapshot and this string are
 # independently editable).
-FINGERPRINT = "codex-in-claude/0.1/schema-92"
+FINGERPRINT = "codex-in-claude/0.1/schema-93"
 
 # The persisted result-format version, stamped into each job record's generic metadata
 # (`extra.result_format`) at spawn so replay can tell a cross-release payload from a corrupt
@@ -1362,6 +1362,18 @@ class AsyncLifecycle(BaseModel):
     event_age_field: str  # "event_age_ms"
 
 
+class ToolDeprecation(BaseModel):
+    """A tool's deprecation marker (#605): one object, fixed field set, the same values on
+    `codex_capabilities` and under the tool's namespaced `_meta` key. Presence is the signal."""
+
+    model_config = ConfigDict(extra="forbid")
+    since: str  # the release the deprecation took effect
+    removal_at_or_after: str  # the earliest version the tool may disappear in
+
+    replaced_by: str | None  # the successor amicus tool name; null when amicus has none
+    migration: str  # what an agent changes to move to the successor
+
+
 class ToolCapability(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
@@ -1388,6 +1400,8 @@ class ToolCapability(BaseModel):
     # that the server uses that custom lifecycle instead of native MCP tasks/progress
     # (#94). None ⇒ a synchronous/lifecycle tool that needs no such metadata.
     async_lifecycle: AsyncLifecycle | None = None
+    # Set on every tool since the project was deprecated (#605). None ⇒ not deprecated.
+    deprecation: ToolDeprecation | None = None
 
 
 class CapabilitiesResult(BaseModel):
