@@ -19,7 +19,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar, cast, get_args
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
@@ -115,6 +115,7 @@ from codex_in_claude.schemas import (
     StatusResult,
     Tier,
     ToolCapability,
+    ToolDeprecation,
     ToolStability,
     TransferMeta,
     TransferResult,
@@ -156,15 +157,23 @@ warnings.filterwarnings(
 # unifying them necessarily rewords the wire (hence the FINGERPRINT bump, schema-72 ->
 # schema-73).
 
+# The deprecation's facts (#605), read by the notice below, deprecation_policy, and every
+# tool's deprecation marker.
+_AMICUS_URL = "https://github.com/briandconnelly/amicus"
+_DEPRECATED_SINCE = "0.23.0"
+_END_OF_SUPPORT = "2026-11-01"
+
 # Rules-then-context (audit F8, #180): a does/does-not lead, then each binding rule as
 # its own imperative sentence, and background (async-job mechanics, cached rate-limit
 # semantics) last so an agent that skims reaches the actionable rules first.
 CAPABILITY_SUMMARY = (
     # Deprecation notice first, so an agent choosing between bridges reads it before routing.
     "DEPRECATED: codex-in-claude is superseded by amicus "
-    "(https://github.com/briandconnelly/amicus), which calls Codex and other backends. "
+    f"({_AMICUS_URL}), which calls Codex and other backends. "
     "When both are installed, prefer amicus's tools. "
-    "This plugin's tools still work. "
+    f"This plugin is unsupported after {_END_OF_SUPPORT}, when its repository is archived; "
+    "installed versions keep running but get no fixes. Each tool's deprecation marker "
+    "(in its _meta and its codex_capabilities entry) names its amicus successor. "
     # Lead: what it does and, up front, what it does not do.
     "Call OpenAI Codex (a different model) from Claude Code for a second opinion, a "
     "structured review of your git changes, or a delegated coding task. This plugin does "
@@ -1560,8 +1569,82 @@ _TOOL_STABILITY: dict[str, ToolStability] = {
 }
 
 
-def _tool_meta(name: str) -> dict[str, str]:
-    return {_STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY)}
+# #605: per-tool deprecation markers, in one place — like _TOOL_STABILITY, every surface
+# that states one (each tool's namespaced _meta, its ToolCapability entry, and the
+# description prefix) reads this map. Deprecation is a separate axis from stability, so a
+# deprecated tool keeps its tier. Every registered tool must have an entry: _tool_meta and
+# _deprecated index it directly, so a new tool without one fails at import.
+_DEPRECATION_META_KEY = "dev.bconnelly.codex-in-claude/deprecation"
+
+
+# Migration prose leaves the successor's name to `replaced_by`: every byte here ships 17
+# times in tools/list.
+_NEEDS_BACKEND = (
+    'Pass backend="codex"; arguments and results differ, so read amicus_capabilities first.'
+)
+_JOB_IDS_STAY = "Job ids do not carry over: finish jobs started here with this tool."
+
+
+_TOOL_SUCCESSORS: dict[str, tuple[str | None, str]] = {
+    "codex_status": (
+        "amicus_backends",
+        'Call amicus_backends with detail="full" to check that Codex is installed and '
+        "authenticated.",
+    ),
+    "codex_transfer": (
+        None,
+        "amicus has no transcript hand-off. This tool keeps working in installed versions "
+        f"but is unsupported after {_END_OF_SUPPORT}.",
+    ),
+    "codex_capabilities": (
+        "amicus_capabilities",
+        "Call amicus_capabilities for amicus's inventory; it covers every backend, not only Codex.",
+    ),
+    "codex_models": ("amicus_models", _NEEDS_BACKEND),
+    "codex_consult": ("amicus_consult", _NEEDS_BACKEND),
+    "codex_consult_async": ("amicus_consult_async", _NEEDS_BACKEND),
+    "codex_review_changes": ("amicus_review_changes", _NEEDS_BACKEND),
+    "codex_review_changes_async": ("amicus_review_changes_async", _NEEDS_BACKEND),
+    "codex_delegate": ("amicus_delegate", _NEEDS_BACKEND),
+    "codex_delegate_async": ("amicus_delegate_async", _NEEDS_BACKEND),
+    "codex_dry_run": ("amicus_review_changes_dry_run", _NEEDS_BACKEND),
+    "codex_delegate_dry_run": ("amicus_delegate_dry_run", _NEEDS_BACKEND),
+    "codex_job_status": ("amicus_job_status", _JOB_IDS_STAY),
+    "codex_job_result": ("amicus_job_result", _JOB_IDS_STAY),
+    "codex_job_consume_result": ("amicus_job_consume_result", _JOB_IDS_STAY),
+    "codex_job_cancel": ("amicus_job_cancel", _JOB_IDS_STAY),
+    "codex_job_list": ("amicus_job_list", _JOB_IDS_STAY),
+}
+_TOOL_DEPRECATIONS: dict[str, ToolDeprecation] = {
+    name: ToolDeprecation(
+        since=_DEPRECATED_SINCE,
+        removal_at_or_after=_END_OF_SUPPORT,
+        replaced_by=successor,
+        migration=migration,
+    )
+    for name, (successor, migration) in _TOOL_SUCCESSORS.items()
+}
+
+
+def _tool_meta(name: str) -> dict[str, object]:
+    return {
+        _STABILITY_META_KEY: _TOOL_STABILITY.get(name, _SERVER_STABILITY),
+        _DEPRECATION_META_KEY: _TOOL_DEPRECATIONS[name].model_dump(),
+    }
+
+
+_ToolFn = TypeVar("_ToolFn", bound="Callable[..., object]")
+
+
+def _deprecated(fn: _ToolFn) -> _ToolFn:
+    """Lead the tool's description with its deprecation (#605). Models read descriptions
+    even where neither `instructions` nor `_meta` reach them. Sits directly under
+    `@mcp.tool`, which reads `__doc__` at registration. The prefix joins the docstring's
+    first line on purpose: a line of its own would defeat the docstring dedent."""
+    successor = _TOOL_DEPRECATIONS[getattr(fn, "__name__", "tool")].replaced_by
+    tail = f"use {successor}." if successor else "amicus has no equivalent."
+    fn.__doc__ = f"Deprecated (unsupported after {_END_OF_SUPPORT}): {tail} {fn.__doc__}"
+    return fn
 
 
 # The unsupported-version advisory. STATIC on purpose (#531): the version string is
@@ -1585,6 +1668,7 @@ VERSION_WARNING = (
     title="Check Codex readiness (free)",
     meta=_tool_meta("codex_status"),
 )
+@_deprecated
 @_guard_sync(tier="consult", sandbox="read-only")
 def codex_status() -> dict:
     """Check that the `codex` CLI is installed, authenticated, and a supported
@@ -1799,6 +1883,7 @@ def _transfer_outcome_envelope(
     title="Transfer session to Codex (free)",
     meta=_tool_meta("codex_transfer"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_transfer(
     transcript_path: TranscriptPathParam,
@@ -2153,7 +2238,14 @@ _ASYNC_LIFECYCLE = AsyncLifecycle(
 # serialized even when None — it is null for default-tier tools, and stripping it would
 # re-create the gap F9 closes. `_normalize_tool_details` (not this tuple) is what puts the
 # key there, for every mode that carries an inventory.
-_CAPABILITY_SUMMARY_FIELDS = ("name", "cost", "stability", "error_codes", "async_lifecycle")
+_CAPABILITY_SUMMARY_FIELDS = (
+    "name",
+    "cost",
+    "stability",
+    "error_codes",
+    "async_lifecycle",
+    "deprecation",
+)
 # Declared field order, so a re-added key lands where the model puts it rather than at the end.
 _TOOL_CAPABILITY_FIELDS = tuple(ToolCapability.model_fields)
 
@@ -2168,6 +2260,10 @@ def _normalize_tool_details(entry: dict) -> dict:
     long as only the summary branch did it.
     """
     entry.setdefault("stability", None)
+    # Same strip, same fix: the marker's field set is fixed, so a tool with no amicus
+    # successor ships `replaced_by: null`, matching its `_meta` copy (#605).
+    if "deprecation" in entry:
+        entry["deprecation"].setdefault("replaced_by", None)
     return {k: entry[k] for k in _TOOL_CAPABILITY_FIELDS if k in entry}
 
 
@@ -2177,6 +2273,7 @@ def _normalize_tool_details(entry: dict) -> dict:
     title="List server capabilities (free)",
     meta=_tool_meta("codex_capabilities"),
 )
+@_deprecated
 @_guard_sync(tier="consult", sandbox="read-only")
 def codex_capabilities(
     include_schemas: IncludeSchemasParam = None,
@@ -2581,8 +2678,11 @@ def codex_capabilities(
             "files itself during a run.",
         ],
         prerequisites=["codex CLI on PATH", "authenticated via `codex login`"],
-        deprecation_policy="Pre-1.0: minor versions may change the agent-visible "
-        "surface; the fingerprint changes when they do.",
+        deprecation_policy=f"Deprecated since {_DEPRECATED_SINCE} in favor of amicus "
+        f"({_AMICUS_URL}). Unsupported after {_END_OF_SUPPORT}, when the repository is "
+        "archived: installed versions keep running but get no fixes. Each tool's "
+        "`deprecation` marker names its amicus successor. Until then, pre-1.0: minor "
+        "versions may change the agent-visible surface; the fingerprint changes when they do.",
         protocol_revision="2026-07-28",
     )
     # Inject per-tool error codes from the single source of truth; KeyError here
@@ -2597,6 +2697,7 @@ def codex_capabilities(
         cap.error_codes = codes
         if cap.name in _ASYNC_TOOLS:
             cap.async_lifecycle = _ASYNC_LIFECYCLE
+        cap.deprecation = _TOOL_DEPRECATIONS[cap.name]
     if include_schemas:
         # Opt-in only (#179): embed the requested full contracts so a resource-blind client
         # can reach them from tools/list alone. De-duplicated and order-stable.
@@ -2674,6 +2775,7 @@ def _static_triage(payload: dict) -> dict[str, dict]:
     title="List Codex models (free)",
     meta=_tool_meta("codex_models"),
 )
+@_deprecated
 @_guard_sync(tier="consult", sandbox="read-only")
 def codex_models() -> dict:
     """List Codex model slugs you can pass as `model`, with each model's advertised
@@ -3245,6 +3347,7 @@ async def _prepare_delegate(
     title="Consult Codex (paid)",
     meta=_tool_meta("codex_consult"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult(
     question: QuestionParam,
@@ -3344,6 +3447,7 @@ async def codex_consult(
     title="Review git changes (paid)",
     meta=_tool_meta("codex_review_changes"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes(
     scope: ScopeParam = "working_tree",
@@ -3455,6 +3559,7 @@ async def codex_review_changes(
     title="Delegate a coding task (paid)",
     meta=_tool_meta("codex_delegate"),
 )
+@_deprecated
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate(
     task: TaskParam,
@@ -3551,6 +3656,7 @@ async def codex_delegate(
     title="Delegate in background (paid)",
     meta=_tool_meta("codex_delegate_async"),
 )
+@_deprecated
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_async(
     task: TaskParam,
@@ -4151,6 +4257,7 @@ async def _run_sync(
     title="Consult Codex in background (paid)",
     meta=_tool_meta("codex_consult_async"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_consult_async(
     question: QuestionParam,
@@ -4229,6 +4336,7 @@ async def codex_consult_async(
     title="Review git changes in background (paid)",
     meta=_tool_meta("codex_review_changes_async"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_review_changes_async(
     scope: ScopeParam = "working_tree",
@@ -4313,6 +4421,7 @@ async def codex_review_changes_async(
     title="Preview a review (free)",
     meta=_tool_meta("codex_dry_run"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_dry_run(
     scope: ScopeParam = "working_tree",
@@ -4535,6 +4644,7 @@ _DELEGATE_PLAN_NOTE = (
     title="Preview a delegate (free)",
     meta=_tool_meta("codex_delegate_dry_run"),
 )
+@_deprecated
 @_guard(tier="propose", sandbox="workspace-write")
 async def codex_delegate_dry_run(
     task: TaskDryRunParam,
@@ -4826,6 +4936,7 @@ def _job_status_model(data: dict, workspace: Workspace) -> JobStatus:
     title="Check job status (free)",
     meta=_tool_meta("codex_job_status"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_status(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
@@ -5195,6 +5306,7 @@ def _finished_job_envelope(
     title="Fetch job result (free)",
     meta=_tool_meta("codex_job_result"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_result(
     job_id: JobIdParam,
@@ -5224,6 +5336,7 @@ async def codex_job_result(
     title="Fetch and delete job result (free)",
     meta=_tool_meta("codex_job_consume_result"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_consume_result(
     job_id: JobIdParam,
@@ -5253,6 +5366,7 @@ async def codex_job_consume_result(
     title="Cancel a job (free)",
     meta=_tool_meta("codex_job_cancel"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_cancel(
     job_id: JobIdParam, ctx: Context | None = None, workspace_root: WorkspaceRootParam = None
@@ -5282,6 +5396,7 @@ async def codex_job_cancel(
     title="List background jobs (free)",
     meta=_tool_meta("codex_job_list"),
 )
+@_deprecated
 @_guard(tier="consult", sandbox="read-only")
 async def codex_job_list(
     ctx: Context | None = None,

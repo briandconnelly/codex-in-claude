@@ -12,7 +12,9 @@ the `codex` CLI safely.
 > [!WARNING]
 > **Deprecated.** `codex-in-claude` is superseded by [**amicus**](https://github.com/briandconnelly/amicus),
 > which calls Codex and other backends (Kimi, Claude Code) through one MCP server.
-> New users should install amicus; existing installs keep working, but new work lands in amicus.
+> **Unsupported after 2026-11-01**, when this repository is archived: installed versions keep
+> running, but get no fixes or releases. New users should install amicus. Each tool's deprecation
+> marker (in its `_meta` and its `codex_capabilities` entry) names its amicus successor.
 
 **Contents:** [Why](#why) · [Quick start](#quick-start) · [Example](#example) ·
 [Requirements](#requirements) · [Tools](#tools) · [Skills](#skills) ·

@@ -2746,7 +2746,7 @@ def test_job_status_model_requires_result_ok_from_store():
 
 
 def test_fingerprint_is_pinned():
-    assert FINGERPRINT == "codex-in-claude/0.1/schema-92"
+    assert FINGERPRINT == "codex-in-claude/0.1/schema-93"
 
 
 def test_capabilities_payload_discloses_fingerprint_covers():
@@ -2788,6 +2788,107 @@ def test_capabilities_mark_m4_surface_experimental():
     for name, entry in by_name.items():
         assert "stability" in entry, name
         assert entry["stability"] == expected.get(name), name
+
+
+# --- deprecation lifecycle markers (#605) ----------------------------------------------
+# Spelled out rather than read from server._TOOL_DEPRECATIONS, the map the surfaces are
+# built from: a derived expectation would stay green if a successor were wrong.
+_EXPECTED_SUCCESSORS = {
+    "codex_status": "amicus_backends",
+    "codex_transfer": None,
+    "codex_capabilities": "amicus_capabilities",
+    "codex_models": "amicus_models",
+    "codex_consult": "amicus_consult",
+    "codex_consult_async": "amicus_consult_async",
+    "codex_review_changes": "amicus_review_changes",
+    "codex_review_changes_async": "amicus_review_changes_async",
+    "codex_delegate": "amicus_delegate",
+    "codex_delegate_async": "amicus_delegate_async",
+    "codex_dry_run": "amicus_review_changes_dry_run",
+    "codex_delegate_dry_run": "amicus_delegate_dry_run",
+    "codex_job_status": "amicus_job_status",
+    "codex_job_result": "amicus_job_result",
+    "codex_job_consume_result": "amicus_job_consume_result",
+    "codex_job_cancel": "amicus_job_cancel",
+    "codex_job_list": "amicus_job_list",
+}
+_DEPRECATION_META_KEY = "dev.bconnelly.codex-in-claude/deprecation"
+
+
+async def _wire_tools() -> dict:
+    from fastmcp import Client
+
+    async with Client(server.mcp) as client:
+        return {t.name: t for t in await client.list_tools()}
+
+
+async def test_every_tool_carries_a_deprecation_marker_in_meta():
+    """#605: the notice in `instructions` misses clients that don't show them, so each
+    tool's own discovery record carries the marker under a namespaced `_meta` key."""
+    tools = await _wire_tools()
+    assert set(tools) == set(_EXPECTED_SUCCESSORS), "a tool gained or lost a marker"
+    for name, tool in tools.items():
+        marker = (tool.meta or {}).get(_DEPRECATION_META_KEY)
+        assert marker is not None, name
+        assert set(marker) == {"since", "removal_at_or_after", "replaced_by", "migration"}
+        assert marker["since"] == "0.23.0", name
+        assert marker["removal_at_or_after"] == "2026-11-01", name
+        assert marker["replaced_by"] == _EXPECTED_SUCCESSORS[name], name
+        assert marker["migration"].strip(), name
+        # The stability key is untouched: deprecation is a separate axis, not a tier.
+        assert tool.meta["dev.bconnelly.codex-in-claude/stability"] in {"alpha", "experimental"}
+
+
+async def test_migration_text_names_backend_only_where_the_successor_requires_it():
+    """amicus's paid tools, dry runs, and amicus_models require `backend`; its job,
+    capabilities, and backends tools don't, so telling an agent to pass it there would be
+    wrong (verified against amicus's tools/list)."""
+    requires_backend = {
+        "codex_consult",
+        "codex_consult_async",
+        "codex_review_changes",
+        "codex_review_changes_async",
+        "codex_delegate",
+        "codex_delegate_async",
+        "codex_dry_run",
+        "codex_delegate_dry_run",
+        "codex_models",
+    }
+    tools = await _wire_tools()
+    for name, tool in tools.items():
+        migration = tool.meta[_DEPRECATION_META_KEY]["migration"]
+        assert ('backend="codex"' in migration) == (name in requires_backend), name
+    for name in ("codex_job_status", "codex_job_result", "codex_job_cancel"):
+        migration = tools[name].meta[_DEPRECATION_META_KEY]["migration"]
+        assert "do not carry over" in migration, name
+
+
+async def test_every_tool_description_leads_with_the_deprecation():
+    """Models see descriptions even where neither `instructions` nor `_meta` reach them."""
+    tools = await _wire_tools()
+    for name, tool in tools.items():
+        successor = _EXPECTED_SUCCESSORS[name]
+        tail = f"use {successor}." if successor else "amicus has no equivalent."
+        assert tool.description.startswith(f"Deprecated (unsupported after 2026-11-01): {tail}")
+
+
+@pytest.mark.parametrize("detail", ["summary", "full"])
+async def test_capabilities_mirror_the_meta_deprecation_marker(detail):
+    """codex_capabilities carries the same marker per tool, in both inventory modes —
+    summary projects entries down to a field list, which would silently drop it."""
+    tools = await _wire_tools()
+    caps = server.codex_capabilities(detail=detail)
+    by_name = {t["name"]: t for t in caps["tool_details"]}
+    assert set(by_name) == set(tools)
+    for name, tool in tools.items():
+        assert by_name[name]["deprecation"] == tool.meta[_DEPRECATION_META_KEY], name
+
+
+def test_capabilities_state_the_end_of_support_date():
+    caps = server.codex_capabilities()
+    assert "2026-11-01" in caps["deprecation_policy"]
+    assert "amicus" in caps["deprecation_policy"]
+    assert "2026-11-01" in server.CAPABILITY_SUMMARY
 
 
 def test_server_advertises_tools_list_changed():
@@ -6822,7 +6923,7 @@ async def test_transfer_success_notification(monkeypatch):
     assert result["meta"]["thread_id_source"] == "import_notification"
     assert result["meta"]["import_id"] == "imp-7"
     assert result["meta"]["codex_home"] == "/home/u/.codex"
-    assert result["fingerprint"].endswith("schema-92")
+    assert result["fingerprint"].endswith("schema-93")
     # TransferResult's only wire path — unreachable from the free-tool walk (#304).
     assert result["server_version"] == __version__
 

@@ -5,6 +5,25 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+### Deprecated
+
+- **codex-in-claude is unsupported after 2026-11-01** (#605). On that date the repository is
+  archived. Installed versions keep running but get no fixes or releases. The server instructions,
+  `codex_capabilities`' `deprecation_policy`, the README, and the plugin and marketplace
+  descriptions all state the date.
+- **Every tool carries a deprecation marker naming its amicus successor** (#605). Before this, the
+  notice reached only clients that show the server instructions. The marker is
+  `{since, removal_at_or_after, replaced_by, migration}`. It appears under the tool's
+  `dev.bconnelly.codex-in-claude/deprecation` `_meta` key and as a new `deprecation` field on its
+  `codex_capabilities` entry, in both `summary` and `full` modes. Each tool description now opens
+  with `Deprecated (unsupported after 2026-11-01): use <successor>.`. Most successors are the
+  `amicus_*` tool of the same name. The exceptions: `codex_status` maps to `amicus_backends`,
+  `codex_dry_run` maps to `amicus_review_changes_dry_run`, and `codex_transfer` has none
+  (`replaced_by: null`). Job ids don't carry over to amicus, so finish jobs you started here with
+  this server's job tools. Per-tool `stability` is unchanged; deprecation is a separate field. The
+  result `fingerprint` goes from `codex-in-claude/0.1/schema-92` to `schema-93`. This is not
+  breaking: it adds a field and wording, and every tool still works.
+
 ## [0.23.0] - 2026-09-26
 
 A deprecation release. codex-in-claude is superseded by
