@@ -5,6 +5,15 @@ agent-visible MCP surface; the result `fingerprint` changes when they do.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-04
+
+The final release. codex-in-claude is superseded by
+[amicus](https://github.com/briandconnelly/amicus), and its repository is archived after this release
+ships. Installed versions keep running but get no fixes. Every tool now carries a deprecation marker
+that names its amicus successor, so clients that never show the server instructions still learn
+where to go. The result `fingerprint` goes from `codex-in-claude/0.1/schema-92` to `schema-93`.
+Nothing is breaking, and every tool still works.
+
 ### Deprecated
 
 - **0.24.0 is the final release of codex-in-claude** (#605). The repository is archived after it

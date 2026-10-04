@@ -1,6 +1,6 @@
 {
   "name": "codex-in-claude",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Deprecated: superseded by amicus (https://github.com/briandconnelly/amicus); 0.24.0 is the final release. Call OpenAI Codex from Claude Code for delegation, review, and second opinions.",
   "author": {
     "name": "Brian Connelly"
